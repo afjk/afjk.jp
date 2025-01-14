@@ -1,0 +1,56 @@
+{
+	"name": "com.afjk.local-device-finder",
+	"versions": {
+		"0.0.1": {
+			"name": "com.afjk.local-device-finder",
+			"version": "0.0.1",
+			"displayName": "Local Device Finder",
+			"description": "A package for finding local devices.",
+			"unity": "2019.4",
+			"keywords": [
+				"networking",
+				"devices"
+			],
+			"author": {
+				"name": "afjk",
+				"email": "afjk01@gmail.com"
+			},
+			"samples": [
+				{
+					"displayName": "Sample",
+					"path": "Samples~"
+				}
+			],
+			"gitHead": "d32c4d029e4dc33ec5e7c46925d9b680db77f5e4",
+			"_id": "com.afjk.local-device-finder@0.0.1",
+			"_nodeVersion": "20.11.1",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-OnCCrUjOPfEyczMU9t6yS3X8M8SSKijSBYUakfBqmspR/hpG753TqvyIE/q/XzVZGAaLbmFS6uNt8I3MS7379Q==",
+				"shasum": "de609ed356850a9ebec80cad44f8a9797a8f289d",
+				"tarball": "http://upm.afjk.jp/com.afjk.local-device-finder/-/com.afjk.local-device-finder-0.0.1.tgz"
+			},
+			"contributors": []
+		}
+	},
+	"time": {
+		"modified": "2025-01-14T07:51:03.031Z",
+		"created": "2025-01-14T07:51:03.031Z",
+		"0.0.1": "2025-01-14T07:51:03.031Z"
+	},
+	"users": {},
+	"dist-tags": {
+		"latest": "0.0.1"
+	},
+	"_uplinks": {},
+	"_distfiles": {},
+	"_attachments": {
+		"com.afjk.local-device-finder-0.0.1.tgz": {
+			"shasum": "de609ed356850a9ebec80cad44f8a9797a8f289d",
+			"version": "0.0.1"
+		}
+	},
+	"_rev": "3-6158ae8866619ed0",
+	"_id": "com.afjk.local-device-finder",
+	"readme": "ERROR: No README data found!"
+}

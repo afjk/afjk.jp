@@ -4,12 +4,12 @@ plugins: /verdaccio/plugins
 
 web:
 # Web UI のタイトル
-  title: afjk's UPM Server
+  title: afjk's UPM Registory
 
 auth:
   htpasswd:
     file: /verdaccio/storage/htpasswd
-    max_users: -1
+    max_users: 0
 
 uplinks:
   unity:

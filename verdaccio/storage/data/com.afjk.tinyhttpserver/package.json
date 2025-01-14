@@ -1,0 +1,56 @@
+{
+	"name": "com.afjk.tinyhttpserver",
+	"versions": {
+		"0.0.2": {
+			"name": "com.afjk.tinyhttpserver",
+			"version": "0.0.2",
+			"displayName": "Tiny HTTP Server for Unity",
+			"description": "A simple HTTP server for Unity.",
+			"unity": "2019.4",
+			"keywords": [
+				"http",
+				"server"
+			],
+			"author": {
+				"name": "afjk",
+				"email": "afjk01@gmail.com"
+			},
+			"samples": [
+				{
+					"displayName": "Sample",
+					"path": "Samples~"
+				}
+			],
+			"gitHead": "c662fc4dee9ea1c590fd487682dd46a882162b7d",
+			"_id": "com.afjk.tinyhttpserver@0.0.2",
+			"_nodeVersion": "20.11.1",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-A7Whk3mca9P+RmEY9LXu1yObZNWF5kuATXdsZqsEM56pgbqZt+kIs7tyWreLJbwhn/jqLb/O0QGOHgoyeDXVIA==",
+				"shasum": "8f71decfd14e37256224475706246323f347eccd",
+				"tarball": "http://upm.afjk.jp/com.afjk.tinyhttpserver/-/com.afjk.tinyhttpserver-0.0.2.tgz"
+			},
+			"contributors": []
+		}
+	},
+	"time": {
+		"modified": "2025-01-14T07:51:51.864Z",
+		"created": "2025-01-14T07:51:51.864Z",
+		"0.0.2": "2025-01-14T07:51:51.864Z"
+	},
+	"users": {},
+	"dist-tags": {
+		"latest": "0.0.2"
+	},
+	"_uplinks": {},
+	"_distfiles": {},
+	"_attachments": {
+		"com.afjk.tinyhttpserver-0.0.2.tgz": {
+			"shasum": "8f71decfd14e37256224475706246323f347eccd",
+			"version": "0.0.2"
+		}
+	},
+	"_rev": "3-3e94ec479e1551c2",
+	"_id": "com.afjk.tinyhttpserver",
+	"readme": "ERROR: No README data found!"
+}
