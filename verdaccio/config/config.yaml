@@ -9,7 +9,7 @@ web:
 auth:
   htpasswd:
     file: /verdaccio/storage/htpasswd
-    max_users: 0
+    max_users: -1
 
 uplinks:
   unity:

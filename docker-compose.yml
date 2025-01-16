@@ -13,6 +13,7 @@ services:
         afjk.jp -> http://www-service:80,
         www.afjk.jp -> http://www-service:80,
         upm.afjk.jp -> http://verdaccio:4873
+      CLIENT_MAX_BODY_SIZE: 100M
       # 本番環境の場合は "production" を指定
       STAGE: production
     volumes:
