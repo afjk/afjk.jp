@@ -1,0 +1,40 @@
+storage: /verdaccio/storage/data
+
+plugins: /verdaccio/plugins
+
+web:
+# Web UI のタイトル
+  title: afjk's UPM Registory
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: -1
+
+uplinks:
+  unity:
+    url: https://packages.unity.com
+
+packages:
+  'com.unity.*':
+    access: $all
+    proxy: unity
+
+  '**':
+#パッケージは全員がアクセス可能だが、追加や削除は認証済みユーザーに限定
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+
+server:
+  keepAliveTimeout: 60
+
+middlewares:
+  audit:
+    enabled: true
+
+max_body_size: 10000mb
+
+listen: http://proxy-sample:4873/
+
+logs: { type: stdout, format: pretty, level: http }

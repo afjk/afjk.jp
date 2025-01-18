@@ -1,0 +1,60 @@
+{
+	"name": "com.afjk.runtime-logger",
+	"versions": {
+		"0.0.1": {
+			"name": "com.afjk.runtime-logger",
+			"displayName": "Runtime Logger",
+			"version": "0.0.1",
+			"unity": "2019.4",
+			"description": "Logging in Runtime",
+			"keywords": [
+				"debug",
+				"logger",
+				"runtime",
+				"VR",
+				"debugging"
+			],
+			"category": "Debugging",
+			"author": {
+				"name": "afjk",
+				"email": "afjk01@gmail.com"
+			},
+			"samples": [
+				{
+					"displayName": "Sample",
+					"path": "Samples~"
+				}
+			],
+			"gitHead": "cb6ab4d6b22795aa9c2eb7d6301bbf680d6f9300",
+			"_id": "com.afjk.runtime-logger@0.0.1",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-kSfH7r4WR6695QcU0Ryi9N5gCILECgG0yn21BbKHxlRUNRXY58+PZb6liThKxz79H+7kDztIey3e1sGrLMiiMQ==",
+				"shasum": "523edc59d4d0eaccf45c1944fe6beb4cca3710ee",
+				"tarball": "http://upm.afjk.jp/com.afjk.runtime-logger/-/com.afjk.runtime-logger-0.0.1.tgz"
+			},
+			"contributors": []
+		}
+	},
+	"time": {
+		"modified": "2025-01-18T11:25:51.380Z",
+		"created": "2025-01-18T11:25:51.380Z",
+		"0.0.1": "2025-01-18T11:25:51.380Z"
+	},
+	"users": {},
+	"dist-tags": {
+		"latest": "0.0.1"
+	},
+	"_uplinks": {},
+	"_distfiles": {},
+	"_attachments": {
+		"com.afjk.runtime-logger-0.0.1.tgz": {
+			"shasum": "523edc59d4d0eaccf45c1944fe6beb4cca3710ee",
+			"version": "0.0.1"
+		}
+	},
+	"_rev": "3-6ff484b31b37af7d",
+	"_id": "com.afjk.runtime-logger",
+	"readme": "ERROR: No README data found!"
+}
