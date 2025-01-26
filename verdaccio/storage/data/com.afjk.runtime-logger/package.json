@@ -35,16 +35,88 @@
 				"tarball": "http://upm.afjk.jp/com.afjk.runtime-logger/-/com.afjk.runtime-logger-0.0.1.tgz"
 			},
 			"contributors": []
+		},
+		"0.0.2": {
+			"name": "com.afjk.runtime-logger",
+			"displayName": "Runtime Logger",
+			"version": "0.0.2",
+			"unity": "2019.4",
+			"description": "Logging in Runtime",
+			"keywords": [
+				"debug",
+				"logger",
+				"runtime",
+				"VR",
+				"debugging"
+			],
+			"category": "Debugging",
+			"author": {
+				"name": "afjk",
+				"email": "afjk01@gmail.com"
+			},
+			"samples": [
+				{
+					"displayName": "Sample",
+					"path": "Samples~"
+				}
+			],
+			"gitHead": "ae54ebb5a0c6a75305f8c4786229d7882a41e664",
+			"_id": "com.afjk.runtime-logger@0.0.2",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-sogFv7L915manGQAWMQfPgWbdvnsQriAZxjIh7mmZsJ/OOBaQpvWkyFhQas+JWe3xkMdNl+mshnn8BW4zfPixA==",
+				"shasum": "9e4a15b857c9c6dbd1251dd91dc13423441d422f",
+				"tarball": "http://upm.afjk.jp/com.afjk.runtime-logger/-/com.afjk.runtime-logger-0.0.2.tgz"
+			},
+			"contributors": []
+		},
+		"0.0.3": {
+			"name": "com.afjk.runtime-logger",
+			"displayName": "Runtime Logger",
+			"version": "0.0.3",
+			"unity": "2019.4",
+			"description": "Logging in Runtime",
+			"keywords": [
+				"debug",
+				"logger",
+				"runtime",
+				"VR",
+				"debugging"
+			],
+			"category": "Debugging",
+			"author": {
+				"name": "afjk",
+				"email": "afjk01@gmail.com"
+			},
+			"samples": [
+				{
+					"displayName": "Sample",
+					"path": "Samples~"
+				}
+			],
+			"gitHead": "818e22c7c79c4b2fb0cdc760fe6578dc8bc37a5c",
+			"_id": "com.afjk.runtime-logger@0.0.3",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-bxWktdcmqGV3fTUYe3lo5+gDxnPlSobQdlDGcuXROMCdV0/J8vzzh2oJWu2XeCq8JdzuCU2RjRboMzawAsls6Q==",
+				"shasum": "20be866882f2eed349f60cc85c8ad65518538515",
+				"tarball": "http://upm.afjk.jp/com.afjk.runtime-logger/-/com.afjk.runtime-logger-0.0.3.tgz"
+			},
+			"contributors": []
 		}
 	},
 	"time": {
-		"modified": "2025-01-18T11:25:51.380Z",
+		"modified": "2025-01-19T00:52:54.381Z",
 		"created": "2025-01-18T11:25:51.380Z",
-		"0.0.1": "2025-01-18T11:25:51.380Z"
+		"0.0.1": "2025-01-18T11:25:51.380Z",
+		"0.0.2": "2025-01-18T15:11:16.855Z",
+		"0.0.3": "2025-01-19T00:52:54.381Z"
 	},
 	"users": {},
 	"dist-tags": {
-		"latest": "0.0.1"
+		"latest": "0.0.3"
 	},
 	"_uplinks": {},
 	"_distfiles": {},
@@ -52,9 +124,17 @@
 		"com.afjk.runtime-logger-0.0.1.tgz": {
 			"shasum": "523edc59d4d0eaccf45c1944fe6beb4cca3710ee",
 			"version": "0.0.1"
+		},
+		"com.afjk.runtime-logger-0.0.2.tgz": {
+			"shasum": "9e4a15b857c9c6dbd1251dd91dc13423441d422f",
+			"version": "0.0.2"
+		},
+		"com.afjk.runtime-logger-0.0.3.tgz": {
+			"shasum": "20be866882f2eed349f60cc85c8ad65518538515",
+			"version": "0.0.3"
 		}
 	},
-	"_rev": "3-6ff484b31b37af7d",
+	"_rev": "9-7a96042ed95cfdc5",
 	"_id": "com.afjk.runtime-logger",
 	"readme": "ERROR: No README data found!"
 }

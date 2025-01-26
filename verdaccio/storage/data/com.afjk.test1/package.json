@@ -1,0 +1,194 @@
+{
+	"name": "com.afjk.test1",
+	"versions": {
+		"1.0.0": {
+			"name": "com.afjk.test1",
+			"version": "1.0.0",
+			"displayName": "Test1",
+			"description": "Test1 package",
+			"unity": "2019.1",
+			"author": {
+				"name": "AFJK",
+				"email": "afjk01@gmail.com",
+				"url": "https://afjk.jp"
+			},
+			"_id": "com.afjk.test1@1.0.0",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-K3Ucs9IPCne6sN8JrSn2q+jOhrTn3Fcyb8pOvvHPRc5JfHNEeJ3g1BmFm39CkbcOm1hPDuyzF+JPt8vjb/NrUQ==",
+				"shasum": "219f1fb5a983cd5c6b72f965c2331253b0d63f27",
+				"tarball": "http://upm.afjk.jp/com.afjk.test1/-/com.afjk.test1-1.0.0.tgz"
+			},
+			"contributors": []
+		},
+		"1.0.1": {
+			"name": "com.afjk.test1",
+			"version": "1.0.1",
+			"displayName": "Test1",
+			"description": "Test1 package",
+			"unity": "2019.1",
+			"dependencies": {
+				"com.afjk.test2": "1.0.1"
+			},
+			"author": {
+				"name": "AFJK",
+				"email": "afjk01@gmail.com",
+				"url": "https://afjk.jp"
+			},
+			"_id": "com.afjk.test1@1.0.1",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-q3N2NHIApMmqd9cabjs/mPg/05rHoahPdU0jv3ZDlscPGK3wleLKZai1nEWRrQI3S0NivD8CglZ+vXNkkRw9Jg==",
+				"shasum": "49bd197e3c5d5545f891bd968029e6652c9bdab3",
+				"tarball": "http://upm.afjk.jp/com.afjk.test1/-/com.afjk.test1-1.0.1.tgz"
+			},
+			"contributors": []
+		},
+		"1.0.2": {
+			"name": "com.afjk.test1",
+			"version": "1.0.2",
+			"displayName": "Test1",
+			"description": "Test1 package",
+			"unity": "2019.1",
+			"dependencies": {
+				"jp.afjk.test2": "1.0.1"
+			},
+			"author": {
+				"name": "AFJK",
+				"email": "afjk01@gmail.com",
+				"url": "https://afjk.jp"
+			},
+			"_id": "com.afjk.test1@1.0.2",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-25VMeoQuUlHn2erOmYwOF87E8/hdbQjAud5ZS0v1LwpuaCTKTft+UVXTQNqf8ribhGwFqkOxG9xW4QhWjqviqQ==",
+				"shasum": "eab2b711ed527d077b7cfe5fd689a201b0965f85",
+				"tarball": "http://upm.afjk.jp/com.afjk.test1/-/com.afjk.test1-1.0.2.tgz"
+			},
+			"contributors": []
+		},
+		"1.0.3": {
+			"name": "com.afjk.test1",
+			"version": "1.0.3",
+			"displayName": "Test1",
+			"description": "Test1 package",
+			"unity": "2019.1",
+			"dependencies": {
+				"jp.afjk.test2": "1.0.2"
+			},
+			"author": {
+				"name": "AFJK",
+				"email": "afjk01@gmail.com",
+				"url": "https://afjk.jp"
+			},
+			"readmeFilename": "README.md",
+			"_id": "com.afjk.test1@1.0.3",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-aJJMqhnwsV2yOwCnq0ALcbn0mchgn7l7pK7yPYLO4aADMZ+sCNMZ+wQQskpz9eQV4V/RhFerHOuN+0yGsZAgNQ==",
+				"shasum": "28eb0453604906d981f6dfa3b458d4a41ce92284",
+				"tarball": "http://upm.afjk.jp/com.afjk.test1/-/com.afjk.test1-1.0.3.tgz"
+			},
+			"contributors": []
+		},
+		"1.0.4": {
+			"name": "com.afjk.test1",
+			"version": "1.0.4",
+			"displayName": "Test1",
+			"description": "Test1 package",
+			"unity": "2019.1",
+			"dependencies": {
+				"jp.afjk.test2": "1.0.2"
+			},
+			"author": {
+				"name": "AFJK",
+				"email": "afjk01@gmail.com",
+				"url": "https://afjk.jp"
+			},
+			"readmeFilename": "README.md",
+			"_id": "com.afjk.test1@1.0.4",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-PKNGwbR2kQNcTauuxNafNaMO5PvBYbSgoPKPqgI/zEiT+OoEcZWCUOdfu1S620XMmeMn1mh6zsNNAg29d/EBwA==",
+				"shasum": "78c828bc6c6f85a2e84dc7fc311a6559994f8031",
+				"tarball": "http://upm.afjk.jp/com.afjk.test1/-/com.afjk.test1-1.0.4.tgz"
+			},
+			"contributors": []
+		},
+		"1.0.5": {
+			"name": "com.afjk.test1",
+			"version": "1.0.5",
+			"displayName": "Test1",
+			"description": "Test1 package",
+			"unity": "2019.1",
+			"dependencies": {
+				"jp.afjk.test2": "1.0.5"
+			},
+			"author": {
+				"name": "AFJK",
+				"email": "afjk01@gmail.com",
+				"url": "https://afjk.jp"
+			},
+			"readmeFilename": "README.md",
+			"_id": "com.afjk.test1@1.0.5",
+			"_nodeVersion": "18.20.5",
+			"_npmVersion": "9.6.7",
+			"dist": {
+				"integrity": "sha512-wBvWv8UY1It4FvfemISGO7SaFvqjshJW3EefJRKqYmVUNk2tqPtho0Z2fNyPK8t1oCnWtpb2FbxQxMpnv4YazQ==",
+				"shasum": "561f46064319f0c6147bdadefadf689245c47ee6",
+				"tarball": "http://upm.afjk.jp/com.afjk.test1/-/com.afjk.test1-1.0.5.tgz"
+			},
+			"contributors": []
+		}
+	},
+	"time": {
+		"modified": "2025-01-20T00:34:09.736Z",
+		"created": "2025-01-20T00:09:43.476Z",
+		"1.0.0": "2025-01-20T00:09:43.476Z",
+		"1.0.1": "2025-01-20T00:11:27.904Z",
+		"1.0.2": "2025-01-20T00:12:40.525Z",
+		"1.0.3": "2025-01-20T00:26:56.595Z",
+		"1.0.4": "2025-01-20T00:31:44.682Z",
+		"1.0.5": "2025-01-20T00:34:09.736Z"
+	},
+	"users": {},
+	"dist-tags": {
+		"latest": "1.0.5"
+	},
+	"_uplinks": {},
+	"_distfiles": {},
+	"_attachments": {
+		"com.afjk.test1-1.0.0.tgz": {
+			"shasum": "219f1fb5a983cd5c6b72f965c2331253b0d63f27",
+			"version": "1.0.0"
+		},
+		"com.afjk.test1-1.0.1.tgz": {
+			"shasum": "49bd197e3c5d5545f891bd968029e6652c9bdab3",
+			"version": "1.0.1"
+		},
+		"com.afjk.test1-1.0.2.tgz": {
+			"shasum": "eab2b711ed527d077b7cfe5fd689a201b0965f85",
+			"version": "1.0.2"
+		},
+		"com.afjk.test1-1.0.3.tgz": {
+			"shasum": "28eb0453604906d981f6dfa3b458d4a41ce92284",
+			"version": "1.0.3"
+		},
+		"com.afjk.test1-1.0.4.tgz": {
+			"shasum": "78c828bc6c6f85a2e84dc7fc311a6559994f8031",
+			"version": "1.0.4"
+		},
+		"com.afjk.test1-1.0.5.tgz": {
+			"shasum": "561f46064319f0c6147bdadefadf689245c47ee6",
+			"version": "1.0.5"
+		}
+	},
+	"_rev": "18-4ba95efea996bafc",
+	"_id": "com.afjk.test1",
+	"readme": " "
+}
