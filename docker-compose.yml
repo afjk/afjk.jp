@@ -6,6 +6,7 @@ services:
     ports:
       - 80:80
       - 443:443
+      - 8080:8080
     restart: always
     environment:
       # ドメイン設定 (複数ドメインも対応可能)
@@ -13,6 +14,7 @@ services:
         afjk.jp -> http://www-service:80,
         www.afjk.jp -> http://www-service:80,
         upm.afjk.jp -> http://verdaccio:4873
+        pipe.afjk.jp -> http://piping-server:8080
       CLIENT_MAX_BODY_SIZE: 100M
       # 本番環境の場合は "production" を指定
       STAGE: production
@@ -39,3 +41,14 @@ services:
       - "./verdaccio/storage:/verdaccio/storage"
       - "./verdaccio/config:/verdaccio/conf"
       - "./verdaccio/plugins:/verdaccio/plugins"
+
+
+  # afjk.jp/piping 用の Piping Server
+  piping-server:
+    image: nwtgck/piping-server
+    container_name: piping-server
+    ports:
+      - "8080:8080" # ホストの8080ポートをコンテナの8080ポートにマッピング
+    environment:
+      - PORT=8080 # Piping Serverがリッスンするポート
+    restart: always
