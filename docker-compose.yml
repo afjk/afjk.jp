@@ -13,7 +13,7 @@ services:
       DOMAINS: |
         afjk.jp -> http://www-service:80,
         www.afjk.jp -> http://www-service:80,
-        upm.afjk.jp -> http://verdaccio:4873
+        upm.afjk.jp -> http://verdaccio:4873,
         pipe.afjk.jp -> http://piping-server:8080
       CLIENT_MAX_BODY_SIZE: 100M
       # 本番環境の場合は "production" を指定
