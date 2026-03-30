@@ -1,7 +1,7 @@
 services:
   https-portal:
-    environment:
-      STAGE: local
+    profiles:
+      - production
 
   www-service:
     ports:
