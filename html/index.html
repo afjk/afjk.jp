@@ -525,6 +525,23 @@
       margin-top: 6px;
     }
 
+    /* ── Posts ────────────────────────────────────── */
+    .posts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+      align-items: start;
+    }
+
+    .posts-grid .twitter-tweet {
+      margin: 0 !important;
+    }
+
+    .posts-more {
+      text-align: center;
+    }
+
     /* ── Contact ──────────────────────────────────── */
     #contact {
       text-align: center;
@@ -576,6 +593,7 @@
       <li><a href="#works" data-ja>Works</a></li>
       <li><a href="#about" data-ja>About</a></li>
       <li><a href="#skills" data-ja>Skills</a></li>
+      <li><a href="#posts" data-ja>Posts</a></li>
       <li><a href="#contact" data-ja>Contact</a></li>
     </ul>
     <div class="nav-right">
@@ -856,6 +874,41 @@
   </div>
 </section>
 
+<!-- ── Posts ─────────────────────────────────────── -->
+<section id="posts">
+  <div class="container">
+    <p class="label">Posts</p>
+    <h2 style="margin-bottom:32px">
+      <span data-ja>最近のポスト</span>
+      <span data-en>Recent Posts</span>
+    </h2>
+    <div class="posts-grid">
+      <blockquote class="twitter-tweet" data-theme="dark" data-dnt="true">
+        <p lang="ja">Apple Vision Proスリープ防止キャップに黒バージョンを追加しました！2色プリントにより内側の1層を白くプリントする事でスリープを防ぎました。</p>
+        &mdash; afjk (@afjk01) <a href="https://x.com/afjk01/status/1992045374941610023">2025年11月22日</a>
+      </blockquote>
+      <blockquote class="twitter-tweet" data-theme="dark" data-dnt="true">
+        <p lang="ja">Apple Vision Pro ZEISS インサート用ミニマルケースを作りました。インサートを保護・収納するコンパクトなケース。</p>
+        &mdash; afjk (@afjk01) <a href="https://x.com/afjk01/status/2025139388393685498">2026年3月</a>
+      </blockquote>
+      <blockquote class="twitter-tweet" data-theme="dark" data-dnt="true">
+        <p lang="ja">Apple Vision Pro 関連の制作・実験の様子。XR体験開発と3Dプリントを組み合わせたプロダクト開発を続けています。</p>
+        &mdash; afjk (@afjk01) <a href="https://x.com/afjk01/status/1984967767293067764">2025年</a>
+      </blockquote>
+      <blockquote class="twitter-tweet" data-theme="dark" data-dnt="true">
+        <p lang="ja">[宣伝です] Apple Vision ProスリープキャップをBoothで販売開始しました！レンズ保護キャップ付き・スリープ防止キャップのみの２種類展開です。</p>
+        &mdash; afjk (@afjk01) <a href="https://x.com/afjk01/status/1973603383127974370">2025年10月2日</a>
+      </blockquote>
+    </div>
+    <div class="posts-more">
+      <a href="https://x.com/afjk01" target="_blank" rel="noopener" class="btn btn-ghost">
+        <span data-ja>X でもっと見る</span>
+        <span data-en>View more on X</span>
+      </a>
+    </div>
+  </div>
+</section>
+
 <!-- ── Contact ────────────────────────────────────── -->
 <section id="contact">
   <div class="container">
@@ -1045,6 +1098,8 @@ const savedLang = localStorage.getItem('lang');
 const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
 setLang(savedLang || browserLang);
 </script>
+
+<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
 
 </body>
 </html>
