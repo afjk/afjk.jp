@@ -32,6 +32,12 @@
       margin: 0 auto;
     }
 
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
     header h1 {
       font-size: 2.5rem;
       font-weight: 700;
@@ -65,6 +71,35 @@
 
     .social-links a:hover { color: var(--accent); }
 
+    /* Language toggle */
+    .lang-toggle {
+      display: flex;
+      gap: 2px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px;
+      flex-shrink: 0;
+    }
+
+    .lang-toggle button {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      letter-spacing: 0.04em;
+    }
+
+    .lang-toggle button.active {
+      background: var(--accent);
+      color: #000;
+    }
+
     /* Main */
     main {
       max-width: 800px;
@@ -83,7 +118,7 @@
       margin-bottom: 1.25rem;
     }
 
-    /* Cards grid */
+    /* Cards */
     .cards {
       display: grid;
       gap: 1px;
@@ -102,10 +137,7 @@
       gap: 1rem;
     }
 
-    .card-info h3 {
-      font-size: 0.95rem;
-      font-weight: 500;
-    }
+    .card-info h3 { font-size: 0.95rem; font-weight: 500; }
 
     .card-info p {
       font-size: 0.8rem;
@@ -131,17 +163,10 @@
       white-space: nowrap;
     }
 
-    .badge:hover {
-      color: var(--accent);
-      border-color: var(--accent);
-    }
+    .badge:hover { color: var(--accent); border-color: var(--accent); }
 
     /* Skills */
-    .skills {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
+    .skills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
     .skill {
       font-size: 0.8rem;
@@ -173,21 +198,11 @@
     }
 
     .platform:hover { background: #222; }
+    .platform .name { font-size: 0.9rem; font-weight: 500; }
+    .platform .handle { font-size: 0.75rem; color: var(--muted); }
 
-    .platform .name {
-      font-size: 0.9rem;
-      font-weight: 500;
-    }
-
-    .platform .handle {
-      font-size: 0.75rem;
-      color: var(--muted);
-    }
-
-    /* Posts */
     .x-embed { border-radius: 12px; overflow: hidden; }
 
-    /* Footer */
     footer {
       text-align: center;
       padding: 2rem;
@@ -199,9 +214,17 @@
 <body>
 
 <header>
-  <h1>afjk<span>.</span></h1>
-  <p>XRエンジニア / 3Dプリント・ガジェット制作<br>
-  Unity を中心に XR / MR アプリを開発。Apple Vision Pro アクセサリーも制作・販売。</p>
+  <div class="header-top">
+    <h1>afjk<span>.</span></h1>
+    <div class="lang-toggle">
+      <button id="btn-ja" class="active" onclick="setLang('ja')">JA</button>
+      <button id="btn-en" onclick="setLang('en')">EN</button>
+    </div>
+  </div>
+  <p>
+    <span data-ja>XRエンジニア / 3Dプリント・ガジェット制作<br>Unity を中心に XR / MR アプリを開発。Apple Vision Pro アクセサリーも制作・販売。</span>
+    <span data-en>XR Engineer / 3D Printing &amp; Gadget Making<br>Developing XR/MR apps with Unity. Also creating and selling Apple Vision Pro accessories.</span>
+  </p>
   <nav class="social-links">
     <a href="https://x.com/afjk01" target="_blank">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.747l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
@@ -248,7 +271,10 @@
       <div class="card">
         <div class="card-info">
           <h3>MR Unity Templates</h3>
-          <p>主要XRプラットフォーム向けUnity MRテンプレート集。PICO4・Meta Quest・Apple Vision Pro・XREAL・VIVEに対応。</p>
+          <p>
+            <span data-ja>主要XRプラットフォーム向けUnity MRテンプレート集。PICO4・Meta Quest・Apple Vision Pro・XREAL・VIVEに対応。</span>
+            <span data-en>Unity MR template collection for major XR platforms. Supports PICO4, Meta Quest, Apple Vision Pro, XREAL, and VIVE.</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://github.com/afjk/MR-Unity-Template" target="_blank">GitHub</a>
@@ -257,7 +283,10 @@
       <div class="card">
         <div class="card-info">
           <h3>MazeMaker</h3>
-          <p>Unity 向け迷路生成ライブラリ。★20</p>
+          <p>
+            <span data-ja>Unity 向け迷路生成ライブラリ。★20</span>
+            <span data-en>Maze generation library for Unity. ★20</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://github.com/afjk/MazeMaker" target="_blank">GitHub</a>
@@ -266,7 +295,10 @@
       <div class="card">
         <div class="card-info">
           <h3>TinyHttpServerForUnity</h3>
-          <p>Unity ランタイム上で動作する軽量 HTTP サーバー。</p>
+          <p>
+            <span data-ja>Unity ランタイム上で動作する軽量 HTTP サーバー。</span>
+            <span data-en>A lightweight HTTP server running on the Unity runtime.</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://github.com/afjk/TinyHttpServerForUnity" target="_blank">GitHub</a>
@@ -275,7 +307,10 @@
       <div class="card">
         <div class="card-info">
           <h3>UnityRuntimeLogger</h3>
-          <p>Unity のログをランタイムで確認できるツール。</p>
+          <p>
+            <span data-ja>Unity のログをランタイムで確認できるツール。</span>
+            <span data-en>A tool for viewing Unity logs at runtime.</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://github.com/afjk/UnityRuntimeLogger" target="_blank">GitHub</a>
@@ -284,7 +319,10 @@
       <div class="card">
         <div class="card-info">
           <h3>BTNFCTagWriter</h3>
-          <p>Android 向け Bluetooth SSP NFC タグライター。★1</p>
+          <p>
+            <span data-ja>Android 向け Bluetooth SSP NFC タグライター。★1</span>
+            <span data-en>Bluetooth SSP NFC tag writer for Android. ★1</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://github.com/afjk/BTNFCTagWriter" target="_blank">GitHub</a>
@@ -299,8 +337,14 @@
     <div class="cards">
       <div class="card">
         <div class="card-info">
-          <h3>Apple Vision Pro アンチスリープキャップ</h3>
-          <p>着脱時の自動スリープを防止する3Dプリント製キャップ。高精度3Dスキャンデータをもとに設計し、IPD変動に追従、ライトシール有無・メガネ着用を問わず対応。MakerWorld 40,000+ DL。完成品・STLデータを販売中。</p>
+          <h3>
+            <span data-ja>Apple Vision Pro アンチスリープキャップ</span>
+            <span data-en>Apple Vision Pro Anti-Sleep Cap</span>
+          </h3>
+          <p>
+            <span data-ja>着脱時の自動スリープを防止する3Dプリント製キャップ。高精度3Dスキャンデータをもとに設計し、IPD変動に追従、ライトシール有無・メガネ着用を問わず対応。MakerWorld 40,000+ DL。完成品・STLデータを販売中。</span>
+            <span data-en>A 3D-printed cap to prevent auto-sleep when removing Apple Vision Pro. Designed from high-precision 3D scan data, follows IPD changes, and works with or without Light Seal and glasses. 40,000+ downloads on MakerWorld. Available as finished product and STL data.</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://afjk.booth.pm/" target="_blank">BOOTH</a>
@@ -310,8 +354,14 @@
       </div>
       <div class="card">
         <div class="card-info">
-          <h3>Apple Vision Pro ZEISSインサート用ミニマルケース</h3>
-          <p>ZEISSインサートを保護・収納するコンパクトなケース。MakerWorld 700+ DL。</p>
+          <h3>
+            <span data-ja>Apple Vision Pro ZEISSインサート用ミニマルケース</span>
+            <span data-en>Apple Vision Pro Minimal Case for ZEISS Inserts</span>
+          </h3>
+          <p>
+            <span data-ja>ZEISSインサートを保護・収納するコンパクトなケース。MakerWorld 700+ DL。</span>
+            <span data-en>A compact case to protect and store ZEISS inserts. 700+ downloads on MakerWorld.</span>
+          </p>
         </div>
         <div class="card-links">
           <a class="badge" href="https://makerworld.com/ja/@afjk01/upload" target="_blank">MakerWorld</a>
@@ -326,11 +376,20 @@
     <div class="cards">
       <div class="card">
         <div class="card-info">
-          <h3>着脱時の面倒を解消 Apple Vision Pro用スリープ防止キャップがBOOTHで販売開始</h3>
-          <p>MoguLive — VR/AR専門メディアに製品紹介記事が掲載。</p>
+          <h3>
+            <span data-ja>着脱時の面倒を解消 Apple Vision Pro用スリープ防止キャップがBOOTHで販売開始</span>
+            <span data-en>Anti-Sleep Cap for Apple Vision Pro Now Available on BOOTH</span>
+          </h3>
+          <p>
+            <span data-ja>MoguLive — VR/AR専門メディアに製品紹介記事が掲載。</span>
+            <span data-en>MoguLive — Product introduction article published on a VR/AR specialist media outlet.</span>
+          </p>
         </div>
         <div class="card-links">
-          <a class="badge" href="https://www.moguravr.com/afjk-vision-pro-sleep-cap/" target="_blank">記事を読む</a>
+          <a class="badge" href="https://www.moguravr.com/afjk-vision-pro-sleep-cap/" target="_blank">
+            <span data-ja>記事を読む</span>
+            <span data-en>Read</span>
+          </a>
         </div>
       </div>
     </div>
@@ -386,5 +445,26 @@
 <footer>© afjk</footer>
 
 <script async src="https://platform.twitter.com/widgets.js"></script>
+<script>
+  function setLang(lang) {
+    document.documentElement.lang = lang;
+    localStorage.setItem('lang', lang);
+
+    document.querySelectorAll('[data-ja]').forEach(el => {
+      el.style.display = lang === 'ja' ? '' : 'none';
+    });
+    document.querySelectorAll('[data-en]').forEach(el => {
+      el.style.display = lang === 'en' ? '' : 'none';
+    });
+
+    document.getElementById('btn-ja').classList.toggle('active', lang === 'ja');
+    document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+  }
+
+  // 初期言語: localStorage → ブラウザ言語 → ja
+  const saved = localStorage.getItem('lang');
+  const browser = navigator.language.startsWith('ja') ? 'ja' : 'en';
+  setLang(saved || browser);
+</script>
 </body>
 </html>
