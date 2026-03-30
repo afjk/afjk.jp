@@ -1,6 +1,78 @@
 # afjk.jp
 afjk.jp home server
 
+## サービス一覧
+
+### afjk.jp / www.afjk.jp — メインサイト
+
+静的HTMLサイト。`html/index.html` を編集してデプロイ。
+
+---
+
+### upm.afjk.jp — Unity Package Manager レジストリ (Verdaccio)
+
+プライベートnpmレジストリ。Unityパッケージの配布に使用。
+
+**パッケージの参照** (認証不要)
+
+```
+https://upm.afjk.jp
+```
+
+**パッケージの公開** (要認証)
+
+```bash
+# ログイン
+npm login --registry https://upm.afjk.jp
+
+# 公開
+npm publish --registry https://upm.afjk.jp
+```
+
+**Unity での設定** (`Packages/manifest.json`)
+
+```json
+{
+  "scopedRegistries": [
+    {
+      "name": "afjk",
+      "url": "https://upm.afjk.jp",
+      "scopes": ["com.afjk", "jp.afjk"]
+    }
+  ]
+}
+```
+
+---
+
+### pipe.afjk.jp — Piping Server
+
+ブラウザ・curl間でファイルやテキストを転送できるサービス。パスは任意の文字列でOK。
+
+**テキストの送受信**
+
+```bash
+# 送信
+echo "hello" | curl -T - https://pipe.afjk.jp/mypath
+
+# 受信
+curl https://pipe.afjk.jp/mypath
+```
+
+**ファイルの送受信**
+
+```bash
+# 送信
+curl -T ./file.zip https://pipe.afjk.jp/mypath
+
+# 受信
+curl -o file.zip https://pipe.afjk.jp/mypath
+```
+
+送信側と受信側が同じパスにアクセスすることでデータが転送される。送信側は受信側が接続するまで待機する。
+
+---
+
 ## ローカル開発
 
 ### 起動
