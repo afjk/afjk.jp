@@ -1,0 +1,16 @@
+services:
+  https-portal:
+    environment:
+      STAGE: local
+
+  www-service:
+    ports:
+      - "8888:80"
+
+  verdaccio:
+    ports:
+      - "4873:4873"
+
+  piping-server:
+    ports:
+      - "8080:8080"
