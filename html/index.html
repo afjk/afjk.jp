@@ -27,7 +27,7 @@
 
     /* Header */
     header {
-      padding: 3rem 2rem 2rem;
+      padding: 4rem 2rem 2rem;
       max-width: 800px;
       margin: 0 auto;
     }
@@ -38,14 +38,13 @@
       letter-spacing: -0.03em;
     }
 
-    header h1 span {
-      color: var(--accent);
-    }
+    header h1 span { color: var(--accent); }
 
     header p {
       margin-top: 0.75rem;
       color: var(--muted);
-      font-size: 1rem;
+      font-size: 0.95rem;
+      max-width: 480px;
     }
 
     .social-links {
@@ -70,22 +69,22 @@
     main {
       max-width: 800px;
       margin: 0 auto;
-      padding: 0 2rem 4rem;
+      padding: 0 2rem 5rem;
     }
 
-    section { margin-top: 3rem; }
+    section { margin-top: 3.5rem; }
 
     section h2 {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       font-weight: 600;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       color: var(--muted);
       margin-bottom: 1.25rem;
     }
 
-    /* Product cards */
-    .products {
+    /* Cards grid */
+    .cards {
       display: grid;
       gap: 1px;
       background: var(--border);
@@ -94,7 +93,7 @@
       overflow: hidden;
     }
 
-    .product {
+    .card {
       background: var(--surface);
       padding: 1.25rem 1.5rem;
       display: flex;
@@ -103,18 +102,18 @@
       gap: 1rem;
     }
 
-    .product-info h3 {
+    .card-info h3 {
       font-size: 0.95rem;
       font-weight: 500;
     }
 
-    .product-info p {
+    .card-info p {
       font-size: 0.8rem;
       color: var(--muted);
       margin-top: 0.25rem;
     }
 
-    .product-links {
+    .card-links {
       display: flex;
       gap: 0.5rem;
       flex-shrink: 0;
@@ -137,10 +136,26 @@
       border-color: var(--accent);
     }
 
-    /* Platform links */
+    /* Skills */
+    .skills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .skill {
+      font-size: 0.8rem;
+      padding: 0.3rem 0.8rem;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    /* Platforms */
     .platforms {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
       gap: 1px;
       background: var(--border);
       border: 1px solid var(--border);
@@ -150,10 +165,10 @@
 
     .platform {
       background: var(--surface);
-      padding: 1.25rem 1.5rem;
+      padding: 1.1rem 1.5rem;
       display: flex;
       flex-direction: column;
-      gap: 0.25rem;
+      gap: 0.2rem;
       transition: background 0.2s;
     }
 
@@ -169,31 +184,8 @@
       color: var(--muted);
     }
 
-    /* X embed */
-    .x-embed {
-      border-radius: 12px;
-      overflow: hidden;
-    }
-
-    /* Stats */
-    .stats {
-      display: flex;
-      gap: 2rem;
-      flex-wrap: wrap;
-    }
-
-    .stat .value {
-      font-size: 1.75rem;
-      font-weight: 700;
-      color: var(--accent);
-      line-height: 1;
-    }
-
-    .stat .label {
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-top: 0.25rem;
-    }
+    /* Posts */
+    .x-embed { border-radius: 12px; overflow: hidden; }
 
     /* Footer */
     footer {
@@ -208,61 +200,136 @@
 
 <header>
   <h1>afjk<span>.</span></h1>
-  <p>XRアプリ開発 / 3Dプリント・ガジェット制作 / Apple Vision Pro アクセサリー</p>
+  <p>XRエンジニア / 3Dプリント・ガジェット制作<br>
+  Unity を中心に XR / MR アプリを開発。Apple Vision Pro アクセサリーも制作・販売。</p>
   <nav class="social-links">
     <a href="https://x.com/afjk01" target="_blank">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.747l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
       @afjk01
     </a>
-    <a href="https://afjk.booth.pm/" target="_blank">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
-      BOOTH
+    <a href="https://github.com/afjk" target="_blank">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+      GitHub
     </a>
-    <a href="https://www.etsy.com/jp/shop/AFJKLab" target="_blank">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
-      Etsy
-    </a>
-    <a href="https://makerworld.com/ja/@afjk01" target="_blank">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
-      MakerWorld
-    </a>
+    <a href="https://afjk.booth.pm/" target="_blank">BOOTH</a>
+    <a href="https://www.etsy.com/jp/shop/AFJKLab" target="_blank">Etsy</a>
+    <a href="https://makerworld.com/ja/@afjk01" target="_blank">MakerWorld</a>
   </nav>
 </header>
 
 <main>
 
+  <!-- Skills -->
   <section>
-    <h2>Works</h2>
-    <div class="products">
-      <div class="product">
-        <div class="product-info">
-          <h3>Apple Vision Pro アンチスリープキャップ</h3>
-          <p>装着中のスリープを防止する3Dプリント製キャップ。完成品・STLデータを販売中。</p>
+    <h2>Skills</h2>
+    <div class="skills">
+      <span class="skill">Unity</span>
+      <span class="skill">C#</span>
+      <span class="skill">XR / MR</span>
+      <span class="skill">Apple Vision Pro</span>
+      <span class="skill">Meta Quest</span>
+      <span class="skill">PICO4</span>
+      <span class="skill">XREAL</span>
+      <span class="skill">VIVE</span>
+      <span class="skill">Android</span>
+      <span class="skill">JavaScript</span>
+      <span class="skill">Python</span>
+      <span class="skill">C++</span>
+      <span class="skill">3D Printing</span>
+      <span class="skill">Docker</span>
+    </div>
+  </section>
+
+  <!-- XR Development -->
+  <section>
+    <h2>XR Development</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="card-info">
+          <h3>MR Unity Templates</h3>
+          <p>主要XRプラットフォーム向けUnity MRテンプレート集。PICO4・Meta Quest・Apple Vision Pro・XREAL・VIVEに対応。</p>
         </div>
-        <div class="product-links">
+        <div class="card-links">
+          <a class="badge" href="https://github.com/afjk/MR-Unity-Template" target="_blank">GitHub</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3>MazeMaker</h3>
+          <p>Unity 向け迷路生成ライブラリ。★20</p>
+        </div>
+        <div class="card-links">
+          <a class="badge" href="https://github.com/afjk/MazeMaker" target="_blank">GitHub</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3>TinyHttpServerForUnity</h3>
+          <p>Unity ランタイム上で動作する軽量 HTTP サーバー。</p>
+        </div>
+        <div class="card-links">
+          <a class="badge" href="https://github.com/afjk/TinyHttpServerForUnity" target="_blank">GitHub</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3>UnityRuntimeLogger</h3>
+          <p>Unity のログをランタイムで確認できるツール。</p>
+        </div>
+        <div class="card-links">
+          <a class="badge" href="https://github.com/afjk/UnityRuntimeLogger" target="_blank">GitHub</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3>BTNFCTagWriter</h3>
+          <p>Android 向け Bluetooth SSP NFC タグライター。★1</p>
+        </div>
+        <div class="card-links">
+          <a class="badge" href="https://github.com/afjk/BTNFCTagWriter" target="_blank">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3D Print / Hardware -->
+  <section>
+    <h2>3D Print / Hardware</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="card-info">
+          <h3>Apple Vision Pro アンチスリープキャップ</h3>
+          <p>装着中のスリープを防止する3Dプリント製キャップ。完成品・STLデータを販売中。MakerWorld 40,000+ DL。</p>
+        </div>
+        <div class="card-links">
           <a class="badge" href="https://afjk.booth.pm/" target="_blank">BOOTH</a>
           <a class="badge" href="https://www.etsy.com/jp/shop/AFJKLab" target="_blank">Etsy</a>
           <a class="badge" href="https://makerworld.com/ja/@afjk01/upload" target="_blank">MakerWorld</a>
         </div>
       </div>
-      <div class="product">
-        <div class="product-info">
+      <div class="card">
+        <div class="card-info">
           <h3>Apple Vision Pro ZEISSインサート用ミニマルケース</h3>
-          <p>ZEISSインサートを保護・収納するコンパクトなケース。</p>
+          <p>ZEISSインサートを保護・収納するコンパクトなケース。MakerWorld 700+ DL。</p>
         </div>
-        <div class="product-links">
+        <div class="card-links">
           <a class="badge" href="https://makerworld.com/ja/@afjk01/upload" target="_blank">MakerWorld</a>
         </div>
       </div>
     </div>
   </section>
 
+  <!-- Platforms -->
   <section>
     <h2>Platforms</h2>
     <div class="platforms">
       <a class="platform" href="https://x.com/afjk01" target="_blank">
         <span class="name">X (Twitter)</span>
         <span class="handle">@afjk01</span>
+      </a>
+      <a class="platform" href="https://github.com/afjk" target="_blank">
+        <span class="name">GitHub</span>
+        <span class="handle">afjk</span>
       </a>
       <a class="platform" href="https://afjk.booth.pm/" target="_blank">
         <span class="name">BOOTH</span>
@@ -279,6 +346,7 @@
     </div>
   </section>
 
+  <!-- Posts -->
   <section>
     <h2>Posts</h2>
     <div class="x-embed">
