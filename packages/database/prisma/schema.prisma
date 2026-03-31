@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  id          String   @id @default(cuid())
+  displayName String
+  headline    String?
+  bio         String?
+  location    String?
+  avatarUrl   String?
+  links       Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  title       String
+  slug        String        @unique
+  summary     String
+  description String?
+  tags        String[]
+  status      ProjectStatus @default(DRAFT)
+  startDate   DateTime?
+  endDate     DateTime?
+  highlight   Boolean       @default(false)
+  repoUrl     String?
+  liveUrl     String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  activity    ActivityEvent[]
+}
+
+model ActivityEvent {
+  id          String          @id @default(cuid())
+  source      ActivitySource
+  title       String
+  url         String?
+  occurredAt  DateTime        @default(now())
+  payload     Json?
+  createdAt   DateTime        @default(now())
+  project     Project?        @relation(fields: [projectId], references: [id])
+  projectId   String?
+  socialPosts SocialPost[]
+
+  @@index([occurredAt])
+  @@index([source])
+}
+
+model SocialPost {
+  id              String         @id @default(cuid())
+  platform        SocialPlatform
+  remoteId        String
+  author          String
+  text            String
+  url             String?
+  media           Json?
+  publishedAt     DateTime
+  metadata        Json?
+  createdAt       DateTime       @default(now())
+  activityEvent   ActivityEvent? @relation(fields: [activityEventId], references: [id])
+  activityEventId String?
+
+  @@unique([platform, remoteId])
+  @@index([publishedAt])
+}
+
+model MetricSnapshot {
+  id          String    @id @default(cuid())
+  metric      String
+  value       Float
+  unit        String?
+  labels      Json?
+  collectedAt DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  @@index([metric, collectedAt])
+}
+
+enum ProjectStatus {
+  DRAFT
+  BUILDING
+  LIVE
+  ARCHIVED
+}
+
+enum ActivitySource {
+  TWITTER
+  GITHUB
+  BLOG
+  NOTION
+  SENSOR
+  SESSION
+}
+
+enum SocialPlatform {
+  TWITTER
+  BLUESKY
+  MASTODON
+  YOUTUBE
+  NOTE
+  OTHER
+}

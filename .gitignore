@@ -1,3 +1,15 @@
 # ローカル開発用の自己署名証明書
 https-portal-certs/*/local/
 https-portal-certs/pipe.afjk.jp/
+
+# Node / Next.js artifacts
+node_modules/
+.turbo/
+.next/
+apps/web/.next/
+apps/web/out/
+*.log
+.DS_Store
+
+# Env files
+.env

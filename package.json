@@ -1,0 +1,19 @@
+{
+  "name": "afjk-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.1.0",
+  "scripts": {
+    "dev": "turbo dev --parallel",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "format": "prettier --write .",
+    "prisma:generate": "pnpm --filter @afjk/database generate",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "turbo": "^2.0.6",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
