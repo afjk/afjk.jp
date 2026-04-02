@@ -14,7 +14,7 @@ services:
         www.afjk.jp -> http://www-service:80,
         upm.afjk.jp -> http://verdaccio:4873,
         pipe.afjk.jp -> http://piping-server:8080
-      CLIENT_MAX_BODY_SIZE: 100M
+      CLIENT_MAX_BODY_SIZE: 0
       # 本番環境の場合は "production" を指定
       STAGE: production
     volumes:
