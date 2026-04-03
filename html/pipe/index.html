@@ -288,7 +288,8 @@
 
     <div class="btn-row">
       <button class="btn btn-primary" id="send-btn" onclick="startSend()" disabled>転送開始</button>
-      <button class="btn btn-ghost" onclick="resetSend()">リセット</button>
+      <button class="btn btn-ghost" id="cancel-send-btn" onclick="cancelSend()" style="display:none">キャンセル</button>
+      <button class="btn btn-ghost" id="reset-send-btn" onclick="resetSend()">リセット</button>
     </div>
   </div>
 
@@ -300,6 +301,7 @@
         placeholder="abc12345 または https://afjk.jp/pipe/#abc12345"
         oninput="document.getElementById('recv-btn').disabled = !this.value.trim()">
       <button class="btn btn-primary" id="recv-btn" onclick="startReceive()" disabled>受信</button>
+      <button class="btn btn-ghost" id="cancel-recv-btn" onclick="cancelRecv()" style="display:none">キャンセル</button>
     </div>
     <div class="status" id="recv-status" style="margin-top:14px"></div>
   </div>
@@ -323,7 +325,8 @@
 
     <div class="status" id="txt-send-status"></div>
     <div class="btn-row">
-      <button class="btn btn-primary" onclick="sendText()">テキストを送信</button>
+      <button class="btn btn-primary" id="txt-send-btn" onclick="sendText()">テキストを送信</button>
+      <button class="btn btn-ghost" id="cancel-txt-send-btn" onclick="cancelTxtSend()" style="display:none">キャンセル</button>
     </div>
 
     <hr class="divider">
@@ -331,7 +334,8 @@
     <div class="field-label">テキストを受信</div>
     <div class="input-row">
       <input class="path-input" id="txt-recv-path" placeholder="abc12345">
-      <button class="btn btn-primary" onclick="receiveText()">受信</button>
+      <button class="btn btn-primary" id="txt-recv-btn" onclick="receiveText()">受信</button>
+      <button class="btn btn-ghost" id="cancel-txt-recv-btn" onclick="cancelTxtRecv()" style="display:none">キャンセル</button>
     </div>
     <textarea id="txt-received" placeholder="受信したテキストがここに表示されます" readonly style="margin-top:12px"></textarea>
     <div class="status" id="txt-recv-status"></div>
@@ -346,6 +350,11 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const PIPE        = 'https://pipe.afjk.jp';
+// ── Cancellation state ────────────────────────────────────────────────────────
+let _sendXHR = null, _sendPC = null;   // file send
+let _recvPC  = null, _recvAC = null;   // file receive
+let _txtSendPC = null;                 // text send
+let _txtRecvAC = null;                 // text receive
 const SIG_TIMEOUT = 8000;   // ms: wait for WebRTC signaling peer
 const ICE_TIMEOUT = 3000;   // ms: max ICE gathering time
 const DC_TIMEOUT  = 5000;   // ms: wait for DataChannel open
@@ -453,9 +462,29 @@ function setFile(f) {
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────
+function _sendStart() {
+  document.getElementById('send-btn').disabled      = true;
+  document.getElementById('cancel-send-btn').style.display = '';
+  document.getElementById('reset-send-btn').style.display  = 'none';
+}
+function _sendEnd() {
+  document.getElementById('send-btn').disabled      = false;
+  document.getElementById('cancel-send-btn').style.display = 'none';
+  document.getElementById('reset-send-btn').style.display  = '';
+  _sendXHR = null; _sendPC = null;
+}
+function cancelSend() {
+  _sendXHR?.abort(); _sendPC?.close();
+  _sendXHR = null; _sendPC = null;
+  document.getElementById('prog-wrap').style.display = 'none';
+  document.getElementById('prog-bar').style.width = '0%';
+  setStatus('send-status', 'キャンセルしました', 'err');
+  _sendEnd();
+}
+
 async function startSend() {
   if (!selFile) return;
-  document.getElementById('send-btn').disabled = true;
+  _sendStart();
   document.getElementById('prog-wrap').style.display = 'block';
   setStatus('send-status', 'ローカル P2P を試みています…', 'waiting');
 
@@ -467,10 +496,11 @@ async function startSend() {
         `${p}%  (${fmt(loaded)} / ${fmt(total)})`;
       if (p > 0) setStatus('send-status', '転送中… (P2P)', 'waiting');
     },
-    msg => setStatus('send-status', msg, 'ok')
+    msg => { setStatus('send-status', msg, 'ok'); _sendEnd(); }
   );
 
   if (!ok) {
+    if (!_sendPC && !_sendXHR && document.getElementById('cancel-send-btn').style.display === 'none') return; // cancelled
     setStatus('send-status', '受信者を待っています… Waiting for receiver…', 'waiting');
     sendHTTP(selFile, curPath);
   }
@@ -478,6 +508,7 @@ async function startSend() {
 
 function sendHTTP(body, path) {
   const xhr = new XMLHttpRequest();
+  _sendXHR = xhr;
   xhr.open('POST', `${PIPE}/${path}`);
   xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
   xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
@@ -498,10 +529,12 @@ function sendHTTP(body, path) {
     document.getElementById('prog-bar').style.width = '100%';
     document.getElementById('prog-text').textContent = '100%';
     setStatus('send-status', `✓ 転送完了 — ${fmt(body.size)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, 'ok');
+    _sendEnd();
   });
+  xhr.addEventListener('abort', () => {});  // handled by cancelSend
   xhr.addEventListener('error', () => {
     setStatus('send-status', '✗ エラー Transfer failed', 'err');
-    document.getElementById('send-btn').disabled = false;
+    _sendEnd();
   });
   xhr.send(body);
 }
@@ -517,18 +550,34 @@ function resetSend() {
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────
+function _recvStart() {
+  document.getElementById('recv-btn').disabled          = true;
+  document.getElementById('cancel-recv-btn').style.display = '';
+}
+function _recvEnd() {
+  document.getElementById('recv-btn').disabled          = false;
+  document.getElementById('cancel-recv-btn').style.display = 'none';
+  _recvPC = null; _recvAC = null;
+}
+function cancelRecv() {
+  _recvPC?.close(); _recvAC?.abort();
+  setStatus('recv-status', 'キャンセルしました', 'err');
+  _recvEnd();
+}
+
 async function startReceive() {
   const path = parsePath(document.getElementById('recv-path').value);
   if (!path) return;
-  document.getElementById('recv-btn').disabled = true;
+  _recvStart();
   setStatus('recv-status', 'ローカル P2P を試みています…', 'waiting');
 
   const ok = await tryRecvWebRTC(path,
-    msg  => setStatus('recv-status', msg, 'waiting'),
-    msg  => setStatus('recv-status', msg, 'ok')
+    msg => setStatus('recv-status', msg, 'waiting'),
+    msg => { setStatus('recv-status', msg, 'ok'); _recvEnd(); }
   );
 
   if (!ok) {
+    if (document.getElementById('cancel-recv-btn').style.display === 'none') return; // cancelled
     setStatus('recv-status', 'ダウンロードを開始します… 送信者が開始するまで待機します。', 'waiting');
     const a = Object.assign(document.createElement('a'), {
       href: `${PIPE}/${path}`, download: ''
@@ -538,11 +587,24 @@ async function startReceive() {
     document.body.removeChild(a);
     setTimeout(() =>
       setStatus('recv-status', '受信を待機中。送信側が転送を開始すると自動でダウンロードされます。'), 1200);
+    _recvEnd();
   }
-  document.getElementById('recv-btn').disabled = false;
 }
 
 // ── Text ──────────────────────────────────────────────────────────────────────
+function cancelTxtSend() {
+  _txtSendPC?.close(); _txtSendPC = null;
+  setStatus('txt-send-status', 'キャンセルしました', 'err');
+  document.getElementById('txt-send-btn').disabled          = false;
+  document.getElementById('cancel-txt-send-btn').style.display = 'none';
+}
+function cancelTxtRecv() {
+  _txtRecvAC?.abort(); _txtRecvAC = null;
+  setStatus('txt-recv-status', 'キャンセルしました', 'err');
+  document.getElementById('txt-recv-btn').disabled          = false;
+  document.getElementById('cancel-txt-recv-btn').style.display = 'none';
+}
+
 async function sendText() {
   const text = document.getElementById('txt-send').value;
   if (!text.trim()) return;
@@ -553,20 +615,36 @@ async function sendText() {
   document.getElementById('txt-url').value = url;
   showQR('txt-qr-box', 'txt-qr-wrap', url);
   setStatus('txt-send-status', 'ローカル P2P を試みています…', 'waiting');
+  document.getElementById('txt-send-btn').disabled          = true;
+  document.getElementById('cancel-txt-send-btn').style.display = '';
 
   const blob = new Blob([text], { type: 'text/plain; charset=utf-8' });
   const ok = await trySendWebRTC(blob, path,
     () => {},
-    () => setStatus('txt-send-status', '✓ 送信完了 (P2P)', 'ok')
+    msg => {
+      setStatus('txt-send-status', msg, 'ok');
+      document.getElementById('txt-send-btn').disabled          = false;
+      document.getElementById('cancel-txt-send-btn').style.display = 'none';
+    }
   );
 
   if (!ok) {
+    if (document.getElementById('cancel-txt-send-btn').style.display === 'none') return; // cancelled
     setStatus('txt-send-status', '受信者を待っています…', 'waiting');
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${PIPE}/${path}`);
     xhr.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
-    xhr.addEventListener('load', () => setStatus('txt-send-status', '✓ 送信完了', 'ok'));
-    xhr.addEventListener('error', () => setStatus('txt-send-status', '✗ エラー', 'err'));
+    xhr.addEventListener('load', () => {
+      setStatus('txt-send-status', '✓ 送信完了', 'ok');
+      document.getElementById('txt-send-btn').disabled          = false;
+      document.getElementById('cancel-txt-send-btn').style.display = 'none';
+    });
+    xhr.addEventListener('abort', () => {});
+    xhr.addEventListener('error', () => {
+      setStatus('txt-send-status', '✗ エラー', 'err');
+      document.getElementById('txt-send-btn').disabled          = false;
+      document.getElementById('cancel-txt-send-btn').style.display = 'none';
+    });
     xhr.send(text);
   }
 }
@@ -574,31 +652,40 @@ async function sendText() {
 async function receiveText() {
   const path = parsePath(document.getElementById('txt-recv-path').value);
   if (!path) return;
+  _txtRecvAC = new AbortController();
   setStatus('txt-recv-status', 'ローカル P2P を試みています…', 'waiting');
+  document.getElementById('txt-recv-btn').disabled          = true;
+  document.getElementById('cancel-txt-recv-btn').style.display = '';
 
   const ok = await tryRecvWebRTC(path,
     msg => setStatus('txt-recv-status', msg, 'waiting'),
     (msg, blob) => {
       blob.text().then(t => {
         document.getElementById('txt-received').value = t;
-        setStatus('txt-recv-status', '✓ 受信完了 (P2P)', 'ok');
+        setStatus('txt-recv-status', msg, 'ok');
       });
+      document.getElementById('txt-recv-btn').disabled          = false;
+      document.getElementById('cancel-txt-recv-btn').style.display = 'none';
     }
   );
 
   if (!ok) {
+    if (!_txtRecvAC) return; // cancelled
     setStatus('txt-recv-status', '受信中…', 'waiting');
     try {
       const t0  = performance.now();
-      const res = await fetch(`${PIPE}/${path}`);
+      const res = await fetch(`${PIPE}/${path}`, { signal: _txtRecvAC.signal });
       const txt = await res.text();
       const elapsed = (performance.now() - t0) / 1000;
       const speed   = elapsed > 0 ? new Blob([txt]).size / elapsed : 0;
       document.getElementById('txt-received').value = txt;
       setStatus('txt-recv-status', `✓ 受信完了 — ${fmt(new Blob([txt]).size)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, 'ok');
     } catch (e) {
-      setStatus('txt-recv-status', '✗ ' + e.message, 'err');
+      if (e.name !== 'AbortError') setStatus('txt-recv-status', '✗ ' + e.message, 'err');
     }
+    document.getElementById('txt-recv-btn').disabled          = false;
+    document.getElementById('cancel-txt-recv-btn').style.display = 'none';
+    _txtRecvAC = null;
   }
 }
 
@@ -636,6 +723,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
   try {
     const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    _sendPC = pc;
     const dc = pc.createDataChannel('pipe', { ordered: true });
 
     const offer = await pc.createOffer();
@@ -672,6 +760,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     const t0 = performance.now();
     let sent = 0;
     while (sent < total) {
+      if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
       while (dc.bufferedAmount > FLOW_HWM)
         await new Promise(r => setTimeout(r, 10));
       const end = Math.min(sent + CHUNK_SIZE, total);
@@ -696,6 +785,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 // Returns true if P2P succeeded
 async function tryRecvWebRTC(path, onStatus, onDone) {
   const ac    = new AbortController();
+  _recvAC = ac;
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
   try {
     // GET offer (blocks until sender posts it)
@@ -703,6 +793,7 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
     if (!res.ok) throw new Error('no offer');
 
     const pc        = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    _recvPC = pc;
     const dcPromise = new Promise(resolve => {
       pc.ondatachannel = e => resolve(e.channel);
     });
