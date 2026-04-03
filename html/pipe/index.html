@@ -297,7 +297,7 @@
     <div class="field-label">パスまたはURL</div>
     <div class="input-row">
       <input class="path-input" id="recv-path"
-        placeholder="abc12345 または https://pipe.afjk.jp/abc12345"
+        placeholder="abc12345 または https://afjk.jp/pipe/#abc12345"
         oninput="document.getElementById('recv-btn').disabled = !this.value.trim()">
       <button class="btn btn-primary" id="recv-btn" onclick="startReceive()" disabled>受信</button>
     </div>
@@ -344,19 +344,15 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
-const PIPE = 'https://pipe.afjk.jp';
+// ── Config ────────────────────────────────────────────────────────────────────
+const PIPE        = 'https://pipe.afjk.jp';
+const SIG_TIMEOUT = 8000;   // ms: wait for WebRTC signaling peer
+const ICE_TIMEOUT = 3000;   // ms: max ICE gathering time
+const DC_TIMEOUT  = 5000;   // ms: wait for DataChannel open
+const CHUNK_SIZE  = 65536;  // bytes per DataChannel message (64 KB)
+const FLOW_HWM    = CHUNK_SIZE * 8;
 
-function showQR(boxId, wrapId, url) {
-  const box = document.getElementById(boxId);
-  box.innerHTML = '';
-  new QRCode(box, { text: url, width: 120, height: 120, colorDark: '#000', colorLight: '#fff' });
-  document.getElementById(wrapId).classList.add('visible');
-}
-
-function hideQR(wrapId) {
-  document.getElementById(wrapId).classList.remove('visible');
-}
-
+// ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
 
 const fmt = b => {
@@ -366,13 +362,46 @@ const fmt = b => {
   return (b / 1073741824).toFixed(2) + ' GB';
 };
 
+// Handles: plain path, https://pipe.afjk.jp/path, https://afjk.jp/pipe/#path
 const parsePath = v => {
   v = v.trim();
-  try { return new URL(v).pathname.replace(/^\//, ''); } catch {}
+  try {
+    const u = new URL(v);
+    if (u.hash) return decodeURIComponent(u.hash.slice(1));
+    return u.pathname.replace(/^\//, '');
+  } catch {}
   return v.replace(/^\//, '');
 };
 
-// ── Tabs ──────────────────────────────────────────────
+// Receive URL points to this page with hash so receivers also get P2P
+const recvUrl = path =>
+  location.origin + location.pathname + '#' + encodeURIComponent(path);
+
+function showQR(boxId, wrapId, url) {
+  const box = document.getElementById(boxId);
+  box.innerHTML = '';
+  new QRCode(box, { text: url, width: 120, height: 120, colorDark: '#000', colorLight: '#fff' });
+  document.getElementById(wrapId).classList.add('visible');
+}
+function hideQR(wrapId) {
+  document.getElementById(wrapId).classList.remove('visible');
+}
+function setStatus(id, msg, cls = '') {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+}
+function copyField(fieldId, btnId) {
+  const val = document.getElementById(fieldId).value;
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = document.getElementById(btnId);
+    btn.textContent = 'コピー済 ✓';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -382,7 +411,16 @@ document.querySelectorAll('.tab').forEach(btn => {
   });
 });
 
-// ── Drop zone ─────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + name);
+  });
+}
+
+// ── Drop zone ─────────────────────────────────────────────────────────────────
 const dz = document.getElementById('dropzone');
 const fi = document.getElementById('file-input');
 let selFile = null, curPath = null;
@@ -403,7 +441,7 @@ function setFile(f) {
   document.getElementById('file-name').textContent = f.name;
   document.getElementById('file-meta').textContent = fmt(f.size) + ' · ' + (f.type || 'application/octet-stream');
 
-  const url = `${PIPE}/${curPath}`;
+  const url = recvUrl(curPath);
   document.getElementById('send-url-block').style.display = 'block';
   document.getElementById('send-url').value = url;
   showQR('send-qr-box', 'send-qr-wrap', url);
@@ -414,17 +452,35 @@ function setFile(f) {
   document.getElementById('prog-bar').style.width = '0%';
 }
 
-function startSend() {
+// ── Send ──────────────────────────────────────────────────────────────────────
+async function startSend() {
   if (!selFile) return;
   document.getElementById('send-btn').disabled = true;
   document.getElementById('prog-wrap').style.display = 'block';
-  setStatus('send-status', '受信者を待っています… Waiting for receiver…', 'waiting');
+  setStatus('send-status', 'ローカル P2P を試みています…', 'waiting');
 
+  const ok = await trySendWebRTC(selFile, curPath,
+    (loaded, total) => {
+      const p = Math.round(loaded / total * 100);
+      document.getElementById('prog-bar').style.width = p + '%';
+      document.getElementById('prog-text').textContent =
+        `${p}%  (${fmt(loaded)} / ${fmt(total)})`;
+      if (p > 0) setStatus('send-status', '転送中… (P2P)', 'waiting');
+    },
+    msg => setStatus('send-status', msg, 'ok')
+  );
+
+  if (!ok) {
+    setStatus('send-status', '受信者を待っています… Waiting for receiver…', 'waiting');
+    sendHTTP(selFile, curPath);
+  }
+}
+
+function sendHTTP(body, path) {
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', `${PIPE}/${curPath}`);
-  xhr.setRequestHeader('Content-Type', selFile.type || 'application/octet-stream');
-  xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(selFile.name)}"`);
-
+  xhr.open('POST', `${PIPE}/${path}`);
+  xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
+  xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
   xhr.upload.addEventListener('progress', e => {
     if (!e.lengthComputable) return;
     const p = Math.round(e.loaded / e.total * 100);
@@ -442,7 +498,7 @@ function startSend() {
     setStatus('send-status', '✗ エラー Transfer failed', 'err');
     document.getElementById('send-btn').disabled = false;
   });
-  xhr.send(selFile);
+  xhr.send(body);
 }
 
 function resetSend() {
@@ -455,73 +511,251 @@ function resetSend() {
   setStatus('send-status', '');
 }
 
-// ── Receive ───────────────────────────────────────────
-function startReceive() {
+// ── Receive ───────────────────────────────────────────────────────────────────
+async function startReceive() {
   const path = parsePath(document.getElementById('recv-path').value);
   if (!path) return;
+  document.getElementById('recv-btn').disabled = true;
+  setStatus('recv-status', 'ローカル P2P を試みています…', 'waiting');
 
-  setStatus('recv-status', 'ダウンロードを開始します… 送信者が開始するまで待機します。', 'waiting');
+  const ok = await tryRecvWebRTC(path,
+    msg  => setStatus('recv-status', msg, 'waiting'),
+    msg  => setStatus('recv-status', msg, 'ok')
+  );
 
-  const a = Object.assign(document.createElement('a'), {
-    href: `${PIPE}/${path}`, download: ''
-  });
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-
-  setTimeout(() =>
-    setStatus('recv-status', '受信を待機中。送信側が転送を開始すると自動でダウンロードされます。'), 1200);
+  if (!ok) {
+    setStatus('recv-status', 'ダウンロードを開始します… 送信者が開始するまで待機します。', 'waiting');
+    const a = Object.assign(document.createElement('a'), {
+      href: `${PIPE}/${path}`, download: ''
+    });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() =>
+      setStatus('recv-status', '受信を待機中。送信側が転送を開始すると自動でダウンロードされます。'), 1200);
+  }
+  document.getElementById('recv-btn').disabled = false;
 }
 
-// ── Text ─────────────────────────────────────────────
-function sendText() {
+// ── Text ──────────────────────────────────────────────────────────────────────
+async function sendText() {
   const text = document.getElementById('txt-send').value;
   if (!text.trim()) return;
   const path = randPath();
 
-  const txtUrl = `${PIPE}/${path}`;
+  const url = recvUrl(path);
   document.getElementById('txt-url-block').style.display = 'block';
-  document.getElementById('txt-url').value = txtUrl;
-  showQR('txt-qr-box', 'txt-qr-wrap', txtUrl);
-  setStatus('txt-send-status', '受信者を待っています…', 'waiting');
+  document.getElementById('txt-url').value = url;
+  showQR('txt-qr-box', 'txt-qr-wrap', url);
+  setStatus('txt-send-status', 'ローカル P2P を試みています…', 'waiting');
 
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', `${PIPE}/${path}`);
-  xhr.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
-  xhr.addEventListener('load', () => setStatus('txt-send-status', '✓ 送信完了', 'ok'));
-  xhr.addEventListener('error', () => setStatus('txt-send-status', '✗ エラー', 'err'));
-  xhr.send(text);
+  const blob = new Blob([text], { type: 'text/plain; charset=utf-8' });
+  const ok = await trySendWebRTC(blob, path,
+    () => {},
+    () => setStatus('txt-send-status', '✓ 送信完了 (P2P)', 'ok')
+  );
+
+  if (!ok) {
+    setStatus('txt-send-status', '受信者を待っています…', 'waiting');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${PIPE}/${path}`);
+    xhr.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
+    xhr.addEventListener('load', () => setStatus('txt-send-status', '✓ 送信完了', 'ok'));
+    xhr.addEventListener('error', () => setStatus('txt-send-status', '✗ エラー', 'err'));
+    xhr.send(text);
+  }
 }
 
 async function receiveText() {
   const path = parsePath(document.getElementById('txt-recv-path').value);
   if (!path) return;
-  setStatus('txt-recv-status', '受信中…', 'waiting');
-  try {
-    const res = await fetch(`${PIPE}/${path}`);
-    document.getElementById('txt-received').value = await res.text();
-    setStatus('txt-recv-status', '✓ 受信完了', 'ok');
-  } catch (e) {
-    setStatus('txt-recv-status', '✗ ' + e.message, 'err');
+  setStatus('txt-recv-status', 'ローカル P2P を試みています…', 'waiting');
+
+  const ok = await tryRecvWebRTC(path,
+    msg => setStatus('txt-recv-status', msg, 'waiting'),
+    (msg, blob) => {
+      blob.text().then(t => {
+        document.getElementById('txt-received').value = t;
+        setStatus('txt-recv-status', '✓ 受信完了 (P2P)', 'ok');
+      });
+    }
+  );
+
+  if (!ok) {
+    setStatus('txt-recv-status', '受信中…', 'waiting');
+    try {
+      const res = await fetch(`${PIPE}/${path}`);
+      document.getElementById('txt-received').value = await res.text();
+      setStatus('txt-recv-status', '✓ 受信完了', 'ok');
+    } catch (e) {
+      setStatus('txt-recv-status', '✗ ' + e.message, 'err');
+    }
   }
 }
 
-// ── Helpers ───────────────────────────────────────────
-function setStatus(id, msg, cls = '') {
-  const el = document.getElementById(id);
-  el.textContent = msg;
-  el.className = 'status ' + cls;
-}
-
-function copyField(fieldId, btnId) {
-  const val = document.getElementById(fieldId).value;
-  navigator.clipboard.writeText(val).then(() => {
-    const btn = document.getElementById(btnId);
-    btn.textContent = 'コピー済 ✓';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
+// ── WebRTC helpers ────────────────────────────────────────────────────────────
+function waitForIce(pc) {
+  return new Promise(resolve => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === 'complete') resolve();
+    };
+    setTimeout(resolve, ICE_TIMEOUT);
   });
 }
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(label)), ms))
+  ]);
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = Object.assign(document.createElement('a'), { href: url, download: filename });
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ── WebRTC send ───────────────────────────────────────────────────────────────
+// onProgress(loaded, total), onDone(message)
+// Returns true if P2P succeeded, false to fall back to HTTP
+async function trySendWebRTC(body, path, onProgress, onDone) {
+  const ac    = new AbortController();
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const dc = pc.createDataChannel('pipe', { ordered: true });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc);
+
+    // POST offer — piping server holds it until receiver reads
+    fetch(`${PIPE}/${path}.__offer`, {
+      method: 'POST', signal: ac.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pc.localDescription)
+    }).catch(() => {});
+
+    // Wait for receiver's answer
+    const res = await fetch(`${PIPE}/${path}.__answer`, { signal: ac.signal });
+    if (!res.ok) throw new Error('no answer');
+    await pc.setRemoteDescription(await res.json());
+
+    await withTimeout(new Promise((resolve, reject) => {
+      dc.onopen  = resolve;
+      dc.onerror = reject;
+    }), DC_TIMEOUT, 'DataChannel timeout');
+
+    clearTimeout(timer);
+
+    // Send via DataChannel
+    const buf      = body instanceof Blob ? await body.arrayBuffer() : body;
+    const filename = body instanceof File ? body.name : 'file';
+    const mime     = body instanceof Blob ? (body.type || 'application/octet-stream') : 'application/octet-stream';
+    const total    = buf.byteLength;
+
+    dc.send(JSON.stringify({ t: 'meta', name: filename, mime, size: total }));
+
+    let sent = 0;
+    while (sent < total) {
+      while (dc.bufferedAmount > FLOW_HWM)
+        await new Promise(r => setTimeout(r, 10));
+      const end = Math.min(sent + CHUNK_SIZE, total);
+      dc.send(buf.slice(sent, end));
+      sent = end;
+      onProgress(sent, total);
+    }
+    dc.send(JSON.stringify({ t: 'done' }));
+    onDone(`✓ 転送完了 via local P2P (${fmt(total)})`);
+    return true;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    return false;
+  }
+}
+
+// ── WebRTC receive ────────────────────────────────────────────────────────────
+// onStatus(message), onDone(message, blob)
+// Returns true if P2P succeeded
+async function tryRecvWebRTC(path, onStatus, onDone) {
+  const ac    = new AbortController();
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  try {
+    // GET offer (blocks until sender posts it)
+    const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
+    if (!res.ok) throw new Error('no offer');
+
+    const pc        = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const dcPromise = new Promise(resolve => {
+      pc.ondatachannel = e => resolve(e.channel);
+    });
+
+    await pc.setRemoteDescription(await res.json());
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitForIce(pc);
+
+    fetch(`${PIPE}/${path}.__answer`, {
+      method: 'POST', signal: ac.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pc.localDescription)
+    }).catch(() => {});
+
+    const dc = await withTimeout(dcPromise, DC_TIMEOUT, 'DataChannel timeout');
+    dc.binaryType = 'arraybuffer';
+
+    clearTimeout(timer);
+    onStatus('ローカル P2P 接続完了！');
+
+    await new Promise(resolve => {
+      let meta = null, chunks = [], recvd = 0;
+      dc.onmessage = e => {
+        if (typeof e.data === 'string') {
+          const msg = JSON.parse(e.data);
+          if (msg.t === 'meta') {
+            meta = msg;
+            onStatus(`受信中 (P2P): ${meta.name}`);
+          } else if (msg.t === 'done') {
+            const blob = new Blob(chunks, { type: meta.mime });
+            onDone(`✓ 受信完了 via local P2P (${fmt(recvd)})`, blob);
+            triggerDownload(blob, meta.name);
+            resolve();
+          }
+        } else {
+          chunks.push(e.data);
+          recvd += e.data.byteLength;
+          if (meta) onStatus(`受信中 (P2P): ${fmt(recvd)} / ${fmt(meta.size)}`);
+        }
+      };
+      dc.onerror = resolve;
+    });
+    return true;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    return false;
+  }
+}
+
+// ── Init: auto-receive if URL has hash ────────────────────────────────────────
+(function () {
+  const hash = location.hash.slice(1);
+  if (!hash) return;
+  const path = decodeURIComponent(hash);
+  // Clear hash without reload
+  history.replaceState(null, '', location.pathname);
+  // Switch to receive tab and auto-start
+  switchTab('receive');
+  const input = document.getElementById('recv-path');
+  input.value = path;
+  document.getElementById('recv-btn').disabled = false;
+  startReceive();
+})();
 </script>
 </body>
 </html>
