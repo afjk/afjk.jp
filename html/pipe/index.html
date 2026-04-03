@@ -358,8 +358,8 @@ let _txtRecvAC = null;                 // text receive
 const SIG_TIMEOUT = 8000;   // ms: wait for WebRTC signaling peer
 const ICE_TIMEOUT = 3000;   // ms: max ICE gathering time
 const DC_TIMEOUT  = 5000;   // ms: wait for DataChannel open
-const CHUNK_SIZE  = 65536;  // bytes per DataChannel message (64 KB)
-const FLOW_HWM    = CHUNK_SIZE * 8;
+const CHUNK_SIZE  = 262144; // bytes per DataChannel message (256 KB)
+const FLOW_HWM    = CHUNK_SIZE * 4; // pause above this bufferedAmount (~1 MB)
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
@@ -757,12 +757,19 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 
     dc.send(JSON.stringify({ t: 'meta', name: filename, mime, size: total }));
 
+    // イベント駆動フロー制御: bufferedAmountLow が発火するまでブロック
+    dc.bufferedAmountLowThreshold = FLOW_HWM / 2;
+    const waitDrain = () => new Promise((resolve, reject) => {
+      if (dc.bufferedAmount <= FLOW_HWM) { resolve(); return; }
+      dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
+      dc.onerror = reject;
+    });
+
     const t0 = performance.now();
     let sent = 0;
     while (sent < total) {
       if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
-      while (dc.bufferedAmount > FLOW_HWM)
-        await new Promise(r => setTimeout(r, 10));
+      if (dc.bufferedAmount > FLOW_HWM) await waitDrain();
       const end = Math.min(sent + CHUNK_SIZE, total);
       dc.send(buf.slice(sent, end));
       sent = end;
