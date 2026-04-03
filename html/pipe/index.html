@@ -111,6 +111,18 @@
     .file-name { font-weight: 600; font-size: 0.95rem; word-break: break-all; }
     .file-meta { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
 
+    /* ── QR ── */
+    .qr-wrap { display: none; margin-top: 14px; align-items: center; gap: 16px; }
+    .qr-wrap.visible { display: flex; }
+    .qr-box {
+      background: #fff;
+      border-radius: 8px;
+      padding: 8px;
+      flex-shrink: 0;
+      line-height: 0;
+    }
+    .qr-hint { font-size: 0.8rem; color: var(--text2); line-height: 1.6; }
+
     /* ── URL row ── */
     .url-block { display: none; margin-top: 16px; }
     .url-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing:.06em; margin-bottom: 6px; }
@@ -261,6 +273,10 @@
         <input class="url-field" id="send-url" readonly>
         <button class="copy-btn" id="send-copy" onclick="copyField('send-url','send-copy')">コピー</button>
       </div>
+      <div class="qr-wrap" id="send-qr-wrap">
+        <div class="qr-box" id="send-qr-box"></div>
+        <div class="qr-hint">スマホでスキャンして受信<br>Scan QR to receive on mobile</div>
+      </div>
     </div>
 
     <div class="prog-wrap" id="prog-wrap">
@@ -299,6 +315,10 @@
         <input class="url-field" id="txt-url" readonly>
         <button class="copy-btn" id="txt-copy" onclick="copyField('txt-url','txt-copy')">コピー</button>
       </div>
+      <div class="qr-wrap" id="txt-qr-wrap">
+        <div class="qr-box" id="txt-qr-box"></div>
+        <div class="qr-hint">スマホでスキャンして受信<br>Scan QR to receive on mobile</div>
+      </div>
     </div>
 
     <div class="status" id="txt-send-status"></div>
@@ -322,8 +342,20 @@
   <a href="/">afjk.jp</a> &nbsp;·&nbsp; Powered by <a href="https://github.com/nicowillis/piping-server" target="_blank" rel="noopener">piping-server</a>
 </footer>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const PIPE = 'https://pipe.afjk.jp';
+
+function showQR(boxId, wrapId, url) {
+  const box = document.getElementById(boxId);
+  box.innerHTML = '';
+  new QRCode(box, { text: url, width: 120, height: 120, colorDark: '#000', colorLight: '#fff' });
+  document.getElementById(wrapId).classList.add('visible');
+}
+
+function hideQR(wrapId) {
+  document.getElementById(wrapId).classList.remove('visible');
+}
 
 const randPath = () => Math.random().toString(36).slice(2, 10);
 
@@ -374,6 +406,7 @@ function setFile(f) {
   const url = `${PIPE}/${curPath}`;
   document.getElementById('send-url-block').style.display = 'block';
   document.getElementById('send-url').value = url;
+  showQR('send-qr-box', 'send-qr-wrap', url);
 
   document.getElementById('send-btn').disabled = false;
   setStatus('send-status', '');
@@ -416,6 +449,7 @@ function resetSend() {
   selFile = null; curPath = null; fi.value = '';
   ['file-card','send-url-block','prog-wrap'].forEach(id =>
     document.getElementById(id).style.display = 'none');
+  hideQR('send-qr-wrap');
   document.getElementById('send-btn').disabled = true;
   document.getElementById('prog-bar').style.width = '0%';
   setStatus('send-status', '');
@@ -445,8 +479,10 @@ function sendText() {
   if (!text.trim()) return;
   const path = randPath();
 
+  const txtUrl = `${PIPE}/${path}`;
   document.getElementById('txt-url-block').style.display = 'block';
-  document.getElementById('txt-url').value = `${PIPE}/${path}`;
+  document.getElementById('txt-url').value = txtUrl;
+  showQR('txt-qr-box', 'txt-qr-wrap', txtUrl);
   setStatus('txt-send-status', '受信者を待っています…', 'waiting');
 
   const xhr = new XMLHttpRequest();
