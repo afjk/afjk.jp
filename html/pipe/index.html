@@ -355,11 +355,13 @@ let _sendXHR = null, _sendPC = null;   // file send
 let _recvPC  = null, _recvAC = null;   // file receive
 let _txtSendPC = null;                 // text send
 let _txtRecvAC = null;                 // text receive
-const SIG_TIMEOUT = 8000;   // ms: wait for WebRTC signaling peer
-const ICE_TIMEOUT = 3000;   // ms: max ICE gathering time
-const DC_TIMEOUT  = 5000;   // ms: wait for DataChannel open
-const CHUNK_SIZE  = 262144; // bytes per DataChannel message (256 KB)
-const FLOW_HWM    = CHUNK_SIZE * 4; // pause above this bufferedAmount (~1 MB)
+const SIG_TIMEOUT    = 8000;   // ms: wait for WebRTC signaling peer
+const ICE_TIMEOUT    = 3000;   // ms: max ICE gathering time
+const DC_TIMEOUT     = 5000;   // ms: wait for DataChannel open
+const MAX_CHUNK_SZ   = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
+const MIN_CHUNK_SZ   = 65536;  // Safari 16.x では 64 KB 程度が安全
+const FLOW_HIGH_MULT = 32;     // bufferedAmount を chunkSize * 32 まで許容
+const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
@@ -715,6 +717,48 @@ function triggerDownload(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function resolveChunking(pc) {
+  const rawMax = pc.sctp?.maxMessageSize;
+  const limit  = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : MAX_CHUNK_SZ;
+  const chunk  = Math.max(MIN_CHUNK_SZ, Math.min(limit, MAX_CHUNK_SZ));
+  return {
+    chunkSize: chunk,
+    flowHigh : chunk * FLOW_HIGH_MULT,
+    flowLow  : chunk * FLOW_LOW_MULT
+  };
+}
+
+function waitForBufferDrain(dc, highWater, lowWater) {
+  if (dc.bufferedAmount <= highWater) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      dc.removeEventListener('bufferedamountlow', onLow);
+      dc.removeEventListener('close', onClose);
+      dc.removeEventListener('error', onClose);
+    };
+    const onLow = () => {
+      if (dc.bufferedAmount <= lowWater) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onClose = err => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error('DataChannel closed'));
+    };
+    dc.addEventListener('bufferedamountlow', onLow);
+    dc.addEventListener('close', onClose);
+    dc.addEventListener('error', onClose);
+  });
+}
+
+function payloadLength(payload) {
+  if (payload instanceof ArrayBuffer) return payload.byteLength;
+  if (ArrayBuffer.isView(payload)) return payload.byteLength;
+  if (typeof payload === 'string') return new TextEncoder().encode(payload).byteLength;
+  return 0;
+}
+
 // ── WebRTC send ───────────────────────────────────────────────────────────────
 // onProgress(loaded, total), onDone(message)
 // Returns true if P2P succeeded, false to fall back to HTTP
@@ -749,36 +793,55 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 
     clearTimeout(timer);
 
-    // Send via DataChannel
-    const buf      = body instanceof Blob ? await body.arrayBuffer() : body;
+    const { chunkSize, flowHigh, flowLow } = resolveChunking(pc);
+    dc.bufferedAmountLowThreshold = flowLow;
+
     const filename = body instanceof File ? body.name : 'file';
     const mime     = body instanceof Blob ? (body.type || 'application/octet-stream') : 'application/octet-stream';
-    const total    = buf.byteLength;
+    const total    = body instanceof Blob ? body.size : payloadLength(body);
 
     dc.send(JSON.stringify({ t: 'meta', name: filename, mime, size: total }));
 
-    // イベント駆動フロー制御: bufferedAmountLow が発火するまでブロック
-    dc.bufferedAmountLowThreshold = FLOW_HWM / 2;
-    const waitDrain = () => new Promise((resolve, reject) => {
-      if (dc.bufferedAmount <= FLOW_HWM) { resolve(); return; }
-      dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
-      dc.onerror = reject;
-    });
+    const t0   = performance.now();
+    let sent   = 0;
+    const feed = async view => {
+      let offset = 0;
+      while (offset < view.byteLength) {
+        if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
+        if (dc.bufferedAmount > flowHigh) await waitForBufferDrain(dc, flowHigh, flowLow);
+        const size  = Math.min(chunkSize, view.byteLength - offset);
+        const chunk = view.subarray(offset, offset + size);
+        dc.send(chunk);
+        offset += size;
+        sent   += size;
+        onProgress(sent, total);
+      }
+    };
 
-    const t0 = performance.now();
-    let sent = 0;
-    while (sent < total) {
-      if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
-      if (dc.bufferedAmount > FLOW_HWM) await waitDrain();
-      const end = Math.min(sent + CHUNK_SIZE, total);
-      dc.send(buf.slice(sent, end));
-      sent = end;
-      onProgress(sent, total);
+    if (body instanceof Blob && typeof body.stream === 'function') {
+      const reader = body.stream().getReader();
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          await feed(value);
+        }
+      } finally {
+        reader.releaseLock?.();
+      }
+    } else {
+      const raw = body instanceof ArrayBuffer
+        ? new Uint8Array(body)
+        : ArrayBuffer.isView(body)
+          ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+          : new TextEncoder().encode(String(body ?? ''));
+      await feed(raw);
     }
+
     dc.send(JSON.stringify({ t: 'done' }));
     const elapsed = (performance.now() - t0) / 1000;
-    const speed   = total / elapsed;
-    onDone(`✓ 転送完了 via local P2P — ${fmt(total)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`);
+    const speed   = sent / elapsed;
+    onDone(`✓ 転送完了 via local P2P — ${fmt(sent)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`);
     return true;
   } catch (e) {
     clearTimeout(timer);
