@@ -481,18 +481,23 @@ function sendHTTP(body, path) {
   xhr.open('POST', `${PIPE}/${path}`);
   xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
   xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
+  const t0 = performance.now();
   xhr.upload.addEventListener('progress', e => {
     if (!e.lengthComputable) return;
     const p = Math.round(e.loaded / e.total * 100);
     document.getElementById('prog-bar').style.width = p + '%';
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
     document.getElementById('prog-text').textContent =
-      `${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})`;
+      `${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})  ${fmt(speed)}/s`;
     if (p > 0 && p < 100) setStatus('send-status', '転送中… Transferring…');
   });
   xhr.addEventListener('load', () => {
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = elapsed > 0 ? body.size / elapsed : 0;
     document.getElementById('prog-bar').style.width = '100%';
     document.getElementById('prog-text').textContent = '100%';
-    setStatus('send-status', '✓ 転送完了 Transfer complete', 'ok');
+    setStatus('send-status', `✓ 転送完了 — ${fmt(body.size)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, 'ok');
   });
   xhr.addEventListener('error', () => {
     setStatus('send-status', '✗ エラー Transfer failed', 'err');
@@ -584,9 +589,13 @@ async function receiveText() {
   if (!ok) {
     setStatus('txt-recv-status', '受信中…', 'waiting');
     try {
+      const t0  = performance.now();
       const res = await fetch(`${PIPE}/${path}`);
-      document.getElementById('txt-received').value = await res.text();
-      setStatus('txt-recv-status', '✓ 受信完了', 'ok');
+      const txt = await res.text();
+      const elapsed = (performance.now() - t0) / 1000;
+      const speed   = elapsed > 0 ? new Blob([txt]).size / elapsed : 0;
+      document.getElementById('txt-received').value = txt;
+      setStatus('txt-recv-status', `✓ 受信完了 — ${fmt(new Blob([txt]).size)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, 'ok');
     } catch (e) {
       setStatus('txt-recv-status', '✗ ' + e.message, 'err');
     }
@@ -660,6 +669,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 
     dc.send(JSON.stringify({ t: 'meta', name: filename, mime, size: total }));
 
+    const t0 = performance.now();
     let sent = 0;
     while (sent < total) {
       while (dc.bufferedAmount > FLOW_HWM)
@@ -670,7 +680,9 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
       onProgress(sent, total);
     }
     dc.send(JSON.stringify({ t: 'done' }));
-    onDone(`✓ 転送完了 via local P2P (${fmt(total)})`);
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = total / elapsed;
+    onDone(`✓ 転送完了 via local P2P — ${fmt(total)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`);
     return true;
   } catch (e) {
     clearTimeout(timer);
@@ -714,6 +726,7 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
 
     await new Promise(resolve => {
       let meta = null, chunks = [], recvd = 0;
+      let t0 = null;
       dc.onmessage = e => {
         if (typeof e.data === 'string') {
           const msg = JSON.parse(e.data);
@@ -721,12 +734,15 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
             meta = msg;
             onStatus(`受信中 (P2P): ${meta.name}`);
           } else if (msg.t === 'done') {
-            const blob = new Blob(chunks, { type: meta.mime });
-            onDone(`✓ 受信完了 via local P2P (${fmt(recvd)})`, blob);
+            const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
+            const speed   = elapsed > 0 ? recvd / elapsed : 0;
+            const blob    = new Blob(chunks, { type: meta.mime });
+            onDone(`✓ 受信完了 via local P2P — ${fmt(recvd)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, blob);
             triggerDownload(blob, meta.name);
             resolve();
           }
         } else {
+          if (!t0) t0 = performance.now();
           chunks.push(e.data);
           recvd += e.data.byteLength;
           if (meta) onStatus(`受信中 (P2P): ${fmt(recvd)} / ${fmt(meta.size)}`);
