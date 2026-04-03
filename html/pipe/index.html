@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pipe — afjk</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:      #0a0a0a;
+      --surface: #161616;
+      --surface2:#1e1e1e;
+      --border:  #252525;
+      --border2: #333;
+      --text:    #efefef;
+      --text2:   #aaa;
+      --muted:   #666;
+      --accent:  #c8ff00;
+      --radius:  10px;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    /* ── Header ── */
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo { font-weight: 800; font-size: 1.1rem; }
+    .logo span { color: var(--accent); }
+    .sep { color: var(--border2); }
+    .logo-sub { color: var(--muted); font-size: 0.9rem; }
+
+    /* ── Main ── */
+    main {
+      flex: 1;
+      max-width: 620px;
+      margin: 0 auto;
+      padding: 40px 24px;
+      width: 100%;
+    }
+    h1 { font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; }
+    .lead { color: var(--text2); font-size: 0.9rem; margin-bottom: 32px; line-height: 1.6; }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 4px;
+      margin-bottom: 28px;
+    }
+    .tab {
+      flex: 1;
+      padding: 9px 8px;
+      border: none;
+      background: none;
+      color: var(--text2);
+      cursor: pointer;
+      border-radius: 7px;
+      font-size: 0.88rem;
+      transition: all .15s;
+      font-family: inherit;
+    }
+    .tab.active { background: var(--accent); color: #000; font-weight: 700; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Drop zone ── */
+    .dropzone {
+      border: 2px dashed var(--border2);
+      border-radius: var(--radius);
+      padding: 52px 24px;
+      text-align: center;
+      cursor: pointer;
+      background: var(--surface);
+      transition: border-color .15s, background .15s;
+      user-select: none;
+    }
+    .dropzone:hover, .dropzone.over {
+      border-color: var(--accent);
+      background: var(--surface2);
+    }
+    .dz-icon { font-size: 2.8rem; margin-bottom: 14px; }
+    .dz-main { font-weight: 600; margin-bottom: 4px; }
+    .dz-sub { color: var(--text2); font-size: 0.85rem; }
+
+    /* ── File card ── */
+    .file-card {
+      display: none;
+      align-items: center;
+      gap: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-top: 14px;
+    }
+    .file-icon { font-size: 1.6rem; flex-shrink: 0; }
+    .file-name { font-weight: 600; font-size: 0.95rem; word-break: break-all; }
+    .file-meta { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+
+    /* ── URL row ── */
+    .url-block { display: none; margin-top: 16px; }
+    .url-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing:.06em; margin-bottom: 6px; }
+    .url-row { display: flex; gap: 8px; }
+    .url-field {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 0.82rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      outline: none;
+    }
+    .copy-btn {
+      padding: 10px 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 0.82rem;
+      white-space: nowrap;
+      font-family: inherit;
+      transition: all .15s;
+    }
+    .copy-btn:hover, .copy-btn.copied { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Progress ── */
+    .prog-wrap { display: none; margin-top: 16px; }
+    .prog-bg { height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+    .prog-bar { height: 100%; background: var(--accent); width: 0%; transition: width .25s; }
+    .prog-text { font-size: 0.78rem; color: var(--muted); margin-top: 5px; }
+
+    /* ── Status ── */
+    .status { margin-top: 12px; font-size: 0.85rem; min-height: 1.2em; color: var(--muted); }
+    .status.waiting { color: var(--accent); }
+    .status.ok  { color: #4ade80; }
+    .status.err { color: #f87171; }
+
+    /* ── Buttons ── */
+    .btn-row { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 11px 22px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-family: inherit;
+      transition: opacity .15s;
+    }
+    .btn-primary { background: var(--accent); color: #000; }
+    .btn-primary:hover { opacity: .88; }
+    .btn-primary:disabled { opacity: .35; cursor: not-allowed; }
+    .btn-ghost { background: none; border: 1px solid var(--border2); color: var(--text2); }
+    .btn-ghost:hover { border-color: var(--text2); color: var(--text); }
+
+    /* ── Receive tab ── */
+    .field-label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing:.06em; margin-bottom: 8px; }
+    .input-row { display: flex; gap: 8px; }
+    .path-input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: var(--text);
+      font-size: 0.9rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      outline: none;
+    }
+    .path-input:focus { border-color: var(--accent); }
+    .path-input::placeholder { color: var(--muted); font-family: inherit; }
+
+    /* ── Text tab ── */
+    textarea {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      padding: 14px;
+      color: var(--text);
+      font-size: 0.9rem;
+      resize: vertical;
+      min-height: 130px;
+      outline: none;
+      font-family: inherit;
+      line-height: 1.6;
+    }
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+
+    input[type=file] { display: none; }
+
+    footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 0.72rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="/">afjk<span>.</span></a>
+  <span class="sep">/</span>
+  <span class="logo-sub">pipe</span>
+</header>
+
+<main>
+  <h1>File Transfer</h1>
+  <p class="lead">URLを共有するだけ。ブラウザだけで安全にファイルを送受信。<br>No upload to cloud — P2P streaming via piping-server.</p>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="send">📤 送信</button>
+    <button class="tab" data-tab="receive">📥 受信</button>
+    <button class="tab" data-tab="text">📝 テキスト</button>
+  </div>
+
+  <!-- ── Send ── -->
+  <div class="tab-panel active" id="tab-send">
+    <div class="dropzone" id="dropzone">
+      <div class="dz-icon">📂</div>
+      <div class="dz-main">クリックまたはドロップ</div>
+      <div class="dz-sub">Click or drop a file to start</div>
+    </div>
+    <input type="file" id="file-input">
+
+    <div class="file-card" id="file-card">
+      <div class="file-icon">📄</div>
+      <div>
+        <div class="file-name" id="file-name"></div>
+        <div class="file-meta" id="file-meta"></div>
+      </div>
+    </div>
+
+    <div class="url-block" id="send-url-block">
+      <div class="url-label">受信用 URL（相手に送ってください）</div>
+      <div class="url-row">
+        <input class="url-field" id="send-url" readonly>
+        <button class="copy-btn" id="send-copy" onclick="copyField('send-url','send-copy')">コピー</button>
+      </div>
+    </div>
+
+    <div class="prog-wrap" id="prog-wrap">
+      <div class="prog-bg"><div class="prog-bar" id="prog-bar"></div></div>
+      <div class="prog-text" id="prog-text">0%</div>
+    </div>
+
+    <div class="status" id="send-status"></div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="send-btn" onclick="startSend()" disabled>転送開始</button>
+      <button class="btn btn-ghost" onclick="resetSend()">リセット</button>
+    </div>
+  </div>
+
+  <!-- ── Receive ── -->
+  <div class="tab-panel" id="tab-receive">
+    <div class="field-label">パスまたはURL</div>
+    <div class="input-row">
+      <input class="path-input" id="recv-path"
+        placeholder="abc12345 または https://pipe.afjk.jp/abc12345"
+        oninput="document.getElementById('recv-btn').disabled = !this.value.trim()">
+      <button class="btn btn-primary" id="recv-btn" onclick="startReceive()" disabled>受信</button>
+    </div>
+    <div class="status" id="recv-status" style="margin-top:14px"></div>
+  </div>
+
+  <!-- ── Text ── -->
+  <div class="tab-panel" id="tab-text">
+    <div class="field-label">送信するテキスト</div>
+    <textarea id="txt-send" placeholder="ここにテキストを貼り付けまたは入力…"></textarea>
+
+    <div class="url-block" id="txt-url-block" style="margin-top:14px">
+      <div class="url-label">受信用 URL</div>
+      <div class="url-row">
+        <input class="url-field" id="txt-url" readonly>
+        <button class="copy-btn" id="txt-copy" onclick="copyField('txt-url','txt-copy')">コピー</button>
+      </div>
+    </div>
+
+    <div class="status" id="txt-send-status"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="sendText()">テキストを送信</button>
+    </div>
+
+    <hr class="divider">
+
+    <div class="field-label">テキストを受信</div>
+    <div class="input-row">
+      <input class="path-input" id="txt-recv-path" placeholder="abc12345">
+      <button class="btn btn-primary" onclick="receiveText()">受信</button>
+    </div>
+    <textarea id="txt-received" placeholder="受信したテキストがここに表示されます" readonly style="margin-top:12px"></textarea>
+    <div class="status" id="txt-recv-status"></div>
+  </div>
+</main>
+
+<footer>
+  <a href="/">afjk.jp</a> &nbsp;·&nbsp; Powered by <a href="https://github.com/nicowillis/piping-server" target="_blank" rel="noopener">piping-server</a>
+</footer>
+
+<script>
+const PIPE = 'https://pipe.afjk.jp';
+
+const randPath = () => Math.random().toString(36).slice(2, 10);
+
+const fmt = b => {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+};
+
+const parsePath = v => {
+  v = v.trim();
+  try { return new URL(v).pathname.replace(/^\//, ''); } catch {}
+  return v.replace(/^\//, '');
+};
+
+// ── Tabs ──────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Drop zone ─────────────────────────────────────────
+const dz = document.getElementById('dropzone');
+const fi = document.getElementById('file-input');
+let selFile = null, curPath = null;
+
+dz.addEventListener('click', () => fi.click());
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('over');
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+});
+fi.addEventListener('change', () => { if (fi.files[0]) setFile(fi.files[0]); });
+
+function setFile(f) {
+  selFile = f; curPath = randPath();
+
+  document.getElementById('file-card').style.display = 'flex';
+  document.getElementById('file-name').textContent = f.name;
+  document.getElementById('file-meta').textContent = fmt(f.size) + ' · ' + (f.type || 'application/octet-stream');
+
+  const url = `${PIPE}/${curPath}`;
+  document.getElementById('send-url-block').style.display = 'block';
+  document.getElementById('send-url').value = url;
+
+  document.getElementById('send-btn').disabled = false;
+  setStatus('send-status', '');
+  document.getElementById('prog-wrap').style.display = 'none';
+  document.getElementById('prog-bar').style.width = '0%';
+}
+
+function startSend() {
+  if (!selFile) return;
+  document.getElementById('send-btn').disabled = true;
+  document.getElementById('prog-wrap').style.display = 'block';
+  setStatus('send-status', '受信者を待っています… Waiting for receiver…', 'waiting');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `${PIPE}/${curPath}`);
+  xhr.setRequestHeader('Content-Type', selFile.type || 'application/octet-stream');
+  xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(selFile.name)}"`);
+
+  xhr.upload.addEventListener('progress', e => {
+    if (!e.lengthComputable) return;
+    const p = Math.round(e.loaded / e.total * 100);
+    document.getElementById('prog-bar').style.width = p + '%';
+    document.getElementById('prog-text').textContent =
+      `${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})`;
+    if (p > 0 && p < 100) setStatus('send-status', '転送中… Transferring…');
+  });
+  xhr.addEventListener('load', () => {
+    document.getElementById('prog-bar').style.width = '100%';
+    document.getElementById('prog-text').textContent = '100%';
+    setStatus('send-status', '✓ 転送完了 Transfer complete', 'ok');
+  });
+  xhr.addEventListener('error', () => {
+    setStatus('send-status', '✗ エラー Transfer failed', 'err');
+    document.getElementById('send-btn').disabled = false;
+  });
+  xhr.send(selFile);
+}
+
+function resetSend() {
+  selFile = null; curPath = null; fi.value = '';
+  ['file-card','send-url-block','prog-wrap'].forEach(id =>
+    document.getElementById(id).style.display = 'none');
+  document.getElementById('send-btn').disabled = true;
+  document.getElementById('prog-bar').style.width = '0%';
+  setStatus('send-status', '');
+}
+
+// ── Receive ───────────────────────────────────────────
+function startReceive() {
+  const path = parsePath(document.getElementById('recv-path').value);
+  if (!path) return;
+
+  setStatus('recv-status', 'ダウンロードを開始します… 送信者が開始するまで待機します。', 'waiting');
+
+  const a = Object.assign(document.createElement('a'), {
+    href: `${PIPE}/${path}`, download: ''
+  });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  setTimeout(() =>
+    setStatus('recv-status', '受信を待機中。送信側が転送を開始すると自動でダウンロードされます。'), 1200);
+}
+
+// ── Text ─────────────────────────────────────────────
+function sendText() {
+  const text = document.getElementById('txt-send').value;
+  if (!text.trim()) return;
+  const path = randPath();
+
+  document.getElementById('txt-url-block').style.display = 'block';
+  document.getElementById('txt-url').value = `${PIPE}/${path}`;
+  setStatus('txt-send-status', '受信者を待っています…', 'waiting');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `${PIPE}/${path}`);
+  xhr.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
+  xhr.addEventListener('load', () => setStatus('txt-send-status', '✓ 送信完了', 'ok'));
+  xhr.addEventListener('error', () => setStatus('txt-send-status', '✗ エラー', 'err'));
+  xhr.send(text);
+}
+
+async function receiveText() {
+  const path = parsePath(document.getElementById('txt-recv-path').value);
+  if (!path) return;
+  setStatus('txt-recv-status', '受信中…', 'waiting');
+  try {
+    const res = await fetch(`${PIPE}/${path}`);
+    document.getElementById('txt-received').value = await res.text();
+    setStatus('txt-recv-status', '✓ 受信完了', 'ok');
+  } catch (e) {
+    setStatus('txt-recv-status', '✗ ' + e.message, 'err');
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────
+function setStatus(id, msg, cls = '') {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+}
+
+function copyField(fieldId, btnId) {
+  const val = document.getElementById(fieldId).value;
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = document.getElementById(btnId);
+    btn.textContent = 'コピー済 ✓';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+</body>
+</html>
