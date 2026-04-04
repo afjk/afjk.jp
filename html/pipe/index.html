@@ -437,7 +437,7 @@ const PRESENCE_OVERRIDE = params.get('presence');
 const DEFAULT_PRESENCE =
   (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
     ? `ws://${location.hostname}:8787`
-    : 'wss://presence.afjk.jp';
+    : `${location.origin.replace(/^http/, 'ws')}/presence`;
 const PRESENCE_ENDPOINT = PRESENCE_OVERRIDE || DEFAULT_PRESENCE;
 const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null };
 let deviceName = localStorage.getItem('pipe.deviceName') || defaultDeviceName();
