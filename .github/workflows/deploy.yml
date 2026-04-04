@@ -23,4 +23,4 @@ jobs:
           script: |
             cd ~/github/afjk.jp
             git pull
-            docker compose up -d --build
+            docker compose up -d --build presence-server
