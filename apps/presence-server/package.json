@@ -1,0 +1,10 @@
+{
+  "name": "presence-server",
+  "version": "0.1.0",
+  "description": "WebSocket presence broker for pipe.afjk.jp",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node src/server.mjs"
+  }
+}
