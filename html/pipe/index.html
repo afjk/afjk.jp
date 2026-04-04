@@ -52,6 +52,73 @@
     h1 { font-size: 1.6rem; font-weight: 800; margin-bottom: 6px; }
     .lead { color: var(--text2); font-size: 0.9rem; margin-bottom: 32px; line-height: 1.6; }
 
+    /* ── Presence ── */
+    .presence {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      margin-bottom: 28px;
+    }
+    .presence-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .presence-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .presence-status { font-size: 0.9rem; color: var(--text2); margin-top: 4px; }
+    .presence-room { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+    .device-chip {
+      border: 1px solid var(--border2);
+      background: var(--surface2);
+      border-radius: 999px;
+      color: var(--text2);
+      font-size: 0.8rem;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .device-chip span { color: var(--text); font-weight: 600; }
+    .device-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .peer-grid {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .peer-grid.empty {
+      display: block;
+    }
+    .presence-empty {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+    .peer-card {
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      background: var(--surface2);
+      padding: 12px 14px;
+      min-width: 160px;
+      flex: 1 1 180px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .peer-card:hover { border-color: var(--accent); }
+    .peer-name { font-weight: 600; color: var(--text); }
+    .peer-meta { font-size: 0.78rem; color: var(--text2); margin-top: 4px; }
+    .peer-action { font-size: 0.78rem; color: var(--accent); font-weight: 600; }
+
     /* ── Tabs ── */
     .tabs {
       display: flex;
@@ -244,6 +311,20 @@
   <h1>File Transfer</h1>
   <p class="lead">URLを共有するだけ。ブラウザだけで安全にファイルを送受信。<br>No upload to cloud — P2P streaming via piping-server.</p>
 
+  <section class="presence">
+    <div class="presence-head">
+      <div>
+        <div class="presence-label">近くのデバイス</div>
+        <div class="presence-status" id="presence-status">接続中…</div>
+        <div class="presence-room" id="presence-room">同じネットワークにいる端末がここに表示されます。</div>
+      </div>
+      <button class="device-chip" id="device-name-btn" type="button">端末名: <span id="device-name-label"></span></button>
+    </div>
+    <div class="peer-grid empty" id="peer-grid">
+      <div class="presence-empty" id="presence-empty">接続中…</div>
+    </div>
+  </section>
+
   <div class="tabs">
     <button class="tab active" data-tab="send">📤 送信</button>
     <button class="tab" data-tab="receive">📥 受信</button>
@@ -350,6 +431,22 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const PIPE        = 'https://pipe.afjk.jp';
+const params      = new URLSearchParams(location.search);
+const ROOM_CODE   = sanitizeRoomCode(params.get('room'));
+const PRESENCE_OVERRIDE = params.get('presence');
+const DEFAULT_PRESENCE =
+  (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? `ws://${location.hostname}:8787`
+    : 'wss://presence.afjk.jp';
+const PRESENCE_ENDPOINT = PRESENCE_OVERRIDE || DEFAULT_PRESENCE;
+const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null };
+let deviceName = localStorage.getItem('pipe.deviceName') || defaultDeviceName();
+const deviceInfo = detectDeviceInfo();
+const presenceStatusEl = document.getElementById('presence-status');
+const presenceRoomEl   = document.getElementById('presence-room');
+const deviceNameLabel  = document.getElementById('device-name-label');
+const deviceNameBtn    = document.getElementById('device-name-btn');
+const peerGrid         = document.getElementById('peer-grid');
 // ── Cancellation state ────────────────────────────────────────────────────────
 let _sendXHR = null, _sendPC = null;   // file send
 let _recvPC  = null, _recvAC = null;   // file receive
@@ -411,6 +508,219 @@ function copyField(fieldId, btnId) {
     setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
   });
 }
+
+function sanitizeRoomCode(raw) {
+  if (!raw) return null;
+  const cleaned = raw.toLowerCase().replace(/[^a-z0-9\-]/g, '').slice(0, 24);
+  return cleaned || null;
+}
+
+function detectDeviceInfo() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('iphone')) return 'iPhone';
+  if (ua.includes('ipad')) return 'iPad';
+  if (ua.includes('android')) return 'Android';
+  if (ua.includes('mac os x')) return 'macOS';
+  if (ua.includes('windows')) return 'Windows';
+  if (ua.includes('linux')) return 'Linux';
+  return 'Browser';
+}
+
+function defaultDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || 'Device';
+  return platform.replace(/_/g, ' ');
+}
+
+function updateDeviceNameLabel() {
+  if (deviceNameLabel) deviceNameLabel.textContent = deviceName;
+}
+
+function editDeviceName() {
+  const next = prompt('表示する端末名を入力', deviceName) || '';
+  const cleaned = next.trim().slice(0, 40);
+  if (!cleaned) return;
+  deviceName = cleaned;
+  localStorage.setItem('pipe.deviceName', deviceName);
+  updateDeviceNameLabel();
+  sendPresenceHello();
+}
+
+function buildPresenceUrl() {
+  try {
+    const url = new URL(PRESENCE_ENDPOINT, location.href);
+    if (ROOM_CODE && !url.searchParams.get('room')) url.searchParams.set('room', ROOM_CODE);
+    return url;
+  } catch {
+    const fallback = new URL('ws://localhost:8787');
+    if (ROOM_CODE) fallback.searchParams.set('room', ROOM_CODE);
+    return fallback;
+  }
+}
+
+function connectPresence() {
+  if (!peerGrid || !presenceStatusEl) return;
+  const url = buildPresenceUrl();
+  presenceStatusEl.textContent = '接続中…';
+  const ws = new WebSocket(url);
+  presenceState.ws = ws;
+  ws.addEventListener('open', () => {
+    if (presenceState.reconnectTimer) {
+      clearTimeout(presenceState.reconnectTimer);
+      presenceState.reconnectTimer = null;
+    }
+    presenceStatusEl.textContent = '接続済み';
+    renderPeerGrid();
+    sendPresenceHello();
+  });
+  ws.addEventListener('message', handlePresenceMessage);
+  ws.addEventListener('close', () => {
+    presenceStatusEl.textContent = '切断されました。再接続しています…';
+    presenceState.ws = null;
+    presenceState.id = null;
+    if (presenceState.reconnectTimer) clearTimeout(presenceState.reconnectTimer);
+    presenceState.reconnectTimer = setTimeout(connectPresence, 3000);
+  });
+  ws.addEventListener('error', () => {
+    presenceStatusEl.textContent = '接続に失敗しました';
+  });
+}
+
+function handlePresenceMessage(ev) {
+  let data;
+  try {
+    data = JSON.parse(ev.data);
+  } catch {
+    return;
+  }
+  switch (data.type) {
+    case 'welcome':
+      presenceState.id = data.id;
+      updateRoomLabel(data.room);
+      sendPresenceHello();
+      break;
+    case 'peers':
+      presenceState.peers = new Map((data.peers || []).map(p => [p.id, p]));
+      renderPeerGrid();
+      break;
+    case 'handoff':
+      handleIncomingHandoff(data);
+      break;
+    default:
+      break;
+  }
+}
+
+function updateRoomLabel(roomId) {
+  if (!presenceRoomEl) return;
+  if (ROOM_CODE) {
+    presenceRoomEl.textContent = `ルームコード: ${ROOM_CODE}`;
+  } else if (roomId) {
+    presenceRoomEl.textContent = `検出されたグループ: ${roomId}`;
+  }
+}
+
+function sendPresenceHello() {
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
+  presenceState.ws.send(JSON.stringify({
+    type: 'hello',
+    nickname: deviceName,
+    device: deviceInfo,
+    capabilities: { file: true, text: true }
+  }));
+}
+
+function renderPeerGrid() {
+  if (!peerGrid) return;
+  peerGrid.innerHTML = '';
+  const peers = Array.from(presenceState.peers.values());
+  if (!peers.length) {
+    peerGrid.classList.add('empty');
+    const empty = document.createElement('div');
+    empty.className = 'presence-empty';
+    empty.textContent = presenceState.ws ? '接続中のデバイスはありません。' : '接続されていません。';
+    peerGrid.appendChild(empty);
+    return;
+  }
+  peerGrid.classList.remove('empty');
+  peers.forEach(peer => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'peer-card';
+    const left = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'peer-name';
+    name.textContent = peer.nickname || 'デバイス';
+    const meta = document.createElement('div');
+    meta.className = 'peer-meta';
+    const bits = [];
+    if (peer.device) bits.push(peer.device);
+    if (peer.lastSeen) bits.push(fmtLastSeen(peer.lastSeen));
+    meta.textContent = bits.join(' · ');
+    left.appendChild(name);
+    left.appendChild(meta);
+    const action = document.createElement('div');
+    action.className = 'peer-action';
+    action.textContent = '送信';
+    card.append(left, action);
+    card.addEventListener('click', () => startSendToPeer(peer.id));
+    peerGrid.appendChild(card);
+  });
+}
+
+function fmtLastSeen(ts) {
+  const diff = Date.now() - Number(ts || 0);
+  if (diff < 10_000) return 'オンライン';
+  if (diff < 60_000) return `${Math.round(diff / 1000)}秒前`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分前`;
+  return `${Math.floor(diff / 3_600_000)}時間前`;
+}
+
+function startSendToPeer(peerId) {
+  if (!selFile || !curPath) {
+    setStatus('send-status', '先にファイルを選択してください。', 'err');
+    return;
+  }
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) {
+    setStatus('send-status', '近くのデバイスとの接続を確立できません。', 'err');
+    return;
+  }
+  presenceState.ws.send(JSON.stringify({
+    type: 'handoff',
+    targetId: peerId,
+    payload: {
+      kind: 'file',
+      path: curPath,
+      filename: selFile.name,
+      size: selFile.size,
+      mime: selFile.type || 'application/octet-stream',
+      url: recvUrl(curPath)
+    }
+  }));
+  setStatus('send-status', '通知を送信しました。P2P 接続を開始します…', 'waiting');
+  startSend();
+}
+
+function handleIncomingHandoff(msg) {
+  const payload = msg.payload || {};
+  if (!payload.path) return;
+  const sender = msg.from?.nickname || '相手';
+  const label = payload.filename ? `「${payload.filename}」` : 'ファイル';
+  switchTab('receive');
+  const input = document.getElementById('recv-path');
+  input.value = payload.path;
+  document.getElementById('recv-btn').disabled = false;
+  setStatus('recv-status', `${sender} から ${label} が届きます。接続しています…`, 'waiting');
+  startReceive();
+}
+
+function initPresence() {
+  if (!peerGrid || !presenceStatusEl) return;
+  updateDeviceNameLabel();
+  if (deviceNameBtn) deviceNameBtn.addEventListener('click', editDeviceName);
+  connectPresence();
+}
+
+initPresence();
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(btn => {
