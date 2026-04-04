@@ -439,7 +439,7 @@ const DEFAULT_PRESENCE =
     ? `ws://${location.hostname}:8787`
     : 'wss://presence.afjk.jp';
 const PRESENCE_ENDPOINT = PRESENCE_OVERRIDE || DEFAULT_PRESENCE;
-const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null };
+const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null, retries: 0 };
 let deviceName = localStorage.getItem('pipe.deviceName') || defaultDeviceName();
 const deviceInfo = detectDeviceInfo();
 const presenceStatusEl = document.getElementById('presence-status');
@@ -568,21 +568,26 @@ function connectPresence() {
       clearTimeout(presenceState.reconnectTimer);
       presenceState.reconnectTimer = null;
     }
+    presenceState.retries = 0;
     presenceStatusEl.textContent = '接続済み';
     renderPeerGrid();
     sendPresenceHello();
   });
   ws.addEventListener('message', handlePresenceMessage);
   ws.addEventListener('close', () => {
-    presenceStatusEl.textContent = '切断されました。再接続しています…';
     presenceState.ws = null;
     presenceState.id = null;
+    presenceState.retries += 1;
     if (presenceState.reconnectTimer) clearTimeout(presenceState.reconnectTimer);
-    presenceState.reconnectTimer = setTimeout(connectPresence, 3000);
+    if (presenceState.retries <= 3) {
+      presenceStatusEl.textContent = '再接続しています…';
+      const delay = Math.min(3000 * Math.pow(2, presenceState.retries - 1), 30000);
+      presenceState.reconnectTimer = setTimeout(connectPresence, delay);
+    } else {
+      presenceStatusEl.textContent = '近くのデバイスの検出は利用できません';
+    }
   });
-  ws.addEventListener('error', () => {
-    presenceStatusEl.textContent = '接続に失敗しました';
-  });
+  ws.addEventListener('error', () => {});
 }
 
 function handlePresenceMessage(ev) {
