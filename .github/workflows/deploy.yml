@@ -24,4 +24,4 @@ jobs:
             cd ~/github/afjk.jp
             git pull
             docker compose up -d --build presence-server
-            docker compose restart https-portal
+            docker compose up -d https-portal
