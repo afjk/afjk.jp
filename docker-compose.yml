@@ -13,8 +13,7 @@ services:
         afjk.jp -> http://www-service:80,
         www.afjk.jp -> http://www-service:80,
         upm.afjk.jp -> http://verdaccio:4873,
-        pipe.afjk.jp -> http://piping-server:8080,
-        presence.afjk.jp -> http://presence-server:8787
+        pipe.afjk.jp -> http://piping-server:8080
       CLIENT_MAX_BODY_SIZE: 0
       # piping-server のストリーミング転送を最適化
       CUSTOM_NGINX_SERVER_CONFIG_BLOCK: |
