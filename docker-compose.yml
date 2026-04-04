@@ -13,7 +13,8 @@ services:
         afjk.jp -> http://www-service:80,
         www.afjk.jp -> http://www-service:80,
         upm.afjk.jp -> http://verdaccio:4873,
-        pipe.afjk.jp -> http://piping-server:8080
+        pipe.afjk.jp -> http://piping-server:8080,
+        presence.afjk.jp -> http://presence-server:8787
       CLIENT_MAX_BODY_SIZE: 0
       # piping-server のストリーミング転送を最適化
       CUSTOM_NGINX_SERVER_CONFIG_BLOCK: |
@@ -57,3 +58,10 @@ services:
     environment:
       - PORT=8080 # Piping Serverがリッスンするポート
     restart: always
+
+  presence-server:
+    build: ./apps/presence-server
+    container_name: presence-server
+    restart: always
+    environment:
+      - PORT=8787

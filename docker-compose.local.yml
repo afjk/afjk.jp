@@ -14,3 +14,7 @@ services:
   piping-server:
     ports:
       - "8080:8080"
+
+  presence-server:
+    ports:
+      - "8787:8787"
