@@ -28,11 +28,11 @@ graph TB
         Piping["piping-server\n（HTTP中継）"]
     end
 
-    Browser1 -->|"HTTPS/WSS"| Portal
-    Browser2 -->|"HTTPS/WSS"| Portal
-    Portal -->|"/"|  WWW
-    Portal -->|"/presence (WSS)"| Presence
-    Portal -->|"pipe.afjk.jp"| Piping
+    Browser1 -->|HTTPS/WSS| Portal
+    Browser2 -->|HTTPS/WSS| Portal
+    Portal -->|静的ファイル| WWW
+    Portal -->|presence WSS| Presence
+    Portal -->|pipe.afjk.jp| Piping
 ```
 
 ---
@@ -44,11 +44,11 @@ graph TB
 ```mermaid
 flowchart TD
     Start([転送開始]) --> TryP2P["trySendWebRTC() / tryRecvWebRTC()"]
-    TryP2P --> Sig{"シグナリング成功?\n(8秒以内)"}
-    Sig -- Yes --> DC{"DataChannel open?\n(5秒以内)"}
+    TryP2P --> Sig{"シグナリング成功?\n8秒以内"}
+    Sig -- Yes --> DC{"DataChannel open?\n5秒以内"}
     DC -- Yes --> P2P["WebRTC DataChannel\nで直接転送"]
     DC -- No --> Fallback
-    Sig -- No --> Fallback["piping-server 経由\nHTTP POST / GET"]
+    Sig -- No --> Fallback["piping-server 経由\nHTTP フォールバック"]
     P2P --> Done([完了])
     Fallback --> Done
 ```
@@ -76,8 +76,8 @@ flowchart LR
     QP{"?room=\nクエリパラメータ?"}
     QP -- あり --> RoomParam["指定ルームに参加"]
     QP -- なし --> InferIP["X-Forwarded-For\nを取得"]
-    InferIP --> Subnet["IPの /24 をルームIDに使用\n例: 192.168.1.x"]
-    RoomParam --> Join["ルームへ参加\nbroadcastPeers()"]
+    InferIP --> Subnet["IP の上位3オクテットをルームIDに使用\n例: 192.168.1.x"]
+    RoomParam --> Join["ルームへ参加\nbroadcastPeers"]
     Subnet --> Join
 ```
 
@@ -89,18 +89,18 @@ sequenceDiagram
     participant S as presence-server
 
     C->>S: WebSocket 接続
-    S->>C: {"type":"welcome", "id":"uuid", "room":"192.168.1.x"}
-    C->>S: {"type":"hello", "nickname":"MacBook", "device":"macOS"}
-    S-->>C: {"type":"peers", "peers":[...]}
+    S->>C: welcome (id, room)
+    C->>S: hello (nickname, device)
+    S-->>C: peers (同室クライアント一覧)
     Note over S: 同室の全クライアントに peers をブロードキャスト
 
     loop 30秒ごと
-        S->>C: ping (opcode 0x9)
-        C->>S: pong (opcode 0xA)
+        S->>C: ping
+        C->>S: pong
     end
 
-    C->>S: {"type":"handoff", "targetId":"uuid", "payload":{...}}
-    S->>C2: {"type":"handoff", "from":{...}, "payload":{...}}
+    C->>S: handoff (targetId, payload)
+    S->>C2: handoff (from, payload)
 ```
 
 ### Handoff ペイロード（ファイル通知）
@@ -133,21 +133,21 @@ sequenceDiagram
     participant P as piping-server
     participant B as 受信側
 
-    A->>A: RTCPeerConnection 作成<br>DataChannel 作成<br>Offer 生成・ICE 収集
-    A->>P: POST /{path}.__offer (SDP offer)
-    B->>P: GET /{path}.__offer  (ブロック待機)
+    A->>A: RTCPeerConnection 作成 / DataChannel 作成 / Offer 生成・ICE 収集
+    A->>P: POST パス.__offer (SDP offer)
+    B->>P: GET パス.__offer (ブロック待機)
     P->>B: SDP offer
     B->>B: Answer 生成・ICE 収集
-    B->>P: POST /{path}.__answer (SDP answer)
-    A->>P: GET /{path}.__answer (ブロック待機)
+    B->>P: POST パス.__answer (SDP answer)
+    A->>P: GET パス.__answer (ブロック待機)
     P->>A: SDP answer
-    A-->>B: WebRTC DataChannel 確立（直接 or STUN 経由）
+    A-->>B: WebRTC DataChannel 確立 (直接 or STUN 経由)
 
-    A->>B: {"t":"meta", "name":"...", "mime":"...", "size":N}
+    A->>B: meta フレーム (name, mime, size)
     loop バイナリチャンク
-        A->>B: ArrayBuffer（最大256KB/chunk）
+        A->>B: ArrayBuffer 最大256KB
     end
-    A->>B: {"t":"done"}
+    A->>B: done フレーム
     B->>B: Blob 組み立て・ダウンロード
 ```
 
@@ -177,12 +177,12 @@ sequenceDiagram
     participant P as pipe.afjk.jp
     participant B as 受信側
 
-    B->>P: GET /{path}（ブロック待機）
+    B->>P: GET パス (ブロック待機)
 
     Note over A,B: URL または QR コードでパスを共有
 
-    A->>P: POST /{path}<br>Content-Type: application/octet-stream<br>Content-Disposition: attachment; filename="..."
-    P-->>B: ストリーミング配信（送信と同時に受信側へ流れる）
+    A->>P: POST パス (ファイルボディ)
+    P-->>B: ストリーミング配信 (送信と同時に受信側へ)
     B->>B: ブラウザのダウンロードとして保存
 ```
 
@@ -223,7 +223,7 @@ sequenceDiagram
 ```mermaid
 graph LR
     GH["GitHub\nActions"]
-    GH -->|"Release publish\ndeploy.yml"| SSH
+    GH -->|Release publish| SSH
 
     subgraph VPS
         SSH["git pull\ndocker compose up"]
