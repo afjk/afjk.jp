@@ -41,6 +41,31 @@
     .sep { color: var(--border2); }
     .logo-sub { color: var(--muted); font-size: 0.9rem; }
 
+    /* ── Lang toggle ── */
+    .lang-toggle {
+      display: flex;
+      gap: 2px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px;
+      margin-left: auto;
+    }
+    .lang-toggle button {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.06em;
+      transition: background 0.15s, color 0.15s;
+      font-family: inherit;
+    }
+    .lang-toggle button.active { background: var(--accent); color: #000; }
+
     /* ── Main ── */
     main {
       flex: 1;
@@ -305,38 +330,59 @@
   <a class="logo" href="/">afjk<span>.</span></a>
   <span class="sep">/</span>
   <span class="logo-sub">pipe</span>
+  <div class="lang-toggle">
+    <button id="btn-ja" onclick="setLang('ja')">JA</button>
+    <button id="btn-en" onclick="setLang('en')">EN</button>
+  </div>
 </header>
 
 <main>
   <h1>File Transfer</h1>
-  <p class="lead">URLを共有するだけ。ブラウザだけで安全にファイルを送受信。<br>No upload to cloud — P2P streaming via piping-server.</p>
+  <p class="lead">
+    <span data-ja>URLを共有するだけ。ブラウザだけで安全にファイルを送受信。<br>クラウドへのアップロード不要。ファイルは相手に直接届きます。</span>
+    <span data-en>Share a URL. Send and receive files securely in the browser.<br>No cloud upload. Files go directly to the recipient.</span>
+  </p>
 
   <section class="presence">
     <div class="presence-head">
       <div>
-        <div class="presence-label">近くのデバイス</div>
-        <div class="presence-status" id="presence-status">接続中…</div>
-        <div class="presence-room" id="presence-room">同じネットワークにいる端末がここに表示されます。</div>
+        <div class="presence-label">
+          <span data-ja>近くのデバイス</span>
+          <span data-en>Nearby Devices</span>
+        </div>
+        <div class="presence-status" id="presence-status"></div>
+        <div class="presence-room" id="presence-room">
+          <span data-ja>同じネットワークにいる端末がここに表示されます。</span>
+          <span data-en>Devices on the same network will appear here.</span>
+        </div>
       </div>
-      <button class="device-chip" id="device-name-btn" type="button">端末名: <span id="device-name-label"></span></button>
+      <button class="device-chip" id="device-name-btn" type="button">
+        <span data-ja>端末名: </span><span data-en>Device: </span><span id="device-name-label"></span>
+      </button>
     </div>
     <div class="peer-grid empty" id="peer-grid">
-      <div class="presence-empty" id="presence-empty">接続中…</div>
+      <div class="presence-empty" id="presence-empty"></div>
     </div>
   </section>
 
   <div class="tabs">
-    <button class="tab active" data-tab="send">📤 送信</button>
-    <button class="tab" data-tab="receive">📥 受信</button>
-    <button class="tab" data-tab="text">📝 テキスト</button>
+    <button class="tab active" data-tab="send">📤 <span data-ja>送信</span><span data-en>Send</span></button>
+    <button class="tab" data-tab="receive">📥 <span data-ja>受信</span><span data-en>Receive</span></button>
+    <button class="tab" data-tab="text">📝 <span data-ja>テキスト</span><span data-en>Text</span></button>
   </div>
 
   <!-- ── Send ── -->
   <div class="tab-panel active" id="tab-send">
     <div class="dropzone" id="dropzone">
       <div class="dz-icon">📂</div>
-      <div class="dz-main">クリックまたはドロップ</div>
-      <div class="dz-sub">Click or drop a file to start</div>
+      <div class="dz-main">
+        <span data-ja>クリックまたはドロップ</span>
+        <span data-en>Click or drop a file</span>
+      </div>
+      <div class="dz-sub">
+        <span data-ja>ファイルをここにドロップして開始</span>
+        <span data-en>Drop a file here to start</span>
+      </div>
     </div>
     <input type="file" id="file-input">
 
@@ -349,14 +395,22 @@
     </div>
 
     <div class="url-block" id="send-url-block">
-      <div class="url-label">受信用 URL（相手に送ってください）</div>
+      <div class="url-label">
+        <span data-ja>受信用 URL（相手に送ってください）</span>
+        <span data-en>Receive URL — share this with the receiver</span>
+      </div>
       <div class="url-row">
         <input class="url-field" id="send-url" readonly>
-        <button class="copy-btn" id="send-copy" onclick="copyField('send-url','send-copy')">コピー</button>
+        <button class="copy-btn" id="send-copy" onclick="copyField('send-url','send-copy')">
+          <span data-ja>コピー</span><span data-en>Copy</span>
+        </button>
       </div>
       <div class="qr-wrap" id="send-qr-wrap">
         <div class="qr-box" id="send-qr-box"></div>
-        <div class="qr-hint">スマホでスキャンして受信<br>Scan QR to receive on mobile</div>
+        <div class="qr-hint">
+          <span data-ja>スマホでスキャンして受信</span>
+          <span data-en>Scan QR to receive on mobile</span>
+        </div>
       </div>
     </div>
 
@@ -368,57 +422,91 @@
     <div class="status" id="send-status"></div>
 
     <div class="btn-row">
-      <button class="btn btn-primary" id="send-btn" onclick="startSend()" disabled>転送開始</button>
-      <button class="btn btn-ghost" id="cancel-send-btn" onclick="cancelSend()" style="display:none">キャンセル</button>
-      <button class="btn btn-ghost" id="reset-send-btn" onclick="resetSend()">リセット</button>
+      <button class="btn btn-primary" id="send-btn" onclick="startSend()" disabled>
+        <span data-ja>転送開始</span><span data-en>Start Transfer</span>
+      </button>
+      <button class="btn btn-ghost" id="cancel-send-btn" onclick="cancelSend()" style="display:none">
+        <span data-ja>キャンセル</span><span data-en>Cancel</span>
+      </button>
+      <button class="btn btn-ghost" id="reset-send-btn" onclick="resetSend()">
+        <span data-ja>リセット</span><span data-en>Reset</span>
+      </button>
     </div>
   </div>
 
   <!-- ── Receive ── -->
   <div class="tab-panel" id="tab-receive">
-    <div class="field-label">パスまたはURL</div>
+    <div class="field-label">
+      <span data-ja>パスまたはURL</span>
+      <span data-en>Path or URL</span>
+    </div>
     <div class="input-row">
       <input class="path-input" id="recv-path"
-        placeholder="abc12345 または https://afjk.jp/pipe/#abc12345"
         oninput="document.getElementById('recv-btn').disabled = !this.value.trim()">
-      <button class="btn btn-primary" id="recv-btn" onclick="startReceive()" disabled>受信</button>
-      <button class="btn btn-ghost" id="cancel-recv-btn" onclick="cancelRecv()" style="display:none">キャンセル</button>
+      <button class="btn btn-primary" id="recv-btn" onclick="startReceive()" disabled>
+        <span data-ja>受信</span><span data-en>Receive</span>
+      </button>
+      <button class="btn btn-ghost" id="cancel-recv-btn" onclick="cancelRecv()" style="display:none">
+        <span data-ja>キャンセル</span><span data-en>Cancel</span>
+      </button>
     </div>
     <div class="status" id="recv-status" style="margin-top:14px"></div>
   </div>
 
   <!-- ── Text ── -->
   <div class="tab-panel" id="tab-text">
-    <div class="field-label">送信するテキスト</div>
-    <textarea id="txt-send" placeholder="ここにテキストを貼り付けまたは入力…"></textarea>
+    <div class="field-label">
+      <span data-ja>送信するテキスト</span>
+      <span data-en>Text to send</span>
+    </div>
+    <textarea id="txt-send"></textarea>
 
     <div class="url-block" id="txt-url-block" style="margin-top:14px">
-      <div class="url-label">受信用 URL</div>
+      <div class="url-label">
+        <span data-ja>受信用 URL</span>
+        <span data-en>Receive URL</span>
+      </div>
       <div class="url-row">
         <input class="url-field" id="txt-url" readonly>
-        <button class="copy-btn" id="txt-copy" onclick="copyField('txt-url','txt-copy')">コピー</button>
+        <button class="copy-btn" id="txt-copy" onclick="copyField('txt-url','txt-copy')">
+          <span data-ja>コピー</span><span data-en>Copy</span>
+        </button>
       </div>
       <div class="qr-wrap" id="txt-qr-wrap">
         <div class="qr-box" id="txt-qr-box"></div>
-        <div class="qr-hint">スマホでスキャンして受信<br>Scan QR to receive on mobile</div>
+        <div class="qr-hint">
+          <span data-ja>スマホでスキャンして受信</span>
+          <span data-en>Scan QR to receive on mobile</span>
+        </div>
       </div>
     </div>
 
     <div class="status" id="txt-send-status"></div>
     <div class="btn-row">
-      <button class="btn btn-primary" id="txt-send-btn" onclick="sendText()">テキストを送信</button>
-      <button class="btn btn-ghost" id="cancel-txt-send-btn" onclick="cancelTxtSend()" style="display:none">キャンセル</button>
+      <button class="btn btn-primary" id="txt-send-btn" onclick="sendText()">
+        <span data-ja>テキストを送信</span><span data-en>Send Text</span>
+      </button>
+      <button class="btn btn-ghost" id="cancel-txt-send-btn" onclick="cancelTxtSend()" style="display:none">
+        <span data-ja>キャンセル</span><span data-en>Cancel</span>
+      </button>
     </div>
 
     <hr class="divider">
 
-    <div class="field-label">テキストを受信</div>
-    <div class="input-row">
-      <input class="path-input" id="txt-recv-path" placeholder="abc12345">
-      <button class="btn btn-primary" id="txt-recv-btn" onclick="receiveText()">受信</button>
-      <button class="btn btn-ghost" id="cancel-txt-recv-btn" onclick="cancelTxtRecv()" style="display:none">キャンセル</button>
+    <div class="field-label">
+      <span data-ja>テキストを受信</span>
+      <span data-en>Receive text</span>
     </div>
-    <textarea id="txt-received" placeholder="受信したテキストがここに表示されます" readonly style="margin-top:12px"></textarea>
+    <div class="input-row">
+      <input class="path-input" id="txt-recv-path">
+      <button class="btn btn-primary" id="txt-recv-btn" onclick="receiveText()">
+        <span data-ja>受信</span><span data-en>Receive</span>
+      </button>
+      <button class="btn btn-ghost" id="cancel-txt-recv-btn" onclick="cancelTxtRecv()" style="display:none">
+        <span data-ja>キャンセル</span><span data-en>Cancel</span>
+      </button>
+    </div>
+    <textarea id="txt-received" readonly style="margin-top:12px"></textarea>
     <div class="status" id="txt-recv-status"></div>
   </div>
 </main>
@@ -429,6 +517,144 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
+// ── i18n ──────────────────────────────────────────────────────────────────────
+const I18N = {
+  ja: {
+    copying:            'コピー済 ✓',
+    copy:               'コピー',
+    editNamePrompt:     '表示する端末名を入力',
+    recvPlaceholder:    'abc12345 または https://afjk.jp/pipe/#abc12345',
+    txtSendPlaceholder: 'ここにテキストを貼り付けまたは入力…',
+    txtRecvPlaceholder: 'abc12345',
+    txtReceivedPlaceholder: '受信したテキストがここに表示されます',
+    presenceConnecting:   '接続中…',
+    presenceConnected:    '接続済み',
+    presenceReconnecting: '再接続しています…',
+    presenceUnavailable:  '近くのデバイスの検出は利用できません',
+    roomCode:    r  => `ルームコード: ${r}`,
+    detectedGrp: r  => `検出されたグループ: ${r}`,
+    noDevices:    '接続中のデバイスはありません。',
+    notConnected: '接続されていません。',
+    unknownDevice: 'デバイス',
+    peerSend:     '送信',
+    online:       'オンライン',
+    secsAgo:  n   => `${n}秒前`,
+    minsAgo:  n   => `${n}分前`,
+    hoursAgo: n   => `${n}時間前`,
+    selectFileFirst:    '先にファイルを選択してください。',
+    presenceConnFail:   '近くのデバイスとの接続を確立できません。',
+    handoffSent:        '通知を送信しました。P2P 接続を開始します…',
+    incomingFile: (sender, label) => `${sender} から ${label} が届きます。接続しています…`,
+    fileLabel:    name => `「${name}」`,
+    fileGeneric:  'ファイル',
+    stranger:     '相手',
+    cancelled:    'キャンセルしました',
+    tryingP2P:    'ローカル P2P を試みています…',
+    transferringP2P: '転送中… (P2P)',
+    transferring: '転送中…',
+    transferDone: (size, secs, spd) => `✓ 転送完了 — ${size} / ${secs}秒 / ${spd}/s`,
+    transferFail: '✗ エラー',
+    waitingRcvr:  '受信者を待っています…',
+    startDL:      'ダウンロードを開始します…',
+    waitingXfer:  '受信を待機中。送信側が転送を開始すると自動でダウンロードされます。',
+    textSentOk:   '✓ 送信完了',
+    textError:    '✗ エラー',
+    receiving:    '受信中…',
+    textRecvDone: (size, secs, spd) => `✓ 受信完了 — ${size} / ${secs}秒 / ${spd}/s`,
+    p2pConnected: 'ローカル P2P 接続完了！',
+    p2pReceiving: name => `受信中 (P2P): ${name}`,
+    p2pProgress:  (rcvd, total) => `受信中 (P2P): ${rcvd} / ${total}`,
+    p2pSendDone:  (size, secs, spd) => `✓ 転送完了 via local P2P — ${size} / ${secs}秒 / ${spd}/s`,
+    p2pRecvDone:  (size, secs, spd) => `✓ 受信完了 via local P2P — ${size} / ${secs}秒 / ${spd}/s`,
+  },
+  en: {
+    copying:            'Copied ✓',
+    copy:               'Copy',
+    editNamePrompt:     'Enter device name',
+    recvPlaceholder:    'abc12345 or https://afjk.jp/pipe/#abc12345',
+    txtSendPlaceholder: 'Paste or type text here…',
+    txtRecvPlaceholder: 'abc12345',
+    txtReceivedPlaceholder: 'Received text will appear here',
+    presenceConnecting:   'Connecting...',
+    presenceConnected:    'Connected',
+    presenceReconnecting: 'Reconnecting...',
+    presenceUnavailable:  'Nearby device detection unavailable',
+    roomCode:    r  => `Room: ${r}`,
+    detectedGrp: r  => `Group: ${r}`,
+    noDevices:    'No devices connected.',
+    notConnected: 'Not connected.',
+    unknownDevice: 'Device',
+    peerSend:     'Send',
+    online:       'Online',
+    secsAgo:  n   => `${n}s ago`,
+    minsAgo:  n   => `${n}m ago`,
+    hoursAgo: n   => `${n}h ago`,
+    selectFileFirst:    'Please select a file first.',
+    presenceConnFail:   'Cannot connect to nearby device.',
+    handoffSent:        'Notification sent. Starting P2P transfer...',
+    incomingFile: (sender, label) => `Incoming ${label} from ${sender}. Connecting...`,
+    fileLabel:    name => `"${name}"`,
+    fileGeneric:  'file',
+    stranger:     'Someone',
+    cancelled:    'Cancelled',
+    tryingP2P:    'Trying local P2P...',
+    transferringP2P: 'Transferring... (P2P)',
+    transferring: 'Transferring...',
+    transferDone: (size, secs, spd) => `✓ Transfer complete — ${size} / ${secs}s / ${spd}/s`,
+    transferFail: '✗ Error',
+    waitingRcvr:  'Waiting for receiver...',
+    startDL:      'Starting download...',
+    waitingXfer:  'Waiting for transfer. Download will start automatically when sender begins.',
+    textSentOk:   '✓ Sent',
+    textError:    '✗ Error',
+    receiving:    'Receiving...',
+    textRecvDone: (size, secs, spd) => `✓ Received — ${size} / ${secs}s / ${spd}/s`,
+    p2pConnected: 'Local P2P connected!',
+    p2pReceiving: name => `Receiving (P2P): ${name}`,
+    p2pProgress:  (rcvd, total) => `Receiving (P2P): ${rcvd} / ${total}`,
+    p2pSendDone:  (size, secs, spd) => `✓ Transfer complete via local P2P — ${size} / ${secs}s / ${spd}/s`,
+    p2pRecvDone:  (size, secs, spd) => `✓ Received via local P2P — ${size} / ${secs}s / ${spd}/s`,
+  }
+};
+
+let currentLang = 'ja';
+const t = key => I18N[currentLang][key];
+
+function setLang(lang) {
+  currentLang = lang;
+  document.documentElement.lang = lang;
+  localStorage.setItem('lang', lang);
+
+  document.querySelectorAll('[data-ja]').forEach(el => {
+    el.style.display = lang === 'ja' ? '' : 'none';
+  });
+  document.querySelectorAll('[data-en]').forEach(el => {
+    el.style.display = lang === 'en' ? '' : 'none';
+  });
+
+  document.getElementById('btn-ja').classList.toggle('active', lang === 'ja');
+  document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+
+  // Update placeholders
+  const recvPath = document.getElementById('recv-path');
+  if (recvPath) recvPath.placeholder = t('recvPlaceholder');
+  const txtSend = document.getElementById('txt-send');
+  if (txtSend) txtSend.placeholder = t('txtSendPlaceholder');
+  const txtRecvPath = document.getElementById('txt-recv-path');
+  if (txtRecvPath) txtRecvPath.placeholder = t('txtRecvPlaceholder');
+  const txtReceived = document.getElementById('txt-received');
+  if (txtReceived) txtReceived.placeholder = t('txtReceivedPlaceholder');
+
+  // Re-render dynamic presence UI
+  renderPeerGrid();
+  if (presenceState.ws) {
+    presenceStatusEl.textContent = presenceState.ws.readyState === WebSocket.OPEN
+      ? t('presenceConnected') : t('presenceReconnecting');
+  } else {
+    presenceStatusEl.textContent = t('presenceConnecting');
+  }
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 const PIPE        = 'https://pipe.afjk.jp';
 const params      = new URLSearchParams(location.search);
@@ -503,9 +729,13 @@ function copyField(fieldId, btnId) {
   const val = document.getElementById(fieldId).value;
   navigator.clipboard.writeText(val).then(() => {
     const btn = document.getElementById(btnId);
-    btn.textContent = 'コピー済 ✓';
+    const copyingSpan = btn.querySelector('[data-ja]') || btn.querySelector('[data-en]');
+    btn.textContent = t('copying');
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(() => {
+      btn.innerHTML = `<span data-ja style="display:${currentLang==='ja'?'':'none'}">${I18N.ja.copy}</span><span data-en style="display:${currentLang==='en'?'':'none'}">${I18N.en.copy}</span>`;
+      btn.classList.remove('copied');
+    }, 2000);
   });
 }
 
@@ -536,7 +766,7 @@ function updateDeviceNameLabel() {
 }
 
 function editDeviceName() {
-  const next = prompt('表示する端末名を入力', deviceName) || '';
+  const next = prompt(t('editNamePrompt'), deviceName) || '';
   const cleaned = next.trim().slice(0, 40);
   if (!cleaned) return;
   deviceName = cleaned;
@@ -560,7 +790,7 @@ function buildPresenceUrl() {
 function connectPresence() {
   if (!peerGrid || !presenceStatusEl) return;
   const url = buildPresenceUrl();
-  presenceStatusEl.textContent = '接続中…';
+  presenceStatusEl.textContent = t('presenceConnecting');
   const ws = new WebSocket(url);
   presenceState.ws = ws;
   ws.addEventListener('open', () => {
@@ -569,7 +799,7 @@ function connectPresence() {
       presenceState.reconnectTimer = null;
     }
     presenceState.retries = 0;
-    presenceStatusEl.textContent = '接続済み';
+    presenceStatusEl.textContent = t('presenceConnected');
     renderPeerGrid();
     sendPresenceHello();
   });
@@ -580,11 +810,11 @@ function connectPresence() {
     presenceState.retries += 1;
     if (presenceState.reconnectTimer) clearTimeout(presenceState.reconnectTimer);
     if (presenceState.retries <= 3) {
-      presenceStatusEl.textContent = '再接続しています…';
+      presenceStatusEl.textContent = t('presenceReconnecting');
       const delay = Math.min(3000 * Math.pow(2, presenceState.retries - 1), 30000);
       presenceState.reconnectTimer = setTimeout(connectPresence, delay);
     } else {
-      presenceStatusEl.textContent = '近くのデバイスの検出は利用できません';
+      presenceStatusEl.textContent = t('presenceUnavailable');
     }
   });
   ws.addEventListener('error', () => {});
@@ -618,9 +848,9 @@ function handlePresenceMessage(ev) {
 function updateRoomLabel(roomId) {
   if (!presenceRoomEl) return;
   if (ROOM_CODE) {
-    presenceRoomEl.textContent = `ルームコード: ${ROOM_CODE}`;
+    presenceRoomEl.textContent = t('roomCode')(ROOM_CODE);
   } else if (roomId) {
-    presenceRoomEl.textContent = `検出されたグループ: ${roomId}`;
+    presenceRoomEl.textContent = t('detectedGrp')(roomId);
   }
 }
 
@@ -642,7 +872,7 @@ function renderPeerGrid() {
     peerGrid.classList.add('empty');
     const empty = document.createElement('div');
     empty.className = 'presence-empty';
-    empty.textContent = presenceState.ws ? '接続中のデバイスはありません。' : '接続されていません。';
+    empty.textContent = presenceState.ws ? t('noDevices') : t('notConnected');
     peerGrid.appendChild(empty);
     return;
   }
@@ -654,7 +884,7 @@ function renderPeerGrid() {
     const left = document.createElement('div');
     const name = document.createElement('div');
     name.className = 'peer-name';
-    name.textContent = peer.nickname || 'デバイス';
+    name.textContent = peer.nickname || t('unknownDevice');
     const meta = document.createElement('div');
     meta.className = 'peer-meta';
     const bits = [];
@@ -665,7 +895,7 @@ function renderPeerGrid() {
     left.appendChild(meta);
     const action = document.createElement('div');
     action.className = 'peer-action';
-    action.textContent = '送信';
+    action.textContent = t('peerSend');
     card.append(left, action);
     card.addEventListener('click', () => startSendToPeer(peer.id));
     peerGrid.appendChild(card);
@@ -674,19 +904,19 @@ function renderPeerGrid() {
 
 function fmtLastSeen(ts) {
   const diff = Date.now() - Number(ts || 0);
-  if (diff < 10_000) return 'オンライン';
-  if (diff < 60_000) return `${Math.round(diff / 1000)}秒前`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分前`;
-  return `${Math.floor(diff / 3_600_000)}時間前`;
+  if (diff < 10_000) return t('online');
+  if (diff < 60_000) return t('secsAgo')(Math.round(diff / 1000));
+  if (diff < 3_600_000) return t('minsAgo')(Math.floor(diff / 60_000));
+  return t('hoursAgo')(Math.floor(diff / 3_600_000));
 }
 
 function startSendToPeer(peerId) {
   if (!selFile || !curPath) {
-    setStatus('send-status', '先にファイルを選択してください。', 'err');
+    setStatus('send-status', t('selectFileFirst'), 'err');
     return;
   }
   if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) {
-    setStatus('send-status', '近くのデバイスとの接続を確立できません。', 'err');
+    setStatus('send-status', t('presenceConnFail'), 'err');
     return;
   }
   presenceState.ws.send(JSON.stringify({
@@ -701,20 +931,20 @@ function startSendToPeer(peerId) {
       url: recvUrl(curPath)
     }
   }));
-  setStatus('send-status', '通知を送信しました。P2P 接続を開始します…', 'waiting');
+  setStatus('send-status', t('handoffSent'), 'waiting');
   startSend();
 }
 
 function handleIncomingHandoff(msg) {
   const payload = msg.payload || {};
   if (!payload.path) return;
-  const sender = msg.from?.nickname || '相手';
-  const label = payload.filename ? `「${payload.filename}」` : 'ファイル';
+  const sender = msg.from?.nickname || t('stranger');
+  const label = payload.filename ? t('fileLabel')(payload.filename) : t('fileGeneric');
   switchTab('receive');
   const input = document.getElementById('recv-path');
   input.value = payload.path;
   document.getElementById('recv-btn').disabled = false;
-  setStatus('recv-status', `${sender} から ${label} が届きます。接続しています…`, 'waiting');
+  setStatus('recv-status', t('incomingFile')(sender, label), 'waiting');
   startReceive();
 }
 
@@ -795,7 +1025,7 @@ function cancelSend() {
   _sendXHR = null; _sendPC = null;
   document.getElementById('prog-wrap').style.display = 'none';
   document.getElementById('prog-bar').style.width = '0%';
-  setStatus('send-status', 'キャンセルしました', 'err');
+  setStatus('send-status', t('cancelled'), 'err');
   _sendEnd();
 }
 
@@ -803,7 +1033,7 @@ async function startSend() {
   if (!selFile) return;
   _sendStart();
   document.getElementById('prog-wrap').style.display = 'block';
-  setStatus('send-status', 'ローカル P2P を試みています…', 'waiting');
+  setStatus('send-status', t('tryingP2P'), 'waiting');
 
   const ok = await trySendWebRTC(selFile, curPath,
     (loaded, total) => {
@@ -811,14 +1041,14 @@ async function startSend() {
       document.getElementById('prog-bar').style.width = p + '%';
       document.getElementById('prog-text').textContent =
         `${p}%  (${fmt(loaded)} / ${fmt(total)})`;
-      if (p > 0) setStatus('send-status', '転送中… (P2P)', 'waiting');
+      if (p > 0) setStatus('send-status', t('transferringP2P'), 'waiting');
     },
     msg => { setStatus('send-status', msg, 'ok'); _sendEnd(); }
   );
 
   if (!ok) {
     if (!_sendPC && !_sendXHR && document.getElementById('cancel-send-btn').style.display === 'none') return; // cancelled
-    setStatus('send-status', '受信者を待っています… Waiting for receiver…', 'waiting');
+    setStatus('send-status', t('waitingRcvr'), 'waiting');
     sendHTTP(selFile, curPath);
   }
 }
@@ -838,19 +1068,19 @@ function sendHTTP(body, path) {
     const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
     document.getElementById('prog-text').textContent =
       `${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})  ${fmt(speed)}/s`;
-    if (p > 0 && p < 100) setStatus('send-status', '転送中… Transferring…');
+    if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
   });
   xhr.addEventListener('load', () => {
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = elapsed > 0 ? body.size / elapsed : 0;
     document.getElementById('prog-bar').style.width = '100%';
     document.getElementById('prog-text').textContent = '100%';
-    setStatus('send-status', `✓ 転送完了 — ${fmt(body.size)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, 'ok');
+    setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
     _sendEnd();
   });
   xhr.addEventListener('abort', () => {});  // handled by cancelSend
   xhr.addEventListener('error', () => {
-    setStatus('send-status', '✗ エラー Transfer failed', 'err');
+    setStatus('send-status', t('transferFail'), 'err');
     _sendEnd();
   });
   xhr.send(body);
@@ -878,7 +1108,7 @@ function _recvEnd() {
 }
 function cancelRecv() {
   _recvPC?.close(); _recvAC?.abort();
-  setStatus('recv-status', 'キャンセルしました', 'err');
+  setStatus('recv-status', t('cancelled'), 'err');
   _recvEnd();
 }
 
@@ -886,7 +1116,7 @@ async function startReceive() {
   const path = parsePath(document.getElementById('recv-path').value);
   if (!path) return;
   _recvStart();
-  setStatus('recv-status', 'ローカル P2P を試みています…', 'waiting');
+  setStatus('recv-status', t('tryingP2P'), 'waiting');
 
   const ok = await tryRecvWebRTC(path,
     msg => setStatus('recv-status', msg, 'waiting'),
@@ -895,7 +1125,7 @@ async function startReceive() {
 
   if (!ok) {
     if (document.getElementById('cancel-recv-btn').style.display === 'none') return; // cancelled
-    setStatus('recv-status', 'ダウンロードを開始します… 送信者が開始するまで待機します。', 'waiting');
+    setStatus('recv-status', t('startDL'), 'waiting');
     const a = Object.assign(document.createElement('a'), {
       href: `${PIPE}/${path}`, download: ''
     });
@@ -903,7 +1133,7 @@ async function startReceive() {
     a.click();
     document.body.removeChild(a);
     setTimeout(() =>
-      setStatus('recv-status', '受信を待機中。送信側が転送を開始すると自動でダウンロードされます。'), 1200);
+      setStatus('recv-status', t('waitingXfer')), 1200);
     _recvEnd();
   }
 }
@@ -911,13 +1141,13 @@ async function startReceive() {
 // ── Text ──────────────────────────────────────────────────────────────────────
 function cancelTxtSend() {
   _txtSendPC?.close(); _txtSendPC = null;
-  setStatus('txt-send-status', 'キャンセルしました', 'err');
+  setStatus('txt-send-status', t('cancelled'), 'err');
   document.getElementById('txt-send-btn').disabled          = false;
   document.getElementById('cancel-txt-send-btn').style.display = 'none';
 }
 function cancelTxtRecv() {
   _txtRecvAC?.abort(); _txtRecvAC = null;
-  setStatus('txt-recv-status', 'キャンセルしました', 'err');
+  setStatus('txt-recv-status', t('cancelled'), 'err');
   document.getElementById('txt-recv-btn').disabled          = false;
   document.getElementById('cancel-txt-recv-btn').style.display = 'none';
 }
@@ -931,7 +1161,7 @@ async function sendText() {
   document.getElementById('txt-url-block').style.display = 'block';
   document.getElementById('txt-url').value = url;
   showQR('txt-qr-box', 'txt-qr-wrap', url);
-  setStatus('txt-send-status', 'ローカル P2P を試みています…', 'waiting');
+  setStatus('txt-send-status', t('tryingP2P'), 'waiting');
   document.getElementById('txt-send-btn').disabled          = true;
   document.getElementById('cancel-txt-send-btn').style.display = '';
 
@@ -947,18 +1177,18 @@ async function sendText() {
 
   if (!ok) {
     if (document.getElementById('cancel-txt-send-btn').style.display === 'none') return; // cancelled
-    setStatus('txt-send-status', '受信者を待っています…', 'waiting');
+    setStatus('txt-send-status', t('waitingRcvr'), 'waiting');
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${PIPE}/${path}`);
     xhr.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
     xhr.addEventListener('load', () => {
-      setStatus('txt-send-status', '✓ 送信完了', 'ok');
+      setStatus('txt-send-status', t('textSentOk'), 'ok');
       document.getElementById('txt-send-btn').disabled          = false;
       document.getElementById('cancel-txt-send-btn').style.display = 'none';
     });
     xhr.addEventListener('abort', () => {});
     xhr.addEventListener('error', () => {
-      setStatus('txt-send-status', '✗ エラー', 'err');
+      setStatus('txt-send-status', t('textError'), 'err');
       document.getElementById('txt-send-btn').disabled          = false;
       document.getElementById('cancel-txt-send-btn').style.display = 'none';
     });
@@ -970,15 +1200,15 @@ async function receiveText() {
   const path = parsePath(document.getElementById('txt-recv-path').value);
   if (!path) return;
   _txtRecvAC = new AbortController();
-  setStatus('txt-recv-status', 'ローカル P2P を試みています…', 'waiting');
+  setStatus('txt-recv-status', t('tryingP2P'), 'waiting');
   document.getElementById('txt-recv-btn').disabled          = true;
   document.getElementById('cancel-txt-recv-btn').style.display = '';
 
   const ok = await tryRecvWebRTC(path,
     msg => setStatus('txt-recv-status', msg, 'waiting'),
     (msg, blob) => {
-      blob.text().then(t => {
-        document.getElementById('txt-received').value = t;
+      blob.text().then(tx => {
+        document.getElementById('txt-received').value = tx;
         setStatus('txt-recv-status', msg, 'ok');
       });
       document.getElementById('txt-recv-btn').disabled          = false;
@@ -988,7 +1218,7 @@ async function receiveText() {
 
   if (!ok) {
     if (!_txtRecvAC) return; // cancelled
-    setStatus('txt-recv-status', '受信中…', 'waiting');
+    setStatus('txt-recv-status', t('receiving'), 'waiting');
     try {
       const t0  = performance.now();
       const res = await fetch(`${PIPE}/${path}`, { signal: _txtRecvAC.signal });
@@ -996,7 +1226,7 @@ async function receiveText() {
       const elapsed = (performance.now() - t0) / 1000;
       const speed   = elapsed > 0 ? new Blob([txt]).size / elapsed : 0;
       document.getElementById('txt-received').value = txt;
-      setStatus('txt-recv-status', `✓ 受信完了 — ${fmt(new Blob([txt]).size)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, 'ok');
+      setStatus('txt-recv-status', t('textRecvDone')(fmt(new Blob([txt]).size), elapsed.toFixed(2), fmt(speed)), 'ok');
     } catch (e) {
       if (e.name !== 'AbortError') setStatus('txt-recv-status', '✗ ' + e.message, 'err');
     }
@@ -1156,7 +1386,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     dc.send(JSON.stringify({ t: 'done' }));
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
-    onDone(`✓ 転送完了 via local P2P — ${fmt(sent)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`);
+    onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
     return true;
   } catch (e) {
     clearTimeout(timer);
@@ -1198,7 +1428,7 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
     dc.binaryType = 'arraybuffer';
 
     clearTimeout(timer);
-    onStatus('ローカル P2P 接続完了！');
+    onStatus(t('p2pConnected'));
 
     await new Promise(resolve => {
       let meta = null, chunks = [], recvd = 0;
@@ -1208,12 +1438,12 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
           const msg = JSON.parse(e.data);
           if (msg.t === 'meta') {
             meta = msg;
-            onStatus(`受信中 (P2P): ${meta.name}`);
+            onStatus(t('p2pReceiving')(meta.name));
           } else if (msg.t === 'done') {
             const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
             const blob    = new Blob(chunks, { type: meta.mime });
-            onDone(`✓ 受信完了 via local P2P — ${fmt(recvd)} / ${elapsed.toFixed(2)}秒 / ${fmt(speed)}/s`, blob);
+            onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob);
             triggerDownload(blob, meta.name);
             resolve();
           }
@@ -1221,7 +1451,7 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
           if (!t0) t0 = performance.now();
           chunks.push(e.data);
           recvd += e.data.byteLength;
-          if (meta) onStatus(`受信中 (P2P): ${fmt(recvd)} / ${fmt(meta.size)}`);
+          if (meta) onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
         }
       };
       dc.onerror = resolve;
@@ -1248,6 +1478,11 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
   document.getElementById('recv-btn').disabled = false;
   startReceive();
 })();
+
+// ── Lang init ─────────────────────────────────────────────────────────────────
+const savedLang   = localStorage.getItem('lang');
+const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
+setLang(savedLang || browserLang);
 </script>
 </body>
 </html>
