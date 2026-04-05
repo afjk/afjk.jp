@@ -164,6 +164,14 @@ dig staging.afjk.jp +short  # 163.44.117.15 が返ることを確認
 `staging.afjk.jp` の証明書を自動発行する。
 DNS が正しく設定されていれば本番への影響は数秒程度。
 
+> **本番サーバーでの再起動コマンド**
+> ローカル開発用の `docker-compose.local.yml` を本番に混ぜると不要なポートが開放されるため、
+> 本番サーバーでは以下のコマンドのみを実行する。
+>
+> ```bash
+> docker compose up -d https-portal
+> ```
+
 ---
 
 ## リスクと対策
