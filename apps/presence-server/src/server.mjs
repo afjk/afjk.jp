@@ -269,8 +269,7 @@ const CORS = {
 };
 
 const server = createServer((req, res) => {
-  log('HTTP', req.method, req.url, 'host:', req.headers.host);
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
   // CORS preflight
   if (req.method === 'OPTIONS') {
@@ -279,14 +278,14 @@ const server = createServer((req, res) => {
   }
 
   // GET /stats
-  if (req.method === 'GET' && url.pathname.endsWith('/stats')) {
+  if (req.method === 'GET' && path === '/stats') {
     res.writeHead(200, { 'content-type': 'application/json', ...CORS })
        .end(JSON.stringify(stats));
     return;
   }
 
   // POST /stats
-  if (req.method === 'POST' && url.pathname.endsWith('/stats')) {
+  if (req.method === 'POST' && path === '/stats') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
