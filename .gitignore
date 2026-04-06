@@ -1,6 +1,5 @@
-# ローカル開発用の自己署名証明書
-https-portal-certs/*/local/
-https-portal-certs/pipe.afjk.jp/
+# https-portal 証明書（秘密鍵を含むため全除外）
+https-portal-certs/
 
 # Claude Code
 .claude/
