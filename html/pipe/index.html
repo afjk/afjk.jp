@@ -463,6 +463,10 @@
         <span data-ja>キャンセル</span><span data-en>Cancel</span>
       </button>
     </div>
+    <div class="prog-wrap" id="recv-prog-wrap">
+      <div class="prog-bg"><div class="prog-bar" id="recv-prog-bar"></div></div>
+      <div class="prog-text" id="recv-prog-text"></div>
+    </div>
     <div class="status" id="recv-status" style="margin-top:14px"></div>
   </div>
 
@@ -1185,11 +1189,25 @@ function resetSend() {
 function _recvStart() {
   document.getElementById('recv-btn').disabled          = true;
   document.getElementById('cancel-recv-btn').style.display = '';
+  document.getElementById('recv-prog-wrap').style.display = 'none';
+  document.getElementById('recv-prog-bar').style.width = '0%';
+  document.getElementById('recv-prog-text').textContent = '';
 }
 function _recvEnd() {
   document.getElementById('recv-btn').disabled          = false;
   document.getElementById('cancel-recv-btn').style.display = 'none';
   _recvPC = null; _recvAC = null;
+}
+function _recvProgress(received, total) {
+  const wrap = document.getElementById('recv-prog-wrap');
+  const bar  = document.getElementById('recv-prog-bar');
+  const text = document.getElementById('recv-prog-text');
+  if (total > 0) {
+    const p = Math.round(received / total * 100);
+    wrap.style.display = 'block';
+    bar.style.width = p + '%';
+    text.textContent = `${p}%  (${fmt(received)} / ${fmt(total)})`;
+  }
 }
 function cancelRecv() {
   _recvPC?.close(); _recvAC?.abort();
@@ -1205,7 +1223,8 @@ async function startReceive() {
 
   const ok = await tryRecvWebRTC(path,
     msg => setStatus('recv-status', msg, 'waiting'),
-    msg => { setStatus('recv-status', msg, 'ok'); _recvEnd(); }
+    msg => { setStatus('recv-status', msg, 'ok'); _recvEnd(); },
+    (received, total) => _recvProgress(received, total)
   );
 
   if (!ok) {
@@ -1482,9 +1501,9 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 }
 
 // ── WebRTC receive ────────────────────────────────────────────────────────────
-// onStatus(message), onDone(message, blob)
+// onStatus(message), onDone(message, blob), onProgress(received, total)
 // Returns true if P2P succeeded
-async function tryRecvWebRTC(path, onStatus, onDone) {
+async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
   const ac    = new AbortController();
   _recvAC = ac;
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
@@ -1537,7 +1556,10 @@ async function tryRecvWebRTC(path, onStatus, onDone) {
           if (!t0) t0 = performance.now();
           chunks.push(e.data);
           recvd += e.data.byteLength;
-          if (meta) onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
+          if (meta) {
+            onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
+            if (onProgress) onProgress(recvd, meta.size);
+          }
         }
       };
       dc.onerror = resolve;
