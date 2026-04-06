@@ -394,6 +394,70 @@
     }
     .url-card a:hover { opacity: .8; }
 
+    /* ── Text receive history ── */
+    .history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .hist-clear-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 0.78rem;
+      cursor: pointer;
+      font-family: inherit;
+      padding: 2px 0;
+      transition: color .15s;
+    }
+    .hist-clear-btn:hover { color: #f87171; }
+    .hist-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .hist-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .hist-time { font-size: 0.72rem; color: var(--muted); }
+    .hist-btns { display: flex; gap: 4px; }
+    .hist-btn {
+      background: none;
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color .15s, color .15s;
+    }
+    .hist-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .hist-del:hover { border-color: #f87171; color: #f87171; }
+    .hist-body {
+      font-size: 0.86rem;
+      color: var(--text2);
+      word-break: break-all;
+      white-space: pre-wrap;
+      cursor: pointer;
+      line-height: 1.5;
+    }
+    .hist-body:hover { color: var(--text); }
+    .hist-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+    .hist-body a:hover { opacity: .8; }
+    .hist-empty {
+      text-align: center;
+      font-size: 0.84rem;
+      color: var(--muted);
+      padding: 18px 0;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -600,6 +664,20 @@
       <a id="txt-received-url-link" href="#" target="_blank" rel="noopener"></a>
     </div>
     <div class="status" id="txt-recv-status"></div>
+
+    <hr class="divider">
+
+    <div class="history-head">
+      <div class="field-label" style="margin:0">
+        <span data-ja>受信履歴</span>
+        <span data-en>Receive History</span>
+      </div>
+      <button class="hist-clear-btn" onclick="clearHistory()">
+        <span data-ja>すべて削除</span>
+        <span data-en>Clear all</span>
+      </button>
+    </div>
+    <div id="txt-history"></div>
   </div>
 </main>
 
@@ -753,6 +831,7 @@ function setLang(lang) {
   } else {
     presenceStatusEl.textContent = t('presenceConnecting');
   }
+  renderHistory();
 }
 
 // ── Stats reporting ───────────────────────────────────────────────────────────
@@ -1600,6 +1679,7 @@ function isUrl(text) {
 }
 
 function setReceivedText(text) {
+  addToHistory(text);
   const ta   = document.getElementById('txt-received');
   const card = document.getElementById('txt-received-url-card');
   const link = document.getElementById('txt-received-url-link');
@@ -1995,10 +2075,82 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
   startReceive();
 })();
 
+// ── Text receive history ──────────────────────────────────────────────────────
+const HISTORY_KEY = 'pipe.textHistory';
+const MAX_HISTORY = 50;
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
+}
+function saveHistory(arr) { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr)); }
+
+function addToHistory(text) {
+  if (!text.trim()) return;
+  const arr = loadHistory();
+  arr.unshift({ text, ts: Date.now() });
+  if (arr.length > MAX_HISTORY) arr.splice(MAX_HISTORY);
+  saveHistory(arr);
+  renderHistory();
+}
+
+function removeFromHistory(idx) {
+  const arr = loadHistory();
+  arr.splice(idx, 1);
+  saveHistory(arr);
+  renderHistory();
+}
+
+function clearHistory() {
+  saveHistory([]);
+  renderHistory();
+}
+
+function copyHistItem(idx) {
+  const arr = loadHistory();
+  if (arr[idx]) navigator.clipboard.writeText(arr[idx].text).catch(() => {});
+}
+
+function renderHistory() {
+  const container = document.getElementById('txt-history');
+  if (!container) return;
+  const arr = loadHistory();
+  container.innerHTML = '';
+
+  if (!arr.length) {
+    const empty = document.createElement('div');
+    empty.className = 'hist-empty';
+    empty.textContent = currentLang === 'ja' ? '受信履歴はありません' : 'No history yet';
+    container.appendChild(empty);
+    return;
+  }
+
+  const copyLabel = currentLang === 'ja' ? 'コピー' : 'Copy';
+  arr.forEach((item, i) => {
+    const el = document.createElement('div');
+    el.className = 'hist-item';
+    const trimmed = item.text.trim();
+    const preview = trimmed.length > 120 ? trimmed.slice(0, 120) + '…' : trimmed;
+    const bodyHtml = isUrl(trimmed)
+      ? `<a href="${escHtml(trimmed)}" target="_blank" rel="noopener">${escHtml(preview)}</a>`
+      : escHtml(preview);
+    el.innerHTML =
+      `<div class="hist-header">` +
+        `<span class="hist-time">${escHtml(fmtLastSeen(item.ts))}</span>` +
+        `<div class="hist-btns">` +
+          `<button class="hist-btn" onclick="copyHistItem(${i})">${copyLabel}</button>` +
+          `<button class="hist-btn hist-del" onclick="removeFromHistory(${i})">×</button>` +
+        `</div>` +
+      `</div>` +
+      `<div class="hist-body" onclick="copyHistItem(${i})">${bodyHtml}</div>`;
+    container.appendChild(el);
+  });
+}
+
 // ── Lang init ─────────────────────────────────────────────────────────────────
 const savedLang   = localStorage.getItem('lang');
 const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
 setLang(savedLang || browserLang);
+renderHistory();
 </script>
 </body>
 </html>
