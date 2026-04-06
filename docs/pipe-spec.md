@@ -9,7 +9,7 @@
 |------|------|
 | 実装 | 単一 HTML ファイル（`html/pipe/index.html`）|
 | 外部ライブラリ | qrcodejs（CDN）のみ |
-| 転送モード | ローカル P2P（WebRTC）/ リモート中継（piping-server）|
+| 転送モード | WebRTC P2P（常に先行試行）/ piping-server 中継（フォールバック）|
 | 言語切替 | JA / EN（`localStorage` 保存）|
 
 ---
@@ -122,10 +122,22 @@ sequenceDiagram
 
 ---
 
-## 2. WebRTC P2P 転送（ローカルネットワーク）
+## 2. WebRTC P2P 転送
 
 piping-server をシグナリングチャネルとして使い、ICE ネゴシエーションを行う。
-同一 LAN の場合は STUN で直接接続が確立され、データはサーバーを経由しない。
+ローカル・リモート問わず常に先に試みる。ICE 収集完了後の SDP を piping-server 経由で交換するため、trickle ICE は使用しない。
+
+### 接続成否の条件
+
+| 状況 | ICE candidate | 結果 |
+|---|---|---|
+| 同一 LAN | host candidate | ✅ 常に成功 |
+| 別ネットワーク・一般的な NAT | srflx (STUN) | ✅ 成功することが多い |
+| 別ネットワーク・Symmetric NAT（4G・企業網など） | srflx のみ | ❌ 失敗 → フォールバック |
+
+TURN サーバーは未設定のため、Symmetric NAT 環境では P2P 確立不可。
+
+**STUN サーバー:** `stun.l.google.com:19302`
 
 ```mermaid
 sequenceDiagram
@@ -167,9 +179,9 @@ sequenceDiagram
 
 ---
 
-## 3. piping-server 経由転送（リモート・フォールバック）
+## 3. piping-server 経由転送（フォールバック）
 
-WebRTC が失敗した場合（異なるネットワーク間など）、piping-server の HTTP 中継を使う。
+WebRTC が失敗した場合（Symmetric NAT 等で P2P 確立不可）、piping-server の HTTP 中継を使う。ファイルサイズ上限は **5GB**。
 
 ```mermaid
 sequenceDiagram
