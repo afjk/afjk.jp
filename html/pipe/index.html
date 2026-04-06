@@ -981,7 +981,18 @@ const dz = document.getElementById('dropzone');
 const fi = document.getElementById('file-input');
 let selFile = null, curPath = null;
 
-dz.addEventListener('click', () => fi.click());
+dz.addEventListener('click', async () => {
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({ multiple: false });
+      setFile(await handle.getFile());
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  fi.click();
+});
 dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('over'));
 dz.addEventListener('drop', e => {
