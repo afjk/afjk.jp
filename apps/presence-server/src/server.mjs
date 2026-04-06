@@ -269,6 +269,7 @@ const CORS = {
 };
 
 const server = createServer((req, res) => {
+  log('HTTP', req.method, req.url, 'host:', req.headers.host);
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   // CORS preflight
