@@ -23,5 +23,6 @@ jobs:
           timeout: 60s
           script: |
             cd ~/github/afjk.jp
-            git pull
+            git fetch origin
+            git reset --hard origin/main
             docker compose -p afjkjp-staging -f docker-compose.staging.yml up -d

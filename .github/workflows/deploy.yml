@@ -22,6 +22,7 @@ jobs:
           timeout: 30s
           script: |
             cd ~/github/afjk.jp
-            git pull
+            git fetch origin
+            git reset --hard origin/main
             docker compose up -d --build presence-server
             docker compose up -d https-portal
