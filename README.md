@@ -98,6 +98,12 @@ git config core.hooksPath .githooks
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 ```
 
+`https-portal` サービスは `production` プロファイルに含めているため、80/443 経由で `afjk.jp` / `upm.afjk.jp` を確認したい場合は以下のコマンドでプロファイルを明示して起動する。
+
+```bash
+docker compose --profile production -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
 ### アクセス先
 
 | サービス | URL |
