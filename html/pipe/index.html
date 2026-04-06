@@ -219,6 +219,41 @@
     .file-name { font-weight: 600; font-size: 0.95rem; word-break: break-all; }
     .file-meta { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
 
+    /* ── File list (multi-file) ── */
+    .file-list {
+      display: none;
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .file-list.visible { display: block; }
+    .file-list-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      transition: background .15s;
+    }
+    .file-list-item:last-child { border-bottom: none; }
+    .file-list-item.sending { background: #1e2a00; }
+    .file-list-item.done    { background: var(--surface); }
+    .file-list-item-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .file-list-item-info { flex: 1; min-width: 0; }
+    .file-list-item-name {
+      font-weight: 600;
+      font-size: 0.88rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-list-item-meta { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+    .file-list-item-status { font-size: 0.78rem; color: var(--muted); flex-shrink: 0; }
+    .file-list-item.sending .file-list-item-status { color: var(--accent); }
+    .file-list-item.done    .file-list-item-status { color: #4ade80; }
+
     /* ── QR ── */
     .qr-wrap { display: none; margin-top: 14px; align-items: center; gap: 16px; }
     .qr-wrap.visible { display: flex; }
@@ -422,22 +457,23 @@
       <div class="dz-icon">📂</div>
       <div class="dz-main">
         <span data-ja>クリックまたはドロップ</span>
-        <span data-en>Click or drop a file</span>
+        <span data-en>Click or drop files</span>
       </div>
       <div class="dz-sub">
-        <span data-ja>ファイルをここにドロップして開始</span>
-        <span data-en>Drop a file here to start</span>
+        <span data-ja>ファイルをここにドロップして開始（複数可）</span>
+        <span data-en>Drop one or more files here to start</span>
       </div>
     </div>
-    <input type="file" id="file-input" accept="*/*">
+    <input type="file" id="file-input" accept="*/*" multiple>
 
-    <div class="file-card" id="file-card">
+    <div class="file-card" id="file-card" style="display:none">
       <div class="file-icon">📄</div>
       <div>
         <div class="file-name" id="file-name"></div>
         <div class="file-meta" id="file-meta"></div>
       </div>
     </div>
+    <div class="file-list" id="file-list"></div>
 
     <div class="url-block" id="send-url-block">
       <div class="url-label">
@@ -623,6 +659,9 @@ const I18N = {
     p2pProgress:  (rcvd, total) => `受信中 (P2P): ${rcvd} / ${total}`,
     p2pSendDone:  (size, secs, spd) => `✓ 転送完了 (P2P) — ${size} / ${secs}秒 / ${spd}/s`,
     p2pRecvDone:  (size, secs, spd) => `✓ 受信完了 (P2P) — ${size} / ${secs}秒 / ${spd}/s`,
+    filesLabel:   n => `${n}個のファイル`,
+    fileProgress: (i, n) => `ファイル ${i}/${n}`,
+    allDone:      n => `✓ ${n}個のファイルを転送完了`,
   },
   en: {
     copying:            'Copied ✓',
@@ -672,6 +711,9 @@ const I18N = {
     p2pProgress:  (rcvd, total) => `Receiving (P2P): ${rcvd} / ${total}`,
     p2pSendDone:  (size, secs, spd) => `✓ Transfer complete (P2P) — ${size} / ${secs}s / ${spd}/s`,
     p2pRecvDone:  (size, secs, spd) => `✓ Received (P2P) — ${size} / ${secs}s / ${spd}/s`,
+    filesLabel:   n => `${n} files`,
+    fileProgress: (i, n) => `File ${i}/${n}`,
+    allDone:      n => `✓ ${n} files transferred`,
   }
 };
 
@@ -1004,7 +1046,7 @@ function selectPeer(peerId, peerName) {
         ? (currentLang === 'ja' ? readyJa : readyEn)
         : (currentLang === 'ja' ? `${peerName} を選択 — テキストを入力してください` : `${peerName} selected — enter text to send`);
     } else {
-      hint.textContent = selFile
+      hint.textContent = selFiles.length > 0
         ? (currentLang === 'ja' ? readyJa : readyEn)
         : (currentLang === 'ja' ? `${peerName} を選択 — ファイルを選んでください` : `${peerName} selected — choose a file`);
     }
@@ -1019,7 +1061,7 @@ function selectPeer(peerId, peerName) {
       document.getElementById('txt-send').focus();
     }
   } else {
-    if (selFile && curPath) {
+    if (selFiles.length > 0) {
       startSendToPeer(peerId);
     } else {
       document.getElementById('tab-send').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1048,7 +1090,7 @@ function startSendTextToPeer(peerId) {
 }
 
 function startSendToPeer(peerId) {
-  if (!selFile || !curPath) {
+  if (!selFiles.length) {
     setStatus('send-status', t('selectFileFirst'), 'err');
     return;
   }
@@ -1056,20 +1098,35 @@ function startSendToPeer(peerId) {
     setStatus('send-status', t('presenceConnFail'), 'err');
     return;
   }
-  presenceState.ws.send(JSON.stringify({
-    type: 'handoff',
-    targetId: peerId,
-    payload: {
-      kind: 'file',
-      path: curPath,
-      filename: selFile.name,
-      size: selFile.size,
-      mime: selFile.type || 'application/octet-stream',
-      url: recvUrl(curPath)
-    }
+
+  const fileInfos = selFiles.map(({ file, path }) => ({
+    path,
+    filename: file.name,
+    size: file.size,
+    mime: file.type || 'application/octet-stream',
+    url: recvUrl(path)
   }));
+
+  if (selFiles.length === 1) {
+    // Backward-compatible single-file handoff
+    presenceState.ws.send(JSON.stringify({
+      type: 'handoff',
+      targetId: peerId,
+      payload: { kind: 'file', ...fileInfos[0] }
+    }));
+  } else {
+    presenceState.ws.send(JSON.stringify({
+      type: 'handoff',
+      targetId: peerId,
+      payload: {
+        kind: 'files',
+        path: selFiles[0].path,  // signaling path (first file)
+        files: fileInfos
+      }
+    }));
+  }
+
   setStatus('send-status', t('handoffSent'), 'waiting');
-  // scroll progress into view
   document.getElementById('prog-wrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   startSend();
 }
@@ -1090,6 +1147,19 @@ function handleIncomingHandoff(msg) {
     return;
   }
 
+  if (payload.kind === 'files') {
+    const count = payload.files?.length || 0;
+    const label = count > 1 ? t('filesLabel')(count) : t('fileGeneric');
+    switchTab('receive');
+    const input = document.getElementById('recv-path');
+    input.value = payload.path;
+    document.getElementById('recv-btn').disabled = false;
+    setStatus('recv-status', t('incomingFile')(sender, label), 'waiting');
+    startReceiveFiles(payload.path, payload.files, sender);
+    return;
+  }
+
+  // kind: 'file' (single file, backward compat)
   const label = payload.filename ? t('fileLabel')(payload.filename) : t('fileGeneric');
   switchTab('receive');
   const input = document.getElementById('recv-path');
@@ -1130,13 +1200,14 @@ function switchTab(name) {
 // ── Drop zone ─────────────────────────────────────────────────────────────────
 const dz = document.getElementById('dropzone');
 const fi = document.getElementById('file-input');
-let selFile = null, curPath = null, selPeerId = null;
+let selFiles = [], selPeerId = null;  // selFiles: [{file, path}]
 
 dz.addEventListener('click', async () => {
   if (window.showOpenFilePicker) {
     try {
-      const [handle] = await window.showOpenFilePicker({ multiple: false });
-      setFile(await handle.getFile());
+      const handles = await window.showOpenFilePicker({ multiple: true });
+      const files = await Promise.all(handles.map(h => h.getFile()));
+      setFiles(files);
       return;
     } catch (e) {
       if (e.name === 'AbortError') return;
@@ -1148,21 +1219,52 @@ dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('ove
 dz.addEventListener('dragleave', () => dz.classList.remove('over'));
 dz.addEventListener('drop', e => {
   e.preventDefault(); dz.classList.remove('over');
-  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) setFiles(Array.from(e.dataTransfer.files));
 });
-fi.addEventListener('change', () => { if (fi.files[0]) setFile(fi.files[0]); });
+fi.addEventListener('change', () => { if (fi.files.length) setFiles(Array.from(fi.files)); });
 
-function setFile(f) {
-  selFile = f; curPath = randPath();
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
-  document.getElementById('file-card').style.display = 'flex';
-  document.getElementById('file-name').textContent = f.name;
-  document.getElementById('file-meta').textContent = fmt(f.size) + ' · ' + (f.type || 'application/octet-stream');
+function renderFileList() {
+  const list = document.getElementById('file-list');
+  list.innerHTML = '';
+  selFiles.forEach(({ file }, i) => {
+    const item = document.createElement('div');
+    item.className = 'file-list-item';
+    item.id = `fli-${i}`;
+    item.innerHTML =
+      `<div class="file-list-item-icon">📄</div>` +
+      `<div class="file-list-item-info">` +
+        `<div class="file-list-item-name">${escHtml(file.name)}</div>` +
+        `<div class="file-list-item-meta">${fmt(file.size)} · ${escHtml(file.type || 'application/octet-stream')}</div>` +
+      `</div>` +
+      `<div class="file-list-item-status" id="fli-status-${i}">—</div>`;
+    list.appendChild(item);
+  });
+  list.classList.add('visible');
+}
 
-  const url = recvUrl(curPath);
-  document.getElementById('send-url-block').style.display = 'block';
-  document.getElementById('send-url').value = url;
-  showQR('send-qr-box', 'send-qr-wrap', url);
+function setFiles(files) {
+  selFiles = files.map(f => ({ file: f, path: randPath() }));
+  if (!selFiles.length) return;
+
+  renderFileList();
+
+  // For a single file show URL + QR; for multiple files hide them
+  if (selFiles.length === 1) {
+    const { file, path } = selFiles[0];
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-meta').textContent = fmt(file.size) + ' · ' + (file.type || 'application/octet-stream');
+    const url = recvUrl(path);
+    document.getElementById('send-url-block').style.display = 'block';
+    document.getElementById('send-url').value = url;
+    showQR('send-qr-box', 'send-qr-wrap', url);
+  } else {
+    document.getElementById('send-url-block').style.display = 'none';
+    hideQR('send-qr-wrap');
+  }
 
   document.getElementById('send-btn').disabled = false;
   setStatus('send-status', '');
@@ -1203,70 +1305,122 @@ function cancelSend() {
 }
 
 async function startSend() {
-  if (!selFile) return;
+  if (!selFiles.length) return;
   _sendStart();
   document.getElementById('prog-wrap').style.display = 'block';
   setStatus('send-status', t('tryingP2P'), 'waiting');
 
-  const ok = await trySendWebRTC(selFile, curPath,
-    (loaded, total) => {
+  const ok = await trySendWebRTCFiles(selFiles,
+    (fileIdx, loaded, total) => {
       const p = Math.round(loaded / total * 100);
       document.getElementById('prog-bar').style.width = p + '%';
-      document.getElementById('prog-text').textContent =
-        `${p}%  (${fmt(loaded)} / ${fmt(total)})`;
+      const prefix = selFiles.length > 1 ? t('fileProgress')(fileIdx + 1, selFiles.length) + ': ' : '';
+      document.getElementById('prog-text').textContent = `${prefix}${p}%  (${fmt(loaded)} / ${fmt(total)})`;
       if (p > 0) setStatus('send-status', t('transferringP2P'), 'waiting');
+      const item = document.getElementById(`fli-${fileIdx}`);
+      if (item && !item.classList.contains('done')) item.classList.add('sending');
     },
-    msg => { setStatus('send-status', msg, 'ok'); _sendEnd(); }
+    fileIdx => {
+      const item = document.getElementById(`fli-${fileIdx}`);
+      if (item) { item.classList.remove('sending'); item.classList.add('done'); }
+      const st = document.getElementById(`fli-status-${fileIdx}`);
+      if (st) st.textContent = '✓';
+    },
+    (totalSent, elapsed) => {
+      const speed = elapsed > 0 ? totalSent / elapsed : 0;
+      const msg = selFiles.length > 1
+        ? t('allDone')(selFiles.length)
+        : t('p2pSendDone')(fmt(totalSent), elapsed.toFixed(2), fmt(speed));
+      setStatus('send-status', msg, 'ok');
+      reportTransfer('p2p', totalSent);
+      _sendEnd();
+    }
   );
 
   if (!ok) {
     if (!_sendPC && !_sendXHR && document.getElementById('cancel-send-btn').style.display === 'none') return; // cancelled
-    if (selFile.size > PIPE_MAX_SIZE) {
+    const oversized = selFiles.find(({ file }) => file.size > PIPE_MAX_SIZE);
+    if (oversized) {
       setStatus('send-status', t('pipeSizeLimit'), 'err');
       _sendEnd();
       return;
     }
     setStatus('send-status', t('waitingRcvr'), 'waiting');
-    sendHTTP(selFile, curPath);
+
+    let totalSent = 0;
+    let anyError = false;
+    for (let i = 0; i < selFiles.length; i++) {
+      if (anyError) break;
+      const { file, path } = selFiles[i];
+      const item = document.getElementById(`fli-${i}`);
+      const st   = document.getElementById(`fli-status-${i}`);
+      if (item) item.classList.add('sending');
+      if (st)   st.textContent = '…';
+      try {
+        await sendHTTP(file, path, i, selFiles.length);
+        if (item) { item.classList.remove('sending'); item.classList.add('done'); }
+        if (st)   st.textContent = '✓';
+        totalSent += file.size;
+      } catch {
+        anyError = true;
+      }
+    }
+    if (!anyError) {
+      const msg = selFiles.length > 1
+        ? t('allDone')(selFiles.length)
+        : t('transferDone')(fmt(totalSent), '—', '—');
+      setStatus('send-status', msg, 'ok');
+      _sendEnd();
+    }
   }
 }
 
-function sendHTTP(body, path) {
-  const xhr = new XMLHttpRequest();
-  _sendXHR = xhr;
-  xhr.open('POST', `${PIPE}/${path}`);
-  xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
-  xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
-  const t0 = performance.now();
-  xhr.upload.addEventListener('progress', e => {
-    if (!e.lengthComputable) return;
-    const p = Math.round(e.loaded / e.total * 100);
-    document.getElementById('prog-bar').style.width = p + '%';
-    const elapsed = (performance.now() - t0) / 1000;
-    const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
-    document.getElementById('prog-text').textContent =
-      `${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})  ${fmt(speed)}/s`;
-    if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
+// Returns a Promise; caller is responsible for _sendEnd()
+function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    _sendXHR = xhr;
+    xhr.open('POST', `${PIPE}/${path}`);
+    xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
+    xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
+    const t0 = performance.now();
+    xhr.upload.addEventListener('progress', e => {
+      if (!e.lengthComputable) return;
+      const p = Math.round(e.loaded / e.total * 100);
+      document.getElementById('prog-bar').style.width = p + '%';
+      const elapsed = (performance.now() - t0) / 1000;
+      const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
+      const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
+      document.getElementById('prog-text').textContent =
+        `${prefix}${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})  ${fmt(speed)}/s`;
+      if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
+    });
+    xhr.addEventListener('load', () => {
+      const elapsed = (performance.now() - t0) / 1000;
+      const speed   = elapsed > 0 ? body.size / elapsed : 0;
+      document.getElementById('prog-bar').style.width = '100%';
+      document.getElementById('prog-text').textContent = totalFiles > 1
+        ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%' : '100%';
+      if (totalFiles === 1) {
+        setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
+      }
+      reportTransfer('pipe', body.size);
+      resolve();
+    });
+    xhr.addEventListener('abort', () => resolve());  // handled by cancelSend
+    xhr.addEventListener('error', () => {
+      setStatus('send-status', t('transferFail'), 'err');
+      _sendEnd();
+      reject(new Error('transfer failed'));
+    });
+    xhr.send(body);
   });
-  xhr.addEventListener('load', () => {
-    const elapsed = (performance.now() - t0) / 1000;
-    const speed   = elapsed > 0 ? body.size / elapsed : 0;
-    document.getElementById('prog-bar').style.width = '100%';
-    document.getElementById('prog-text').textContent = '100%';
-    setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
-    reportTransfer('pipe', body.size);
-    _sendEnd();
-  });
-  xhr.addEventListener('abort', () => {});  // handled by cancelSend
-  xhr.addEventListener('error', () => {
-    setStatus('send-status', t('transferFail'), 'err');
-    _sendEnd();
-  });
-  xhr.send(body);
 }
 
 function resetSend() {
-  selFile = null; curPath = null; fi.value = '';
+  selFiles = []; fi.value = '';
+  const fileList = document.getElementById('file-list');
+  if (fileList) { fileList.innerHTML = ''; fileList.classList.remove('visible'); }
   ['file-card','send-url-block','prog-wrap'].forEach(id =>
     document.getElementById(id).style.display = 'none');
   hideQR('send-qr-wrap');
@@ -1328,6 +1482,51 @@ async function startReceive() {
     document.body.removeChild(a);
     setTimeout(() =>
       setStatus('recv-status', t('waitingXfer')), 1200);
+    _recvEnd();
+  }
+}
+
+// Receive multiple files arriving via a single P2P session (kind: 'files' handoff)
+async function startReceiveFiles(sigPath, fileInfos, sender) {
+  _recvStart();
+  setStatus('recv-status', t('tryingP2P'), 'waiting');
+
+  const fileCount = fileInfos?.length || 1;
+  let filesReceived = 0;
+
+  const ok = await tryRecvWebRTC(sigPath,
+    msg => setStatus('recv-status', msg, 'waiting'),
+    (msg, blob, filename) => {
+      triggerDownload(blob, filename);
+      filesReceived++;
+      if (filesReceived >= fileCount) {
+        const finalMsg = fileCount > 1 ? t('allDone')(fileCount) : msg;
+        setStatus('recv-status', finalMsg, 'ok');
+        _recvEnd();
+      } else {
+        setStatus('recv-status',
+          currentLang === 'ja'
+            ? `${filesReceived}/${fileCount} 完了…`
+            : `${filesReceived}/${fileCount} done…`,
+          'waiting');
+      }
+    },
+    (received, total) => _recvProgress(received, total)
+  );
+
+  if (!ok) {
+    // HTTP fallback: trigger a download for each file path
+    const infos = fileInfos || [{ path: sigPath, filename: '' }];
+    for (const info of infos) {
+      const a = Object.assign(document.createElement('a'), {
+        href: `${PIPE}/${info.path}`, download: info.filename || ''
+      });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      await new Promise(r => setTimeout(r, 600));
+    }
+    setTimeout(() => setStatus('recv-status', t('waitingXfer')), 1200);
     _recvEnd();
   }
 }
@@ -1617,8 +1816,96 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
   }
 }
 
+// ── WebRTC send (multi-file) ──────────────────────────────────────────────────
+// fileEntries: [{file, path}] — uses first path for signaling
+// onProgress(fileIdx, loaded, total), onFileDone(fileIdx), onAllDone(totalSent, elapsed)
+async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone) {
+  const sigPath = fileEntries[0].path;
+  const ac    = new AbortController();
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    _sendPC = pc;
+    const dc = pc.createDataChannel('pipe', { ordered: true });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc);
+
+    fetch(`${PIPE}/${sigPath}.__offer`, {
+      method: 'POST', signal: ac.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pc.localDescription)
+    }).catch(() => {});
+
+    const res = await fetch(`${PIPE}/${sigPath}.__answer`, { signal: ac.signal });
+    if (!res.ok) throw new Error('no answer');
+    await pc.setRemoteDescription(await res.json());
+
+    await withTimeout(new Promise((resolve, reject) => {
+      dc.onopen  = resolve;
+      dc.onerror = reject;
+    }), DC_TIMEOUT, 'DataChannel timeout');
+
+    clearTimeout(timer);
+
+    const { chunkSize, flowHigh, flowLow } = resolveChunking(pc);
+    dc.bufferedAmountLowThreshold = flowLow;
+
+    let totalSent = 0;
+    const t0 = performance.now();
+
+    for (let i = 0; i < fileEntries.length; i++) {
+      const { file } = fileEntries[i];
+      const mime  = file.type || 'application/octet-stream';
+      const total = file.size;
+
+      dc.send(JSON.stringify({ t: 'meta', name: file.name, mime, size: total, index: i, count: fileEntries.length }));
+
+      let fileSent = 0;
+      const feed = async view => {
+        let offset = 0;
+        while (offset < view.byteLength) {
+          if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
+          if (dc.bufferedAmount > flowHigh) await waitForBufferDrain(dc, flowHigh, flowLow);
+          const size  = Math.min(chunkSize, view.byteLength - offset);
+          const chunk = view.subarray(offset, offset + size);
+          dc.send(chunk);
+          offset   += size;
+          fileSent += size;
+          totalSent += size;
+          onProgress(i, fileSent, total);
+        }
+      };
+
+      const reader = file.stream().getReader();
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          await feed(value);
+        }
+      } finally {
+        reader.releaseLock?.();
+      }
+
+      dc.send(JSON.stringify({ t: 'done' }));
+      onFileDone(i);
+    }
+
+    dc.send(JSON.stringify({ t: 'all-done' }));
+    const elapsed = (performance.now() - t0) / 1000;
+    onAllDone(totalSent, elapsed);
+    return true;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    return false;
+  }
+}
+
 // ── WebRTC receive ────────────────────────────────────────────────────────────
-// onStatus(message), onDone(message, blob), onProgress(received, total)
+// onStatus(message), onDone(message, blob, filename), onProgress(received, total)
 // Returns true if P2P succeeded
 async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
   const ac    = new AbortController();
@@ -1654,19 +1941,24 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
 
     await new Promise(resolve => {
       let meta = null, chunks = [], recvd = 0;
-      let t0 = null;
+      let t0 = null, isMulti = false;
       dc.onmessage = e => {
         if (typeof e.data === 'string') {
           const msg = JSON.parse(e.data);
           if (msg.t === 'meta') {
-            meta = msg;
+            meta   = msg;
+            chunks = []; recvd = 0; t0 = null;
+            isMulti = (msg.count > 1);
             onStatus(t('p2pReceiving')(meta.name));
           } else if (msg.t === 'done') {
             const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
             const blob    = new Blob(chunks, { type: meta.mime });
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
-            resolve();
+            if (!isMulti) resolve();  // single-file: done
+            // multi-file: keep listening for more files
+          } else if (msg.t === 'all-done') {
+            resolve();  // multi-file: all files sent
           }
         } else {
           if (!t0) t0 = performance.now();
