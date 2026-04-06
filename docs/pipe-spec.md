@@ -41,6 +41,13 @@ graph TB
 
 送受信開始時、常に **WebRTC（P2P）を先に試み**、失敗したとき piping-server 経由にフォールバックする。
 
+完了時のステータス表示でどちらの経路が使われたか確認できる：
+
+| 表示 | 経路 |
+|---|---|
+| `✓ 転送完了 (P2P)` | WebRTC DataChannel による直接転送 |
+| `✓ 転送完了 (中継)` | piping-server 経由の HTTP ストリーミング |
+
 ```mermaid
 flowchart TD
     Start([転送開始]) --> TryP2P["trySendWebRTC() / tryRecvWebRTC()"]
