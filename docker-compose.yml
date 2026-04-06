@@ -77,3 +77,9 @@ services:
     restart: always
     environment:
       - PORT=8787
+      - STATS_FILE=/data/stats.json
+    volumes:
+      - presence-stats:/data
+
+volumes:
+  presence-stats:

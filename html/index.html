@@ -573,6 +573,47 @@
       flex-wrap: wrap;
     }
 
+    /* ── Stats ────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-top: 32px;
+    }
+    @media (max-width: 600px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .stat-card {
+      background: var(--surface);
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .stat-sub {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
     /* ── Footer ───────────────────────────────────── */
     footer {
       border-top: 1px solid var(--border);
@@ -909,6 +950,54 @@
   </div>
 </section>
 
+<!-- ── Stats ──────────────────────────────────────── -->
+<section id="stats">
+  <div class="container">
+    <p class="label">pipe — live stats</p>
+    <h2>
+      <span data-ja>転送の記録</span>
+      <span data-en>Transfer Stats</span>
+    </h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-total">—</div>
+        <div class="stat-label">
+          <span data-ja>転送回数</span>
+          <span data-en>Transfers</span>
+        </div>
+        <div class="stat-sub" id="stat-total-sub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-p2p">—</div>
+        <div class="stat-label">P2P</div>
+        <div class="stat-sub">
+          <span data-ja>直接接続</span>
+          <span data-en>Direct</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-relay">—</div>
+        <div class="stat-label">
+          <span data-ja>中継</span>
+          <span data-en>Relay</span>
+        </div>
+        <div class="stat-sub">piping-server</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-bytes">—</div>
+        <div class="stat-label">
+          <span data-ja>転送量</span>
+          <span data-en>Data relayed</span>
+        </div>
+        <div class="stat-sub">
+          <span data-ja>中継経由</span>
+          <span data-en>via relay</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ── Contact ────────────────────────────────────── -->
 <section id="contact">
   <div class="container">
@@ -1120,6 +1209,30 @@ function renderWorks(lang) {
     </article>
   `).join('');
 }
+
+// ── Stats ─────────────────────────────────────────────
+function fmtBytes(b) {
+  if (b >= 1e12) return (b / 1e12).toFixed(2) + ' TB';
+  if (b >= 1e9)  return (b / 1e9).toFixed(2) + ' GB';
+  if (b >= 1e6)  return (b / 1e6).toFixed(1) + ' MB';
+  if (b >= 1e3)  return (b / 1e3).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+(async () => {
+  try {
+    const res = await fetch('https://afjk.jp/presence/stats');
+    if (!res.ok) return;
+    const s = await res.json();
+    const p2p   = s.p2p   || { count: 0, bytes: 0 };
+    const pipe  = s.pipe  || { count: 0, bytes: 0 };
+    const total = p2p.count + pipe.count;
+    document.getElementById('stat-total').textContent = total.toLocaleString();
+    document.getElementById('stat-p2p').textContent   = p2p.count.toLocaleString();
+    document.getElementById('stat-relay').textContent = pipe.count.toLocaleString();
+    document.getElementById('stat-bytes').textContent = fmtBytes(pipe.bytes);
+  } catch {}
+})();
 
 // ── Init ─────────────────────────────────────────────
 const savedLang = localStorage.getItem('lang');

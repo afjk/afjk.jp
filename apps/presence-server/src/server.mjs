@@ -1,12 +1,36 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
+
+// ── Stats persistence ─────────────────────────────────────────────────────────
+const EMPTY_STATS = () => ({ p2p: { count: 0, bytes: 0 }, pipe: { count: 0, bytes: 0 } });
+
+function loadStats() {
+  try {
+    return JSON.parse(readFileSync(STATS_FILE, 'utf8'));
+  } catch {
+    return EMPTY_STATS();
+  }
+}
+
+function saveStats(data) {
+  try {
+    mkdirSync(STATS_FILE.replace(/\/[^/]+$/, ''), { recursive: true });
+    writeFileSync(STATS_FILE, JSON.stringify(data), 'utf8');
+  } catch (err) {
+    log('stats write error', err.message);
+  }
+}
+
+const stats = loadStats();
 
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
@@ -238,7 +262,47 @@ function deliverHandoff(sender, msg) {
   safeSend(target.conn, payload);
 }
 
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-allow-headers': 'content-type',
+};
+
 const server = createServer((req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, CORS).end();
+    return;
+  }
+
+  // GET /stats
+  if (req.method === 'GET' && url.pathname === '/stats') {
+    res.writeHead(200, { 'content-type': 'application/json', ...CORS })
+       .end(JSON.stringify(stats));
+    return;
+  }
+
+  // POST /stats
+  if (req.method === 'POST' && url.pathname === '/stats') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { type, bytes } = JSON.parse(body);
+        if (type === 'p2p' || type === 'pipe') {
+          stats[type].count += 1;
+          stats[type].bytes += Number(bytes) || 0;
+          saveStats(stats);
+          log('stats recorded', type, bytes);
+        }
+      } catch {}
+      res.writeHead(204, CORS).end();
+    });
+    return;
+  }
+
   res.writeHead(200, { 'content-type': 'text/plain' }).end('presence ok');
 });
 

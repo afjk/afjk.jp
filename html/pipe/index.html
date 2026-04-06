@@ -657,6 +657,20 @@ function setLang(lang) {
   }
 }
 
+// ── Stats reporting ───────────────────────────────────────────────────────────
+const STATS_URL = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+  ? `http://${location.hostname}:8787/stats`
+  : `${location.protocol}//${location.hostname}/presence/stats`;
+
+function reportTransfer(type, bytes) {
+  fetch(STATS_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type, bytes }),
+    keepalive: true
+  }).catch(() => {});
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 const PIPE        = 'https://pipe.afjk.jp';
 const PIPE_MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
@@ -1095,6 +1109,7 @@ function sendHTTP(body, path) {
     document.getElementById('prog-bar').style.width = '100%';
     document.getElementById('prog-text').textContent = '100%';
     setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
+    reportTransfer('pipe', body.size);
     _sendEnd();
   });
   xhr.addEventListener('abort', () => {});  // handled by cancelSend
@@ -1406,6 +1421,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
+    reportTransfer('p2p', sent);
     return true;
   } catch (e) {
     clearTimeout(timer);
