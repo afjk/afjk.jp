@@ -138,11 +138,23 @@
       gap: 12px;
       cursor: pointer;
       text-align: left;
+      transition: border-color .15s, background .15s;
     }
     .peer-card:hover { border-color: var(--accent); }
+    .peer-card.selected {
+      border-color: var(--accent);
+      background: #1e2a00;
+    }
     .peer-name { font-weight: 600; color: var(--text); }
     .peer-meta { font-size: 0.78rem; color: var(--text2); margin-top: 4px; }
     .peer-action { font-size: 0.78rem; color: var(--accent); font-weight: 600; }
+    .peer-selected-hint {
+      margin-top: 12px;
+      font-size: 0.82rem;
+      color: var(--accent);
+      display: none;
+    }
+    .peer-selected-hint.visible { display: block; }
 
     /* ── Tabs ── */
     .tabs {
@@ -363,6 +375,7 @@
     <div class="peer-grid empty" id="peer-grid">
       <div class="presence-empty" id="presence-empty"></div>
     </div>
+    <div class="peer-selected-hint" id="peer-selected-hint"></div>
   </section>
 
   <div class="tabs">
@@ -914,7 +927,7 @@ function renderPeerGrid() {
     action.className = 'peer-action';
     action.textContent = t('peerSend');
     card.append(left, action);
-    card.addEventListener('click', () => startSendToPeer(peer.id));
+    card.addEventListener('click', () => selectPeer(peer.id, peer.nickname || t('unknownDevice')));
     peerGrid.appendChild(card);
   });
 }
@@ -925,6 +938,31 @@ function fmtLastSeen(ts) {
   if (diff < 60_000) return t('secsAgo')(Math.round(diff / 1000));
   if (diff < 3_600_000) return t('minsAgo')(Math.floor(diff / 60_000));
   return t('hoursAgo')(Math.floor(diff / 3_600_000));
+}
+
+function selectPeer(peerId, peerName) {
+  selPeerId = peerId;
+  // highlight selected card
+  document.querySelectorAll('.peer-card').forEach(c => c.classList.remove('selected'));
+  const cards = document.querySelectorAll('.peer-card');
+  cards.forEach(c => {
+    if (c.querySelector('.peer-name')?.textContent === peerName) c.classList.add('selected');
+  });
+  // show hint
+  const hint = document.getElementById('peer-selected-hint');
+  if (hint) {
+    hint.textContent = selFile
+      ? (currentLang === 'ja' ? `${peerName} に送信します` : `Ready to send to ${peerName}`)
+      : (currentLang === 'ja' ? `${peerName} を選択 — ファイルを選んでください` : `${peerName} selected — choose a file`);
+    hint.classList.add('visible');
+  }
+  if (selFile && curPath) {
+    startSendToPeer(peerId);
+  } else {
+    // scroll to dropzone so user can select file
+    document.getElementById('tab-send').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    document.getElementById('dropzone').focus?.();
+  }
 }
 
 function startSendToPeer(peerId) {
@@ -949,6 +987,8 @@ function startSendToPeer(peerId) {
     }
   }));
   setStatus('send-status', t('handoffSent'), 'waiting');
+  // scroll progress into view
+  document.getElementById('prog-wrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   startSend();
 }
 
@@ -996,7 +1036,7 @@ function switchTab(name) {
 // ── Drop zone ─────────────────────────────────────────────────────────────────
 const dz = document.getElementById('dropzone');
 const fi = document.getElementById('file-input');
-let selFile = null, curPath = null;
+let selFile = null, curPath = null, selPeerId = null;
 
 dz.addEventListener('click', async () => {
   if (window.showOpenFilePicker) {
@@ -1034,6 +1074,17 @@ function setFile(f) {
   setStatus('send-status', '');
   document.getElementById('prog-wrap').style.display = 'none';
   document.getElementById('prog-bar').style.width = '0%';
+
+  // if peer already selected, auto-start
+  if (selPeerId) {
+    const hint = document.getElementById('peer-selected-hint');
+    if (hint) {
+      const card = document.querySelector('.peer-card.selected .peer-name');
+      const name = card?.textContent || '';
+      hint.textContent = currentLang === 'ja' ? `${name} に送信します` : `Ready to send to ${name}`;
+    }
+    startSendToPeer(selPeerId);
+  }
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────
