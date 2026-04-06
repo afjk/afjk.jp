@@ -952,25 +952,64 @@ function selectPeer(peerId, peerName) {
   selPeerId = peerId;
   // highlight selected card
   document.querySelectorAll('.peer-card').forEach(c => c.classList.remove('selected'));
-  const cards = document.querySelectorAll('.peer-card');
-  cards.forEach(c => {
+  document.querySelectorAll('.peer-card').forEach(c => {
     if (c.querySelector('.peer-name')?.textContent === peerName) c.classList.add('selected');
   });
+
+  const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+
   // show hint
   const hint = document.getElementById('peer-selected-hint');
   if (hint) {
-    hint.textContent = selFile
-      ? (currentLang === 'ja' ? `${peerName} に送信します` : `Ready to send to ${peerName}`)
-      : (currentLang === 'ja' ? `${peerName} を選択 — ファイルを選んでください` : `${peerName} selected — choose a file`);
+    const readyJa = `${peerName} に送信します`;
+    const readyEn = `Ready to send to ${peerName}`;
+    if (activeTab === 'text') {
+      const hasText = document.getElementById('txt-send').value.trim();
+      hint.textContent = hasText
+        ? (currentLang === 'ja' ? readyJa : readyEn)
+        : (currentLang === 'ja' ? `${peerName} を選択 — テキストを入力してください` : `${peerName} selected — enter text to send`);
+    } else {
+      hint.textContent = selFile
+        ? (currentLang === 'ja' ? readyJa : readyEn)
+        : (currentLang === 'ja' ? `${peerName} を選択 — ファイルを選んでください` : `${peerName} selected — choose a file`);
+    }
     hint.classList.add('visible');
   }
-  if (selFile && curPath) {
-    startSendToPeer(peerId);
+
+  if (activeTab === 'text') {
+    const text = document.getElementById('txt-send').value.trim();
+    if (text) {
+      startSendTextToPeer(peerId);
+    } else {
+      document.getElementById('txt-send').focus();
+    }
   } else {
-    // scroll to dropzone so user can select file
-    document.getElementById('tab-send').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    document.getElementById('dropzone').focus?.();
+    if (selFile && curPath) {
+      startSendToPeer(peerId);
+    } else {
+      document.getElementById('tab-send').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }
+}
+
+function startSendTextToPeer(peerId) {
+  const text = document.getElementById('txt-send').value.trim();
+  if (!text) {
+    document.getElementById('txt-send').focus();
+    return;
+  }
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) {
+    setStatus('txt-send-status', t('presenceConnFail'), 'err');
+    return;
+  }
+  const path = randPath();
+  presenceState.ws.send(JSON.stringify({
+    type: 'handoff',
+    targetId: peerId,
+    payload: { kind: 'text', path }
+  }));
+  // reuse sendText flow but with the pre-generated path
+  sendTextToPath(path);
 }
 
 function startSendToPeer(peerId) {
@@ -1004,6 +1043,18 @@ function handleIncomingHandoff(msg) {
   const payload = msg.payload || {};
   if (!payload.path) return;
   const sender = msg.from?.nickname || t('stranger');
+
+  if (payload.kind === 'text') {
+    switchTab('text');
+    const input = document.getElementById('txt-recv-path');
+    input.value = payload.path;
+    setStatus('txt-recv-status',
+      currentLang === 'ja' ? `${sender} からテキストが届きます…` : `Receiving text from ${sender}…`,
+      'waiting');
+    receiveText();
+    return;
+  }
+
   const label = payload.filename ? t('fileLabel')(payload.filename) : t('fileGeneric');
   switchTab('receive');
   const input = document.getElementById('recv-path');
@@ -1263,7 +1314,12 @@ function cancelTxtRecv() {
 async function sendText() {
   const text = document.getElementById('txt-send').value;
   if (!text.trim()) return;
-  const path = randPath();
+  await sendTextToPath(randPath());
+}
+
+async function sendTextToPath(path) {
+  const text = document.getElementById('txt-send').value;
+  if (!text.trim()) return;
 
   const url = recvUrl(path);
   document.getElementById('txt-url-block').style.display = 'block';
