@@ -278,14 +278,14 @@ const server = createServer((req, res) => {
   }
 
   // GET /stats
-  if (req.method === 'GET' && url.pathname === '/stats') {
+  if (req.method === 'GET' && url.pathname.endsWith('/stats')) {
     res.writeHead(200, { 'content-type': 'application/json', ...CORS })
        .end(JSON.stringify(stats));
     return;
   }
 
   // POST /stats
-  if (req.method === 'POST' && url.pathname === '/stats') {
+  if (req.method === 'POST' && url.pathname.endsWith('/stats')) {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
