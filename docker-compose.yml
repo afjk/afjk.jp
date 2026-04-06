@@ -55,9 +55,9 @@ services:
     environment:
       - VERDACCIO_PORT=4873
     volumes:
-      - "./verdaccio/storage:/verdaccio/storage"
-      - "./verdaccio/config:/verdaccio/conf"
-      - "./verdaccio/plugins:/verdaccio/plugins"
+      - "${VERDACCIO_DATA_DIR:-./verdaccio}/storage:/verdaccio/storage"
+      - "${VERDACCIO_DATA_DIR:-./verdaccio}/config:/verdaccio/conf"
+      - "${VERDACCIO_DATA_DIR:-./verdaccio}/plugins:/verdaccio/plugins"
 
 
   # afjk.jp/piping 用の Piping Server
