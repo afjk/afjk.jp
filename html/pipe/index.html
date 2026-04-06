@@ -542,6 +542,7 @@ const I18N = {
     minsAgo:  n   => `${n}分前`,
     hoursAgo: n   => `${n}時間前`,
     selectFileFirst:    '先にファイルを選択してください。',
+    pipeSizeLimit:      'ファイルサイズが 5GB を超えています。ローカル P2P（同一ネットワーク）をお使いください。',
     presenceConnFail:   '近くのデバイスとの接続を確立できません。',
     handoffSent:        '通知を送信しました。P2P 接続を開始します…',
     incomingFile: (sender, label) => `${sender} から ${label} が届きます。接続しています…`,
@@ -590,6 +591,7 @@ const I18N = {
     minsAgo:  n   => `${n}m ago`,
     hoursAgo: n   => `${n}h ago`,
     selectFileFirst:    'Please select a file first.',
+    pipeSizeLimit:      'File exceeds 5GB limit. Please use local P2P (same network).',
     presenceConnFail:   'Cannot connect to nearby device.',
     handoffSent:        'Notification sent. Starting P2P transfer...',
     incomingFile: (sender, label) => `Incoming ${label} from ${sender}. Connecting...`,
@@ -657,6 +659,7 @@ function setLang(lang) {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const PIPE        = 'https://pipe.afjk.jp';
+const PIPE_MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
 const params      = new URLSearchParams(location.search);
 const ROOM_CODE   = sanitizeRoomCode(params.get('room'));
 const PRESENCE_OVERRIDE = params.get('presence');
@@ -1059,6 +1062,11 @@ async function startSend() {
 
   if (!ok) {
     if (!_sendPC && !_sendXHR && document.getElementById('cancel-send-btn').style.display === 'none') return; // cancelled
+    if (selFile.size > PIPE_MAX_SIZE) {
+      setStatus('send-status', t('pipeSizeLimit'), 'err');
+      _sendEnd();
+      return;
+    }
     setStatus('send-status', t('waitingRcvr'), 'waiting');
     sendHTTP(selFile, curPath);
   }
