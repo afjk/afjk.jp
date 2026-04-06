@@ -331,6 +331,34 @@
 
     input[type=file] { display: none; }
 
+    /* ── URL card (received text が URL の場合) ── */
+    .url-card {
+      display: none;
+      margin-top: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+    }
+    .url-card.visible { display: block; }
+    .url-card-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 8px;
+    }
+    .url-card a {
+      display: block;
+      word-break: break-all;
+      color: var(--accent);
+      font-size: 0.9rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .url-card a:hover { opacity: .8; }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -528,6 +556,13 @@
       </button>
     </div>
     <textarea id="txt-received" readonly style="margin-top:12px"></textarea>
+    <div class="url-card" id="txt-received-url-card">
+      <div class="url-card-label">
+        <span data-ja>受信した URL</span>
+        <span data-en>Received URL</span>
+      </div>
+      <a id="txt-received-url-link" href="#" target="_blank" rel="noopener"></a>
+    </div>
     <div class="status" id="txt-recv-status"></div>
   </div>
 </main>
@@ -1360,6 +1395,28 @@ async function sendTextToPath(path) {
   }
 }
 
+function isUrl(text) {
+  // scheme://... 形式ならURLとみなす（http/https/カスタムスキーム両対応）
+  return /^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\/\S+$/.test(text.trim());
+}
+
+function setReceivedText(text) {
+  const ta   = document.getElementById('txt-received');
+  const card = document.getElementById('txt-received-url-card');
+  const link = document.getElementById('txt-received-url-link');
+  const trimmed = text.trim();
+  if (isUrl(trimmed)) {
+    ta.style.display = 'none';
+    link.href = trimmed;
+    link.textContent = trimmed;
+    card.classList.add('visible');
+  } else {
+    ta.style.display = '';
+    card.classList.remove('visible');
+    ta.value = text;
+  }
+}
+
 async function receiveText() {
   const path = parsePath(document.getElementById('txt-recv-path').value);
   if (!path) return;
@@ -1372,7 +1429,7 @@ async function receiveText() {
     msg => setStatus('txt-recv-status', msg, 'waiting'),
     (msg, blob) => {
       blob.text().then(tx => {
-        document.getElementById('txt-received').value = tx;
+        setReceivedText(tx);
         setStatus('txt-recv-status', msg, 'ok');
       });
       document.getElementById('txt-recv-btn').disabled          = false;
@@ -1389,7 +1446,7 @@ async function receiveText() {
       const txt = await res.text();
       const elapsed = (performance.now() - t0) / 1000;
       const speed   = elapsed > 0 ? new Blob([txt]).size / elapsed : 0;
-      document.getElementById('txt-received').value = txt;
+      setReceivedText(txt);
       setStatus('txt-recv-status', t('textRecvDone')(fmt(new Blob([txt]).size), elapsed.toFixed(2), fmt(speed)), 'ok');
     } catch (e) {
       if (e.name !== 'AbortError') setStatus('txt-recv-status', '✗ ' + e.message, 'err');
