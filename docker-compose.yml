@@ -1,4 +1,3 @@
-version: "3.8"
 services:
   https-portal:
     image: steveltn/https-portal
