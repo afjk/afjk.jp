@@ -376,6 +376,19 @@
     .prog-bar { height: 100%; background: var(--accent); width: 0%; transition: width .25s; }
     .prog-text { font-size: 0.78rem; color: var(--muted); margin-top: 5px; }
 
+    /* ── Sender badge ── */
+    .recv-from {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      margin-top: 10px;
+      font-size: 0.78rem;
+      color: var(--text2);
+    }
+    .recv-from.visible { display: flex; }
+    .recv-from-icon { font-size: 0.85rem; }
+    .recv-from-name { color: var(--text); font-weight: 600; }
+
     /* ── Status ── */
     .status { margin-top: 12px; font-size: 0.85rem; min-height: 1.2em; color: var(--muted); }
     .status.waiting { color: var(--accent); }
@@ -671,6 +684,7 @@
         <span data-ja>キャンセル</span><span data-en>Cancel</span>
       </button>
     </div>
+    <div class="recv-from" id="recv-from"></div>
     <div class="prog-wrap" id="recv-prog-wrap">
       <div class="prog-bg"><div class="prog-bar" id="recv-prog-bar"></div></div>
       <div class="prog-text" id="recv-prog-text"></div>
@@ -731,6 +745,7 @@
         <span data-ja>キャンセル</span><span data-en>Cancel</span>
       </button>
     </div>
+    <div class="recv-from" id="txt-recv-from"></div>
     <textarea id="txt-received" readonly style="margin-top:12px"></textarea>
     <div class="url-card" id="txt-received-url-card">
       <div class="url-card-label">
@@ -1436,7 +1451,7 @@ function handleIncomingHandoff(msg) {
     setStatus('txt-recv-status',
       currentLang === 'ja' ? `${sender} からテキストが届きます…` : `Receiving text from ${sender}…`,
       'waiting');
-    receiveText();
+    receiveText(sender);
     return;
   }
 
@@ -1459,7 +1474,7 @@ function handleIncomingHandoff(msg) {
   input.value = payload.path;
   document.getElementById('recv-btn').disabled = false;
   setStatus('recv-status', t('incomingFile')(sender, label), 'waiting');
-  startReceive();
+  startReceive(sender);
 }
 
 // ── Room code management ──────────────────────────────────────────────────────
@@ -1864,12 +1879,23 @@ function resetSend() {
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────
+function setRecvSender(elId, name) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!name) { el.classList.remove('visible'); el.innerHTML = ''; return; }
+  el.innerHTML = `<span class="recv-from-icon">📲</span><span>${
+    currentLang === 'ja' ? '送信元：' : 'From: '
+  }</span><span class="recv-from-name">${escHtml(name)}</span>`;
+  el.classList.add('visible');
+}
+
 function _recvStart() {
   document.getElementById('recv-btn').disabled          = true;
   document.getElementById('cancel-recv-btn').style.display = '';
   document.getElementById('recv-prog-wrap').style.display = 'none';
   document.getElementById('recv-prog-bar').style.width = '0%';
   document.getElementById('recv-prog-text').textContent = '';
+  setRecvSender('recv-from', null);
 }
 function _recvEnd() {
   document.getElementById('recv-btn').disabled          = false;
@@ -1893,10 +1919,11 @@ function cancelRecv() {
   _recvEnd();
 }
 
-async function startReceive() {
+async function startReceive(sender = null) {
   const path = parsePath(document.getElementById('recv-path').value);
   if (!path) return;
   _recvStart();
+  setRecvSender('recv-from', sender);
   setStatus('recv-status', t('tryingP2P'), 'waiting');
 
   const ok = await tryRecvWebRTC(path,
@@ -1923,6 +1950,7 @@ async function startReceive() {
 // Receive multiple files arriving via a single P2P session (kind: 'files' handoff)
 async function startReceiveFiles(sigPath, fileInfos, sender) {
   _recvStart();
+  setRecvSender('recv-from', sender);
   setStatus('recv-status', t('tryingP2P'), 'waiting');
 
   const fileCount = fileInfos?.length || 1;
@@ -2033,8 +2061,8 @@ function isUrl(text) {
   return /^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\/\S+$/.test(text.trim());
 }
 
-function setReceivedText(text) {
-  addToHistory(text);
+function setReceivedText(text, sender = null) {
+  addToHistory(text, sender);
   const ta   = document.getElementById('txt-received');
   const card = document.getElementById('txt-received-url-card');
   const link = document.getElementById('txt-received-url-link');
@@ -2051,10 +2079,11 @@ function setReceivedText(text) {
   }
 }
 
-async function receiveText() {
+async function receiveText(sender = null) {
   const path = parsePath(document.getElementById('txt-recv-path').value);
   if (!path) return;
   _txtRecvAC = new AbortController();
+  setRecvSender('txt-recv-from', sender);
   setStatus('txt-recv-status', t('tryingP2P'), 'waiting');
   document.getElementById('txt-recv-btn').disabled          = true;
   document.getElementById('cancel-txt-recv-btn').style.display = '';
@@ -2063,7 +2092,7 @@ async function receiveText() {
     msg => setStatus('txt-recv-status', msg, 'waiting'),
     (msg, blob) => {
       blob.text().then(tx => {
-        setReceivedText(tx);
+        setReceivedText(tx, sender);
         setStatus('txt-recv-status', msg, 'ok');
       });
       document.getElementById('txt-recv-btn').disabled          = false;
@@ -2080,7 +2109,7 @@ async function receiveText() {
       const txt = await res.text();
       const elapsed = (performance.now() - t0) / 1000;
       const speed   = elapsed > 0 ? new Blob([txt]).size / elapsed : 0;
-      setReceivedText(txt);
+      setReceivedText(txt, sender);
       setStatus('txt-recv-status', t('textRecvDone')(fmt(new Blob([txt]).size), elapsed.toFixed(2), fmt(speed)), 'ok');
     } catch (e) {
       if (e.name !== 'AbortError') setStatus('txt-recv-status', '✗ ' + e.message, 'err');
@@ -2439,10 +2468,10 @@ function loadHistory() {
 }
 function saveHistory(arr) { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr)); }
 
-function addToHistory(text) {
+function addToHistory(text, sender = null) {
   if (!text.trim()) return;
   const arr = loadHistory();
-  arr.unshift({ text, ts: Date.now() });
+  arr.unshift({ text, ts: Date.now(), sender: sender || null });
   if (arr.length > MAX_HISTORY) arr.splice(MAX_HISTORY);
   saveHistory(arr);
   renderHistory();
@@ -2490,7 +2519,7 @@ function renderHistory() {
       : escHtml(preview);
     el.innerHTML =
       `<div class="hist-header">` +
-        `<span class="hist-time">${escHtml(fmtLastSeen(item.ts))}</span>` +
+        `<span class="hist-time">${escHtml(fmtLastSeen(item.ts))}${item.sender ? ` · ${escHtml(item.sender)}` : ''}</span>` +
         `<div class="hist-btns">` +
           `<button class="hist-btn" onclick="copyHistItem(${i})">${copyLabel}</button>` +
           `<button class="hist-btn hist-del" onclick="removeFromHistory(${i})">×</button>` +
