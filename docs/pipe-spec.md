@@ -256,12 +256,16 @@ sequenceDiagram
 
 | 操作 | 挙動 |
 |------|------|
-| 「作成」ボタン | ランダム6文字コードを生成し自分もそのルームに参加 |
-| 「参加」入力 | 任意のコードを入力して接続 |
+| 「作成」ボタン | ランダム6文字コードを生成し自分もそのルームに参加。URL に `?room=<code>` を追加 |
+| 「参加」入力 | 任意のコードを入力して接続。URL に `?room=<code>` を追加 |
 | 「URL コピー」 | `?room=<code>` 付きの URL をクリップボードへ |
-| 「クリア」 | デフォルト（同一 IP グループ）ルームに戻る |
+| 「退場」 | デフォルト（同一 IP グループ）ルームに戻る。URL から `?room=` を削除 |
 
-ルーム変更時は WebSocket を再接続する。コードは永続保存しない（URL パラメータとして共有）。
+ルーム変更時は WebSocket を再接続する。`applyRoomCode()` / `clearRoom()` は `history.replaceState` で URL を同期するため、リロード時も参加・退場の状態が維持される。
+
+### WebSocket 再接続時の stale close ガード
+
+`applyRoomCode()` は旧 ws を close してすぐ新 ws を生成する。旧 ws の `close` イベントは非同期で遅れて発火するため、`presenceState.ws !== ws` を確認して旧 ws のハンドラが新 ws の状態を上書きしないよう保護している。
 
 ---
 
@@ -280,7 +284,17 @@ sequenceDiagram
 
 ---
 
-## 6. テキスト受信履歴
+## 6. 送信元バッジ
+
+presence 経由（handoff）で届いたファイル・テキストの受信時に、送信元端末名をプログレスバー上の `.recv-from` バッジに表示する。
+
+- `setRecvSender(elId, name)` がバッジの表示・非表示を管理
+- ステータスメッセージは転送中に上書きされるが、バッジは独立した要素のため継続表示される
+- URL 入力やハッシュ自動受信など、presence を介さない手動受信ではバッジを表示しない
+
+---
+
+## 7. テキスト受信履歴
 
 受信したテキストを localStorage に自動保存する。
 
@@ -288,12 +302,37 @@ sequenceDiagram
 |------|------|
 | ストレージキー | `pipe.textHistory` |
 | 最大件数 | 50件（超過時は古いものから削除）|
-| 保存内容 | テキスト本文・受信タイムスタンプ |
+| 保存内容 | テキスト本文・受信タイムスタンプ・送信元端末名（`sender`、presence 経由の場合のみ）|
 | URL 判定 | `scheme://...` 形式の場合はリンクとして表示 |
+| 送信元表示 | 履歴一覧の時刻欄に「3分前 · DeviceName」形式で表示 |
 
 ---
 
-## 7. URL スキーム
+## 8. ルーム内一斉送信（Send to All）
+
+ルームに他のデバイスが存在するとき、ファイルタブ・テキストタブに「全員に送信 (N人)」ボタンが表示される。
+
+### 動作
+
+1. **パス生成**: 受信者ごとに独立したランダムパスを生成（piping-server のパスは 1 対 1 のため共有不可）
+2. **handoff 送信**: 各受信者に `presenceState.ws.send()` でハンドオフを通知
+3. **並列転送**: `Promise.allSettled` で全受信者への転送を並列実行
+4. **フォールバック**: P2P 失敗時は `fetch POST` で HTTP 中継にフォールバック
+
+```
+全員に送信ボタン押下
+  ├─ 受信者 A: handoff → trySendWebRTCFiles([freshFiles_A]) or fetch POST
+  ├─ 受信者 B: handoff → trySendWebRTCFiles([freshFiles_B]) or fetch POST
+  └─ 受信者 C: handoff → trySendWebRTCFiles([freshFiles_C]) or fetch POST
+           ↓ Promise.allSettled
+       "N台に送信しました"
+```
+
+ステータス表示は「N台に送信中…」→「d/N 完了…」→「N台に送信しました」と進捗に応じて更新される。
+
+---
+
+## 9. URL スキーム
 
 | 形式 | 例 | 用途 |
 |------|-----|------|
@@ -305,18 +344,18 @@ sequenceDiagram
 
 ---
 
-## 8. localStorage / IndexedDB 利用一覧
+## 10. localStorage / IndexedDB 利用一覧
 
 | キー / DB | 種別 | 内容 |
 |---|---|---|
 | `pipe.deviceName` | localStorage | 端末の表示名 |
 | `lang` | localStorage | 言語設定（`ja` / `en`）|
-| `pipe.textHistory` | localStorage | テキスト受信履歴（最大50件）|
+| `pipe.textHistory` | localStorage | テキスト受信履歴（最大50件、各レコードに `text` / `ts` / `sender` を保存）|
 | `pipe-pairing` DB | IndexedDB | ピン留めデバイス情報 |
 
 ---
 
-## 9. Presence エンドポイント解決
+## 11. Presence エンドポイント解決
 
 ```
 本番環境（afjk.jp）:
@@ -330,7 +369,7 @@ sequenceDiagram
 
 ---
 
-## 10. デプロイ構成
+## 12. デプロイ構成
 
 ```mermaid
 graph LR
