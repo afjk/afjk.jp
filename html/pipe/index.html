@@ -1652,20 +1652,19 @@ async function sendTextToAllPeers() {
 // ── WebTorrent (swarm) ────────────────────────────────────────────────────────
 const WT_CDN = 'https://cdn.jsdelivr.net/npm/webtorrent/dist/webtorrent.min.js';
 let _wtClient = null;
+let _wtClass  = null;   // the WebTorrent constructor, loaded via dynamic import()
 
-function loadWebTorrent() {
-  if (window.WebTorrent) return Promise.resolve(window.WebTorrent);
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = WT_CDN;
-    s.onload  = () => resolve(window.WebTorrent);
-    s.onerror = () => reject(new Error('WebTorrent load failed'));
-    document.head.appendChild(s);
-  });
+async function loadWebTorrent() {
+  if (_wtClass) return _wtClass;
+  // dist/webtorrent.min.js is an ES Module — must use import() not <script src>
+  const mod = await import(/* webpackIgnore: true */ WT_CDN);
+  _wtClass = mod.default ?? mod;
+  return _wtClass;
 }
 
 function getWtClient() {
-  if (!_wtClient || _wtClient.destroyed) _wtClient = new WebTorrent();
+  if (!_wtClass) throw new Error('WebTorrent not loaded');
+  if (!_wtClient || _wtClient.destroyed) _wtClient = new _wtClass();
   return _wtClient;
 }
 
