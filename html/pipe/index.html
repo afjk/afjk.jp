@@ -1515,6 +1515,10 @@ function roomUrl(code) {
 
 function applyRoomCode(code) {
   activeRoomCode = code;
+  // Sync URL so reloading stays in the same room
+  const u = new URL(location.href);
+  u.searchParams.set('room', code);
+  history.replaceState(null, '', u.toString());
   // Reconnect with new room
   if (presenceState.ws) {
     presenceState.ws.close();
@@ -1537,6 +1541,10 @@ function joinRoom(code) {
 
 function clearRoom() {
   activeRoomCode = null;
+  // Remove room param from URL so reloading does not re-join
+  const u = new URL(location.href);
+  u.searchParams.delete('room');
+  history.replaceState(null, '', u.toString());
   if (presenceState.ws) {
     presenceState.ws.close();
     presenceState.ws = null;
