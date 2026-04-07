@@ -152,6 +152,81 @@
     .peer-name { font-weight: 600; color: var(--text); }
     .peer-meta { font-size: 0.78rem; color: var(--text2); margin-top: 4px; }
     .peer-action { font-size: 0.78rem; color: var(--accent); font-weight: 600; }
+    .peer-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+    .peer-pair-btn {
+      background: none;
+      border: none;
+      font-size: 1rem;
+      cursor: pointer;
+      padding: 2px 4px;
+      line-height: 1;
+      color: var(--muted);
+      border-radius: 5px;
+      transition: color .15s;
+    }
+    .peer-pair-btn:hover { color: var(--accent); }
+    .peer-card.paired { background: #111800; border-color: #2a3a00; }
+    .peer-card.paired:hover,
+    .peer-card.paired.selected { border-color: var(--accent); }
+    .peer-card.paired .peer-pair-btn { color: var(--accent); }
+
+    /* ── Room code section ── */
+    .room-section {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .room-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .room-chip {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.84rem;
+      color: var(--accent);
+      background: #111800;
+      border: 1px solid #2a3a00;
+      border-radius: 6px;
+      padding: 3px 10px;
+      letter-spacing: .04em;
+    }
+    .room-btn {
+      background: none;
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .room-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .room-btn.danger:hover { border-color: #f87171; color: #f87171; }
+    .room-join-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .room-input {
+      flex: 1;
+      min-width: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--text);
+      font-size: 0.82rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      outline: none;
+    }
+    .room-input:focus { border-color: var(--accent); }
+    .room-input::placeholder { color: var(--muted); font-family: inherit; }
+
     .peer-selected-hint {
       margin-top: 12px;
       font-size: 0.82rem;
@@ -507,6 +582,7 @@
       <div class="presence-empty" id="presence-empty"></div>
     </div>
     <div class="peer-selected-hint" id="peer-selected-hint"></div>
+    <div id="room-section"></div>
   </section>
 
   <div class="tabs">
@@ -740,6 +816,16 @@ const I18N = {
     filesLabel:   n => `${n}個のファイル`,
     fileProgress: (i, n) => `ファイル ${i}/${n}`,
     allDone:      n => `✓ ${n}個のファイルを転送完了`,
+    pairBtn:      'ピン',
+    unpairBtn:    'ピン解除',
+    roomLabel:    'ルームコード',
+    roomNone:     '未設定',
+    roomGenerate: '作成',
+    roomCopyUrl:  'URL コピー',
+    roomClear:    'クリア',
+    roomJoinPlaceholder: 'コードを入力',
+    roomJoin:     '参加',
+    roomUrlCopied:'コピー済 ✓',
   },
   en: {
     copying:            'Copied ✓',
@@ -792,6 +878,16 @@ const I18N = {
     filesLabel:   n => `${n} files`,
     fileProgress: (i, n) => `File ${i}/${n}`,
     allDone:      n => `✓ ${n} files transferred`,
+    pairBtn:      'Pin',
+    unpairBtn:    'Unpin',
+    roomLabel:    'Room code',
+    roomNone:     'none',
+    roomGenerate: 'Generate',
+    roomCopyUrl:  'Copy URL',
+    roomClear:    'Clear',
+    roomJoinPlaceholder: 'Enter code',
+    roomJoin:     'Join',
+    roomUrlCopied:'Copied ✓',
   }
 };
 
@@ -825,6 +921,7 @@ function setLang(lang) {
 
   // Re-render dynamic presence UI
   renderPeerGrid();
+  renderRoomSection();
   if (presenceState.ws) {
     presenceStatusEl.textContent = presenceState.ws.readyState === WebSocket.OPEN
       ? t('presenceConnected') : t('presenceReconnecting');
@@ -867,6 +964,79 @@ const presenceRoomEl   = document.getElementById('presence-room');
 const deviceNameLabel  = document.getElementById('device-name-label');
 const deviceNameBtn    = document.getElementById('device-name-btn');
 const peerGrid         = document.getElementById('peer-grid');
+
+// ── Pairing & room state ──────────────────────────────────────────────────────
+// pairedIds: Set<peerId string> — loaded from IndexedDB on init
+let pairedIds = new Set();
+// activeRoomCode: currently connected room (from URL param, generated, or joined)
+let activeRoomCode = ROOM_CODE;
+let _pairingDb = null;  // IDBDatabase handle
+
+// ── IndexedDB helpers ─────────────────────────────────────────────────────────
+const IDB_NAME    = 'pipe-pairing';
+const IDB_VERSION = 1;
+const IDB_STORE   = 'pairs';
+
+function openPairingDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'peerId' });
+      }
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function idbGetAll() {
+  if (!_pairingDb) return [];
+  return new Promise((resolve, reject) => {
+    const tx  = _pairingDb.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function idbPut(record) {
+  if (!_pairingDb) return;
+  return new Promise((resolve, reject) => {
+    const tx  = _pairingDb.transaction(IDB_STORE, 'readwrite');
+    const req = tx.objectStore(IDB_STORE).put(record);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function idbDelete(peerId) {
+  if (!_pairingDb) return;
+  return new Promise((resolve, reject) => {
+    const tx  = _pairingDb.transaction(IDB_STORE, 'readwrite');
+    const req = tx.objectStore(IDB_STORE).delete(peerId);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function loadPairedIds() {
+  const records = await idbGetAll();
+  pairedIds = new Set(records.map(r => r.peerId));
+}
+
+async function pairPeer(peerId, nickname) {
+  pairedIds.add(peerId);
+  await idbPut({ peerId, nickname, pairedAt: Date.now() });
+  renderPeerGrid();
+}
+
+async function unpairPeer(peerId) {
+  pairedIds.delete(peerId);
+  await idbDelete(peerId);
+  renderPeerGrid();
+}
 // ── Cancellation state ────────────────────────────────────────────────────────
 let _sendXHR = null, _sendPC = null;   // file send
 let _recvPC  = null, _recvAC = null;   // file receive
@@ -972,11 +1142,13 @@ function editDeviceName() {
 function buildPresenceUrl() {
   try {
     const url = new URL(PRESENCE_ENDPOINT, location.href);
-    if (ROOM_CODE && !url.searchParams.get('room')) url.searchParams.set('room', ROOM_CODE);
+    // activeRoomCode overrides the URL param (generated/joined room takes priority)
+    const room = activeRoomCode;
+    if (room && !url.searchParams.get('room')) url.searchParams.set('room', room);
     return url;
   } catch {
     const fallback = new URL('ws://localhost:8787');
-    if (ROOM_CODE) fallback.searchParams.set('room', ROOM_CODE);
+    if (activeRoomCode) fallback.searchParams.set('room', activeRoomCode);
     return fallback;
   }
 }
@@ -1030,6 +1202,19 @@ function handlePresenceMessage(ev) {
     case 'peers':
       presenceState.peers = new Map((data.peers || []).map(p => [p.id, p]));
       renderPeerGrid();
+      // Auto-select a paired peer if exactly one is present and none selected yet
+      if (!selPeerId) {
+        const paired = (data.peers || []).filter(p => pairedIds.has(p.id));
+        if (paired.length === 1) {
+          const p = paired[0];
+          selPeerId = p.id;
+          document.querySelectorAll('.peer-card').forEach(c => c.classList.remove('selected'));
+          document.querySelectorAll('.peer-card').forEach(c => {
+            if (c.querySelector('.peer-name')?.textContent === (p.nickname || t('unknownDevice')))
+              c.classList.add('selected');
+          });
+        }
+      }
       break;
     case 'handoff':
       handleIncomingHandoff(data);
@@ -1071,10 +1256,19 @@ function renderPeerGrid() {
     return;
   }
   peerGrid.classList.remove('empty');
-  peers.forEach(peer => {
+  // Paired peers first, then alphabetical
+  const sorted = [...peers].sort((a, b) => {
+    const ap = pairedIds.has(a.id) ? 0 : 1;
+    const bp = pairedIds.has(b.id) ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return (a.nickname || '').localeCompare(b.nickname || '');
+  });
+  sorted.forEach(peer => {
+    const isPaired = pairedIds.has(peer.id);
     const card = document.createElement('button');
     card.type = 'button';
-    card.className = 'peer-card';
+    card.className = 'peer-card' + (isPaired ? ' paired' : '');
+
     const left = document.createElement('div');
     const name = document.createElement('div');
     name.className = 'peer-name';
@@ -1087,10 +1281,30 @@ function renderPeerGrid() {
     meta.textContent = bits.join(' · ');
     left.appendChild(name);
     left.appendChild(meta);
+
+    const right = document.createElement('div');
+    right.className = 'peer-right';
+
     const action = document.createElement('div');
     action.className = 'peer-action';
     action.textContent = t('peerSend');
-    card.append(left, action);
+
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = 'peer-pair-btn';
+    pinBtn.title = isPaired ? t('unpairBtn') : t('pairBtn');
+    pinBtn.textContent = isPaired ? '📌' : '📍';
+    pinBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (pairedIds.has(peer.id)) {
+        unpairPeer(peer.id);
+      } else {
+        pairPeer(peer.id, peer.nickname || t('unknownDevice'));
+      }
+    });
+
+    right.append(action, pinBtn);
+    card.append(left, right);
     card.addEventListener('click', () => selectPeer(peer.id, peer.nickname || t('unknownDevice')));
     peerGrid.appendChild(card);
   });
@@ -1248,14 +1462,155 @@ function handleIncomingHandoff(msg) {
   startReceive();
 }
 
+// ── Room code management ──────────────────────────────────────────────────────
+function randRoomCode() {
+  // 6-char alphanumeric, easy to share verbally
+  return Math.random().toString(36).slice(2, 8);
+}
+
+function roomUrl(code) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash   = '';
+  u.searchParams.set('room', code);
+  return u.toString();
+}
+
+function applyRoomCode(code) {
+  activeRoomCode = code;
+  // Reconnect with new room
+  if (presenceState.ws) {
+    presenceState.ws.close();
+    presenceState.ws = null;
+  }
+  presenceState.retries = 0;
+  connectPresence();
+  renderRoomSection();
+}
+
+function generateRoom() {
+  applyRoomCode(randRoomCode());
+}
+
+function joinRoom(code) {
+  const cleaned = sanitizeRoomCode(code);
+  if (!cleaned) return;
+  applyRoomCode(cleaned);
+}
+
+function clearRoom() {
+  activeRoomCode = null;
+  if (presenceState.ws) {
+    presenceState.ws.close();
+    presenceState.ws = null;
+  }
+  presenceState.retries = 0;
+  connectPresence();
+  renderRoomSection();
+}
+
+function copyRoomUrl() {
+  if (!activeRoomCode) return;
+  navigator.clipboard.writeText(roomUrl(activeRoomCode)).then(() => {
+    const btn = document.getElementById('room-copy-btn');
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = t('roomUrlCopied');
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  }).catch(() => {});
+}
+
+function renderRoomSection() {
+  const el = document.getElementById('room-section');
+  if (!el) return;
+  el.innerHTML = '';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'room-section';
+
+  const label = document.createElement('div');
+  label.className = 'presence-label';
+  label.textContent = t('roomLabel');
+  wrap.appendChild(label);
+
+  if (activeRoomCode) {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+
+    const chip = document.createElement('span');
+    chip.className = 'room-chip';
+    chip.textContent = activeRoomCode;
+    row.appendChild(chip);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.id = 'room-copy-btn';
+    copyBtn.className = 'room-btn';
+    copyBtn.textContent = t('roomCopyUrl');
+    copyBtn.addEventListener('click', copyRoomUrl);
+    row.appendChild(copyBtn);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'room-btn danger';
+    clearBtn.textContent = t('roomClear');
+    clearBtn.addEventListener('click', clearRoom);
+    row.appendChild(clearBtn);
+
+    wrap.appendChild(row);
+  } else {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+
+    const genBtn = document.createElement('button');
+    genBtn.className = 'room-btn';
+    genBtn.textContent = t('roomGenerate');
+    genBtn.addEventListener('click', generateRoom);
+    row.appendChild(genBtn);
+    wrap.appendChild(row);
+
+    const joinRow = document.createElement('div');
+    joinRow.className = 'room-join-row';
+
+    const input = document.createElement('input');
+    input.className = 'room-input';
+    input.placeholder = t('roomJoinPlaceholder');
+    input.maxLength = 24;
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') joinRoom(input.value);
+    });
+    joinRow.appendChild(input);
+
+    const joinBtn = document.createElement('button');
+    joinBtn.className = 'room-btn';
+    joinBtn.textContent = t('roomJoin');
+    joinBtn.addEventListener('click', () => joinRoom(input.value));
+    joinRow.appendChild(joinBtn);
+
+    wrap.appendChild(joinRow);
+  }
+
+  el.appendChild(wrap);
+}
+
+// ── Presence init ─────────────────────────────────────────────────────────────
 function initPresence() {
   if (!peerGrid || !presenceStatusEl) return;
   updateDeviceNameLabel();
   if (deviceNameBtn) deviceNameBtn.addEventListener('click', editDeviceName);
+  renderRoomSection();
   connectPresence();
 }
 
-initPresence();
+async function initPresenceWithDb() {
+  try {
+    _pairingDb = await openPairingDb();
+    await loadPairedIds();
+  } catch (e) {
+    // IndexedDB unavailable (private mode etc.) — degrade gracefully
+  }
+  initPresence();
+}
+
+initPresenceWithDb();
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(btn => {
