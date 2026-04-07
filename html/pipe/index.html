@@ -1651,21 +1651,99 @@ async function sendTextToAllPeers() {
 
 // ── WebTorrent (swarm) ────────────────────────────────────────────────────────
 const WT_CDN = 'https://cdn.jsdelivr.net/npm/webtorrent/dist/webtorrent.min.js';
+const SP_CDN = 'https://cdn.jsdelivr.net/npm/simple-peer/simplepeer.min.js';
 let _wtClient = null;
-let _wtClass  = null;   // the WebTorrent constructor, loaded via dynamic import()
+let _wtClass  = null;   // WebTorrent constructor (ES module, loaded via import())
+let _spLoaded = false;  // SimplePeer UMD loaded via <script> tag → window.SimplePeer
 
+// WebtTorrent: ES Module → must use import()
 async function loadWebTorrent() {
   if (_wtClass) return _wtClass;
-  // dist/webtorrent.min.js is an ES Module — must use import() not <script src>
   const mod = await import(/* webpackIgnore: true */ WT_CDN);
   _wtClass = mod.default ?? mod;
   return _wtClass;
 }
 
+// SimplePeer: UMD bundle → sets window.SimplePeer
+function loadSimplePeer() {
+  if (_spLoaded || window.SimplePeer) { _spLoaded = true; return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = SP_CDN;
+    s.onload  = () => { _spLoaded = true; resolve(); };
+    s.onerror = () => reject(new Error('SimplePeer load failed'));
+    document.head.appendChild(s);
+  });
+}
+
 function getWtClient() {
   if (!_wtClass) throw new Error('WebTorrent not loaded');
-  if (!_wtClient || _wtClient.destroyed) _wtClient = new _wtClass();
+  if (!_wtClient || _wtClient.destroyed) {
+    _wtClient = new _wtClass();
+    // Suppress uncaught client-level errors (e.g. tracker WebSocket failures)
+    _wtClient.on('error', e => console.warn('[wt]', e?.message || e));
+  }
   return _wtClient;
+}
+
+// ── Presence-based direct peer signaling (tracker-free) ──────────────────────
+// Seeder holds pending SimplePeer instances awaiting the receiver's answer
+const _wtPendingPeers = new Map();   // peerId → { sp, torrent }
+// Receiver queues offers that arrive before the torrent is ready
+const _wtPendingSignals = [];        // { fromId, signal }
+
+// Seeder: open a direct SimplePeer connection to each room peer
+async function _wtConnectRoomPeers(torrent, roomPeers) {
+  await loadSimplePeer().catch(() => {});
+  const SP = window.SimplePeer;
+  if (!SP) return;
+  for (const peer of roomPeers) {
+    const sp = new SP({ initiator: true, trickle: false });
+    _wtPendingPeers.set(peer.id, { sp, torrent });
+    sp.on('signal', offer => {
+      presenceState.ws?.send(JSON.stringify({
+        type: 'handoff', targetId: peer.id,
+        payload: { kind: 'wt-signal', signal: offer },
+      }));
+    });
+    sp.on('connect', () => {
+      try { torrent.addPeer(sp); } catch(e) { console.warn('[wt] addPeer:', e.message); }
+      _wtPendingPeers.delete(peer.id);
+    });
+    sp.on('error', e => { console.warn('[wt] sp:', e.message); _wtPendingPeers.delete(peer.id); });
+  }
+}
+
+// Receiver: handle an offer → create answer → add peer to torrent
+function _wtHandleOffer(torrent, fromId, signal) {
+  const SP = window.SimplePeer;
+  if (!SP) return;
+  const sp = new SP({ initiator: false, trickle: false });
+  sp.on('signal', answer => {
+    presenceState.ws?.send(JSON.stringify({
+      type: 'handoff', targetId: fromId,
+      payload: { kind: 'wt-signal', signal: answer },
+    }));
+  });
+  sp.on('connect', () => {
+    try { torrent.addPeer(sp); } catch(e) { console.warn('[wt] addPeer:', e.message); }
+  });
+  sp.on('error', e => console.warn('[wt] sp:', e.message));
+  sp.signal(signal);
+}
+
+// Dispatcher called from handleIncomingHandoff for kind:'wt-signal'
+async function handleWtSignal(fromId, signal) {
+  await loadSimplePeer().catch(() => {});
+  // Case 1: we're the seeder — this is an answer from the receiver
+  const pending = _wtPendingPeers.get(fromId);
+  if (pending) { pending.sp.signal(signal); return; }
+  // Case 2: we're the receiver — this is an offer from the seeder
+  if (!_wtClient?.torrents?.length) {
+    _wtPendingSignals.push({ fromId, signal }); // torrent not ready yet
+    return;
+  }
+  _wtHandleOffer(_wtClient.torrents[0], fromId, signal);
 }
 
 function hideMagnetInfo() {
@@ -1727,6 +1805,10 @@ async function seedFilesAsTorrent() {
   client.torrents.slice().forEach(t => { try { t.destroy(); } catch {} });
 
   client.seed(files, torrent => {
+    // Suppress tracker connection errors (non-fatal warnings)
+    torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
+    torrent.on('error',   e => console.warn('[wt] torrent error:', e?.message || e));
+
     const magnetURI = torrent.magnetURI;
     showMagnetInfo(magnetURI);
 
@@ -1747,6 +1829,8 @@ async function seedFilesAsTorrent() {
         }));
       });
       setStatus('send-status', t('torrentSentToAll')(count), 'waiting');
+      // Also connect directly via presence (tracker-free)
+      _wtConnectRoomPeers(torrent, peers);
     } else {
       setStatus('send-status', t('torrentSeeding'), 'waiting');
     }
@@ -1790,6 +1874,14 @@ async function receiveTorrent(magnetURI, sender) {
   if (client.get(magnetURI)) return;
 
   client.add(magnetURI, torrent => {
+    torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
+    torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
+
+    // Process any wt-signal offers that arrived before this torrent was ready
+    _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => {
+      _wtHandleOffer(torrent, fromId, signal);
+    });
+
     torrent.on('download', () => {
       const p  = Math.round(torrent.progress * 100);
       const dl = fmt(torrent.downloadSpeed);
@@ -1810,9 +1902,6 @@ async function receiveTorrent(magnetURI, sender) {
       });
     });
 
-    torrent.on('error', err => {
-      setStatus('recv-status', '✗ ' + (err?.message || err), 'err');
-    });
   });
 }
 
@@ -1826,6 +1915,12 @@ function handleIncomingHandoff(msg) {
       : (payload.fileNames || t('fileGeneric'));
     setStatus('recv-status', t('torrentIncoming')(sender, label), 'waiting');
     receiveTorrent(payload.magnetURI, sender);
+    return;
+  }
+
+  if (payload.kind === 'wt-signal') {
+    const fromId = msg.from?.id;
+    if (fromId) handleWtSignal(fromId, payload.signal);
     return;
   }
 
