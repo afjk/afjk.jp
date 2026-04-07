@@ -1204,6 +1204,10 @@ function connectPresence() {
   });
   ws.addEventListener('message', handlePresenceMessage);
   ws.addEventListener('close', () => {
+    // Guard against stale close events from intentionally-replaced connections.
+    // applyRoomCode / clearRoom call connectPresence() immediately after ws.close(),
+    // so presenceState.ws already points to the NEW ws when this fires.
+    if (presenceState.ws !== ws) return;
     presenceState.ws = null;
     presenceState.id = null;
     presenceState.retries += 1;
@@ -1259,8 +1263,8 @@ function handlePresenceMessage(ev) {
 
 function updateRoomLabel(roomId) {
   if (!presenceRoomEl) return;
-  if (ROOM_CODE) {
-    presenceRoomEl.textContent = t('roomCode')(ROOM_CODE);
+  if (activeRoomCode) {
+    presenceRoomEl.textContent = t('roomCode')(activeRoomCode);
   } else if (roomId) {
     presenceRoomEl.textContent = t('detectedGrp')(roomId);
   }
