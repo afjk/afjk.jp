@@ -388,6 +388,34 @@
     .prog-bar { height: 100%; background: var(--accent); width: 0%; transition: width .25s; }
     .prog-text { font-size: 0.78rem; color: var(--muted); margin-top: 5px; }
 
+    /* ── Magnet info (WebTorrent seed) ── */
+    .magnet-info {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      font-size: 0.78rem;
+      color: var(--text2);
+      gap: 8px;
+      flex-direction: column;
+    }
+    .magnet-info.visible { display: flex; }
+    .magnet-info-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .magnet-uri {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .magnet-stats { color: var(--text2); font-size: 0.75rem; min-height: 1em; }
+    .torrent-btn { color: #4fc; }
+    .torrent-btn:hover { color: #4fc; border-color: #4fc; }
+
     /* ── Sender badge ── */
     .recv-from {
       display: none;
@@ -679,6 +707,15 @@
         <span data-ja>リセット</span><span data-en>Reset</span>
       </button>
       <button class="btn btn-ghost" id="send-all-btn" onclick="sendFilesToAllPeers()" style="display:none"></button>
+      <button class="btn btn-ghost torrent-btn" id="torrent-btn" onclick="seedFilesAsTorrent()" style="display:none"></button>
+    </div>
+    <div class="magnet-info" id="magnet-info">
+      <div class="magnet-info-row">
+        <span id="magnet-uri" class="magnet-uri"></span>
+        <button class="btn btn-ghost" id="magnet-copy-btn" style="padding:4px 10px;font-size:0.75rem"></button>
+        <button class="btn btn-ghost" id="torrent-stop-btn" onclick="stopSeeding()" style="padding:4px 10px;font-size:0.75rem"></button>
+      </div>
+      <div class="magnet-stats" id="magnet-stats"></div>
     </div>
   </div>
 
@@ -860,6 +897,15 @@ const I18N = {
     broadcastSending:  n      => `${n}台に送信中…`,
     broadcastProgress: (d, n) => `${d}/${n} 完了…`,
     broadcastDone:     n      => `${n}台に送信しました`,
+    torrentBtn:        '🌊 スウォーム',
+    torrentLoading:    'WebTorrent を読み込み中…',
+    torrentSeeding:    '🌊 シーディング中',
+    torrentSentToAll:  n => `🌊 ${n}台にマグネットリンクを送信しました`,
+    torrentIncoming:   (sender, n) => `🌊 ${sender} からトレント (${n}) が届きます…`,
+    torrentRecv:       '🌊 トレント受信中…',
+    torrentDone:       '🌊 受信完了 (トレント)',
+    torrentCopyMagnet: 'マグネットコピー',
+    torrentStop:       'シード停止',
   },
   en: {
     copying:            'Copied ✓',
@@ -926,6 +972,15 @@ const I18N = {
     broadcastSending:  n      => `Sending to ${n} devices…`,
     broadcastProgress: (d, n) => `${d}/${n} done…`,
     broadcastDone:     n      => `Sent to ${n} devices`,
+    torrentBtn:        '🌊 Swarm',
+    torrentLoading:    'Loading WebTorrent…',
+    torrentSeeding:    '🌊 Seeding',
+    torrentSentToAll:  n => `🌊 Magnet link sent to ${n} devices`,
+    torrentIncoming:   (sender, n) => `🌊 Torrent incoming from ${sender} (${n})…`,
+    torrentRecv:       '🌊 Receiving torrent…',
+    torrentDone:       '🌊 Received (torrent)',
+    torrentCopyMagnet: 'Copy Magnet',
+    torrentStop:       'Stop Seeding',
   }
 };
 
@@ -1299,6 +1354,17 @@ function updateSendAllBtns() {
     btn.style.display = count > 0 ? '' : 'none';
     btn.textContent = t('sendToAll')(count);
   });
+  // Torrent button: show when files are selected (peers optional — magnet can be shared manually)
+  const torrentBtn = document.getElementById('torrent-btn');
+  if (torrentBtn) {
+    torrentBtn.textContent = t('torrentBtn');
+    torrentBtn.style.display = selFiles.length > 0 ? '' : 'none';
+  }
+  // Localise magnet-info buttons
+  const copyBtn = document.getElementById('magnet-copy-btn');
+  if (copyBtn) copyBtn.textContent = t('torrentCopyMagnet');
+  const stopBtn = document.getElementById('torrent-stop-btn');
+  if (stopBtn) stopBtn.textContent = t('torrentStop');
 }
 
 function renderPeerGrid() {
@@ -1583,10 +1649,188 @@ async function sendTextToAllPeers() {
   if (allBtn) allBtn.disabled = false;
 }
 
+// ── WebTorrent (swarm) ────────────────────────────────────────────────────────
+const WT_CDN = 'https://cdn.jsdelivr.net/npm/webtorrent@2/webtorrent.min.js';
+let _wtClient = null;
+
+function loadWebTorrent() {
+  if (window.WebTorrent) return Promise.resolve(window.WebTorrent);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = WT_CDN;
+    s.onload  = () => resolve(window.WebTorrent);
+    s.onerror = () => reject(new Error('WebTorrent load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+function getWtClient() {
+  if (!_wtClient || _wtClient.destroyed) _wtClient = new WebTorrent();
+  return _wtClient;
+}
+
+function hideMagnetInfo() {
+  const el = document.getElementById('magnet-info');
+  if (el) el.classList.remove('visible');
+}
+
+function showMagnetInfo(magnetURI) {
+  const el    = document.getElementById('magnet-info');
+  const uri   = document.getElementById('magnet-uri');
+  const copy  = document.getElementById('magnet-copy-btn');
+  const stop  = document.getElementById('torrent-stop-btn');
+  if (!el) return;
+  if (uri)  uri.textContent = magnetURI;
+  if (copy) {
+    copy.textContent = t('torrentCopyMagnet');
+    copy.onclick = () => {
+      navigator.clipboard.writeText(magnetURI).then(() => {
+        const orig = copy.textContent;
+        copy.textContent = t('copying');
+        setTimeout(() => { copy.textContent = orig; }, 1500);
+      }).catch(() => {});
+    };
+  }
+  if (stop) stop.textContent = t('torrentStop');
+  el.classList.add('visible');
+}
+
+function updateMagnetStats(torrent) {
+  const el = document.getElementById('magnet-stats');
+  if (!el) return;
+  const ul  = fmt(torrent.uploadSpeed) + '/s ↑';
+  const ratio = torrent.ratio.toFixed(2);
+  const peers = torrent.numPeers;
+  el.textContent = `${ul}  ratio: ${ratio}  peers: ${peers}`;
+}
+
+async function seedFilesAsTorrent() {
+  if (!selFiles.length) { setStatus('send-status', t('selectFileFirst'), 'err'); return; }
+  const btn = document.getElementById('torrent-btn');
+  if (btn) btn.disabled = true;
+  setStatus('send-status', t('torrentLoading'), 'waiting');
+
+  let WT;
+  try {
+    WT = await loadWebTorrent();
+  } catch (e) {
+    setStatus('send-status', '✗ ' + e.message, 'err');
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  const client = getWtClient();
+  const files  = selFiles.map(({ file }) => file);
+  const peers  = Array.from(presenceState.peers.values());
+  setStatus('send-status', t('torrentSeeding'), 'waiting');
+
+  // Remove any previous torrent for same files before re-seeding
+  client.torrents.slice().forEach(t => { try { t.destroy(); } catch {} });
+
+  client.seed(files, torrent => {
+    const magnetURI = torrent.magnetURI;
+    showMagnetInfo(magnetURI);
+
+    // Send handoff to all peers in room
+    if (peers.length && presenceState.ws?.readyState === WebSocket.OPEN) {
+      const fileNames = files.map(f => f.name).join(', ');
+      const count = peers.length;
+      peers.forEach(peer => {
+        presenceState.ws.send(JSON.stringify({
+          type: 'handoff',
+          targetId: peer.id,
+          payload: {
+            kind: 'torrent',
+            magnetURI,
+            fileNames,
+            fileCount: files.length,
+          }
+        }));
+      });
+      setStatus('send-status', t('torrentSentToAll')(count), 'waiting');
+    } else {
+      setStatus('send-status', t('torrentSeeding'), 'waiting');
+    }
+
+    // Live upload stats
+    const statsInterval = setInterval(() => {
+      if (torrent.destroyed) { clearInterval(statsInterval); return; }
+      updateMagnetStats(torrent);
+    }, 1000);
+
+    if (btn) btn.disabled = false;
+  });
+}
+
+function stopSeeding() {
+  if (_wtClient) {
+    _wtClient.destroy(() => { _wtClient = null; });
+  }
+  hideMagnetInfo();
+  setStatus('send-status', '');
+}
+
+async function receiveTorrent(magnetURI, sender) {
+  switchTab('receive');
+  setRecvSender('recv-from', sender);
+  setStatus('recv-status', t('torrentRecv'), 'waiting');
+  document.getElementById('recv-prog-wrap').style.display = 'block';
+  document.getElementById('recv-prog-bar').style.width = '0%';
+  document.getElementById('recv-prog-text').textContent = '';
+
+  try {
+    await loadWebTorrent();
+  } catch (e) {
+    setStatus('recv-status', '✗ ' + e.message, 'err');
+    return;
+  }
+
+  const client = getWtClient();
+
+  // Avoid duplicate downloads
+  if (client.get(magnetURI)) return;
+
+  client.add(magnetURI, torrent => {
+    torrent.on('download', () => {
+      const p  = Math.round(torrent.progress * 100);
+      const dl = fmt(torrent.downloadSpeed);
+      document.getElementById('recv-prog-bar').style.width = p + '%';
+      document.getElementById('recv-prog-text').textContent = `${p}%  ↓${dl}/s`;
+    });
+
+    torrent.on('done', () => {
+      document.getElementById('recv-prog-bar').style.width = '100%';
+      setStatus('recv-status', t('torrentDone'), 'ok');
+      torrent.files.forEach(file => {
+        // WebTorrent v2: file.blob() → Promise; v1: file.getBlob(cb)
+        if (typeof file.blob === 'function') {
+          file.blob().then(blob => triggerDownload(blob, file.name)).catch(() => {});
+        } else {
+          file.getBlob((err, blob) => { if (!err) triggerDownload(blob, file.name); });
+        }
+      });
+    });
+
+    torrent.on('error', err => {
+      setStatus('recv-status', '✗ ' + (err?.message || err), 'err');
+    });
+  });
+}
+
 function handleIncomingHandoff(msg) {
   const payload = msg.payload || {};
+  const sender  = msg.from?.nickname || t('stranger');
+
+  if (payload.kind === 'torrent') {
+    const label = payload.fileCount > 1
+      ? t('filesLabel')(payload.fileCount)
+      : (payload.fileNames || t('fileGeneric'));
+    setStatus('recv-status', t('torrentIncoming')(sender, label), 'waiting');
+    receiveTorrent(payload.magnetURI, sender);
+    return;
+  }
+
   if (!payload.path) return;
-  const sender = msg.from?.nickname || t('stranger');
 
   if (payload.kind === 'text') {
     switchTab('text');
@@ -1871,6 +2115,7 @@ function setFiles(files) {
   setStatus('send-status', '');
   document.getElementById('prog-wrap').style.display = 'none';
   document.getElementById('prog-bar').style.width = '0%';
+  updateSendAllBtns();
 
   // if peer already selected, auto-start
   if (selPeerId) {
@@ -2028,6 +2273,8 @@ function resetSend() {
   document.getElementById('send-btn').disabled = true;
   document.getElementById('prog-bar').style.width = '0%';
   setStatus('send-status', '');
+  hideMagnetInfo();
+  updateSendAllBtns();
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────
