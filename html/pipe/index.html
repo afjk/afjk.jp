@@ -678,6 +678,7 @@
       <button class="btn btn-ghost" id="reset-send-btn" onclick="resetSend()">
         <span data-ja>リセット</span><span data-en>Reset</span>
       </button>
+      <button class="btn btn-ghost" id="send-all-btn" onclick="sendFilesToAllPeers()" style="display:none"></button>
     </div>
   </div>
 
@@ -741,6 +742,7 @@
       <button class="btn btn-ghost" id="cancel-txt-send-btn" onclick="cancelTxtSend()" style="display:none">
         <span data-ja>キャンセル</span><span data-en>Cancel</span>
       </button>
+      <button class="btn btn-ghost" id="txt-send-all-btn" onclick="sendTextToAllPeers()" style="display:none"></button>
     </div>
 
     <hr class="divider">
@@ -854,6 +856,10 @@ const I18N = {
     roomJoinPlaceholder: 'コードを入力',
     roomJoin:     '参加',
     roomUrlCopied:'コピー済 ✓',
+    sendToAll:         n      => `全員に送信 (${n}人)`,
+    broadcastSending:  n      => `${n}台に送信中…`,
+    broadcastProgress: (d, n) => `${d}/${n} 完了…`,
+    broadcastDone:     n      => `${n}台に送信しました`,
   },
   en: {
     copying:            'Copied ✓',
@@ -916,6 +922,10 @@ const I18N = {
     roomJoinPlaceholder: 'Enter code',
     roomJoin:     'Join',
     roomUrlCopied:'Copied ✓',
+    sendToAll:         n      => `Send to All (${n})`,
+    broadcastSending:  n      => `Sending to ${n} devices…`,
+    broadcastProgress: (d, n) => `${d}/${n} done…`,
+    broadcastDone:     n      => `Sent to ${n} devices`,
   }
 };
 
@@ -949,6 +959,7 @@ function setLang(lang) {
 
   // Re-render dynamic presence UI
   updateDeviceNameLabel();
+  updateSendAllBtns();
   renderPeerGrid();
   renderRoomSection();
   if (presenceState.ws) {
@@ -1280,6 +1291,16 @@ function sendPresenceHello() {
   }));
 }
 
+function updateSendAllBtns() {
+  const count = presenceState.peers.size;
+  ['send-all-btn', 'txt-send-all-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.style.display = count > 0 ? '' : 'none';
+    btn.textContent = t('sendToAll')(count);
+  });
+}
+
 function renderPeerGrid() {
   if (!peerGrid) return;
   peerGrid.innerHTML = '';
@@ -1345,6 +1366,7 @@ function renderPeerGrid() {
     card.addEventListener('click', () => selectPeer(peer.id, peer.nickname || t('unknownDevice')));
     peerGrid.appendChild(card);
   });
+  updateSendAllBtns();
 }
 
 function fmtLastSeen(ts) {
@@ -1459,6 +1481,106 @@ function startSendToPeer(peerId) {
   setStatus('send-status', t('handoffSent'), 'waiting');
   document.getElementById('prog-wrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   startSend();
+}
+
+// ── Broadcast (send to all peers) ─────────────────────────────────────────────
+// Send files to a single peer via P2P or HTTP; no UI side-effects.
+async function _sendFilesRawToPeer(fileEntries) {
+  const ok = await trySendWebRTCFiles(fileEntries, () => {}, () => {}, () => {});
+  if (!ok) {
+    for (const { file, path } of fileEntries) {
+      await fetch(`${PIPE}/${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
+        },
+        body: file,
+      });
+    }
+  }
+}
+
+async function sendFilesToAllPeers() {
+  const peers = Array.from(presenceState.peers.values());
+  if (!peers.length) return;
+  if (!selFiles.length) { setStatus('send-status', t('selectFileFirst'), 'err'); return; }
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) {
+    setStatus('send-status', t('presenceConnFail'), 'err'); return;
+  }
+  const count = peers.length;
+  const allBtn = document.getElementById('send-all-btn');
+  if (allBtn) allBtn.disabled = true;
+  setStatus('send-status', t('broadcastSending')(count), 'waiting');
+
+  let done = 0;
+  const tasks = peers.map(peer => {
+    // Each peer gets its own fresh paths so piping-server paths aren't shared
+    const freshFiles = selFiles.map(({ file }) => ({ file, path: randPath() }));
+    const fileInfos  = freshFiles.map(({ file, path }) => ({
+      path, filename: file.name, size: file.size,
+      mime: file.type || 'application/octet-stream', url: recvUrl(path),
+    }));
+    if (freshFiles.length === 1) {
+      presenceState.ws.send(JSON.stringify({
+        type: 'handoff', targetId: peer.id,
+        payload: { kind: 'file', ...fileInfos[0] },
+      }));
+    } else {
+      presenceState.ws.send(JSON.stringify({
+        type: 'handoff', targetId: peer.id,
+        payload: { kind: 'files', path: freshFiles[0].path, files: fileInfos },
+      }));
+    }
+    return _sendFilesRawToPeer(freshFiles).then(() => {
+      done++;
+      setStatus('send-status', t('broadcastProgress')(done, count), 'waiting');
+    });
+  });
+
+  await Promise.allSettled(tasks);
+  setStatus('send-status', t('broadcastDone')(count), 'ok');
+  if (allBtn) allBtn.disabled = false;
+}
+
+async function sendTextToAllPeers() {
+  const peers = Array.from(presenceState.peers.values());
+  if (!peers.length) return;
+  const text = document.getElementById('txt-send').value.trim();
+  if (!text) { document.getElementById('txt-send').focus(); return; }
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) {
+    setStatus('txt-send-status', t('presenceConnFail'), 'err'); return;
+  }
+  const count  = peers.length;
+  const allBtn = document.getElementById('txt-send-all-btn');
+  if (allBtn) allBtn.disabled = true;
+  document.getElementById('txt-send-btn').disabled = true;
+  setStatus('txt-send-status', t('broadcastSending')(count), 'waiting');
+
+  const blob = new Blob([text], { type: 'text/plain; charset=utf-8' });
+  let done = 0;
+  const tasks = peers.map(peer => {
+    const path = randPath();
+    presenceState.ws.send(JSON.stringify({
+      type: 'handoff', targetId: peer.id,
+      payload: { kind: 'text', path },
+    }));
+    return trySendWebRTC(blob, path, () => {}, () => {})
+      .then(ok => ok ? null : fetch(`${PIPE}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: text,
+      }))
+      .then(() => {
+        done++;
+        setStatus('txt-send-status', t('broadcastProgress')(done, count), 'waiting');
+      });
+  });
+
+  await Promise.allSettled(tasks);
+  setStatus('txt-send-status', t('broadcastDone')(count), 'ok');
+  document.getElementById('txt-send-btn').disabled = false;
+  if (allBtn) allBtn.disabled = false;
 }
 
 function handleIncomingHandoff(msg) {
