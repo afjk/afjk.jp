@@ -45,9 +45,22 @@ npm publish --registry https://upm.afjk.jp
 
 ---
 
+### afjk.jp/pipe — File Transfer
+
+ブラウザ完結型のファイル・テキスト転送ページ（`html/pipe/index.html`）。
+
+- **近くのデバイス**: 同一ネットワーク内のデバイスが自動検出され、タップするだけで転送開始
+- **ルームコード**: 6文字コードを生成して URL 共有すれば、リモートの相手とも接続可能
+- **複数ファイル一括送信**: ドロップゾーンに複数ファイルをドロップして一括転送
+- **テキスト送受信**: テキストや URL を直接送受信。受信履歴を localStorage に保存
+- **転送モード**: WebRTC P2P を優先試行し、失敗時は piping-server 中継にフォールバック
+- **デバイスピン留め**: よく使うデバイスを IndexedDB に保存して優先表示
+
+詳細な技術仕様は [`docs/pipe-spec.md`](docs/pipe-spec.md) を参照。
+
 ### pipe.afjk.jp — Piping Server
 
-ブラウザ・curl間でファイルやテキストを転送できるサービス。パスは任意の文字列でOK。
+ブラウザ・curl間でファイルやテキストを転送できる HTTP 中継サービス。パスは任意の文字列でOK。
 
 **テキストの送受信**
 
