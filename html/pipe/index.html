@@ -104,18 +104,30 @@
     .presence-status { font-size: 0.9rem; color: var(--text2); margin-top: 4px; }
     .presence-room { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
     .device-chip {
-      border: 1px solid var(--border2);
+      border: 1px dashed var(--border2);
       background: var(--surface2);
       border-radius: 999px;
       color: var(--text2);
       font-size: 0.8rem;
-      padding: 6px 14px;
+      padding: 6px 12px 6px 14px;
       cursor: pointer;
       font-family: inherit;
       white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: border-color .15s, color .15s;
     }
     .device-chip span { color: var(--text); font-weight: 600; }
+    .device-chip .chip-edit-icon {
+      font-size: 0.72rem;
+      opacity: 0.4;
+      transition: opacity .15s;
+      line-height: 1;
+    }
     .device-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .device-chip:hover span { color: var(--accent); }
+    .device-chip:hover .chip-edit-icon { opacity: 1; }
     .peer-grid {
       margin-top: 16px;
       display: flex;
@@ -587,8 +599,9 @@
           <span data-en>Devices on the same network will appear here.</span>
         </div>
       </div>
-      <button class="device-chip" id="device-name-btn" type="button">
-        <span data-ja>端末名: </span><span data-en>Device: </span><span id="device-name-label"></span>
+      <button class="device-chip" id="device-name-btn" type="button"
+        data-ja-title="端末名をタップして変更" data-en-title="Tap to change device name">
+        <span data-ja>端末名: </span><span data-en>Device: </span><span id="device-name-label"></span><span class="chip-edit-icon">✏️</span>
       </button>
     </div>
     <div class="peer-grid empty" id="peer-grid">
@@ -935,6 +948,7 @@ function setLang(lang) {
   if (txtReceived) txtReceived.placeholder = t('txtReceivedPlaceholder');
 
   // Re-render dynamic presence UI
+  updateDeviceNameLabel();
   renderPeerGrid();
   renderRoomSection();
   if (presenceState.ws) {
@@ -1142,6 +1156,10 @@ function defaultDeviceName() {
 
 function updateDeviceNameLabel() {
   if (deviceNameLabel) deviceNameLabel.textContent = deviceName;
+  if (deviceNameBtn) {
+    const key = currentLang === 'ja' ? 'data-ja-title' : 'data-en-title';
+    deviceNameBtn.title = deviceNameBtn.getAttribute(key) || '';
+  }
 }
 
 function editDeviceName() {
