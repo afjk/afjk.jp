@@ -3,3 +3,5 @@ https-portal-certs/
 
 # Claude Code
 .claude/
+
+.DS_Store
