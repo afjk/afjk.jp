@@ -1004,6 +1004,7 @@ const I18N = {
     swarmRemoveLocal:  'ローカル削除',
     gdrivePick:        'Google Driveから選択',
     gdriveDownloading: 'Driveからダウンロード中…',
+    gdriveDone:        n => `${n}件のファイルを読み込みました`,
     gdriveError:       msg => `Google Drive エラー: ${msg}`,
   },
   en: {
@@ -1091,6 +1092,7 @@ const I18N = {
     swarmRemoveLocal:  'Remove local copy',
     gdrivePick:        'Select from Google Drive',
     gdriveDownloading: 'Downloading from Drive…',
+    gdriveDone:        n => `${n} file${n === 1 ? '' : 's'} loaded from Drive`,
     gdriveError:       msg => `Google Drive error: ${msg}`,
   }
 };
@@ -3036,6 +3038,12 @@ async function downloadDriveFiles(pickedDocs, token) {
 function _openPickerWithToken(token) {
   return new Promise((resolve, reject) => {
     const btn = document.getElementById('gdrive-btn');
+    const origContent = btn.innerHTML;
+    function restoreBtn() {
+      btn.disabled = false;
+      btn.innerHTML = origContent;
+      setLang(currentLang);
+    }
     const picker = new google.picker.PickerBuilder()
       .addView(new google.picker.DocsView()
         .setIncludeFolders(false)
@@ -3043,15 +3051,18 @@ function _openPickerWithToken(token) {
       .setOAuthToken(token)
       .setDeveloperKey(GDRIVE_API_KEY)
       .setCallback(async data => {
-        if (data.action === google.picker.Action.CANCEL) { resolve(); return; }
+        if (data.action === google.picker.Action.CANCEL) { restoreBtn(); resolve(); return; }
         if (data.action !== google.picker.Action.PICKED) return;
         try {
           btn.disabled = true;
           btn.textContent = t('gdriveDownloading');
           const files = await downloadDriveFiles(data.docs, token);
           setFiles(files);
+          restoreBtn();
+          setStatus('send-status', t('gdriveDone')(files.length), 'ok');
           resolve();
         } catch (e) {
+          restoreBtn();
           setStatus('send-status', t('gdriveError')(e.message), 'err');
           reject(e);
         }
