@@ -2053,6 +2053,7 @@ async function seedStoredEntry(infoHash) {
   }
   if (!stored?.files?.length) return null;
   try {
+    await loadWebTorrent();
     const files = stored.files.map(f =>
       new File([f.blob], f.name || 'file', { type: f.type || 'application/octet-stream' })
     );
@@ -2660,6 +2661,7 @@ async function handleIncomingHandoff(msg) {
     const requestedInfoHash = payload.infoHash || extractInfoHash(payload.magnetURI);
     logSwarm('swarm-join received', { requesterId, infoHash: requestedInfoHash });
     try {
+      await loadWebTorrent();
       const client = getWtClient();
       let torrent = requestedInfoHash
         ? findTorrentByInfoHash(requestedInfoHash)
