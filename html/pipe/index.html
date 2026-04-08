@@ -1306,7 +1306,6 @@ const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
 const logSwarm = (...args) => { try { console.debug('[swarm]', ...args); } catch {} };
-const localSeedInfoHashes = new Set();
 const localCatalog = new Map();
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
