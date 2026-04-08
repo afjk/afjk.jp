@@ -451,6 +451,8 @@
     }
     .swarm-item:first-child { border-top: none; padding-top: 0; }
     .swarm-item:last-child { padding-bottom: 0; }
+    .swarm-item.local-active { background: rgba(79, 252, 149, 0.08); border-top-color: rgba(79, 252, 149, 0.4); }
+    .swarm-item.local-catalog { background: rgba(255, 255, 255, 0.02); border-top-color: rgba(255, 255, 255, 0.08); }
     .swarm-item-main { flex: 1; min-width: 0; }
     .swarm-item-name {
       font-weight: 600;
@@ -970,6 +972,9 @@ const I18N = {
     swarmFrom:         name => `共有者: ${name}`,
     swarmCatalogTag:   'ローカル保存',
     swarmCatalogOnly:  'アーカイブ表示のみ',
+    swarmOwnedActive:  '自分がシード中',
+    swarmOwnedOffline: 'ローカルのみ',
+    swarmRemoveLocal:  'ローカル削除',
   },
   en: {
     copying:            'Copied ✓',
@@ -1051,6 +1056,9 @@ const I18N = {
     swarmFrom:         name => `Shared by ${name}`,
     swarmCatalogTag:   'Catalog only',
     swarmCatalogOnly:  'Catalog entry',
+    swarmOwnedActive:  'Seeding locally',
+    swarmOwnedOffline: 'Stored locally',
+    swarmRemoveLocal:  'Remove local copy',
   }
 };
 
@@ -1196,6 +1204,19 @@ async function swarmIDBGet(infoHash) {
   } catch {
     return null;
   }
+}
+
+async function swarmIDBDelete(infoHash) {
+  if (!infoHash) return;
+  try {
+    const db = await openSwarmDb();
+    await new Promise(resolve => {
+      const tx  = db.transaction(SWARM_IDB_STORE, 'readwrite');
+      const req = tx.objectStore(SWARM_IDB_STORE).delete(infoHash);
+      req.onsuccess = () => resolve();
+      req.onerror   = () => resolve();
+    });
+  } catch {}
 }
 
 async function loadLocalSwarmCatalog() {
@@ -2074,6 +2095,30 @@ async function collectFilesFromTorrent(torrent) {
   return out;
 }
 
+async function removeLocalArchive(infoHash) {
+  if (!infoHash) return;
+  const stored = localCatalog.get(infoHash);
+  localCatalog.delete(infoHash);
+  await swarmIDBDelete(infoHash);
+  const torrent = findTorrentByInfoHash(infoHash);
+  if (torrent) {
+    try { torrent.destroy(); } catch {}
+  }
+  unregisterLocalSeederInfoHash(infoHash);
+  const entry = findSwarmEntryByInfoHash(infoHash);
+  if (entry) {
+    entry.seeders?.delete(presenceState.id);
+    if (localCatalog.has(infoHash)) {
+      entry.catalogOnly = true;
+      renderSwarmList();
+    } else if (!entry.seeders || !entry.seeders.size) {
+      removeSwarmEntry(infoHash);
+    } else {
+      renderSwarmList();
+    }
+  }
+}
+
 function requestSwarmPeerConnection(entry) {
   const infoHash = entry?.infoHash || extractInfoHash(entry?.magnetURI);
   if (!infoHash) {
@@ -2119,8 +2164,13 @@ function renderSwarmList() {
   }
   empty.style.display = 'none';
   entries.forEach(entry => {
+    const infoHash = entry.infoHash || entry.magnetURI;
+    const ownsLocal = infoHash ? localCatalog.has(infoHash) : false;
+    const isSeeding = entry.seeders?.has(presenceState.id);
     const item = document.createElement('div');
     item.className = 'swarm-item';
+    if (isSeeding) item.classList.add('local-active');
+    else if (ownsLocal) item.classList.add('local-catalog');
     const main = document.createElement('div');
     main.className = 'swarm-item-main';
     const name = document.createElement('div');
@@ -2132,6 +2182,8 @@ function renderSwarmList() {
     if (entry.totalBytes) metaBits.push(fmt(entry.totalBytes));
     if (entry.fromNickname) metaBits.push(t('swarmFrom')(entry.fromNickname));
     const isCatalogOnly = entry.catalogOnly && (!entry.seeders || !entry.seeders.size);
+    if (isSeeding) metaBits.push(t('swarmOwnedActive'));
+    else if (ownsLocal) metaBits.push(t('swarmOwnedOffline'));
     if (isCatalogOnly) metaBits.push(t('swarmCatalogTag'));
     meta.textContent = metaBits.join(' · ');
     main.appendChild(name);
@@ -2150,6 +2202,14 @@ function renderSwarmList() {
       receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
     };
     actions.appendChild(dlBtn);
+    if (ownsLocal) {
+      const rmBtn = document.createElement('button');
+      rmBtn.type = 'button';
+      rmBtn.className = 'btn btn-ghost';
+      rmBtn.textContent = t('swarmRemoveLocal');
+      rmBtn.onclick = () => removeLocalArchive(infoHash);
+      actions.appendChild(rmBtn);
+    }
     item.appendChild(main);
     item.appendChild(actions);
     list.appendChild(item);
