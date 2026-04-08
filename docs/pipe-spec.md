@@ -8,7 +8,7 @@
 | 項目 | 内容 |
 |------|------|
 | 実装 | 単一 HTML ファイル（`html/pipe/index.html`）|
-| 外部ライブラリ | qrcodejs（CDN）のみ |
+| 外部ライブラリ | qrcodejs / webtorrent / simple-peer（いずれも CDN、動的ロード）|
 | 転送モード | WebRTC P2P（常に先行試行）/ piping-server 中継（フォールバック）|
 | 言語切替 | JA / EN（`localStorage` 保存）|
 
@@ -155,6 +155,34 @@ sequenceDiagram
   "payload": {
     "kind": "text",
     "path": "abc12345"
+  }
+}
+```
+
+**WebTorrent マグネット通知（`kind: 'torrent'`）**
+
+```json
+{
+  "type": "handoff",
+  "targetId": "<受信側のUUID>",
+  "payload": {
+    "kind": "torrent",
+    "magnetURI": "magnet:?xt=urn:btih:...",
+    "fileNames": "photo.jpg, video.mp4",
+    "fileCount": 2
+  }
+}
+```
+
+**WebRTC シグナリング（`kind: 'wt-signal'`）**
+
+```json
+{
+  "type": "handoff",
+  "targetId": "<相手のUUID>",
+  "payload": {
+    "kind": "wt-signal",
+    "signal": { "type": "offer", "sdp": "..." }
   }
 }
 ```
@@ -385,3 +413,57 @@ graph LR
 
 - `main` ブランチへのマージ → `staging.afjk.jp` へ自動デプロイ
 - GitHub Release 作成 → `afjk.jp`（本番）へデプロイ
+
+---
+
+## 13. スウォーム転送（実験的）
+
+WebTorrent + SimplePeer による BitTorrent 方式のファイル転送。ルーム内に他のデバイスがいるときにのみ「スウォーム」ボタンが表示される。
+
+### 外部ライブラリ
+
+| ライブラリ | 読み込み方式 | タイミング |
+|---|---|---|
+| `webtorrent` (CDN) | ES Module dynamic `import()` | スウォームボタン押下時のみ |
+| `simple-peer` (CDN) | `<script>` タグ（UMD）| スウォームボタン押下時のみ |
+
+### 転送フロー
+
+トラッカー（外部 WebSocket）は使用しない。プレゼンスサーバーを `wt-signal` ハンドオフ経由のシグナリングチャネルとして使い、SimplePeer で WebRTC 接続を確立してからトレントを接続する。
+
+```mermaid
+sequenceDiagram
+    participant S as 送信側
+    participant P as presence-server
+    participant R as 受信側
+
+    S->>S: client.seed(files) → torrent 生成
+    S->>P: handoff kind:'torrent' (magnetURI)
+    S->>P: handoff kind:'wt-signal' (SDP offer)
+
+    P->>R: handoff kind:'torrent'
+    R->>R: client.add(magnetURI) → torrent 追加
+    P->>R: handoff kind:'wt-signal' (SDP offer)
+    R->>R: SimplePeer(initiator:false).signal(offer)
+    R->>P: handoff kind:'wt-signal' (SDP answer)
+
+    P->>S: handoff kind:'wt-signal' (SDP answer)
+    S->>S: SimplePeer.signal(answer) → connect
+    R->>R: sp.on('connect') → torrent.addPeer(sp)
+    S->>S: sp.on('connect') → torrent.addPeer(sp)
+
+    S-->>R: BitTorrent ワイヤー転送
+```
+
+### 実装上の注意点
+
+- `client.add(magnetURI)` はコールバック形式ではなく**同期的な戻り値**を使用する。コールバックはメタデータ取得後（= ピア接続後）に発火するため、ピアがいない状態では永遠に呼ばれない（デッドロック）
+- WebTorrent がピアタイムアウトでトレントを自動削除しても `client.get()` のキャッシュに残る場合がある。`receiveTorrent()` では `existingTorrent.destroyed` と `client.torrents.includes()` で生死を確認し、古い参照を削除してから再追加する
+- `wt-signal` がトレント追加前に届いた場合は `_wtPendingSignals` キューに積み、`client.add()` 直後に処理する
+
+### ルーム内スウォーム一覧（実験メモ）
+
+- トレント開始時に `handoff` (`kind: 'swarm-publish'`) をルーム内の各ピアへ送信し、`magnetURI` / ファイル名 / サイズ / 作成者情報だけを共有する
+- 新規参加端末は入室直後に既存ピアへ `kind: 'swarm-request'` を送り、最初に応答したピアが `kind: 'swarm-sync'` （単純な配列）で一覧を返す
+- 受信タブにはシンプルなリストを表示し、任意の項目から `receiveTorrent()` をトリガーできる
+- すべてクライアント間の揮発的なやり取りで、presence-server 側には保存しない（タブを閉じるとリストは失われる）

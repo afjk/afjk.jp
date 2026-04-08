@@ -388,6 +388,85 @@
     .prog-bar { height: 100%; background: var(--accent); width: 0%; transition: width .25s; }
     .prog-text { font-size: 0.78rem; color: var(--muted); margin-top: 5px; }
 
+    /* ── Magnet info (WebTorrent seed) ── */
+    .magnet-info {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      font-size: 0.78rem;
+      color: var(--text2);
+      gap: 8px;
+      flex-direction: column;
+    }
+    .magnet-info.visible { display: flex; }
+    .magnet-info-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .magnet-uri {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .magnet-stats { color: var(--text2); font-size: 0.75rem; min-height: 1em; }
+    .torrent-btn { color: #4fc; }
+    .torrent-btn:hover { color: #4fc; border-color: #4fc; }
+
+    /* ── Swarm list ── */
+    .swarm-block {
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .swarm-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .swarm-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .swarm-empty {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      padding: 6px 0;
+    }
+    .swarm-list { display: flex; flex-direction: column; gap: 10px; }
+    .swarm-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-top: 1px solid var(--border2);
+    }
+    .swarm-item:first-child { border-top: none; padding-top: 0; }
+    .swarm-item:last-child { padding-bottom: 0; }
+    .swarm-item-main { flex: 1; min-width: 0; }
+    .swarm-item-name {
+      font-weight: 600;
+      font-size: 0.88rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .swarm-item-meta {
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .swarm-item-actions { flex-shrink: 0; display: flex; gap: 8px; }
+    .swarm-item .btn-ghost { padding: 6px 12px; font-size: 0.78rem; }
+
     /* ── Sender badge ── */
     .recv-from {
       display: none;
@@ -679,6 +758,15 @@
         <span data-ja>リセット</span><span data-en>Reset</span>
       </button>
       <button class="btn btn-ghost" id="send-all-btn" onclick="sendFilesToAllPeers()" style="display:none"></button>
+      <button class="btn btn-ghost torrent-btn" id="torrent-btn" onclick="seedFilesAsTorrent()" style="display:none"></button>
+    </div>
+    <div class="magnet-info" id="magnet-info">
+      <div class="magnet-info-row">
+        <span id="magnet-uri" class="magnet-uri"></span>
+        <button class="btn btn-ghost" id="magnet-copy-btn" style="padding:4px 10px;font-size:0.75rem"></button>
+        <button class="btn btn-ghost" id="torrent-stop-btn" onclick="stopSeeding()" style="padding:4px 10px;font-size:0.75rem"></button>
+      </div>
+      <div class="magnet-stats" id="magnet-stats"></div>
     </div>
   </div>
 
@@ -704,6 +792,13 @@
       <div class="prog-text" id="recv-prog-text"></div>
     </div>
     <div class="status" id="recv-status" style="margin-top:14px"></div>
+    <div class="swarm-block" id="swarm-block">
+      <div class="swarm-head">
+        <div class="swarm-title" id="swarm-title"></div>
+      </div>
+      <div class="swarm-empty" id="swarm-empty"></div>
+      <div class="swarm-list" id="swarm-list"></div>
+    </div>
   </div>
 
   <!-- ── Text ── -->
@@ -860,6 +955,19 @@ const I18N = {
     broadcastSending:  n      => `${n}台に送信中…`,
     broadcastProgress: (d, n) => `${d}/${n} 完了…`,
     broadcastDone:     n      => `${n}台に送信しました`,
+    torrentBtn:        '🌊 スウォーム',
+    torrentLoading:    'WebTorrent を読み込み中…',
+    torrentSeeding:    '🌊 シーディング中',
+    torrentSentToAll:  n => `🌊 ${n}台にマグネットリンクを送信しました`,
+    torrentIncoming:   (sender, n) => `🌊 ${sender} からトレント (${n}) が届きます…`,
+    torrentRecv:       '🌊 トレント受信中…',
+    torrentDone:       '🌊 受信完了 (トレント)',
+    torrentCopyMagnet: 'マグネットコピー',
+    torrentStop:       'シード停止',
+    swarmHeading:      'ルームで保持中のファイル',
+    swarmEmpty:        'まだ共有されているトレントはありません。',
+    swarmDownload:     'ダウンロード',
+    swarmFrom:         name => `共有者: ${name}`,
   },
   en: {
     copying:            'Copied ✓',
@@ -926,6 +1034,19 @@ const I18N = {
     broadcastSending:  n      => `Sending to ${n} devices…`,
     broadcastProgress: (d, n) => `${d}/${n} done…`,
     broadcastDone:     n      => `Sent to ${n} devices`,
+    torrentBtn:        '🌊 Swarm',
+    torrentLoading:    'Loading WebTorrent…',
+    torrentSeeding:    '🌊 Seeding',
+    torrentSentToAll:  n => `🌊 Magnet link sent to ${n} devices`,
+    torrentIncoming:   (sender, n) => `🌊 Torrent incoming from ${sender} (${n})…`,
+    torrentRecv:       '🌊 Receiving torrent…',
+    torrentDone:       '🌊 Received (torrent)',
+    torrentCopyMagnet: 'Copy Magnet',
+    torrentStop:       'Stop Seeding',
+    swarmHeading:      'Room Swarm',
+    swarmEmpty:        'No torrents have been shared yet.',
+    swarmDownload:     'Download',
+    swarmFrom:         name => `Shared by ${name}`,
   }
 };
 
@@ -969,6 +1090,7 @@ function setLang(lang) {
     presenceStatusEl.textContent = t('presenceConnecting');
   }
   renderHistory();
+  renderSwarmList();
 }
 
 // ── Stats reporting ───────────────────────────────────────────────────────────
@@ -997,6 +1119,8 @@ const DEFAULT_PRESENCE =
     : `${location.origin.replace(/^http/, 'ws')}/presence`;
 const PRESENCE_ENDPOINT = PRESENCE_OVERRIDE || DEFAULT_PRESENCE;
 const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null, retries: 0 };
+const swarmState = { entries: new Map(), requestedPeerIds: new Set() };
+let currentSwarmMagnet = null;
 let deviceName = localStorage.getItem('pipe.deviceName') || defaultDeviceName();
 const deviceInfo = detectDeviceInfo();
 const presenceStatusEl = document.getElementById('presence-status');
@@ -1092,6 +1216,29 @@ const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
+const logSwarm = (...args) => { try { console.debug('[swarm]', ...args); } catch {} };
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32ToHex(str) {
+  let bits = '';
+  for (const ch of str.replace(/=+$/, '').toUpperCase()) {
+    const idx = BASE32_ALPHABET.indexOf(ch);
+    if (idx === -1) return null;
+    bits += idx.toString(2).padStart(5, '0');
+  }
+  const hex = bits.match(/.{4}/g)?.map(chunk => parseInt(chunk, 2).toString(16)).join('') || '';
+  return hex || null;
+}
+
+function extractInfoHash(magnetURI) {
+  if (!magnetURI) return null;
+  const match = magnetURI.match(/xt=urn:btih:([^&]+)/i);
+  if (!match) return null;
+  const hash = match[1];
+  if (hash.length === 40) return hash.toLowerCase();
+  if (hash.length === 32) return base32ToHex(hash);
+  return null;
+}
 
 const fmt = b => {
   if (b < 1024) return b + ' B';
@@ -1250,6 +1397,7 @@ function handlePresenceMessage(ev) {
     case 'peers':
       presenceState.peers = new Map((data.peers || []).map(p => [p.id, p]));
       renderPeerGrid();
+      requestSwarmSyncFromPeers();
       // Auto-select a paired peer if exactly one is present and none selected yet
       if (!selPeerId) {
         const paired = (data.peers || []).filter(p => pairedIds.has(p.id));
@@ -1299,6 +1447,17 @@ function updateSendAllBtns() {
     btn.style.display = count > 0 ? '' : 'none';
     btn.textContent = t('sendToAll')(count);
   });
+  // Torrent button: show when files are selected (peers optional — magnet can be shared manually)
+  const torrentBtn = document.getElementById('torrent-btn');
+  if (torrentBtn) {
+    torrentBtn.textContent = t('torrentBtn');
+    torrentBtn.style.display = selFiles.length > 0 ? '' : 'none';
+  }
+  // Localise magnet-info buttons
+  const copyBtn = document.getElementById('magnet-copy-btn');
+  if (copyBtn) copyBtn.textContent = t('torrentCopyMagnet');
+  const stopBtn = document.getElementById('torrent-stop-btn');
+  if (stopBtn) stopBtn.textContent = t('torrentStop');
 }
 
 function renderPeerGrid() {
@@ -1583,10 +1742,541 @@ async function sendTextToAllPeers() {
   if (allBtn) allBtn.disabled = false;
 }
 
+// ── WebTorrent (swarm) ────────────────────────────────────────────────────────
+const WT_CDN = 'https://cdn.jsdelivr.net/npm/webtorrent/dist/webtorrent.min.js';
+const SP_CDN = 'https://cdn.jsdelivr.net/npm/simple-peer/simplepeer.min.js';
+let _wtClient = null;
+let _wtClass  = null;   // WebTorrent constructor (ES module, loaded via import())
+let _spLoaded = false;  // SimplePeer UMD loaded via <script> tag → window.SimplePeer
+
+// WebtTorrent: ES Module → must use import()
+async function loadWebTorrent() {
+  if (_wtClass) return _wtClass;
+  const mod = await import(/* webpackIgnore: true */ WT_CDN);
+  _wtClass = mod.default ?? mod;
+  return _wtClass;
+}
+
+// SimplePeer: UMD bundle → sets window.SimplePeer
+function loadSimplePeer() {
+  if (_spLoaded || window.SimplePeer) { _spLoaded = true; return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = SP_CDN;
+    s.onload  = () => { _spLoaded = true; resolve(); };
+    s.onerror = () => reject(new Error('SimplePeer load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+// ── Swarm (room torrent list) ────────────────────────────────────────────────
+function requestSwarmSyncFromPeers() {
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
+  const activeIds = new Set(presenceState.peers.keys());
+  swarmState.requestedPeerIds.forEach(id => {
+    if (!activeIds.has(id)) swarmState.requestedPeerIds.delete(id);
+  });
+  presenceState.peers.forEach((_, peerId) => {
+    if (swarmState.requestedPeerIds.has(peerId)) return;
+    sendSwarmMessage(peerId, { kind: 'swarm-request' });
+    swarmState.requestedPeerIds.add(peerId);
+  });
+}
+
+function sendSwarmMessage(targetId, payload) {
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
+  presenceState.ws.send(JSON.stringify({ type: 'handoff', targetId, payload }));
+}
+
+function broadcastSwarmPublish(entry) {
+  presenceState.peers.forEach((_, peerId) => {
+    sendSwarmMessage(peerId, { kind: 'swarm-publish', entry });
+  });
+}
+
+function sendSwarmSync(targetId) {
+  if (!swarmState.entries.size) return;
+  const entries = Array.from(swarmState.entries.values()).map(entry => ({ ...entry }));
+  sendSwarmMessage(targetId, { kind: 'swarm-sync', entries });
+}
+
+function normalizeSwarmEntry(rawEntry, senderFallback) {
+  if (!rawEntry || !rawEntry.magnetURI) return null;
+  const fileNames = Array.isArray(rawEntry.fileNames) ? rawEntry.fileNames.slice(0, 5) : [];
+  const fileCount = Number(rawEntry.fileCount) || fileNames.length || 1;
+  const totalBytes = Number(rawEntry.totalBytes) || 0;
+  const infoHash = rawEntry.infoHash || extractInfoHash(rawEntry.magnetURI);
+  return {
+    magnetURI: rawEntry.magnetURI,
+    fileNames,
+    fileCount,
+    totalBytes,
+    fromNickname: rawEntry.fromNickname || senderFallback || t('stranger'),
+    senderId: rawEntry.senderId || null,
+    infoHash,
+    createdAt: rawEntry.createdAt || Date.now()
+  };
+}
+
+function addSwarmEntry(rawEntry, senderFallback) {
+  const entry = normalizeSwarmEntry(rawEntry, senderFallback);
+  if (!entry) return;
+  swarmState.entries.set(entry.magnetURI, entry);
+  renderSwarmList();
+}
+
+function requestSwarmPeerConnection(entry) {
+  const infoHash = entry?.infoHash || extractInfoHash(entry?.magnetURI);
+  if (!infoHash) {
+    logSwarm('requestSwarmPeerConnection skipped — missing infoHash');
+    return;
+  }
+  const targets = new Set();
+  if (entry.senderId && entry.senderId !== presenceState.id) targets.add(entry.senderId);
+  presenceState.peers.forEach((_, peerId) => {
+    if (peerId && peerId !== presenceState.id) targets.add(peerId);
+  });
+  if (!targets.size) {
+    logSwarm('requestSwarmPeerConnection no peers to notify');
+    return;
+  }
+  logSwarm('requestSwarmPeerConnection broadcast', { infoHash, targets: Array.from(targets) });
+  targets.forEach(peerId => {
+    sendSwarmMessage(peerId, { kind: 'swarm-join', magnetURI: entry.magnetURI, infoHash });
+  });
+}
+
+function swarmEntryLabel(entry) {
+  const count = entry.fileCount || (entry.fileNames?.length ?? 0);
+  if (count > 1) return t('filesLabel')(count);
+  const first = entry.fileNames?.[0];
+  return first || t('fileGeneric');
+}
+
+function renderSwarmList() {
+  const block = document.getElementById('swarm-block');
+  const title = document.getElementById('swarm-title');
+  const empty = document.getElementById('swarm-empty');
+  const list = document.getElementById('swarm-list');
+  if (!block || !title || !empty || !list) return;
+  title.textContent = t('swarmHeading');
+  const entries = Array.from(swarmState.entries.values())
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  list.innerHTML = '';
+  if (!entries.length) {
+    empty.style.display = '';
+    empty.textContent = t('swarmEmpty');
+    return;
+  }
+  empty.style.display = 'none';
+  entries.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'swarm-item';
+    const main = document.createElement('div');
+    main.className = 'swarm-item-main';
+    const name = document.createElement('div');
+    name.className = 'swarm-item-name';
+    name.textContent = swarmEntryLabel(entry);
+    const meta = document.createElement('div');
+    meta.className = 'swarm-item-meta';
+    const metaBits = [];
+    if (entry.totalBytes) metaBits.push(fmt(entry.totalBytes));
+    if (entry.fromNickname) metaBits.push(t('swarmFrom')(entry.fromNickname));
+    meta.textContent = metaBits.join(' · ');
+    main.appendChild(name);
+    main.appendChild(meta);
+    const actions = document.createElement('div');
+    actions.className = 'swarm-item-actions';
+    const dlBtn = document.createElement('button');
+    dlBtn.type = 'button';
+    dlBtn.className = 'btn btn-ghost';
+    dlBtn.textContent = t('swarmDownload');
+    dlBtn.onclick = () => {
+      const label = swarmEntryLabel(entry);
+      requestSwarmPeerConnection(entry);
+      setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
+      receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
+    };
+    actions.appendChild(dlBtn);
+    item.appendChild(main);
+    item.appendChild(actions);
+    list.appendChild(item);
+  });
+}
+
+function publishLocalSwarmEntry(magnetURI, files, infoHash = null) {
+  if (!magnetURI || !files?.length) return;
+  logSwarm('publishLocalSwarmEntry', { magnetURI, infoHash, files: files.map(f => f?.name) });
+  let knownInfoHash = infoHash || extractInfoHash(magnetURI);
+  const entry = {
+    magnetURI,
+    fileNames: files.map(f => f?.name || ''),
+    fileCount: files.length,
+    totalBytes: files.reduce((sum, f) => sum + (f?.size || 0), 0),
+    fromNickname: deviceName || t('unknownDevice'),
+    senderId: presenceState.id || null,
+    infoHash: knownInfoHash,
+    createdAt: Date.now()
+  };
+  currentSwarmMagnet = magnetURI;
+  addSwarmEntry(entry, entry.fromNickname);
+  broadcastSwarmPublish(entry);
+}
+
+function findTorrentByInfoHash(infoHash) {
+  if (!infoHash || !_wtClient?.torrents?.length) return null;
+  return _wtClient.torrents.find(t => t.infoHash === infoHash) || null;
+}
+
+function getWtClient() {
+  if (!_wtClass) throw new Error('WebTorrent not loaded');
+  if (!_wtClient || _wtClient.destroyed) {
+    _wtClient = new _wtClass({ tracker: false });
+    _wtClient.on('error', e => console.warn('[wt]', e?.message || e));
+  }
+  return _wtClient;
+}
+
+// ── Presence-based direct peer signaling (tracker-free) ──────────────────────
+// Seeder holds pending SimplePeer instances awaiting the receiver's answer
+const _wtPendingPeers = new Map();   // `${peerId}:${infoHash}` → { sp, torrent, infoHash }
+// Receiver queues offers that arrive before the torrent is ready
+const _wtPendingSignals = [];        // { fromId, signal, infoHash }
+
+// Seeder: open a direct SimplePeer connection to each room peer
+async function _wtConnectRoomPeers(torrent, roomPeers) {
+  await loadSimplePeer().catch(() => {});
+  const SP = window.SimplePeer;
+  if (!SP) return;
+  const infoHash = torrent?.infoHash || extractInfoHash(torrent?.magnetURI || '') || '';
+  for (const peer of roomPeers) {
+    const sp = new SP({ initiator: true, trickle: false });
+    const key = infoHash ? `${peer.id}:${infoHash}` : peer.id;
+    _wtPendingPeers.set(key, { sp, torrent, infoHash });
+    sp.on('signal', offer => {
+      const payload = { kind: 'wt-signal', signal: offer, infoHash };
+      presenceState.ws?.send(JSON.stringify({ type: 'handoff', targetId: peer.id, payload }));
+    });
+    sp.on('connect', () => {
+      try { torrent.addPeer(sp); } catch(e) { console.warn('[wt] addPeer:', e.message); }
+      _wtPendingPeers.delete(key);
+    });
+    sp.on('error', e => { console.warn('[wt] sp:', e.message); _wtPendingPeers.delete(key); });
+  }
+}
+
+// Receiver: handle an offer → create answer → add peer to torrent
+function _wtHandleOffer(torrent, fromId, signal) {
+  const SP = window.SimplePeer;
+  if (!SP) return;
+  const sp = new SP({ initiator: false, trickle: false });
+  sp.on('signal', answer => {
+    presenceState.ws?.send(JSON.stringify({
+      type: 'handoff', targetId: fromId,
+      payload: { kind: 'wt-signal', signal: answer, infoHash: torrent?.infoHash || '' },
+    }));
+  });
+  sp.on('connect', () => {
+    try { torrent.addPeer(sp); } catch(e) { console.warn('[wt] addPeer:', e.message); }
+  });
+  sp.on('error', e => console.warn('[wt] sp:', e.message));
+  sp.signal(signal);
+}
+
+// Dispatcher called from handleIncomingHandoff for kind:'wt-signal'
+async function handleWtSignal(fromId, signal, infoHash = '') {
+  await loadSimplePeer().catch(() => {});
+  // Case 1: we're the seeder — this is an answer from the receiver
+  const key = infoHash ? `${fromId}:${infoHash}` : fromId;
+  const pending = _wtPendingPeers.get(key) || _wtPendingPeers.get(fromId);
+  if (pending) {
+    pending.sp.signal(signal);
+    _wtPendingPeers.delete(key);
+    _wtPendingPeers.delete(fromId);
+    return;
+  }
+  // Case 2: we're the receiver — this is an offer from the seeder
+  if (!_wtClient?.torrents?.length) {
+    _wtPendingSignals.push({ fromId, signal, infoHash });
+    return;
+  }
+  const target = findTorrentByInfoHash(infoHash) || _wtClient.torrents[0];
+  if (target) {
+    _wtHandleOffer(target, fromId, signal);
+  } else {
+    _wtPendingSignals.push({ fromId, signal, infoHash });
+  }
+}
+
+function hideMagnetInfo() {
+  const el = document.getElementById('magnet-info');
+  if (el) el.classList.remove('visible');
+}
+
+function showMagnetInfo(magnetURI) {
+  const el    = document.getElementById('magnet-info');
+  const uri   = document.getElementById('magnet-uri');
+  const copy  = document.getElementById('magnet-copy-btn');
+  const stop  = document.getElementById('torrent-stop-btn');
+  if (!el) return;
+  if (uri)  uri.textContent = magnetURI;
+  if (copy) {
+    copy.textContent = t('torrentCopyMagnet');
+    copy.onclick = () => {
+      navigator.clipboard.writeText(magnetURI).then(() => {
+        const orig = copy.textContent;
+        copy.textContent = t('copying');
+        setTimeout(() => { copy.textContent = orig; }, 1500);
+      }).catch(() => {});
+    };
+  }
+  if (stop) stop.textContent = t('torrentStop');
+  el.classList.add('visible');
+}
+
+function updateMagnetStats(torrent) {
+  const el = document.getElementById('magnet-stats');
+  if (!el) return;
+  const ul  = fmt(torrent.uploadSpeed) + '/s ↑';
+  const ratio = torrent.ratio.toFixed(2);
+  const peers = torrent.numPeers;
+  el.textContent = `${ul}  ratio: ${ratio}  peers: ${peers}`;
+}
+
+async function seedFilesAsTorrent() {
+  if (!selFiles.length) { setStatus('send-status', t('selectFileFirst'), 'err'); return; }
+  const btn = document.getElementById('torrent-btn');
+  if (btn) btn.disabled = true;
+  setStatus('send-status', t('torrentLoading'), 'waiting');
+
+  let WT;
+  try {
+    WT = await loadWebTorrent();
+  } catch (e) {
+    setStatus('send-status', '✗ ' + e.message, 'err');
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  const client = getWtClient();
+  const files  = selFiles.map(({ file }) => file);
+  const peers  = Array.from(presenceState.peers.values());
+  setStatus('send-status', t('torrentSeeding'), 'waiting');
+
+  // Remove any previous torrent for same files before re-seeding
+  client.torrents.slice().forEach(t => { try { t.destroy(); } catch {} });
+
+  client.seed(files, torrent => {
+    // Suppress tracker connection errors (non-fatal warnings)
+    torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
+    torrent.on('error',   e => console.warn('[wt] torrent error:', e?.message || e));
+
+    const magnetURI = torrent.magnetURI;
+    showMagnetInfo(magnetURI);
+    publishLocalSwarmEntry(magnetURI, files, torrent.infoHash || null);
+
+    // Send handoff to all peers in room
+    if (peers.length && presenceState.ws?.readyState === WebSocket.OPEN) {
+      const fileNames = files.map(f => f.name).join(', ');
+      const count = peers.length;
+      peers.forEach(peer => {
+        presenceState.ws.send(JSON.stringify({
+          type: 'handoff',
+          targetId: peer.id,
+        payload: {
+          kind: 'torrent',
+          magnetURI,
+          infoHash: torrent.infoHash || null,
+          fileNames,
+          fileCount: files.length,
+        }
+      }));
+      });
+      setStatus('send-status', t('torrentSentToAll')(count), 'waiting');
+      // Also connect directly via presence (tracker-free)
+      _wtConnectRoomPeers(torrent, peers);
+    } else {
+      setStatus('send-status', t('torrentSeeding'), 'waiting');
+    }
+
+    // Live upload stats
+    const statsInterval = setInterval(() => {
+      if (torrent.destroyed) { clearInterval(statsInterval); return; }
+      updateMagnetStats(torrent);
+    }, 1000);
+
+    if (btn) btn.disabled = false;
+  });
+}
+
+function stopSeeding() {
+  if (_wtClient) {
+    _wtClient.destroy(() => { _wtClient = null; });
+  }
+  hideMagnetInfo();
+  setStatus('send-status', '');
+}
+
+async function receiveTorrent(magnetURI, sender) {
+  logSwarm('receiveTorrent start', { magnetURI, sender });
+  switchTab('receive');
+  setRecvSender('recv-from', sender);
+  setStatus('recv-status', t('torrentRecv'), 'waiting');
+  document.getElementById('recv-prog-wrap').style.display = 'block';
+  document.getElementById('recv-prog-bar').style.width = '0%';
+  document.getElementById('recv-prog-text').textContent = '';
+
+  try {
+    await loadWebTorrent();
+  } catch (e) {
+    setStatus('recv-status', '✗ ' + e.message, 'err');
+    return;
+  }
+
+  const client = getWtClient();
+  const infoHashFromMagnet = extractInfoHash(magnetURI) || currentSwarmMagnet;
+
+  // Remove any stale torrent with the same infoHash before re-adding.
+  // WebTorrent may auto-destroy a torrent (e.g. timeout with no peers) but keep it
+  // in its internal Map, causing client.get() to return a dead reference that blocks
+  // client.add(). We always want a fresh torrent so we can wire up SimplePeer.
+  const existingTorrent = infoHashFromMagnet
+    ? findTorrentByInfoHash(infoHashFromMagnet)
+    : (client.torrents.find(t => t.magnetURI === magnetURI) || client.get(magnetURI));
+  if (existingTorrent) {
+    logSwarm('existing torrent found', {
+      infoHash: existingTorrent.infoHash,
+      destroyed: existingTorrent.destroyed,
+      inList: client.torrents.includes(existingTorrent)
+    });
+    if (!existingTorrent.destroyed && client.torrents.includes(existingTorrent)) {
+      // Active torrent already exists — resume progress or retrigger downloads
+      if (existingTorrent.done) {
+        setStatus('recv-status', t('torrentDone'), 'ok');
+        triggerTorrentDownloads(existingTorrent);
+      } else {
+        setStatus('recv-status', t('torrentRecv'), 'waiting');
+      }
+      _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal));
+      return;
+    }
+    // Stale/destroyed reference — remove before re-adding
+    try {
+      existingTorrent.destroy?.();
+      logSwarm('destroyed stale torrent', existingTorrent.infoHash);
+    } catch (e) {
+      logSwarm('destroy error', e?.message);
+    }
+    try {
+      logSwarm('client.remove (object)');
+      client.remove(existingTorrent);
+    } catch (e) {
+      logSwarm('client.remove error', e?.message);
+    }
+  }
+
+  // client.add() returns the torrent synchronously; the callback fires only after
+  // metadata is fetched — which requires peers. We must wire up SimplePeer BEFORE
+  // the callback, otherwise we have a deadlock (no peers → no metadata → no callback
+  // → no peers).
+  logSwarm('client.add', magnetURI);
+  const torrent = client.add(magnetURI);
+
+  torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
+  torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
+
+  torrent.on('download', () => {
+    const p  = Math.round(torrent.progress * 100);
+    const dl = fmt(torrent.downloadSpeed);
+    document.getElementById('recv-prog-bar').style.width = p + '%';
+    document.getElementById('recv-prog-text').textContent = `${p}%  ↓${dl}/s`;
+  });
+
+  torrent.on('done', () => {
+    document.getElementById('recv-prog-bar').style.width = '100%';
+    setStatus('recv-status', t('torrentDone'), 'ok');
+    logSwarm('torrent done', torrent.infoHash);
+    triggerTorrentDownloads(torrent);
+  });
+
+  // Process any wt-signal offers already queued
+  if (_wtPendingSignals.length) {
+    logSwarm('flushing pending signals', { count: _wtPendingSignals.length, targetHash });
+    const remaining = [];
+    const targetHash = torrent.infoHash || null;
+    _wtPendingSignals.forEach(({ fromId, signal, infoHash }) => {
+      if (!targetHash || !infoHash || infoHash === targetHash) {
+        _wtHandleOffer(torrent, fromId, signal);
+      } else {
+        remaining.push({ fromId, signal, infoHash });
+      }
+    });
+    _wtPendingSignals.splice(0, _wtPendingSignals.length, ...remaining);
+  }
+}
+
+function triggerTorrentDownloads(torrent) {
+  if (!torrent?.files) return;
+  torrent.files.forEach(file => {
+    if (!file) return;
+    if (typeof file.blob === 'function') {
+      file.blob().then(blob => triggerDownload(blob, file.name)).catch(() => {});
+    } else if (typeof file.getBlob === 'function') {
+      file.getBlob((err, blob) => { if (!err) triggerDownload(blob, file.name); });
+    }
+  });
+}
+
 function handleIncomingHandoff(msg) {
   const payload = msg.payload || {};
+  const sender  = msg.from?.nickname || t('stranger');
+
+  if (payload.kind === 'swarm-publish') {
+    addSwarmEntry(payload.entry, sender);
+    return;
+  }
+  if (payload.kind === 'swarm-sync') {
+    (payload.entries || []).forEach(entry => addSwarmEntry(entry, entry?.fromNickname || sender));
+    return;
+  }
+  if (payload.kind === 'swarm-request') {
+    const requesterId = msg.from?.id;
+    if (requesterId) sendSwarmSync(requesterId);
+    return;
+  }
+  if (payload.kind === 'swarm-join' && payload.magnetURI) {
+    const requesterId = msg.from?.id;
+    if (!requesterId) return;
+    const requestedInfoHash = payload.infoHash || extractInfoHash(payload.magnetURI);
+    logSwarm('swarm-join received', { requesterId, infoHash: requestedInfoHash });
+    try {
+      const client = getWtClient();
+      const torrent = requestedInfoHash
+        ? findTorrentByInfoHash(requestedInfoHash)
+        : (client.get(payload.magnetURI) || client.torrents.find(t => t.magnetURI === payload.magnetURI));
+      if (!torrent) return;
+      const peer = presenceState.peers.get(requesterId) || { id: requesterId };
+      _wtConnectRoomPeers(torrent, [peer]);
+    } catch {}
+    return;
+  }
+
+  if (payload.kind === 'torrent') {
+    const label = payload.fileCount > 1
+      ? t('filesLabel')(payload.fileCount)
+      : (payload.fileNames || t('fileGeneric'));
+    setStatus('recv-status', t('torrentIncoming')(sender, label), 'waiting');
+    receiveTorrent(payload.magnetURI, sender);
+    return;
+  }
+
+  if (payload.kind === 'wt-signal') {
+    const fromId = msg.from?.id;
+    if (fromId) handleWtSignal(fromId, payload.signal, payload.infoHash || '');
+    return;
+  }
+
   if (!payload.path) return;
-  const sender = msg.from?.nickname || t('stranger');
 
   if (payload.kind === 'text') {
     switchTab('text');
@@ -1871,6 +2561,7 @@ function setFiles(files) {
   setStatus('send-status', '');
   document.getElementById('prog-wrap').style.display = 'none';
   document.getElementById('prog-bar').style.width = '0%';
+  updateSendAllBtns();
 
   // if peer already selected, auto-start
   if (selPeerId) {
@@ -2028,6 +2719,8 @@ function resetSend() {
   document.getElementById('send-btn').disabled = true;
   document.getElementById('prog-bar').style.width = '0%';
   setStatus('send-status', '');
+  hideMagnetInfo();
+  updateSendAllBtns();
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────
@@ -2687,6 +3380,7 @@ const savedLang   = localStorage.getItem('lang');
 const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
 setLang(savedLang || browserLang);
 renderHistory();
+renderSwarmList();
 </script>
 </body>
 </html>

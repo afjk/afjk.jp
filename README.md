@@ -56,6 +56,7 @@ npm publish --registry https://upm.afjk.jp
 - **複数ファイル一括送信**: ドロップゾーンに複数ファイルをドロップして一括転送
 - **テキスト送受信**: テキストや URL を直接送受信。受信履歴を localStorage に保存
 - **転送モード**: WebRTC P2P を優先試行し、失敗時は piping-server 中継にフォールバック
+- **スウォーム転送**: WebTorrent + SimplePeer による BitTorrent 方式の実験的転送。ルーム内の全員にマグネットリンクを送信し、プレゼンスサーバーをシグナリングに使ったトラッカー不要の P2P 転送
 - **デバイスピン留め**: よく使うデバイスを IndexedDB に保存して優先表示
 
 詳細な技術仕様は [`docs/pipe-spec.md`](docs/pipe-spec.md) を参照。
