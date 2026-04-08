@@ -2315,6 +2315,7 @@ async function receiveTorrent(magnetURI, sender) {
     logSwarm('torrent done', torrent.infoHash);
     triggerTorrentDownloads(torrent);
     registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
+    reportTransfer('torrent', torrent.length || 0);
   });
 
   // Process any wt-signal offers already queued

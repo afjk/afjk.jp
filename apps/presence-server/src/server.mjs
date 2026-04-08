@@ -11,7 +11,7 @@ const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 
 // ── Stats persistence ─────────────────────────────────────────────────────────
-const EMPTY_STATS = () => ({ p2p: { count: 0, bytes: 0 }, pipe: { count: 0, bytes: 0 } });
+const EMPTY_STATS = () => ({ p2p: { count: 0, bytes: 0 }, pipe: { count: 0, bytes: 0 }, torrent: { count: 0, bytes: 0 } });
 
 function loadStats() {
   try {
@@ -291,7 +291,8 @@ const server = createServer((req, res) => {
     req.on('end', () => {
       try {
         const { type, bytes } = JSON.parse(body);
-        if (type === 'p2p' || type === 'pipe') {
+        if (type === 'p2p' || type === 'pipe' || type === 'torrent') {
+          if (!stats[type]) stats[type] = { count: 0, bytes: 0 };
           stats[type].count += 1;
           stats[type].bytes += Number(bytes) || 0;
           saveStats(stats);

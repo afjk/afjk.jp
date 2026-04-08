@@ -990,6 +990,14 @@
         <div class="stat-sub">piping-server</div>
       </div>
       <div class="stat-card">
+        <div class="stat-value" id="stat-torrent">—</div>
+        <div class="stat-label">
+          <span data-ja>ルーム共有</span>
+          <span data-en>Room Share</span>
+        </div>
+        <div class="stat-sub">WebTorrent</div>
+      </div>
+      <div class="stat-card">
         <div class="stat-value" id="stat-bytes">—</div>
         <div class="stat-label">
           <span data-ja>転送量</span>
@@ -1216,13 +1224,15 @@ function fmtBytes(b) {
     const res = await fetch('https://afjk.jp/presence/stats');
     if (!res.ok) return;
     const s = await res.json();
-    const p2p   = s.p2p   || { count: 0, bytes: 0 };
-    const pipe  = s.pipe  || { count: 0, bytes: 0 };
-    const total = p2p.count + pipe.count;
-    document.getElementById('stat-total').textContent = total.toLocaleString();
-    document.getElementById('stat-p2p').textContent   = p2p.count.toLocaleString();
-    document.getElementById('stat-relay').textContent = pipe.count.toLocaleString();
-    document.getElementById('stat-bytes').textContent = fmtBytes(pipe.bytes);
+    const p2p     = s.p2p     || { count: 0, bytes: 0 };
+    const pipe    = s.pipe    || { count: 0, bytes: 0 };
+    const torrent = s.torrent || { count: 0, bytes: 0 };
+    const total   = p2p.count + pipe.count + torrent.count;
+    document.getElementById('stat-total').textContent   = total.toLocaleString();
+    document.getElementById('stat-p2p').textContent     = p2p.count.toLocaleString();
+    document.getElementById('stat-relay').textContent   = pipe.count.toLocaleString();
+    document.getElementById('stat-torrent').textContent = torrent.count.toLocaleString();
+    document.getElementById('stat-bytes').textContent   = fmtBytes(pipe.bytes);
   } catch {}
 })();
 
