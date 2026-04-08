@@ -2095,13 +2095,15 @@ async function removeLocalArchive(infoHash) {
     try { torrent.destroy(); } catch {}
   }
   unregisterLocalSeederInfoHash(infoHash);
+  // Always broadcast removal to peers — even if never actively seeding (catalog-only after reload),
+  // unregisterLocalSeederInfoHash is a no-op and peers would keep the stale entry.
+  presenceState.peers.forEach((_, peerId) => {
+    sendSwarmMessage(peerId, { kind: 'swarm-seeder', infoHash, active: false, peerId: presenceState.id });
+  });
   const entry = findSwarmEntryByInfoHash(infoHash);
   if (entry) {
     entry.seeders?.delete(presenceState.id);
-    if (localCatalog.has(infoHash)) {
-      entry.catalogOnly = true;
-      renderSwarmList();
-    } else if (!entry.seeders || !entry.seeders.size) {
+    if (!entry.seeders || !entry.seeders.size) {
       removeSwarmEntry(infoHash);
     } else {
       renderSwarmList();
