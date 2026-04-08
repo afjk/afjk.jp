@@ -968,6 +968,8 @@ const I18N = {
     swarmEmpty:        'まだ共有されているトレントはありません。',
     swarmDownload:     'ダウンロード',
     swarmFrom:         name => `共有者: ${name}`,
+    swarmCatalogTag:   'ローカル保存',
+    swarmCatalogOnly:  'アーカイブ表示のみ',
   },
   en: {
     copying:            'Copied ✓',
@@ -1047,6 +1049,8 @@ const I18N = {
     swarmEmpty:        'No torrents have been shared yet.',
     swarmDownload:     'Download',
     swarmFrom:         name => `Shared by ${name}`,
+    swarmCatalogTag:   'Catalog only',
+    swarmCatalogOnly:  'Catalog entry',
   }
 };
 
@@ -1121,6 +1125,7 @@ const PRESENCE_ENDPOINT = PRESENCE_OVERRIDE || DEFAULT_PRESENCE;
 const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null, retries: 0 };
 const swarmState = { entries: new Map(), requestedPeerIds: new Set() };
 let currentSwarmMagnet = null;
+const localSeedInfoHashes = new Set();
 let deviceName = localStorage.getItem('pipe.deviceName') || defaultDeviceName();
 const deviceInfo = detectDeviceInfo();
 const presenceStatusEl = document.getElementById('presence-status');
@@ -1128,6 +1133,88 @@ const presenceRoomEl   = document.getElementById('presence-room');
 const deviceNameLabel  = document.getElementById('device-name-label');
 const deviceNameBtn    = document.getElementById('device-name-btn');
 const peerGrid         = document.getElementById('peer-grid');
+
+// ── Swarm catalog storage (metadata only) ─────────────────────────────────────
+const SWARM_IDB_NAME    = 'pipe-swarm';
+const SWARM_IDB_STORE   = 'entries';
+const SWARM_IDB_VERSION = 1;
+let _swarmDb = null;
+let _swarmCatalogLoaded = false;
+let _swarmCatalogAnnouncedForId = null;
+
+function openSwarmDb() {
+  if (_swarmDb) return Promise.resolve(_swarmDb);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(SWARM_IDB_NAME, SWARM_IDB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(SWARM_IDB_STORE)) {
+        db.createObjectStore(SWARM_IDB_STORE, { keyPath: 'infoHash' });
+      }
+    };
+    req.onsuccess = e => { _swarmDb = e.target.result; resolve(_swarmDb); };
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function swarmIDBPut(entry) {
+  try {
+    const db = await openSwarmDb();
+    await new Promise((resolve, reject) => {
+      const tx  = db.transaction(SWARM_IDB_STORE, 'readwrite');
+      const req = tx.objectStore(SWARM_IDB_STORE).put(entry);
+      req.onsuccess = () => resolve();
+      req.onerror   = () => reject(req.error);
+    });
+  } catch {}
+}
+
+async function swarmIDBGetAll() {
+  try {
+    const db = await openSwarmDb();
+    return await new Promise(resolve => {
+      const tx  = db.transaction(SWARM_IDB_STORE, 'readonly');
+      const req = tx.objectStore(SWARM_IDB_STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror   = () => resolve([]);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function loadLocalSwarmCatalog() {
+  if (_swarmCatalogLoaded) return;
+  _swarmCatalogLoaded = true;
+  const rows = await swarmIDBGetAll();
+  rows.forEach(row => {
+    addSwarmEntry({
+      magnetURI: row.magnetURI,
+      fileNames: row.fileNames,
+      fileCount: row.fileCount,
+      totalBytes: row.totalBytes,
+      infoHash: row.infoHash,
+      fromNickname: deviceName || t('unknownDevice'),
+      senderId: null,
+      createdAt: row.savedAt,
+      catalogOnly: true,
+    });
+  });
+}
+
+function announceCatalogEntriesOnce() {
+  if (!presenceState.peers.size) return;
+  if (_swarmCatalogAnnouncedForId === presenceState.id) return;
+  _swarmCatalogAnnouncedForId = presenceState.id;
+  const catalogEntries = Array.from(swarmState.entries.values())
+    .filter(e => e.catalogOnly);
+  if (!catalogEntries.length) return;
+  catalogEntries.forEach(entry => {
+    presenceState.peers.forEach((_, peerId) => {
+      sendSwarmMessage(peerId, { kind: 'swarm-catalog', entry: serializeSwarmEntry(entry) });
+    });
+  });
+}
 
 // ── Pairing & room state ──────────────────────────────────────────────────────
 // pairedIds: Set<peerId string> — loaded from IndexedDB on init
@@ -1241,7 +1328,8 @@ function serializeSwarmEntry(entry) {
     senderId: entry.senderId,
     infoHash: entry.infoHash,
     createdAt: entry.createdAt,
-    seeders: Array.from(entry.seeders || [])
+    seeders: Array.from(entry.seeders || []),
+    catalogOnly: Boolean(entry.catalogOnly)
   };
 }
 
@@ -1417,6 +1505,7 @@ function handlePresenceMessage(ev) {
       presenceState.peers = new Map((data.peers || []).map(p => [p.id, p]));
       renderPeerGrid();
       requestSwarmSyncFromPeers();
+      announceCatalogEntriesOnce();
       pruneSwarmEntries();
       // Auto-select a paired peer if exactly one is present and none selected yet
       if (!selPeerId) {
@@ -1836,21 +1925,36 @@ function normalizeSwarmEntry(rawEntry, senderFallback) {
     senderId: rawEntry.senderId || null,
     infoHash,
     createdAt: rawEntry.createdAt || Date.now(),
-    seeders
+    seeders,
+    catalogOnly: Boolean(rawEntry.catalogOnly)
   };
 }
 
 function addSwarmEntry(rawEntry, senderFallback) {
   const entry = normalizeSwarmEntry(rawEntry, senderFallback);
   if (!entry) return;
+  const key = entry.infoHash || entry.magnetURI;
+  if (!key) return;
+  const existing = swarmState.entries.get(key);
+  if (existing) {
+    if (entry.fileNames?.length) existing.fileNames = entry.fileNames;
+    if (entry.totalBytes) existing.totalBytes = entry.totalBytes;
+    if (entry.fromNickname) existing.fromNickname = entry.fromNickname;
+    if (entry.createdAt) existing.createdAt = entry.createdAt;
+    existing.catalogOnly = Boolean(existing.catalogOnly && entry.catalogOnly);
+    entry.seeders?.forEach(id => existing.seeders.add(id));
+    renderSwarmList();
+    return existing;
+  }
   if (entry.senderId) entry.seeders.add(entry.senderId);
-  swarmState.entries.set(entry.magnetURI, entry);
+  swarmState.entries.set(key, entry);
   renderSwarmList();
+  return entry;
 }
 
-function removeSwarmEntry(magnetURI) {
-  if (!magnetURI) return;
-  if (swarmState.entries.delete(magnetURI)) {
+function removeSwarmEntry(infoHashOrMagnet) {
+  if (!infoHashOrMagnet) return;
+  if (swarmState.entries.delete(infoHashOrMagnet)) {
     renderSwarmList();
   }
 }
@@ -1859,6 +1963,10 @@ function requestSwarmPeerConnection(entry) {
   const infoHash = entry?.infoHash || extractInfoHash(entry?.magnetURI);
   if (!infoHash) {
     logSwarm('requestSwarmPeerConnection skipped — missing infoHash');
+    return;
+  }
+  if (entry.catalogOnly) {
+    logSwarm('requestSwarmPeerConnection skipped — catalog only');
     return;
   }
   const targets = new Set();
@@ -1912,6 +2020,8 @@ function renderSwarmList() {
     const metaBits = [];
     if (entry.totalBytes) metaBits.push(fmt(entry.totalBytes));
     if (entry.fromNickname) metaBits.push(t('swarmFrom')(entry.fromNickname));
+    const isCatalogOnly = entry.catalogOnly && (!entry.seeders || !entry.seeders.size);
+    if (isCatalogOnly) metaBits.push(t('swarmCatalogTag'));
     meta.textContent = metaBits.join(' · ');
     main.appendChild(name);
     main.appendChild(meta);
@@ -1920,13 +2030,18 @@ function renderSwarmList() {
     const dlBtn = document.createElement('button');
     dlBtn.type = 'button';
     dlBtn.className = 'btn btn-ghost';
-    dlBtn.textContent = t('swarmDownload');
-    dlBtn.onclick = () => {
-      const label = swarmEntryLabel(entry);
-      requestSwarmPeerConnection(entry);
-      setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
-      receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
-    };
+    if (isCatalogOnly) {
+      dlBtn.textContent = t('swarmCatalogOnly');
+      dlBtn.disabled = true;
+    } else {
+      dlBtn.textContent = t('swarmDownload');
+      dlBtn.onclick = () => {
+        const label = swarmEntryLabel(entry);
+        requestSwarmPeerConnection(entry);
+        setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
+        receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
+      };
+    }
     actions.appendChild(dlBtn);
     item.appendChild(main);
     item.appendChild(actions);
@@ -1938,11 +2053,12 @@ function pruneSwarmEntries() {
   const activeIds = new Set(presenceState.peers.keys());
   if (presenceState.id) activeIds.add(presenceState.id);
   let changed = false;
-  swarmState.entries.forEach((entry, magnetURI) => {
+  swarmState.entries.forEach((entry, key) => {
+    if (entry.catalogOnly) return;
     const seeders = entry.seeders || new Set();
     const hasActiveSeeder = Array.from(seeders).some(id => activeIds.has(id));
     if (!hasActiveSeeder) {
-      swarmState.entries.delete(magnetURI);
+      swarmState.entries.delete(key);
       changed = true;
     }
   });
@@ -1961,7 +2077,7 @@ function updateEntrySeeder(infoHash, peerId, active) {
     entry.senderId = peerId;
   }
   if (!active && entry.seeders.size === 0) {
-    removeSwarmEntry(entry.magnetURI);
+    removeSwarmEntry(infoHash);
   } else if (entry.seeders.size !== beforeSize) {
     renderSwarmList();
   }
@@ -2023,12 +2139,21 @@ function publishLocalSwarmEntry(magnetURI, files, infoHash = null) {
     fromNickname: deviceName || t('unknownDevice'),
     senderId: presenceState.id || null,
     infoHash: knownInfoHash,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    catalogOnly: false,
   };
   currentSwarmMagnet = magnetURI;
   addSwarmEntry(entry, entry.fromNickname);
   broadcastSwarmPublish(entry);
   registerLocalSeederInfoHash(knownInfoHash);
+  swarmIDBPut({
+    infoHash: knownInfoHash,
+    magnetURI,
+    fileNames: entry.fileNames,
+    fileCount: entry.fileCount,
+    totalBytes: entry.totalBytes,
+    savedAt: entry.createdAt,
+  });
 }
 
 function findTorrentByInfoHash(infoHash) {
@@ -2038,10 +2163,7 @@ function findTorrentByInfoHash(infoHash) {
 
 function findSwarmEntryByInfoHash(infoHash) {
   if (!infoHash) return null;
-  for (const entry of swarmState.entries.values()) {
-    if (entry.infoHash === infoHash) return entry;
-  }
-  return null;
+  return swarmState.entries.get(infoHash) || null;
 }
 
 function getWtClient() {
@@ -2316,6 +2438,14 @@ async function receiveTorrent(magnetURI, sender) {
     triggerTorrentDownloads(torrent);
     registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
     reportTransfer('torrent', torrent.length || 0);
+    swarmIDBPut({
+      infoHash: torrent.infoHash || extractInfoHash(magnetURI),
+      magnetURI,
+      fileNames: torrent.files.map(f => f.name),
+      fileCount: torrent.files.length,
+      totalBytes: torrent.length || 0,
+      savedAt: Date.now(),
+    });
   });
 
   // Process any wt-signal offers already queued
@@ -2352,6 +2482,10 @@ function handleIncomingHandoff(msg) {
 
   if (payload.kind === 'swarm-publish') {
     addSwarmEntry(payload.entry, sender);
+    return;
+  }
+  if (payload.kind === 'swarm-catalog') {
+    addSwarmEntry({ ...payload.entry, catalogOnly: true, senderId: null }, sender);
     return;
   }
   if (payload.kind === 'swarm-sync') {
@@ -3506,6 +3640,7 @@ const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
 setLang(savedLang || browserLang);
 renderHistory();
 renderSwarmList();
+loadLocalSwarmCatalog();
 
 window.addEventListener('beforeunload', () => {
   unregisterAllLocalSeeders();
