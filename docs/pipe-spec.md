@@ -416,16 +416,16 @@ graph LR
 
 ---
 
-## 13. スウォーム転送（実験的）
+## 13. ルームに保存（実験的）
 
-WebTorrent + SimplePeer による BitTorrent 方式のファイル転送。ルーム内に他のデバイスがいるときにのみ「スウォーム」ボタンが表示される。外部トラッカーは使用しない（`tracker: false`）。
+WebTorrent + SimplePeer による BitTorrent 方式のファイル転送。ルーム内に他のデバイスがいるときにのみ「ルームに保存」ボタンが表示される。外部トラッカーは使用しない（`tracker: false`）。
 
 ### 外部ライブラリ
 
 | ライブラリ | 読み込み方式 | タイミング |
 |---|---|---|
-| `webtorrent` (CDN) | ES Module dynamic `import()` | スウォームボタン押下時のみ |
-| `simple-peer` (CDN) | `<script>` タグ（UMD）| スウォームボタン押下時のみ |
+| `webtorrent` (CDN) | ES Module dynamic `import()` | 「ルームに保存」ボタン押下時のみ |
+| `simple-peer` (CDN) | `<script>` タグ（UMD）| 「ルームに保存」ボタン押下時のみ |
 
 ### 転送フロー
 
