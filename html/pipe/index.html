@@ -1217,6 +1217,7 @@ const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
 const logSwarm = (...args) => { try { console.debug('[swarm]', ...args); } catch {} };
+const localSeedInfoHashes = new Set();
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 function base32ToHex(str) {
@@ -1228,6 +1229,20 @@ function base32ToHex(str) {
   }
   const hex = bits.match(/.{4}/g)?.map(chunk => parseInt(chunk, 2).toString(16)).join('') || '';
   return hex || null;
+}
+
+function serializeSwarmEntry(entry) {
+  return {
+    magnetURI: entry.magnetURI,
+    fileNames: entry.fileNames,
+    fileCount: entry.fileCount,
+    totalBytes: entry.totalBytes,
+    fromNickname: entry.fromNickname,
+    senderId: entry.senderId,
+    infoHash: entry.infoHash,
+    createdAt: entry.createdAt,
+    seeders: Array.from(entry.seeders || [])
+  };
 }
 
 function extractInfoHash(magnetURI) {
@@ -1795,13 +1810,13 @@ function sendSwarmMessage(targetId, payload) {
 
 function broadcastSwarmPublish(entry) {
   presenceState.peers.forEach((_, peerId) => {
-    sendSwarmMessage(peerId, { kind: 'swarm-publish', entry });
+    sendSwarmMessage(peerId, { kind: 'swarm-publish', entry: serializeSwarmEntry(entry) });
   });
 }
 
 function sendSwarmSync(targetId) {
   if (!swarmState.entries.size) return;
-  const entries = Array.from(swarmState.entries.values()).map(entry => ({ ...entry }));
+  const entries = Array.from(swarmState.entries.values()).map(entry => serializeSwarmEntry(entry));
   sendSwarmMessage(targetId, { kind: 'swarm-sync', entries });
 }
 
@@ -1811,6 +1826,7 @@ function normalizeSwarmEntry(rawEntry, senderFallback) {
   const fileCount = Number(rawEntry.fileCount) || fileNames.length || 1;
   const totalBytes = Number(rawEntry.totalBytes) || 0;
   const infoHash = rawEntry.infoHash || extractInfoHash(rawEntry.magnetURI);
+  const seeders = new Set(Array.isArray(rawEntry.seeders) ? rawEntry.seeders : []);
   return {
     magnetURI: rawEntry.magnetURI,
     fileNames,
@@ -1819,13 +1835,15 @@ function normalizeSwarmEntry(rawEntry, senderFallback) {
     fromNickname: rawEntry.fromNickname || senderFallback || t('stranger'),
     senderId: rawEntry.senderId || null,
     infoHash,
-    createdAt: rawEntry.createdAt || Date.now()
+    createdAt: rawEntry.createdAt || Date.now(),
+    seeders
   };
 }
 
 function addSwarmEntry(rawEntry, senderFallback) {
   const entry = normalizeSwarmEntry(rawEntry, senderFallback);
   if (!entry) return;
+  if (entry.senderId) entry.seeders.add(entry.senderId);
   swarmState.entries.set(entry.magnetURI, entry);
   renderSwarmList();
 }
@@ -1921,7 +1939,9 @@ function pruneSwarmEntries() {
   if (presenceState.id) activeIds.add(presenceState.id);
   let changed = false;
   swarmState.entries.forEach((entry, magnetURI) => {
-    if (entry.senderId && !activeIds.has(entry.senderId)) {
+    const seeders = entry.seeders || new Set();
+    const hasActiveSeeder = Array.from(seeders).some(id => activeIds.has(id));
+    if (!hasActiveSeeder) {
       swarmState.entries.delete(magnetURI);
       changed = true;
     }
@@ -1929,12 +1949,62 @@ function pruneSwarmEntries() {
   if (changed) renderSwarmList();
 }
 
+function updateEntrySeeder(infoHash, peerId, active) {
+  if (!infoHash || !peerId) return;
+  const entry = findSwarmEntryByInfoHash(infoHash);
+  if (!entry) return;
+  entry.seeders = entry.seeders || new Set();
+  const beforeSize = entry.seeders.size;
+  if (active) entry.seeders.add(peerId);
+  else entry.seeders.delete(peerId);
+  if (active && entry.senderId === peerId) {
+    entry.senderId = peerId;
+  }
+  if (!active && entry.seeders.size === 0) {
+    removeSwarmEntry(entry.magnetURI);
+  } else if (entry.seeders.size !== beforeSize) {
+    renderSwarmList();
+  }
+}
+
+function announceSeeder(infoHash, active) {
+  if (!infoHash) return;
+  updateEntrySeeder(infoHash, presenceState.id, active);
+  presenceState.peers.forEach((_, peerId) => {
+    sendSwarmMessage(peerId, { kind: 'swarm-seeder', infoHash, active, peerId: presenceState.id });
+  });
+}
+
+function registerLocalSeederInfoHash(infoHash) {
+  if (!infoHash || localSeedInfoHashes.has(infoHash)) return;
+  localSeedInfoHashes.add(infoHash);
+  announceSeeder(infoHash, true);
+}
+
+function unregisterLocalSeederInfoHash(infoHash) {
+  if (!infoHash || !localSeedInfoHashes.has(infoHash)) return;
+  localSeedInfoHashes.delete(infoHash);
+  announceSeeder(infoHash, false);
+}
+
+function unregisterAllLocalSeeders() {
+  Array.from(localSeedInfoHashes).forEach(hash => unregisterLocalSeederInfoHash(hash));
+}
+
 function updateLocalSwarmOwner(oldId, newId) {
   if (!oldId || !newId || oldId === newId) return;
   let changed = false;
   swarmState.entries.forEach(entry => {
+    entry.seeders = entry.seeders || new Set();
     if (entry.senderId === oldId) {
       entry.senderId = newId;
+      entry.seeders?.delete(oldId);
+      entry.seeders?.add(newId);
+      changed = true;
+    }
+    if (entry.seeders?.has(oldId)) {
+      entry.seeders.delete(oldId);
+      entry.seeders.add(newId);
       changed = true;
     }
   });
@@ -1958,11 +2028,20 @@ function publishLocalSwarmEntry(magnetURI, files, infoHash = null) {
   currentSwarmMagnet = magnetURI;
   addSwarmEntry(entry, entry.fromNickname);
   broadcastSwarmPublish(entry);
+  registerLocalSeederInfoHash(knownInfoHash);
 }
 
 function findTorrentByInfoHash(infoHash) {
   if (!infoHash || !_wtClient?.torrents?.length) return null;
   return _wtClient.torrents.find(t => t.infoHash === infoHash) || null;
+}
+
+function findSwarmEntryByInfoHash(infoHash) {
+  if (!infoHash) return null;
+  for (const entry of swarmState.entries.values()) {
+    if (entry.infoHash === infoHash) return entry;
+  }
+  return null;
 }
 
 function getWtClient() {
@@ -2150,6 +2229,7 @@ function stopSeeding() {
   if (_wtClient) {
     _wtClient.destroy(() => { _wtClient = null; });
   }
+  unregisterAllLocalSeeders();
   hideMagnetInfo();
   setStatus('send-status', '');
 }
@@ -2234,6 +2314,7 @@ async function receiveTorrent(magnetURI, sender) {
     setStatus('recv-status', t('torrentDone'), 'ok');
     logSwarm('torrent done', torrent.infoHash);
     triggerTorrentDownloads(torrent);
+    registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
   });
 
   // Process any wt-signal offers already queued
@@ -2295,6 +2376,12 @@ function handleIncomingHandoff(msg) {
       const peer = presenceState.peers.get(requesterId) || { id: requesterId };
       _wtConnectRoomPeers(torrent, [peer]);
     } catch {}
+    return;
+  }
+  if (payload.kind === 'swarm-seeder') {
+    const infoHash = payload.infoHash || extractInfoHash(payload.magnetURI);
+    const peerId   = payload.peerId || msg.from?.id;
+    updateEntrySeeder(infoHash, peerId, payload.active);
     return;
   }
 
@@ -3418,6 +3505,10 @@ const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
 setLang(savedLang || browserLang);
 renderHistory();
 renderSwarmList();
+
+window.addEventListener('beforeunload', () => {
+  unregisterAllLocalSeeders();
+});
 </script>
 </body>
 </html>
