@@ -1183,6 +1183,21 @@ async function swarmIDBGetAll() {
   }
 }
 
+async function swarmIDBGet(infoHash) {
+  if (!infoHash) return null;
+  try {
+    const db = await openSwarmDb();
+    return await new Promise(resolve => {
+      const tx  = db.transaction(SWARM_IDB_STORE, 'readonly');
+      const req = tx.objectStore(SWARM_IDB_STORE).get(infoHash);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror   = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function loadLocalSwarmCatalog() {
   if (_swarmCatalogLoaded) return;
   _swarmCatalogLoaded = true;
@@ -1970,10 +1985,14 @@ async function persistLocalArchive(infoHash, magnetURI, fileObjs) {
       let blob;
       if (file instanceof Blob) {
         blob = file;
+      } else if (file.blob instanceof Blob) {
+        blob = file.blob;
       } else if (typeof file.blob === 'function') {
         blob = await file.blob();
       } else if (typeof file.getBlob === 'function') {
         blob = await new Promise(resolve => file.getBlob((err, b) => resolve(err ? null : b)));
+      } else if (file.blobPromise instanceof Promise) {
+        blob = await file.blobPromise;
       } else {
         blob = new Blob([file]);
       }
@@ -2006,7 +2025,11 @@ async function seedStoredEntry(infoHash) {
   if (!infoHash) return null;
   const existing = findTorrentByInfoHash(infoHash);
   if (existing) return existing;
-  const stored = localCatalog.get(infoHash);
+  let stored = localCatalog.get(infoHash);
+  if (!stored) {
+    stored = await swarmIDBGet(infoHash);
+    if (stored) localCatalog.set(infoHash, stored);
+  }
   if (!stored?.files?.length) return null;
   try {
     const files = stored.files.map(f =>
