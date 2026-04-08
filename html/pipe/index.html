@@ -1121,7 +1121,6 @@ const PRESENCE_ENDPOINT = PRESENCE_OVERRIDE || DEFAULT_PRESENCE;
 const presenceState = { ws: null, id: null, peers: new Map(), reconnectTimer: null, retries: 0 };
 const swarmState = { entries: new Map(), requestedPeerIds: new Set() };
 let currentSwarmMagnet = null;
-let _swarmIDBAnnouncedId = null; // tracks which session we've announced IDB entries for
 let deviceName = localStorage.getItem('pipe.deviceName') || defaultDeviceName();
 const deviceInfo = detectDeviceInfo();
 const presenceStatusEl = document.getElementById('presence-status');
@@ -1138,52 +1137,6 @@ let activeRoomCode = ROOM_CODE;
 let _pairingDb = null;  // IDBDatabase handle
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
-// ── Swarm catalog IDB (pipe-swarm) ──────────────────────────────────────────
-const SWARM_IDB_NAME    = 'pipe-swarm';
-const SWARM_IDB_STORE   = 'entries';
-const SWARM_IDB_VERSION = 1;
-let _swarmDb = null;
-
-function openSwarmDb() {
-  if (_swarmDb) return Promise.resolve(_swarmDb);
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(SWARM_IDB_NAME, SWARM_IDB_VERSION);
-    req.onupgradeneeded = e => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(SWARM_IDB_STORE)) {
-        db.createObjectStore(SWARM_IDB_STORE, { keyPath: 'infoHash' });
-      }
-    };
-    req.onsuccess = e => { _swarmDb = e.target.result; resolve(_swarmDb); };
-    req.onerror   = () => reject(req.error);
-  });
-}
-
-async function swarmIDBPut(entry) {
-  try {
-    const db = await openSwarmDb();
-    return new Promise((resolve, reject) => {
-      const tx  = db.transaction(SWARM_IDB_STORE, 'readwrite');
-      const req = tx.objectStore(SWARM_IDB_STORE).put(entry);
-      req.onsuccess = () => resolve();
-      req.onerror   = () => reject(req.error);
-    });
-  } catch {}
-}
-
-async function swarmIDBGetAll() {
-  try {
-    const db = await openSwarmDb();
-    return new Promise(resolve => {
-      const tx  = db.transaction(SWARM_IDB_STORE, 'readonly');
-      const req = tx.objectStore(SWARM_IDB_STORE).getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror   = () => resolve([]);
-    });
-  } catch { return []; }
-}
-
-// ── Pairing IDB (pipe-pairing) ───────────────────────────────────────────────
 const IDB_NAME    = 'pipe-pairing';
 const IDB_VERSION = 1;
 const IDB_STORE   = 'pairs';
@@ -1464,7 +1417,6 @@ function handlePresenceMessage(ev) {
       presenceState.peers = new Map((data.peers || []).map(p => [p.id, p]));
       renderPeerGrid();
       requestSwarmSyncFromPeers();
-      announceSwarmFromIDB();
       pruneSwarmEntries();
       // Auto-select a paired peer if exactly one is present and none selected yet
       if (!selPeerId) {
@@ -1838,31 +1790,6 @@ function loadSimplePeer() {
 }
 
 // ── Swarm (room torrent list) ────────────────────────────────────────────────
-
-// On first peers arrival per session, broadcast IDB catalog to room.
-// senderId is null — we announce metadata only, not claiming to be an active seeder.
-async function announceSwarmFromIDB() {
-  if (!presenceState.peers.size) return;
-  if (_swarmIDBAnnouncedId === presenceState.id) return;
-  _swarmIDBAnnouncedId = presenceState.id;
-  const entries = await swarmIDBGetAll();
-  if (!entries.length) return;
-  for (const e of entries) {
-    const raw = {
-      magnetURI:    e.magnetURI,
-      fileNames:    e.fileNames,
-      fileCount:    e.fileCount,
-      totalBytes:   e.totalBytes,
-      infoHash:     e.infoHash,
-      fromNickname: deviceName || t('unknownDevice'),
-      senderId:     null,   // catalog entry — not actively seeding
-      createdAt:    e.savedAt,
-    };
-    addSwarmEntry(raw);
-    broadcastSwarmPublish(raw);
-  }
-}
-
 function requestSwarmSyncFromPeers() {
   if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
   const activeIds = new Set(presenceState.peers.keys());
@@ -2263,14 +2190,6 @@ async function seedFilesAsTorrent() {
     const magnetURI = torrent.magnetURI;
     showMagnetInfo(magnetURI);
     publishLocalSwarmEntry(magnetURI, files, torrent.infoHash || null);
-    swarmIDBPut({
-      infoHash:   torrent.infoHash,
-      magnetURI,
-      fileNames:  files.map(f => f.name),
-      fileCount:  files.length,
-      totalBytes: files.reduce((s, f) => s + (f.size || 0), 0),
-      savedAt:    Date.now(),
-    });
 
     // Send handoff to all peers in room
     if (peers.length && presenceState.ws?.readyState === WebSocket.OPEN) {
@@ -2397,14 +2316,6 @@ async function receiveTorrent(magnetURI, sender) {
     triggerTorrentDownloads(torrent);
     registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
     reportTransfer('torrent', torrent.length || 0);
-    swarmIDBPut({
-      infoHash:   torrent.infoHash || extractInfoHash(magnetURI),
-      magnetURI,
-      fileNames:  torrent.files.map(f => f.name),
-      fileCount:  torrent.files.length,
-      totalBytes: torrent.length || 0,
-      savedAt:    Date.now(),
-    });
   });
 
   // Process any wt-signal offers already queued
