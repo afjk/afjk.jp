@@ -1865,6 +1865,7 @@ function stopSeeding() {
 }
 
 async function receiveTorrent(magnetURI, sender) {
+  console.log('[wt] receiveTorrent START, sender:', sender, 'pendingSignals:', _wtPendingSignals.length);
   switchTab('receive');
   setRecvSender('recv-from', sender);
   setStatus('recv-status', t('torrentRecv'), 'waiting');
@@ -1874,7 +1875,9 @@ async function receiveTorrent(magnetURI, sender) {
 
   try {
     await loadWebTorrent();
+    console.log('[wt] receiveTorrent: WebTorrent loaded OK');
   } catch (e) {
+    console.warn('[wt] receiveTorrent: loadWebTorrent failed:', e.message);
     setStatus('recv-status', '✗ ' + e.message, 'err');
     return;
   }
@@ -1882,7 +1885,7 @@ async function receiveTorrent(magnetURI, sender) {
   const client = getWtClient();
 
   // Avoid duplicate downloads
-  if (client.get(magnetURI)) return;
+  if (client.get(magnetURI)) { console.log('[wt] receiveTorrent: already have this torrent, skipping'); return; }
 
   // client.add() returns the torrent synchronously; the callback fires only after
   // metadata is fetched — which requires peers. We must wire up SimplePeer BEFORE
@@ -1928,6 +1931,7 @@ function handleIncomingHandoff(msg) {
   const sender  = msg.from?.nickname || t('stranger');
 
   if (payload.kind === 'torrent') {
+    console.log('[wt] handleIncomingHandoff: kind=torrent from', sender, 'magnet:', payload.magnetURI?.slice(0, 40));
     const label = payload.fileCount > 1
       ? t('filesLabel')(payload.fileCount)
       : (payload.fileNames || t('fileGeneric'));
