@@ -2057,19 +2057,8 @@ async function seedStoredEntry(infoHash) {
       new File([f.blob], f.name || 'file', { type: f.type || 'application/octet-stream' })
     );
     const client = getWtClient();
-    const torrent = client.seed(files);
     return await new Promise(resolve => {
-      torrent.once('ready', () => {
-        const entry = findSwarmEntryByInfoHash(infoHash);
-        if (entry) {
-          entry.catalogOnly = false;
-          entry.seeders = entry.seeders || new Set();
-          entry.seeders.add(presenceState.id);
-          renderSwarmList();
-        }
-        registerLocalSeederInfoHash(torrent.infoHash);
-        resolve(torrent);
-      });
+      const torrent = client.seed(files, t => resolve(t));
     });
   } catch (e) {
     console.warn('[swarm] seedStoredEntry failed', e);
@@ -2677,6 +2666,16 @@ async function handleIncomingHandoff(msg) {
         : (client.get(payload.magnetURI) || client.torrents.find(t => t.magnetURI === payload.magnetURI));
       if (!torrent && requestedInfoHash) {
         torrent = await seedStoredEntry(requestedInfoHash);
+        if (torrent) {
+          const entry = findSwarmEntryByInfoHash(requestedInfoHash);
+          if (entry) {
+            entry.catalogOnly = false;
+            entry.seeders = entry.seeders || new Set();
+            entry.seeders.add(presenceState.id);
+            renderSwarmList();
+          }
+          registerLocalSeederInfoHash(requestedInfoHash);
+        }
       }
       if (!torrent) return;
       const peer = presenceState.peers.get(requesterId) || { id: requesterId };
