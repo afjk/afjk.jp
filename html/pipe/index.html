@@ -2191,15 +2191,14 @@ function renderSwarmList() {
       setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
       receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
     };
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'btn btn-ghost';
+    rmBtn.textContent = t('swarmRemoveLocal');
+    rmBtn.onclick = () => removeLocalArchive(infoHash);
+    rmBtn.style.visibility = ownsLocal ? '' : 'hidden';
     actions.appendChild(dlBtn);
-    if (ownsLocal) {
-      const rmBtn = document.createElement('button');
-      rmBtn.type = 'button';
-      rmBtn.className = 'btn btn-ghost';
-      rmBtn.textContent = t('swarmRemoveLocal');
-      rmBtn.onclick = () => removeLocalArchive(infoHash);
-      actions.appendChild(rmBtn);
-    }
+    actions.appendChild(rmBtn);
     item.appendChild(main);
     item.appendChild(actions);
     list.appendChild(item);
