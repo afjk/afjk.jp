@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <title>Privacy Policy — afjk.jp</title>
+  <meta name="description" content="afjk.jp プライバシーポリシー / Privacy Policy">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0a0a0a;
+      --surface: #161616;
+      --border:  #252525;
+      --text:    #efefef;
+      --text2:   #aaa;
+      --muted:   #666;
+      --accent:  #c8ff00;
+      --max:     720px;
+      --nav-h:   56px;
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      height: var(--nav-h);
+      border-bottom: 1px solid var(--border);
+      background: rgba(10,10,10,0.92);
+      backdrop-filter: blur(12px);
+    }
+    .nav-inner {
+      max-width: var(--max); margin: 0 auto; padding: 0 24px;
+      height: 100%; display: flex; align-items: center; justify-content: space-between;
+    }
+    .nav-logo { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.03em; color: var(--text); }
+    .nav-logo span { color: var(--accent); }
+    .lang-toggle {
+      display: flex; gap: 2px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 999px; padding: 3px;
+    }
+    .lang-toggle button {
+      background: none; border: none; color: var(--muted);
+      font-size: 0.72rem; font-weight: 700; padding: 3px 9px;
+      border-radius: 999px; cursor: pointer; letter-spacing: 0.06em;
+      transition: background 0.15s, color 0.15s;
+    }
+    .lang-toggle button.active { background: var(--accent); color: #000; }
+
+    /* ── Content ── */
+    main {
+      max-width: var(--max); margin: 0 auto; padding: 56px 24px 80px;
+    }
+    .page-label {
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+    }
+    h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 8px; }
+    .updated { font-size: 0.82rem; color: var(--muted); margin-bottom: 48px; }
+
+    section { margin-bottom: 40px; }
+    h2 {
+      font-size: 1rem; font-weight: 700; color: var(--accent);
+      margin-bottom: 12px; padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    p { color: var(--text2); margin-bottom: 12px; }
+    ul { color: var(--text2); padding-left: 1.4em; margin-bottom: 12px; }
+    li { margin-bottom: 6px; }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center; padding: 24px;
+      font-size: 0.72rem; color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">afjk<span>.</span></a>
+    <div class="lang-toggle">
+      <button id="btn-ja" onclick="setLang('ja')">JA</button>
+      <button id="btn-en" onclick="setLang('en')">EN</button>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <p class="page-label">Legal</p>
+
+  <div data-ja>
+    <h1>プライバシーポリシー</h1>
+    <p class="updated">最終更新日: 2026年4月8日</p>
+
+    <section>
+      <h2>1. はじめに</h2>
+      <p>afjk.jp（以下「本サービス」）は、ブラウザ上でファイルをP2P転送するサービスです。本ポリシーでは、Google アカウントとの連携機能（Google Drive ファイル選択）においてどのような情報を取り扱うかを説明します。</p>
+    </section>
+
+    <section>
+      <h2>2. 取得する情報</h2>
+      <p>Google Drive との連携機能を使用する場合、以下の情報にアクセスします：</p>
+      <ul>
+        <li>Google アカウントの認証情報（OAuth2 アクセストークン）</li>
+        <li>ユーザーが選択した Google Drive 上のファイルの内容</li>
+      </ul>
+      <p>アクセストークンはブラウザのメモリ内にのみ保持され、本サービスのサーバーには送信・保存されません。</p>
+    </section>
+
+    <section>
+      <h2>3. 情報の利用目的</h2>
+      <p>取得した情報は、以下の目的のみに使用します：</p>
+      <ul>
+        <li>ユーザーが選択した Google Drive のファイルをブラウザ上に読み込み、ルーム参加者へ転送するため</li>
+      </ul>
+      <p>上記以外の目的には一切使用しません。</p>
+    </section>
+
+    <section>
+      <h2>4. データの転送について</h2>
+      <p>Google Drive から読み込んだファイルは、ユーザー自身の操作によってルーム参加者のブラウザへ直接転送されます（P2P / WebRTC）。</p>
+      <p>ファイルの内容は本サービスの運営者サーバーを経由せず、運営者がファイルの内容を取得・閲覧・保存することはありません。</p>
+    </section>
+
+    <section>
+      <h2>5. 第三者への提供</h2>
+      <p>ユーザーが転送操作を行ったルーム参加者へのファイル送信を除き、取得した情報を第三者に提供することはありません。</p>
+      <p>広告・マーケティング・分析目的での第三者へのデータ提供は行いません。</p>
+    </section>
+
+    <section>
+      <h2>6. データの保持</h2>
+      <p>Google OAuth アクセストークンはブラウザのメモリ内にのみ保持され、ページを閉じると消去されます。</p>
+      <p>「ルームで保持」機能を使用した場合、ファイルのデータはユーザー自身のブラウザの IndexedDB に保存されます。このデータはユーザーが削除操作を行うか、ブラウザのデータを消去することで削除できます。</p>
+    </section>
+
+    <section>
+      <h2>7. Google アカウント連携の取り消し</h2>
+      <p>Google Drive へのアクセス許可はいつでも取り消すことができます：</p>
+      <ul>
+        <li><a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google アカウントの連携アプリ設定</a> からアクセスを取り消してください</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. お問い合わせ</h2>
+      <p>本ポリシーに関するお問い合わせは、<a href="https://x.com/afjk01" target="_blank" rel="noopener">@afjk01</a> までご連絡ください。</p>
+    </section>
+  </div>
+
+  <div data-en style="display:none">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: April 8, 2026</p>
+
+    <section>
+      <h2>1. Overview</h2>
+      <p>afjk.jp ("the Service") is a browser-based P2P file transfer service. This policy explains how we handle information in connection with the Google Account integration feature (Google Drive file selection).</p>
+    </section>
+
+    <section>
+      <h2>2. Information We Access</h2>
+      <p>When you use the Google Drive integration feature, we access the following:</p>
+      <ul>
+        <li>Google Account authentication credentials (OAuth2 access token)</li>
+        <li>The content of files you select from Google Drive</li>
+      </ul>
+      <p>Access tokens are stored only in browser memory and are never sent to or stored on our servers.</p>
+    </section>
+
+    <section>
+      <h2>3. How We Use Your Information</h2>
+      <p>Information obtained is used solely for the following purpose:</p>
+      <ul>
+        <li>To load the file you selected from Google Drive into your browser and transfer it to room participants</li>
+      </ul>
+      <p>We do not use your information for any other purpose.</p>
+    </section>
+
+    <section>
+      <h2>4. File Transfer</h2>
+      <p>Files loaded from Google Drive are transferred directly to room participants' browsers (P2P / WebRTC) by your own action.</p>
+      <p>File content does not pass through our servers, and we never access, view, or store the content of your files.</p>
+    </section>
+
+    <section>
+      <h2>5. Sharing with Third Parties</h2>
+      <p>We do not share your information with any third party, except for the transfer of files to room participants that you explicitly initiate.</p>
+      <p>We do not share data with third parties for advertising, marketing, or analytics purposes.</p>
+    </section>
+
+    <section>
+      <h2>6. Data Retention</h2>
+      <p>Google OAuth access tokens are stored only in browser memory and are cleared when you close the page.</p>
+      <p>When you use the "Keep in Room" feature, file data is stored in your browser's IndexedDB. This data can be deleted by removing it through the app or clearing your browser data.</p>
+    </section>
+
+    <section>
+      <h2>7. Revoking Google Account Access</h2>
+      <p>You can revoke Google Drive access at any time:</p>
+      <ul>
+        <li>Visit <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account Connected Apps</a> and remove access for afjk File Transfer</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. Contact</h2>
+      <p>For questions about this policy, please contact <a href="https://x.com/afjk01" target="_blank" rel="noopener">@afjk01</a>.</p>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <p>© Akihiro Fujii (afjk) — <a href="/" style="color:inherit">afjk.jp</a></p>
+</footer>
+
+<script>
+  let currentLang = 'ja';
+  function setLang(lang) {
+    currentLang = lang;
+    document.documentElement.lang = lang;
+    localStorage.setItem('lang', lang);
+    document.querySelectorAll('[data-ja]').forEach(el => { el.style.display = lang === 'ja' ? '' : 'none'; });
+    document.querySelectorAll('[data-en]').forEach(el => { el.style.display = lang === 'en' ? '' : 'none'; });
+    document.getElementById('btn-ja').classList.toggle('active', lang === 'ja');
+    document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+  }
+  const saved = localStorage.getItem('lang');
+  const browser = navigator.language.startsWith('ja') ? 'ja' : 'en';
+  setLang(saved || browser);
+</script>
+</body>
+</html>
