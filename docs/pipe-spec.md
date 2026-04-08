@@ -460,3 +460,10 @@ sequenceDiagram
 - `client.add(magnetURI)` はコールバック形式ではなく**同期的な戻り値**を使用する。コールバックはメタデータ取得後（= ピア接続後）に発火するため、ピアがいない状態では永遠に呼ばれない（デッドロック）
 - WebTorrent がピアタイムアウトでトレントを自動削除しても `client.get()` のキャッシュに残る場合がある。`receiveTorrent()` では `existingTorrent.destroyed` と `client.torrents.includes()` で生死を確認し、古い参照を削除してから再追加する
 - `wt-signal` がトレント追加前に届いた場合は `_wtPendingSignals` キューに積み、`client.add()` 直後に処理する
+
+### ルーム内スウォーム一覧（実験メモ）
+
+- トレント開始時に `handoff` (`kind: 'swarm-publish'`) をルーム内の各ピアへ送信し、`magnetURI` / ファイル名 / サイズ / 作成者情報だけを共有する
+- 新規参加端末は入室直後に既存ピアへ `kind: 'swarm-request'` を送り、最初に応答したピアが `kind: 'swarm-sync'` （単純な配列）で一覧を返す
+- 受信タブにはシンプルなリストを表示し、任意の項目から `receiveTorrent()` をトリガーできる
+- すべてクライアント間の揮発的なやり取りで、presence-server 側には保存しない（タブを閉じるとリストは失われる）
