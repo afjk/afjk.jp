@@ -3031,47 +3031,68 @@ async function downloadDriveFiles(pickedDocs, token) {
   return files;
 }
 
+function _openPickerWithToken(token) {
+  return new Promise((resolve, reject) => {
+    const btn = document.getElementById('gdrive-btn');
+    const picker = new google.picker.PickerBuilder()
+      .addView(new google.picker.DocsView()
+        .setIncludeFolders(false)
+        .setSelectFolderEnabled(false))
+      .setOAuthToken(token)
+      .setDeveloperKey(GDRIVE_API_KEY)
+      .setCallback(async data => {
+        if (data.action === google.picker.Action.CANCEL) { resolve(); return; }
+        if (data.action !== google.picker.Action.PICKED) return;
+        try {
+          btn.disabled = true;
+          btn.textContent = t('gdriveDownloading');
+          const files = await downloadDriveFiles(data.docs, token);
+          setFiles(files);
+          resolve();
+        } catch (e) {
+          setStatus('send-status', t('gdriveError')(e.message), 'err');
+          reject(e);
+        }
+      })
+      .build();
+    picker.setVisible(true);
+  });
+}
+
 async function openGoogleDrivePicker() {
   const btn = document.getElementById('gdrive-btn');
   const origContent = btn.innerHTML;
+
+  function restoreBtn() {
+    btn.disabled = false;
+    btn.innerHTML = origContent;
+    setLang(currentLang);
+  }
+
   try {
     btn.disabled = true;
     btn.textContent = '…';
     await loadGoogleAPIs();
-    const token = await requestGoogleToken();
-    await new Promise((resolve, reject) => {
-      const picker = new google.picker.PickerBuilder()
-        .addView(new google.picker.DocsView()
-          .setIncludeFolders(false)
-          .setSelectFolderEnabled(false))
-        .setOAuthToken(token)
-        .setDeveloperKey(GDRIVE_API_KEY)
-        .setCallback(async data => {
-          if (data.action === google.picker.Action.CANCEL) { resolve(); return; }
-          if (data.action !== google.picker.Action.PICKED) return;
-          try {
-            btn.disabled = true;
-            btn.textContent = t('gdriveDownloading');
-            const files = await downloadDriveFiles(data.docs, token);
-            setFiles(files);
-            resolve();
-          } catch (e) {
-            setStatus('send-status', t('gdriveError')(e.message), 'err');
-            reject(e);
-          }
-        })
-        .build();
-      picker.setVisible(true);
-      // resolve when picker closes without picking is handled by CANCEL above
-    });
+
+    // Token already cached → open Picker directly within this gesture (iOS-safe).
+    if (_gdriveToken && Date.now() < _gdriveTokenExpiry) {
+      await _openPickerWithToken(_gdriveToken);
+      restoreBtn();
+      return;
+    }
+
+    // First-time: OAuth popup consumes this gesture.
+    // After auth, show a hint and let next tap open the Picker.
+    await requestGoogleToken();
+    restoreBtn();
+    setStatus('send-status',
+      currentLang === 'ja' ? 'もう一度タップしてファイルを選択してください' : 'Tap again to select a file',
+      'ok');
   } catch (e) {
+    restoreBtn();
     if (e?.message !== 'popup_closed_by_user' && e?.message !== 'access_denied') {
       setStatus('send-status', t('gdriveError')(e?.message || e), 'err');
     }
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = origContent;
-    setLang(currentLang); // re-apply lang to restored innerHTML
   }
 }
 
