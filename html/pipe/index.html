@@ -2197,8 +2197,8 @@ function renderSwarmList() {
     rmBtn.textContent = t('swarmRemoveLocal');
     rmBtn.onclick = () => removeLocalArchive(infoHash);
     rmBtn.style.visibility = ownsLocal ? '' : 'hidden';
-    actions.appendChild(dlBtn);
     actions.appendChild(rmBtn);
+    actions.appendChild(dlBtn);
     item.appendChild(main);
     item.appendChild(actions);
     list.appendChild(item);
