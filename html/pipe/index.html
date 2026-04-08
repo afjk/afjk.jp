@@ -1679,8 +1679,7 @@ function loadSimplePeer() {
 function getWtClient() {
   if (!_wtClass) throw new Error('WebTorrent not loaded');
   if (!_wtClient || _wtClient.destroyed) {
-    _wtClient = new _wtClass();
-    // Suppress uncaught client-level errors (e.g. tracker WebSocket failures)
+    _wtClient = new _wtClass({ tracker: false });
     _wtClient.on('error', e => console.warn('[wt]', e?.message || e));
   }
   return _wtClient;
