@@ -1884,8 +1884,23 @@ async function receiveTorrent(magnetURI, sender) {
 
   const client = getWtClient();
 
-  // Avoid duplicate downloads
-  if (client.get(magnetURI)) { console.log('[wt] receiveTorrent: already have this torrent, skipping'); return; }
+  // Remove any stale torrent with the same infoHash before re-adding.
+  // WebTorrent may auto-destroy a torrent (e.g. timeout with no peers) but keep it
+  // in its internal Map, causing client.get() to return a dead reference that blocks
+  // client.add(). We always want a fresh torrent so we can wire up SimplePeer.
+  const existingTorrent = client.get(magnetURI);
+  if (existingTorrent) {
+    if (!existingTorrent.destroyed && client.torrents.includes(existingTorrent)) {
+      console.log('[wt] receiveTorrent: active torrent already exists, reusing');
+      // Still wire up any pending signals against the active torrent
+      const pend = _wtPendingSignals.splice(0);
+      console.log('[wt] receiveTorrent: processing', pend.length, 'pending signals on existing torrent');
+      pend.forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal));
+      return;
+    }
+    console.log('[wt] receiveTorrent: stale/destroyed torrent found, removing before re-add');
+    try { client.remove(existingTorrent); } catch {}
+  }
 
   // client.add() returns the torrent synchronously; the callback fires only after
   // metadata is fetched — which requires peers. We must wire up SimplePeer BEFORE
