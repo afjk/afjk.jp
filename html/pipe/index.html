@@ -1694,63 +1694,52 @@ const _wtPendingSignals = [];        // { fromId, signal }
 
 // Seeder: open a direct SimplePeer connection to each room peer
 async function _wtConnectRoomPeers(torrent, roomPeers) {
-  console.log('[wt] _wtConnectRoomPeers peers:', roomPeers.length);
-  await loadSimplePeer().catch(e => console.warn('[wt] SimplePeer load failed:', e.message));
+  await loadSimplePeer().catch(() => {});
   const SP = window.SimplePeer;
-  if (!SP) { console.warn('[wt] SimplePeer not available'); return; }
+  if (!SP) return;
   for (const peer of roomPeers) {
-    console.log('[wt] creating initiator SP for peer:', peer.id);
     const sp = new SP({ initiator: true, trickle: false });
     _wtPendingPeers.set(peer.id, { sp, torrent });
     sp.on('signal', offer => {
-      console.log('[wt] sending offer to peer:', peer.id, 'type:', offer.type);
       presenceState.ws?.send(JSON.stringify({
         type: 'handoff', targetId: peer.id,
         payload: { kind: 'wt-signal', signal: offer },
       }));
     });
     sp.on('connect', () => {
-      console.log('[wt] seeder SP connected to peer:', peer.id);
-      try { torrent.addPeer(sp); console.log('[wt] seeder addPeer OK'); }
-      catch(e) { console.warn('[wt] seeder addPeer error:', e.message); }
+      try { torrent.addPeer(sp); } catch(e) { console.warn('[wt] addPeer:', e.message); }
       _wtPendingPeers.delete(peer.id);
     });
-    sp.on('error', e => { console.warn('[wt] seeder sp error:', e.message); _wtPendingPeers.delete(peer.id); });
+    sp.on('error', e => { console.warn('[wt] sp:', e.message); _wtPendingPeers.delete(peer.id); });
   }
 }
 
 // Receiver: handle an offer → create answer → add peer to torrent
 function _wtHandleOffer(torrent, fromId, signal) {
-  console.log('[wt] _wtHandleOffer from:', fromId);
   const SP = window.SimplePeer;
-  if (!SP) { console.warn('[wt] SimplePeer not available in _wtHandleOffer'); return; }
+  if (!SP) return;
   const sp = new SP({ initiator: false, trickle: false });
   sp.on('signal', answer => {
-    console.log('[wt] sending answer to:', fromId, 'type:', answer.type);
     presenceState.ws?.send(JSON.stringify({
       type: 'handoff', targetId: fromId,
       payload: { kind: 'wt-signal', signal: answer },
     }));
   });
   sp.on('connect', () => {
-    console.log('[wt] receiver SP connected, fromId:', fromId);
-    try { torrent.addPeer(sp); console.log('[wt] receiver addPeer OK'); }
-    catch(e) { console.warn('[wt] receiver addPeer error:', e.message); }
+    try { torrent.addPeer(sp); } catch(e) { console.warn('[wt] addPeer:', e.message); }
   });
-  sp.on('error', e => console.warn('[wt] receiver sp error:', e.message));
+  sp.on('error', e => console.warn('[wt] sp:', e.message));
   sp.signal(signal);
 }
 
 // Dispatcher called from handleIncomingHandoff for kind:'wt-signal'
 async function handleWtSignal(fromId, signal) {
-  console.log('[wt] handleWtSignal from:', fromId, 'pendingPeers:', _wtPendingPeers.size, 'torrents:', _wtClient?.torrents?.length ?? 'no client');
-  await loadSimplePeer().catch(e => console.warn('[wt] SimplePeer load failed:', e.message));
+  await loadSimplePeer().catch(() => {});
   // Case 1: we're the seeder — this is an answer from the receiver
   const pending = _wtPendingPeers.get(fromId);
-  if (pending) { console.log('[wt] found pending peer, signaling answer'); pending.sp.signal(signal); return; }
+  if (pending) { pending.sp.signal(signal); return; }
   // Case 2: we're the receiver — this is an offer from the seeder
   if (!_wtClient?.torrents?.length) {
-    console.log('[wt] no torrent yet, queuing signal. pendingSignals now:', _wtPendingSignals.length + 1);
     _wtPendingSignals.push({ fromId, signal });
     return;
   }
@@ -1865,7 +1854,6 @@ function stopSeeding() {
 }
 
 async function receiveTorrent(magnetURI, sender) {
-  console.log('[wt] receiveTorrent START, sender:', sender, 'pendingSignals:', _wtPendingSignals.length);
   switchTab('receive');
   setRecvSender('recv-from', sender);
   setStatus('recv-status', t('torrentRecv'), 'waiting');
@@ -1875,9 +1863,7 @@ async function receiveTorrent(magnetURI, sender) {
 
   try {
     await loadWebTorrent();
-    console.log('[wt] receiveTorrent: WebTorrent loaded OK');
   } catch (e) {
-    console.warn('[wt] receiveTorrent: loadWebTorrent failed:', e.message);
     setStatus('recv-status', '✗ ' + e.message, 'err');
     return;
   }
@@ -1891,14 +1877,11 @@ async function receiveTorrent(magnetURI, sender) {
   const existingTorrent = client.get(magnetURI);
   if (existingTorrent) {
     if (!existingTorrent.destroyed && client.torrents.includes(existingTorrent)) {
-      console.log('[wt] receiveTorrent: active torrent already exists, reusing');
-      // Still wire up any pending signals against the active torrent
-      const pend = _wtPendingSignals.splice(0);
-      console.log('[wt] receiveTorrent: processing', pend.length, 'pending signals on existing torrent');
-      pend.forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal));
+      // Active torrent already exists — process any queued signals against it
+      _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal));
       return;
     }
-    console.log('[wt] receiveTorrent: stale/destroyed torrent found, removing before re-add');
+    // Stale/destroyed reference — remove before re-adding
     try { client.remove(existingTorrent); } catch {}
   }
 
@@ -1906,9 +1889,7 @@ async function receiveTorrent(magnetURI, sender) {
   // metadata is fetched — which requires peers. We must wire up SimplePeer BEFORE
   // the callback, otherwise we have a deadlock (no peers → no metadata → no callback
   // → no peers).
-  console.log('[wt] receiveTorrent: calling client.add(), pending signals:', _wtPendingSignals.length);
   const torrent = client.add(magnetURI);
-  console.log('[wt] receiveTorrent: torrent added, infoHash:', torrent.infoHash, 'torrents:', client.torrents.length);
 
   torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
   torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
@@ -1933,12 +1914,8 @@ async function receiveTorrent(magnetURI, sender) {
     });
   });
 
-  // Process any wt-signal offers already queued, and hook future ones
-  const pending = _wtPendingSignals.splice(0);
-  console.log('[wt] receiveTorrent: processing', pending.length, 'pending signals');
-  pending.forEach(({ fromId, signal }) => {
-    _wtHandleOffer(torrent, fromId, signal);
-  });
+  // Process any wt-signal offers already queued
+  _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(torrent, fromId, signal));
 }
 
 function handleIncomingHandoff(msg) {
@@ -1946,7 +1923,6 @@ function handleIncomingHandoff(msg) {
   const sender  = msg.from?.nickname || t('stranger');
 
   if (payload.kind === 'torrent') {
-    console.log('[wt] handleIncomingHandoff: kind=torrent from', sender, 'magnet:', payload.magnetURI?.slice(0, 40));
     const label = payload.fileCount > 1
       ? t('filesLabel')(payload.fileCount)
       : (payload.fileNames || t('fileGeneric'));
