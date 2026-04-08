@@ -1873,35 +1873,38 @@ async function receiveTorrent(magnetURI, sender) {
   // Avoid duplicate downloads
   if (client.get(magnetURI)) return;
 
-  client.add(magnetURI, torrent => {
-    torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
-    torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
+  // client.add() returns the torrent synchronously; the callback fires only after
+  // metadata is fetched — which requires peers. We must wire up SimplePeer BEFORE
+  // the callback, otherwise we have a deadlock (no peers → no metadata → no callback
+  // → no peers).
+  const torrent = client.add(magnetURI);
 
-    // Process any wt-signal offers that arrived before this torrent was ready
-    _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => {
-      _wtHandleOffer(torrent, fromId, signal);
+  torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
+  torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
+
+  torrent.on('download', () => {
+    const p  = Math.round(torrent.progress * 100);
+    const dl = fmt(torrent.downloadSpeed);
+    document.getElementById('recv-prog-bar').style.width = p + '%';
+    document.getElementById('recv-prog-text').textContent = `${p}%  ↓${dl}/s`;
+  });
+
+  torrent.on('done', () => {
+    document.getElementById('recv-prog-bar').style.width = '100%';
+    setStatus('recv-status', t('torrentDone'), 'ok');
+    torrent.files.forEach(file => {
+      // WebTorrent v2: file.blob() → Promise; v1: file.getBlob(cb)
+      if (typeof file.blob === 'function') {
+        file.blob().then(blob => triggerDownload(blob, file.name)).catch(() => {});
+      } else {
+        file.getBlob((err, blob) => { if (!err) triggerDownload(blob, file.name); });
+      }
     });
+  });
 
-    torrent.on('download', () => {
-      const p  = Math.round(torrent.progress * 100);
-      const dl = fmt(torrent.downloadSpeed);
-      document.getElementById('recv-prog-bar').style.width = p + '%';
-      document.getElementById('recv-prog-text').textContent = `${p}%  ↓${dl}/s`;
-    });
-
-    torrent.on('done', () => {
-      document.getElementById('recv-prog-bar').style.width = '100%';
-      setStatus('recv-status', t('torrentDone'), 'ok');
-      torrent.files.forEach(file => {
-        // WebTorrent v2: file.blob() → Promise; v1: file.getBlob(cb)
-        if (typeof file.blob === 'function') {
-          file.blob().then(blob => triggerDownload(blob, file.name)).catch(() => {});
-        } else {
-          file.getBlob((err, blob) => { if (!err) triggerDownload(blob, file.name); });
-        }
-      });
-    });
-
+  // Process any wt-signal offers already queued, and hook future ones
+  _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => {
+    _wtHandleOffer(torrent, fromId, signal);
   });
 }
 
