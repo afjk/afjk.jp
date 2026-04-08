@@ -1188,6 +1188,8 @@ async function loadLocalSwarmCatalog() {
   _swarmCatalogLoaded = true;
   const rows = await swarmIDBGetAll();
   rows.forEach(row => {
+    if (!row?.infoHash) return;
+    localCatalog.set(row.infoHash, row);
     addSwarmEntry({
       magnetURI: row.magnetURI,
       fileNames: row.fileNames,
@@ -1305,6 +1307,7 @@ const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
 const randPath = () => Math.random().toString(36).slice(2, 10);
 const logSwarm = (...args) => { try { console.debug('[swarm]', ...args); } catch {} };
 const localSeedInfoHashes = new Set();
+const localCatalog = new Map();
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 function base32ToHex(str) {
@@ -1941,7 +1944,7 @@ function addSwarmEntry(rawEntry, senderFallback) {
     if (entry.totalBytes) existing.totalBytes = entry.totalBytes;
     if (entry.fromNickname) existing.fromNickname = entry.fromNickname;
     if (entry.createdAt) existing.createdAt = entry.createdAt;
-    existing.catalogOnly = Boolean(existing.catalogOnly && entry.catalogOnly);
+    existing.catalogOnly = Boolean(existing.catalogOnly || entry.catalogOnly);
     entry.seeders?.forEach(id => existing.seeders.add(id));
     renderSwarmList();
     return existing;
@@ -1959,14 +1962,100 @@ function removeSwarmEntry(infoHashOrMagnet) {
   }
 }
 
+async function persistLocalArchive(infoHash, magnetURI, fileObjs) {
+  if (!infoHash || !fileObjs?.length) return;
+  try {
+    const storedFiles = [];
+    for (const file of fileObjs) {
+      if (!file) continue;
+      let blob;
+      if (file instanceof Blob) {
+        blob = file;
+      } else if (typeof file.blob === 'function') {
+        blob = await file.blob();
+      } else if (typeof file.getBlob === 'function') {
+        blob = await new Promise(resolve => file.getBlob((err, b) => resolve(err ? null : b)));
+      } else {
+        blob = new Blob([file]);
+      }
+      if (!blob) continue;
+      storedFiles.push({
+        name: file.name || file.fileName || 'file',
+        type: file.type || blob.type || 'application/octet-stream',
+        size: blob.size || file.size || 0,
+        blob
+      });
+    }
+    if (!storedFiles.length) return;
+    const payload = {
+      infoHash,
+      magnetURI,
+      fileNames: storedFiles.map(f => f.name),
+      fileCount: storedFiles.length,
+      totalBytes: storedFiles.reduce((sum, f) => sum + (f.size || 0), 0),
+      savedAt: Date.now(),
+      files: storedFiles
+    };
+    localCatalog.set(infoHash, payload);
+    await swarmIDBPut(payload);
+  } catch (e) {
+    console.warn('[swarm] persistLocalArchive failed', e);
+  }
+}
+
+async function seedStoredEntry(infoHash) {
+  if (!infoHash) return null;
+  const existing = findTorrentByInfoHash(infoHash);
+  if (existing) return existing;
+  const stored = localCatalog.get(infoHash);
+  if (!stored?.files?.length) return null;
+  try {
+    const files = stored.files.map(f =>
+      new File([f.blob], f.name || 'file', { type: f.type || 'application/octet-stream' })
+    );
+    const client = getWtClient();
+    const torrent = client.seed(files);
+    return await new Promise(resolve => {
+      torrent.once('ready', () => {
+        const entry = findSwarmEntryByInfoHash(infoHash);
+        if (entry) {
+          entry.catalogOnly = false;
+          entry.seeders = entry.seeders || new Set();
+          entry.seeders.add(presenceState.id);
+          renderSwarmList();
+        }
+        registerLocalSeederInfoHash(torrent.infoHash);
+        resolve(torrent);
+      });
+    });
+  } catch (e) {
+    console.warn('[swarm] seedStoredEntry failed', e);
+    return null;
+  }
+}
+
+async function collectFilesFromTorrent(torrent) {
+  const out = [];
+  if (!torrent?.files) return out;
+  for (const file of torrent.files) {
+    let blob = null;
+    try {
+      if (typeof file.blob === 'function') {
+        blob = await file.blob();
+      } else if (typeof file.getBlob === 'function') {
+        blob = await new Promise(resolve => file.getBlob((err, b) => resolve(err ? null : b)));
+      }
+    } catch {}
+    if (!blob) continue;
+    out.push(new File([blob], file.name || 'file', { type: file.type || blob.type || 'application/octet-stream' }));
+  }
+  return out;
+}
+
 function requestSwarmPeerConnection(entry) {
   const infoHash = entry?.infoHash || extractInfoHash(entry?.magnetURI);
   if (!infoHash) {
     logSwarm('requestSwarmPeerConnection skipped — missing infoHash');
-    return;
-  }
-  if (entry.catalogOnly) {
-    logSwarm('requestSwarmPeerConnection skipped — catalog only');
     return;
   }
   const targets = new Set();
@@ -2030,18 +2119,14 @@ function renderSwarmList() {
     const dlBtn = document.createElement('button');
     dlBtn.type = 'button';
     dlBtn.className = 'btn btn-ghost';
-    if (isCatalogOnly) {
-      dlBtn.textContent = t('swarmCatalogOnly');
-      dlBtn.disabled = true;
-    } else {
-      dlBtn.textContent = t('swarmDownload');
-      dlBtn.onclick = () => {
-        const label = swarmEntryLabel(entry);
-        requestSwarmPeerConnection(entry);
-        setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
-        receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
-      };
-    }
+    dlBtn.textContent = t('swarmDownload');
+    if (isCatalogOnly) dlBtn.title = t('swarmCatalogOnly');
+    dlBtn.onclick = () => {
+      const label = swarmEntryLabel(entry);
+      requestSwarmPeerConnection(entry);
+      setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
+      receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
+    };
     actions.appendChild(dlBtn);
     item.appendChild(main);
     item.appendChild(actions);
@@ -2071,13 +2156,22 @@ function updateEntrySeeder(infoHash, peerId, active) {
   if (!entry) return;
   entry.seeders = entry.seeders || new Set();
   const beforeSize = entry.seeders.size;
-  if (active) entry.seeders.add(peerId);
-  else entry.seeders.delete(peerId);
+  if (active) {
+    entry.seeders.add(peerId);
+    entry.catalogOnly = false;
+  } else {
+    entry.seeders.delete(peerId);
+  }
   if (active && entry.senderId === peerId) {
     entry.senderId = peerId;
   }
   if (!active && entry.seeders.size === 0) {
-    removeSwarmEntry(infoHash);
+    if (localCatalog.has(infoHash)) {
+      entry.catalogOnly = true;
+      renderSwarmList();
+    } else {
+      removeSwarmEntry(infoHash);
+    }
   } else if (entry.seeders.size !== beforeSize) {
     renderSwarmList();
   }
@@ -2146,14 +2240,6 @@ function publishLocalSwarmEntry(magnetURI, files, infoHash = null) {
   addSwarmEntry(entry, entry.fromNickname);
   broadcastSwarmPublish(entry);
   registerLocalSeederInfoHash(knownInfoHash);
-  swarmIDBPut({
-    infoHash: knownInfoHash,
-    magnetURI,
-    fileNames: entry.fileNames,
-    fileCount: entry.fileCount,
-    totalBytes: entry.totalBytes,
-    savedAt: entry.createdAt,
-  });
 }
 
 function findTorrentByInfoHash(infoHash) {
@@ -2308,6 +2394,9 @@ async function seedFilesAsTorrent() {
     // Suppress tracker connection errors (non-fatal warnings)
     torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
     torrent.on('error',   e => console.warn('[wt] torrent error:', e?.message || e));
+    torrent.once('ready', () => {
+      persistLocalArchive(torrent.infoHash, torrent.magnetURI, files);
+    });
 
     const magnetURI = torrent.magnetURI;
     showMagnetInfo(magnetURI);
@@ -2438,13 +2527,10 @@ async function receiveTorrent(magnetURI, sender) {
     triggerTorrentDownloads(torrent);
     registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
     reportTransfer('torrent', torrent.length || 0);
-    swarmIDBPut({
-      infoHash: torrent.infoHash || extractInfoHash(magnetURI),
-      magnetURI,
-      fileNames: torrent.files.map(f => f.name),
-      fileCount: torrent.files.length,
-      totalBytes: torrent.length || 0,
-      savedAt: Date.now(),
+    collectFilesFromTorrent(torrent).then(files => {
+      if (files.length) {
+        persistLocalArchive(torrent.infoHash || extractInfoHash(magnetURI), magnetURI, files);
+      }
     });
   });
 
@@ -2476,7 +2562,7 @@ function triggerTorrentDownloads(torrent) {
   });
 }
 
-function handleIncomingHandoff(msg) {
+async function handleIncomingHandoff(msg) {
   const payload = msg.payload || {};
   const sender  = msg.from?.nickname || t('stranger');
 
@@ -2504,9 +2590,12 @@ function handleIncomingHandoff(msg) {
     logSwarm('swarm-join received', { requesterId, infoHash: requestedInfoHash });
     try {
       const client = getWtClient();
-      const torrent = requestedInfoHash
+      let torrent = requestedInfoHash
         ? findTorrentByInfoHash(requestedInfoHash)
         : (client.get(payload.magnetURI) || client.torrents.find(t => t.magnetURI === payload.magnetURI));
+      if (!torrent && requestedInfoHash) {
+        torrent = await seedStoredEntry(requestedInfoHash);
+      }
       if (!torrent) return;
       const peer = presenceState.peers.get(requesterId) || { id: requesterId };
       _wtConnectRoomPeers(torrent, [peer]);

@@ -474,7 +474,8 @@ sequenceDiagram
 - 新規参加者は入室直後に全ピアへ `swarm-request` を送信。最初に応答したピアが `swarm-sync` で一覧を返す
 - ダウンロードボタン押下時に `swarm-join` を送ってシーダーに SimplePeer 接続を要求し、`wt-signal` 経由でピア接続を確立
 - 送信者がルームを離れたらそのエントリは削除（`swarm-seeder` で追跡）
-- ブラウザは `pipe-swarm` IndexedDB に「保持ファイル」のメタデータ（infoHash, ファイル名など）だけ保存し、同じ infoHash は重複登録しない。ルーム参加時に自身の catalog を `swarm-catalog` で共有するが、実ファイルは再送しない（ダウンロード不可）
+- ブラウザは `pipe-swarm` IndexedDB に infoHash ごとのファイル Blob を保存し（メタデータ + 実データ）、同じ infoHash は重複登録しない
+- ルーム参加時、保持している infoHash を `swarm-catalog` でルームへ共有。必要に応じてローカル Blob から自動的に `client.seed()` し直してシーダーとして復帰する
 - presence-server 側には保存しない
 
 ### 実装上の注意点
