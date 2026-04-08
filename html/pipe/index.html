@@ -3972,6 +3972,19 @@ renderHistory();
 renderSwarmList();
 loadLocalSwarmCatalog();
 
+// Pre-load Google APIs in background so the OAuth popup fires synchronously
+// within the user gesture when the button is clicked (required on iOS Safari).
+loadGoogleAPIs().then(() => {
+  // Also pre-initialize the token client after APIs are ready.
+  if (!_gdriveTokenClient) {
+    _gdriveTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GDRIVE_CLIENT_ID,
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      callback: () => {},  // replaced at request time
+    });
+  }
+}).catch(() => {});
+
 window.addEventListener('beforeunload', () => {
   unregisterAllLocalSeeders();
 });
