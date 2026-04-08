@@ -2988,14 +2988,16 @@ function requestGoogleToken() {
       _gdriveTokenClient = google.accounts.oauth2.initTokenClient({
         client_id: GDRIVE_CLIENT_ID,
         scope: 'https://www.googleapis.com/auth/drive.readonly',
-        callback: resp => {
-          if (resp.error) { reject(new Error(resp.error)); return; }
-          _gdriveToken = resp.access_token;
-          _gdriveTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
-          resolve(_gdriveToken);
-        },
+        callback: () => {},  // replaced below
       });
     }
+    // Always update the callback so the current Promise's resolve/reject are wired up.
+    _gdriveTokenClient.callback = resp => {
+      if (resp.error) { reject(new Error(resp.error)); return; }
+      _gdriveToken = resp.access_token;
+      _gdriveTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
+      resolve(_gdriveToken);
+    };
     _gdriveTokenClient.requestAccessToken({ prompt: _gdriveToken ? '' : 'select_account' });
   });
 }
@@ -3059,7 +3061,19 @@ function _openPickerWithToken(token) {
   });
 }
 
-async function openGoogleDrivePicker() {
+// Fast-path (iOS-safe): no await at all before picker.setVisible(true).
+// Called synchronously from the click handler when APIs + token are ready.
+function openGoogleDrivePicker() {
+  if (_gdriveLoaded && _gdriveToken && Date.now() < _gdriveTokenExpiry) {
+    // Both APIs loaded and token cached: open picker with ZERO awaits.
+    _openPickerWithToken(_gdriveToken).catch(() => {});
+    return;
+  }
+  // Slow path: need to load APIs and/or authenticate (async, gesture consumed).
+  _openGoogleDrivePickerAsync();
+}
+
+async function _openGoogleDrivePickerAsync() {
   const btn = document.getElementById('gdrive-btn');
   const origContent = btn.innerHTML;
 
@@ -3074,10 +3088,13 @@ async function openGoogleDrivePicker() {
     btn.textContent = '…';
     await loadGoogleAPIs();
 
-    // Token already cached → open Picker directly within this gesture (iOS-safe).
+    // If token was cached while loading APIs, prompt user to tap again
+    // (gesture is already consumed by the await above).
     if (_gdriveToken && Date.now() < _gdriveTokenExpiry) {
-      await _openPickerWithToken(_gdriveToken);
       restoreBtn();
+      setStatus('send-status',
+        currentLang === 'ja' ? 'もう一度タップしてファイルを選択してください' : 'Tap again to select a file',
+        'ok');
       return;
     }
 
