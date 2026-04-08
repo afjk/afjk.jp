@@ -1390,7 +1390,11 @@ function handlePresenceMessage(ev) {
   }
   switch (data.type) {
     case 'welcome':
-      presenceState.id = data.id;
+      {
+        const prevId = presenceState.id;
+        presenceState.id = data.id;
+        updateLocalSwarmOwner(prevId, data.id);
+      }
       updateRoomLabel(data.room);
       sendPresenceHello();
       break;
@@ -1398,6 +1402,7 @@ function handlePresenceMessage(ev) {
       presenceState.peers = new Map((data.peers || []).map(p => [p.id, p]));
       renderPeerGrid();
       requestSwarmSyncFromPeers();
+      pruneSwarmEntries();
       // Auto-select a paired peer if exactly one is present and none selected yet
       if (!selPeerId) {
         const paired = (data.peers || []).filter(p => pairedIds.has(p.id));
@@ -1825,6 +1830,13 @@ function addSwarmEntry(rawEntry, senderFallback) {
   renderSwarmList();
 }
 
+function removeSwarmEntry(magnetURI) {
+  if (!magnetURI) return;
+  if (swarmState.entries.delete(magnetURI)) {
+    renderSwarmList();
+  }
+}
+
 function requestSwarmPeerConnection(entry) {
   const infoHash = entry?.infoHash || extractInfoHash(entry?.magnetURI);
   if (!infoHash) {
@@ -1902,6 +1914,31 @@ function renderSwarmList() {
     item.appendChild(actions);
     list.appendChild(item);
   });
+}
+
+function pruneSwarmEntries() {
+  const activeIds = new Set(presenceState.peers.keys());
+  if (presenceState.id) activeIds.add(presenceState.id);
+  let changed = false;
+  swarmState.entries.forEach((entry, magnetURI) => {
+    if (entry.senderId && !activeIds.has(entry.senderId)) {
+      swarmState.entries.delete(magnetURI);
+      changed = true;
+    }
+  });
+  if (changed) renderSwarmList();
+}
+
+function updateLocalSwarmOwner(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  let changed = false;
+  swarmState.entries.forEach(entry => {
+    if (entry.senderId === oldId) {
+      entry.senderId = newId;
+      changed = true;
+    }
+  });
+  if (changed) renderSwarmList();
 }
 
 function publishLocalSwarmEntry(magnetURI, files, infoHash = null) {
