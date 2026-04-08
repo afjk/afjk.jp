@@ -415,6 +415,22 @@
     .magnet-stats { color: var(--text2); font-size: 0.75rem; min-height: 1em; }
     .torrent-btn { color: #4fc; }
     .torrent-btn:hover { color: #4fc; border-color: #4fc; }
+    .gdrive-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px auto 0;
+      padding: 7px 14px;
+      background: none;
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      color: var(--text2);
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .gdrive-btn:hover { border-color: var(--accent); color: var(--text); }
+    .gdrive-btn svg { flex-shrink: 0; }
 
     /* ── Swarm list ── */
     .swarm-block {
@@ -712,6 +728,17 @@
       </div>
     </div>
     <input type="file" id="file-input" accept="*/*" multiple>
+    <button type="button" id="gdrive-btn" class="gdrive-btn">
+      <svg width="16" height="16" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
+        <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+        <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/>
+        <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+        <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+        <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+        <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+      </svg>
+      <span data-ja>Google Driveから選択</span><span data-en>Select from Google Drive</span>
+    </button>
 
     <div class="file-card" id="file-card" style="display:none">
       <div class="file-icon">📄</div>
@@ -975,6 +1002,9 @@ const I18N = {
     swarmOwnedActive:  '自分がシード中',
     swarmOwnedOffline: 'ローカルのみ',
     swarmRemoveLocal:  'ローカル削除',
+    gdrivePick:        'Google Driveから選択',
+    gdriveDownloading: 'Driveからダウンロード中…',
+    gdriveError:       msg => `Google Drive エラー: ${msg}`,
   },
   en: {
     copying:            'Copied ✓',
@@ -1059,6 +1089,9 @@ const I18N = {
     swarmOwnedActive:  'Seeding locally',
     swarmOwnedOffline: 'Stored locally',
     swarmRemoveLocal:  'Remove local copy',
+    gdrivePick:        'Select from Google Drive',
+    gdriveDownloading: 'Downloading from Drive…',
+    gdriveError:       msg => `Google Drive error: ${msg}`,
   }
 };
 
@@ -1120,6 +1153,8 @@ function reportTransfer(type, bytes) {
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
+const GDRIVE_CLIENT_ID = '109611024015-h8dt5416re6edbun25a5iq1a3spuj0qc.apps.googleusercontent.com';
+const GDRIVE_API_KEY   = 'AIzaSyCHXozZm9QMqLRgQOrKmq74Q6yutFHHeA0';
 const PIPE        = 'https://pipe.afjk.jp';
 const PIPE_MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
 const params      = new URLSearchParams(location.search);
@@ -2919,6 +2954,128 @@ function switchTab(name) {
     p.classList.toggle('active', p.id === 'tab-' + name);
   });
 }
+
+// ── Google Drive Picker ───────────────────────────────────────────────────────
+let _gdriveLoaded = false;
+let _gdriveToken  = null;
+let _gdriveTokenExpiry = 0;
+let _gdriveTokenClient = null;
+
+async function loadGoogleAPIs() {
+  if (_gdriveLoaded) return;
+  // Load gapi
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://apis.google.com/js/api.js';
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+  await new Promise(resolve => gapi.load('picker', resolve));
+  // Load GIS
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+  _gdriveLoaded = true;
+}
+
+function requestGoogleToken() {
+  return new Promise((resolve, reject) => {
+    if (_gdriveToken && Date.now() < _gdriveTokenExpiry) { resolve(_gdriveToken); return; }
+    if (!_gdriveTokenClient) {
+      _gdriveTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GDRIVE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/drive.readonly',
+        callback: resp => {
+          if (resp.error) { reject(new Error(resp.error)); return; }
+          _gdriveToken = resp.access_token;
+          _gdriveTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
+          resolve(_gdriveToken);
+        },
+      });
+    }
+    _gdriveTokenClient.requestAccessToken({ prompt: _gdriveToken ? '' : 'select_account' });
+  });
+}
+
+// Google Workspace MIME → export MIME + extension
+const GDRIVE_EXPORT_MAP = {
+  'application/vnd.google-apps.document':     { mime: 'application/pdf', ext: '.pdf' },
+  'application/vnd.google-apps.spreadsheet':  { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: '.xlsx' },
+  'application/vnd.google-apps.presentation': { mime: 'application/pdf', ext: '.pdf' },
+  'application/vnd.google-apps.drawing':      { mime: 'image/png', ext: '.png' },
+};
+
+async function downloadDriveFiles(pickedDocs, token) {
+  const files = [];
+  for (const doc of pickedDocs) {
+    const { id, name, mimeType } = doc;
+    const exportInfo = GDRIVE_EXPORT_MAP[mimeType];
+    let url, finalMime, finalName;
+    if (exportInfo) {
+      url = `https://www.googleapis.com/drive/v3/files/${id}/export?mimeType=${encodeURIComponent(exportInfo.mime)}`;
+      finalMime = exportInfo.mime;
+      finalName = name.replace(/\.[^.]*$/, '') + exportInfo.ext;
+    } else {
+      url = `https://www.googleapis.com/drive/v3/files/${id}?alt=media`;
+      finalMime = mimeType || 'application/octet-stream';
+      finalName = name;
+    }
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    const blob = await resp.blob();
+    files.push(new File([blob], finalName, { type: finalMime }));
+  }
+  return files;
+}
+
+async function openGoogleDrivePicker() {
+  const btn = document.getElementById('gdrive-btn');
+  const origContent = btn.innerHTML;
+  try {
+    btn.disabled = true;
+    btn.textContent = '…';
+    await loadGoogleAPIs();
+    const token = await requestGoogleToken();
+    await new Promise((resolve, reject) => {
+      const picker = new google.picker.PickerBuilder()
+        .addView(new google.picker.DocsView()
+          .setIncludeFolders(false)
+          .setSelectFolderEnabled(false))
+        .setOAuthToken(token)
+        .setDeveloperKey(GDRIVE_API_KEY)
+        .setCallback(async data => {
+          if (data.action === google.picker.Action.CANCEL) { resolve(); return; }
+          if (data.action !== google.picker.Action.PICKED) return;
+          try {
+            btn.disabled = true;
+            btn.textContent = t('gdriveDownloading');
+            const files = await downloadDriveFiles(data.docs, token);
+            setFiles(files);
+            resolve();
+          } catch (e) {
+            setStatus('send-status', t('gdriveError')(e.message), 'err');
+            reject(e);
+          }
+        })
+        .build();
+      picker.setVisible(true);
+      // resolve when picker closes without picking is handled by CANCEL above
+    });
+  } catch (e) {
+    if (e?.message !== 'popup_closed_by_user' && e?.message !== 'access_denied') {
+      setStatus('send-status', t('gdriveError')(e?.message || e), 'err');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origContent;
+    setLang(currentLang); // re-apply lang to restored innerHTML
+  }
+}
+
+document.getElementById('gdrive-btn').addEventListener('click', openGoogleDrivePicker);
 
 // ── Drop zone ─────────────────────────────────────────────────────────────────
 const dz = document.getElementById('dropzone');
