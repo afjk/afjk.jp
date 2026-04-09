@@ -3481,6 +3481,7 @@ PreviewRegistry.register({
     const progressEl = document.createElement('span');
     progressEl.className = 'img-edit-progress';
 
+    let _resultBlob = null;
     let _resultUrl = null;
     let _disposed = false;
 
@@ -3498,6 +3499,7 @@ PreviewRegistry.register({
         });
         if (_disposed) return;
         if (_resultUrl) URL.revokeObjectURL(_resultUrl);
+        _resultBlob = blob;
         _resultUrl = URL.createObjectURL(blob);
 
         let resultImg = wrap.querySelector('.img-edit-result');
@@ -3507,16 +3509,30 @@ PreviewRegistry.register({
         }
         resultImg.src = _resultUrl;
 
-        let dlBtn = toolbar.querySelector('.img-edit-dl-btn');
-        if (!dlBtn) {
-          dlBtn = Object.assign(document.createElement('a'), { className: 'img-edit-btn img-edit-dl-btn' });
-          dlBtn.textContent = currentLang === 'ja' ? '⬇ 保存' : '⬇ Save';
-          toolbar.appendChild(dlBtn);
-        }
-        dlBtn.href = _resultUrl;
         const safeName = (meta && meta.name ? meta.name.replace(/\.[^.]+$/, '') : 'image')
           .replace(/[/\\?%*:|"<>]/g, '_');
-        dlBtn.download = safeName + '_nobg.png';
+        const filename = safeName + '_nobg.png';
+
+        let saveBtn = toolbar.querySelector('.img-edit-dl-btn');
+        if (!saveBtn) {
+          saveBtn = document.createElement('button');
+          saveBtn.className = 'img-edit-btn img-edit-dl-btn';
+          saveBtn.addEventListener('click', async () => {
+            if (!_resultBlob) return;
+            const file = new File([_resultBlob], filename, { type: 'image/png' });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              try {
+                await navigator.share({ files: [file], title: filename });
+              } catch (e) {
+                if (e.name !== 'AbortError') _fallbackDownload(_resultUrl, filename);
+              }
+            } else {
+              _fallbackDownload(_resultUrl, filename);
+            }
+          });
+          toolbar.appendChild(saveBtn);
+        }
+        saveBtn.textContent = currentLang === 'ja' ? '📤 フォトに保存' : '📤 Save to Photos';
 
         progressEl.textContent = '';
         removeBgBtn.disabled = false;
@@ -3538,6 +3554,13 @@ PreviewRegistry.register({
     };
   }
 });
+
+function _fallbackDownload(url, filename) {
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
 
 // T9: Video provider
 PreviewRegistry.register({
