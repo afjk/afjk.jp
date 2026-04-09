@@ -531,7 +531,7 @@
       align-items: center;
       justify-content: center;
       font-size: 1.5rem;
-      cursor: pointer;
+      cursor: default;
     }
     .rcvd-item-thumb img,
     .rcvd-item-thumb video,
@@ -1640,6 +1640,30 @@ async function rcvdIDBDelete(id) {
   } catch {}
 }
 
+async function rcvdIDBGetById(id) {
+  if (id == null) return null;
+  try {
+    const db = await openReceivedDb();
+    return await new Promise(resolve => {
+      const tx  = db.transaction(RCVD_IDB_STORE, 'readonly');
+      const req = tx.objectStore(RCVD_IDB_STORE).get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror   = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Return the blob for a record — from memory if already loaded, otherwise fetch from IDB
+async function getBlobForRecord(id) {
+  const mem = _rcvdMemory.get(id);
+  if (mem?.blob) return mem.blob;
+  const row = await rcvdIDBGetById(id);
+  if (row?.blob && mem) mem.blob = row.blob; // cache back into memory record
+  return row?.blob || null;
+}
+
 async function loadLocalSwarmCatalog() {
   if (_swarmCatalogLoaded) return;
   _swarmCatalogLoaded = true;
@@ -2612,7 +2636,7 @@ function renderSwarmList() {
       const label = swarmEntryLabel(entry);
       requestSwarmPeerConnection(entry);
       setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
-      receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
+      receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'), true);
     };
     // Preview button — only if we have the blobs locally
     if (ownsLocal) {
@@ -2963,7 +2987,10 @@ function stopSeeding() {
   setStatus('send-status', '');
 }
 
-async function receiveTorrent(magnetURI, sender) {
+// userInitiated=true when called from an explicit user action (e.g. swarm "Download" button).
+// In that case an already-completed torrent will trigger an immediate download.
+// For automatic receive (incoming handoff), userInitiated stays false so no auto-download occurs.
+async function receiveTorrent(magnetURI, sender, userInitiated = false) {
   logSwarm('receiveTorrent start', { magnetURI, sender });
   switchTab('receive');
   setRecvSender('recv-from', sender);
@@ -2999,7 +3026,13 @@ async function receiveTorrent(magnetURI, sender) {
       // Active torrent already exists — resume progress or retrigger downloads
       if (existingTorrent.done) {
         setStatus('recv-status', t('torrentDone'), 'ok');
-        triggerTorrentDownloads(existingTorrent);
+        if (userInitiated) {
+          // Explicit user action (e.g. swarm "Download" button) — download immediately
+          triggerTorrentDownloads(existingTorrent);
+        } else {
+          // Auto-receive via handoff — notify only, no forced download
+          notifyFileShared(swarmEntryLabel({ fileNames: existingTorrent.files?.map(f => f.name) }), sender);
+        }
       } else {
         setStatus('recv-status', t('torrentRecv'), 'waiting');
       }
@@ -4471,6 +4504,8 @@ function _showToast(title, body) {
   setTimeout(() => el.remove(), 5000);
 }
 
+let _notificationPermissionRequested = false;
+
 function notifyFileShared(filename, sender) {
   const title = currentLang === 'ja' ? '📥 ファイル受信' : '📥 File Received';
   const body  = t('rcvdNotify')(sender || t('stranger'), filename);
@@ -4478,7 +4513,11 @@ function notifyFileShared(filename, sender) {
     try { new Notification(title, { body, icon: '/favicon-192x192.png' }); } catch {}
   } else {
     _showToast(title, body);
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    // Request permission at most once per session, and only from a user gesture context
+    if (typeof Notification !== 'undefined'
+        && Notification.permission === 'default'
+        && !_notificationPermissionRequested) {
+      _notificationPermissionRequested = true;
       Notification.requestPermission().catch(() => {});
     }
   }
@@ -4500,7 +4539,15 @@ async function saveReceivedAndNotify(blob, filename, sender) {
     infoHash:   null,
   };
   const id = await rcvdIDBPut(record);
-  if (id != null) record.id = id;
+  if (id == null) {
+    const msg = currentLang === 'ja'
+      ? `受信ファイルを保存できませんでした: ${filename}`
+      : `Failed to save received file: ${filename}`;
+    setStatus('recv-status', msg, 'err');
+    _showToast(currentLang === 'ja' ? '保存エラー' : 'Save Error', msg);
+    return;
+  }
+  record.id = id;
   _rcvdMemory.set(id, record);
   notifyFileShared(filename, sender);
   setStatus('recv-status', t('rcvdAdded')(filename), 'ok');
@@ -4510,7 +4557,11 @@ async function saveReceivedAndNotify(blob, filename, sender) {
 async function loadAllReceivedFiles() {
   const rows = await rcvdIDBGetAll();
   _rcvdMemory.clear();
-  rows.forEach(r => _rcvdMemory.set(r.id, r));
+  // Keep only metadata in memory — blobs are fetched lazily to avoid OOM on reload
+  rows.forEach(r => {
+    const meta = { ...r, blob: null };
+    _rcvdMemory.set(r.id, meta);
+  });
   renderReceivedList();
 }
 
@@ -4522,7 +4573,10 @@ async function deleteReceivedFile(id) {
 
 async function seedReceivedFile(id) {
   const record = _rcvdMemory.get(id);
-  if (!record?.blob) return null;
+  if (!record) return null;
+  const blob = await getBlobForRecord(id);
+  if (!blob) return null;
+  record.blob = blob;
   try {
     await loadWebTorrent();
     const client = getWtClient();
@@ -4575,6 +4629,7 @@ function renderReceivedList() {
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'rcvd-item-thumb';
     const mime = record.type || '';
+    // Only show a live preview thumbnail if the blob is already in memory
     const kind = record.blob ? previewKind(record.filename, mime) : null;
     const provider = kind && PreviewRegistry.find(kind);
     if (provider && record.blob && record.blob.size <= PREVIEW_MAX_BYTES) {
@@ -4584,8 +4639,10 @@ function renderReceivedList() {
         openPreviewModal(record.filename, body => provider.renderDetail(body, url, { name: record.filename, mime }));
       });
       thumbWrap.appendChild(thumbEl);
+      thumbWrap.style.cursor = 'pointer';
       thumbWrap.onclick = () => openPreviewModal(record.filename, body => provider.renderDetail(body, url, { name: record.filename, mime }));
     } else {
+      // No blob in memory — show generic icon (blob loaded on demand by action buttons)
       thumbWrap.textContent = '📄';
     }
     item.appendChild(thumbWrap);
@@ -4611,15 +4668,20 @@ function renderReceivedList() {
     const actions = document.createElement('div');
     actions.className = 'rcvd-item-actions';
 
-    if (provider && record.blob) {
+    // Preview button — shown for all previewable file types; fetches blob lazily if needed
+    const previewKindForFile = previewKind(record.filename, mime);
+    const previewProvider    = previewKindForFile && PreviewRegistry.find(previewKindForFile);
+    if (previewProvider) {
       const prevBtn = document.createElement('button');
       prevBtn.type = 'button';
       prevBtn.className = 'btn btn-ghost';
       prevBtn.textContent = t('rcvdPreview');
-      prevBtn.onclick = () => {
-        const url = _createPreviewUrl(record.blob);
+      prevBtn.onclick = async () => {
+        const blob = await getBlobForRecord(record.id);
+        if (!blob) return;
+        const url = _createPreviewUrl(blob);
         openPreviewModal(record.filename, body => {
-          const cleanup = provider.renderDetail(body, url, { name: record.filename, mime });
+          const cleanup = previewProvider.renderDetail(body, url, { name: record.filename, mime });
           return () => { _revokePreviewUrl(url); if (cleanup) cleanup(); };
         });
       };
@@ -4630,7 +4692,10 @@ function renderReceivedList() {
     dlBtn.type = 'button';
     dlBtn.className = 'btn btn-ghost';
     dlBtn.textContent = t('rcvdDownload');
-    dlBtn.onclick = () => triggerDownload(record.blob, record.filename);
+    dlBtn.onclick = async () => {
+      const blob = await getBlobForRecord(record.id);
+      if (blob) triggerDownload(blob, record.filename);
+    };
     actions.appendChild(dlBtn);
 
     const seedBtn = document.createElement('button');
