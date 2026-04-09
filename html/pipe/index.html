@@ -851,6 +851,53 @@
       white-space: nowrap;
     }
     .preview-open-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Image Editor ── */
+    .img-edit-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+    }
+    .img-edit-wrap img {
+      max-width: 100%;
+      max-height: 55vh;
+      border-radius: 6px;
+      object-fit: contain;
+    }
+    .img-edit-result {
+      background:
+        repeating-conic-gradient(#bbb 0% 25%, #fff 0% 50%)
+        0 0 / 12px 12px;
+    }
+    .img-edit-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .img-edit-btn {
+      background: none;
+      border: 1px solid var(--border2);
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 0.78rem;
+      padding: 5px 12px;
+      border-radius: 4px;
+      white-space: nowrap;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .img-edit-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .img-edit-btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+    .img-edit-progress {
+      font-size: 0.76rem;
+      color: var(--muted);
+      min-width: 4em;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -3417,10 +3464,78 @@ PreviewRegistry.register({
     });
     return _a11yBtn(img, onClick, meta.name);
   },
-  renderDetail(container, url) {
-    const img = Object.assign(document.createElement('img'), { src: url });
-    container.appendChild(img);
-    return null;
+  renderDetail(container, url, meta) {
+    const wrap = document.createElement('div');
+    wrap.className = 'img-edit-wrap';
+
+    const imgEl = Object.assign(document.createElement('img'), { src: url });
+    wrap.appendChild(imgEl);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'img-edit-toolbar';
+
+    const removeBgBtn = document.createElement('button');
+    removeBgBtn.className = 'img-edit-btn';
+    removeBgBtn.textContent = currentLang === 'ja' ? '✂ 背景を削除' : '✂ Remove BG';
+
+    const progressEl = document.createElement('span');
+    progressEl.className = 'img-edit-progress';
+
+    let _resultUrl = null;
+    let _disposed = false;
+
+    removeBgBtn.addEventListener('click', async () => {
+      removeBgBtn.disabled = true;
+      progressEl.textContent = currentLang === 'ja' ? 'モデル読み込み中…' : 'Loading model…';
+      try {
+        const { removeBackground } = await import('https://esm.sh/@imgly/background-removal@1.7.0?target=es2022');
+        if (_disposed) return;
+        progressEl.textContent = currentLang === 'ja' ? '処理中…' : 'Processing…';
+        const blob = await removeBackground(url, {
+          progress(key, cur, total) {
+            if (total > 0) progressEl.textContent = `${Math.round(cur / total * 100)}%`;
+          }
+        });
+        if (_disposed) return;
+        if (_resultUrl) URL.revokeObjectURL(_resultUrl);
+        _resultUrl = URL.createObjectURL(blob);
+
+        let resultImg = wrap.querySelector('.img-edit-result');
+        if (!resultImg) {
+          resultImg = Object.assign(document.createElement('img'), { className: 'img-edit-result' });
+          wrap.insertBefore(resultImg, toolbar);
+        }
+        resultImg.src = _resultUrl;
+
+        let dlBtn = toolbar.querySelector('.img-edit-dl-btn');
+        if (!dlBtn) {
+          dlBtn = Object.assign(document.createElement('a'), { className: 'img-edit-btn img-edit-dl-btn' });
+          dlBtn.textContent = currentLang === 'ja' ? '⬇ 保存' : '⬇ Save';
+          toolbar.appendChild(dlBtn);
+        }
+        dlBtn.href = _resultUrl;
+        const safeName = (meta && meta.name ? meta.name.replace(/\.[^.]+$/, '') : 'image')
+          .replace(/[/\\?%*:|"<>]/g, '_');
+        dlBtn.download = safeName + '_nobg.png';
+
+        progressEl.textContent = '';
+        removeBgBtn.disabled = false;
+        removeBgBtn.textContent = currentLang === 'ja' ? '↺ 再実行' : '↺ Retry';
+      } catch (err) {
+        if (_disposed) return;
+        progressEl.textContent = err?.message || String(err ?? 'Error');
+        removeBgBtn.disabled = false;
+      }
+    });
+
+    toolbar.appendChild(removeBgBtn);
+    toolbar.appendChild(progressEl);
+    wrap.appendChild(toolbar);
+    container.appendChild(wrap);
+    return () => {
+      _disposed = true;
+      if (_resultUrl) URL.revokeObjectURL(_resultUrl);
+    };
   }
 });
 
