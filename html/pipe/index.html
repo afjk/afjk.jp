@@ -792,6 +792,53 @@
       color: var(--muted);
       margin-top: 2px;
     }
+    .preview-thumb-pdf {
+      background: #c0392b;
+      color: #fff;
+      font-weight: 800;
+      font-size: 0.8rem;
+      letter-spacing: .03em;
+    }
+    .preview-modal-body iframe {
+      width: 100%;
+      height: 65vh;
+      border: none;
+      border-radius: 4px;
+      background: #fff;
+    }
+    .preview-text-pre {
+      font-family: 'Menlo', 'Consolas', 'Monaco', monospace;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--text);
+      background: var(--surface2);
+      border-radius: 6px;
+      padding: 12px 14px;
+      max-height: 65vh;
+      overflow: auto;
+      width: 100%;
+      text-align: left;
+    }
+    .preview-md-body {
+      font-size: 0.88rem;
+      line-height: 1.7;
+      color: var(--text);
+      max-height: 65vh;
+      overflow: auto;
+      width: 100%;
+      text-align: left;
+    }
+    .preview-md-body h1,.preview-md-body h2,.preview-md-body h3 { margin: .8em 0 .4em; font-weight: 700; }
+    .preview-md-body p  { margin: .4em 0; }
+    .preview-md-body code { background: var(--surface2); padding: 1px 4px; border-radius: 3px; font-size: .85em; }
+    .preview-md-body pre  { background: var(--surface2); padding: 10px; border-radius: 6px; overflow-x: auto; }
+    .preview-md-body ul,.preview-md-body ol { padding-left: 1.4em; }
+    .preview-csv-wrap { max-height: 65vh; overflow: auto; width: 100%; }
+    .preview-csv-table { border-collapse: collapse; font-size: 0.8rem; width: 100%; }
+    .preview-csv-table th,.preview-csv-table td { padding: 4px 10px; border: 1px solid var(--border2); text-align: left; white-space: nowrap; }
+    .preview-csv-table th { background: var(--surface2); font-weight: 600; position: sticky; top: 0; }
     .preview-open-btn {
       background: none;
       border: 1px solid var(--border2);
@@ -3310,6 +3357,9 @@ function previewKind(name, mime) {
   if (m.startsWith('audio/') || /^(mp3|wav|ogg|oga|flac|aac|m4a|opus)$/.test(ext))      return 'audio';
   if (m === 'application/pdf' || ext === 'pdf')                                           return 'pdf';
   if (/^(glb|gltf)$/.test(ext) || /gltf/.test(m) || m === 'model/gltf-binary')          return 'model3d';
+  if (/^(md|markdown)$/.test(ext) || m === 'text/markdown')                             return 'markdown';
+  if (ext === 'csv' || m === 'text/csv')                                                return 'csv';
+  if (m.startsWith('text/') || /^(txt|log|json|xml|yaml|yml|toml|ini|sh|py|js|ts|html|css|rs|go|java|c|cpp|h)$/.test(ext)) return 'text';
   return null;
 }
 
@@ -3407,8 +3457,170 @@ PreviewRegistry.register({
   }
 });
 
+// T13: Size limits
+const PREVIEW_MAX_BYTES = 30 * 1024 * 1024; // 30 MB – skip preview above this
+
+// T10: PDF provider (uses browser built-in PDF viewer via iframe)
+PreviewRegistry.register({
+  kinds: ['pdf'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon preview-thumb-pdf';
+    el.textContent = 'PDF';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    const iframe = document.createElement('iframe');
+    iframe.src = url;
+    container.style.padding = '0';
+    container.appendChild(iframe);
+    return () => { iframe.src = ''; };
+  }
+});
+
+// T12: Text provider
+PreviewRegistry.register({
+  kinds: ['text'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon';
+    el.textContent = '📝';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    fetch(url)
+      .then(r => r.text())
+      .then(text => {
+        const pre = document.createElement('pre');
+        pre.className = 'preview-text-pre';
+        pre.textContent = text.length > 100_000 ? text.slice(0, 100_000) + '\n…(truncated)' : text;
+        container.style.alignItems = 'flex-start';
+        container.appendChild(pre);
+      });
+    return null;
+  }
+});
+
+// T12: Markdown provider (lazy-loads marked + DOMPurify)
+PreviewRegistry.register({
+  kinds: ['markdown'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon';
+    el.textContent = '📋';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    const div = document.createElement('div');
+    div.className = 'preview-md-body';
+    div.textContent = '…';
+    container.style.alignItems = 'flex-start';
+    container.appendChild(div);
+
+    const loadLibs = () => Promise.all([
+      typeof marked !== 'undefined'       ? Promise.resolve() : new Promise(res => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'; s.onload = res; document.head.appendChild(s); }),
+      typeof DOMPurify !== 'undefined'    ? Promise.resolve() : new Promise(res => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js'; s.onload = res; document.head.appendChild(s); })
+    ]);
+
+    fetch(url).then(r => r.text()).then(text => loadLibs().then(() => {
+      div.innerHTML = DOMPurify.sanitize(marked.parse(text));
+    }));
+    return null;
+  }
+});
+
+// T12: CSV provider
+PreviewRegistry.register({
+  kinds: ['csv'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon';
+    el.textContent = '📊';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    fetch(url).then(r => r.text()).then(text => {
+      const rows = text.split(/\r?\n/).filter(Boolean).slice(0, 201);
+      const parse = line => {
+        const cells = []; let cur = '', inQ = false;
+        for (const c of line) {
+          if (c === '"') { inQ = !inQ; continue; }
+          if (c === ',' && !inQ) { cells.push(cur); cur = ''; continue; }
+          cur += c;
+        }
+        cells.push(cur);
+        return cells;
+      };
+      const table = document.createElement('table');
+      table.className = 'preview-csv-table';
+      rows.forEach((row, ri) => {
+        const tr = document.createElement('tr');
+        parse(row).forEach(cell => {
+          const td = document.createElement(ri === 0 ? 'th' : 'td');
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+      if (rows.length > 200) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 999;
+        td.style.textAlign = 'center';
+        td.style.color = 'var(--muted)';
+        td.textContent = '…(200行まで表示)';
+        tr.appendChild(td); table.appendChild(tr);
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'preview-csv-wrap';
+      wrap.appendChild(table);
+      container.style.alignItems = 'flex-start';
+      container.appendChild(wrap);
+    });
+    return null;
+  }
+});
+
+// T11: GLB/GLTF provider (uses <model-viewer> web component, lazy-loaded)
+PreviewRegistry.register({
+  kinds: ['model3d'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon';
+    el.textContent = '🧊';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    const load = () => {
+      const mv = document.createElement('model-viewer');
+      mv.setAttribute('src', url);
+      mv.setAttribute('camera-controls', '');
+      mv.setAttribute('auto-rotate', '');
+      mv.setAttribute('shadow-intensity', '1');
+      mv.style.cssText = 'width:100%;height:65vh;background:#111;border-radius:6px;';
+      container.appendChild(mv);
+    };
+    if (customElements.get('model-viewer')) {
+      load();
+    } else {
+      const s = document.createElement('script');
+      s.type = 'module';
+      s.src = 'https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js';
+      s.onload = load;
+      document.head.appendChild(s);
+    }
+    return null;
+  }
+});
+
 // Build a thumb element for a File/Blob; returns { el, dispose } or null
 function buildPreviewThumb(source, name, mime) {
+  if (source.size > PREVIEW_MAX_BYTES) return null; // T13: skip large files
   const kind     = previewKind(name, mime);
   const provider = kind && PreviewRegistry.find(kind);
   if (!provider) return null;
