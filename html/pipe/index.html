@@ -673,7 +673,9 @@
       background: var(--surface2);
       flex-shrink: 0;
       display: block;
+      transition: opacity .15s, transform .15s;
     }
+    .preview-thumb:hover { opacity: .8; transform: scale(1.06); }
     .preview-thumb-icon {
       width: 56px;
       height: 56px;
@@ -685,7 +687,9 @@
       font-size: 1.6rem;
       cursor: pointer;
       flex-shrink: 0;
+      transition: background .15s, transform .15s;
     }
+    .preview-thumb-icon:hover { background: var(--border2); transform: scale(1.06); }
     .preview-modal-overlay {
       position: fixed;
       inset: 0;
@@ -788,6 +792,18 @@
       color: var(--muted);
       margin-top: 2px;
     }
+    .preview-open-btn {
+      background: none;
+      border: 1px solid var(--border2);
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .preview-open-btn:hover { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -3438,6 +3454,15 @@ function renderFileList() {
     status.textContent = '—';
     item.appendChild(status);
 
+    if (thumb) {
+      const previewBtn = document.createElement('button');
+      previewBtn.className = 'preview-open-btn';
+      previewBtn.textContent = '👁';
+      previewBtn.title = currentLang === 'ja' ? 'プレビュー' : 'Preview';
+      previewBtn.addEventListener('click', () => thumb.el.click());
+      item.appendChild(previewBtn);
+    }
+
     list.appendChild(item);
   });
   list.classList.add('visible');
@@ -3925,12 +3950,16 @@ function _showRecvPreview(blob, filename) {
   const nameEl = document.createElement('div');
   nameEl.className = 'recv-preview-card-name';
   nameEl.textContent = filename;
-  const metaEl = document.createElement('div');
-  metaEl.className = 'recv-preview-card-meta';
-  metaEl.textContent = kind;
   info.appendChild(nameEl);
-  info.appendChild(metaEl);
   card.appendChild(info);
+
+  const openBtn = document.createElement('button');
+  openBtn.className = 'preview-open-btn';
+  openBtn.textContent = currentLang === 'ja' ? '👁 プレビュー' : '👁 Preview';
+  openBtn.addEventListener('click', () => {
+    openPreviewModal(filename, body => provider.renderDetail(body, url, { name: filename, mime }));
+  });
+  card.appendChild(openBtn);
 
   area.appendChild(card);
 }
