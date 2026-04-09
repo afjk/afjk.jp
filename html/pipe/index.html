@@ -662,6 +662,148 @@
       color: var(--muted);
       border-top: 1px solid var(--border);
     }
+
+    /* ── Preview ── */
+    .preview-thumb {
+      width: 56px;
+      height: 56px;
+      border-radius: 6px;
+      object-fit: cover;
+      cursor: pointer;
+      background: var(--surface2);
+      flex-shrink: 0;
+      display: block;
+      transition: opacity .15s, transform .15s;
+    }
+    .preview-thumb:hover { opacity: .8; transform: scale(1.06); }
+    .preview-thumb-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 6px;
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.6rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background .15s, transform .15s;
+    }
+    .preview-thumb-icon:hover { background: var(--border2); transform: scale(1.06); }
+    .preview-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.88);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 16px;
+    }
+    .preview-modal {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      max-width: min(92vw, 720px);
+      width: 100%;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .preview-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .preview-modal-title {
+      font-size: 0.88rem;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .preview-modal-close {
+      background: none;
+      border: none;
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 1.2rem;
+      padding: 4px 8px;
+      flex-shrink: 0;
+      border-radius: 4px;
+    }
+    .preview-modal-close:hover { background: var(--surface2); }
+    .preview-modal-body {
+      overflow: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      flex: 1;
+    }
+    .preview-modal-body img {
+      max-width: 100%;
+      max-height: 70vh;
+      border-radius: 6px;
+      object-fit: contain;
+    }
+    .preview-modal-body video {
+      max-width: 100%;
+      max-height: 70vh;
+      border-radius: 6px;
+    }
+    .preview-modal-body audio {
+      width: 100%;
+      min-width: 260px;
+    }
+    .recv-preview-area {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .recv-preview-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+    }
+    .recv-preview-card-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .recv-preview-card-name {
+      font-size: 0.88rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .recv-preview-card-meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .preview-open-btn {
+      background: none;
+      border: 1px solid var(--border2);
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .preview-open-btn:hover { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -821,6 +963,7 @@
       <div class="prog-text" id="recv-prog-text"></div>
     </div>
     <div class="status" id="recv-status" style="margin-top:14px"></div>
+    <div class="recv-preview-area" id="recv-preview-area"></div>
     <div class="swarm-block" id="swarm-block">
       <div class="swarm-head">
         <div class="swarm-title" id="swarm-title"></div>
@@ -3156,20 +3299,170 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Preview System (T3/T4/T5/T6/T9) ──────────────────────────────────────────
+
+// T3: Detect preview kind from filename + MIME type
+function previewKind(name, mime) {
+  const ext = (name || '').split('.').pop().toLowerCase();
+  const m   = (mime || '').toLowerCase();
+  if (m.startsWith('image/') || /^(jpg|jpeg|png|gif|webp|avif|svg|bmp|ico)$/.test(ext)) return 'image';
+  if (m.startsWith('video/') || /^(mp4|webm|ogg|ogv|mov|avi|mkv)$/.test(ext))           return 'video';
+  if (m.startsWith('audio/') || /^(mp3|wav|ogg|oga|flac|aac|m4a|opus)$/.test(ext))      return 'audio';
+  if (m === 'application/pdf' || ext === 'pdf')                                           return 'pdf';
+  if (/^(glb|gltf)$/.test(ext) || /gltf/.test(m) || m === 'model/gltf-binary')          return 'model3d';
+  return null;
+}
+
+// T6: Object URL tracking
+const _previewUrls = new Set();
+function _createPreviewUrl(blob) {
+  const url = URL.createObjectURL(blob);
+  _previewUrls.add(url);
+  return url;
+}
+function _revokePreviewUrl(url) {
+  URL.revokeObjectURL(url);
+  _previewUrls.delete(url);
+}
+
+// T4: Preview Registry
+const PreviewRegistry = (() => {
+  const _providers = [];
+  return {
+    register(p) { _providers.push(p); },
+    find(kind)  { return _providers.find(p => p.kinds.includes(kind)); }
+  };
+})();
+
+// T5: Modal open/close
+let _modalCleanup = null;
+function openPreviewModal(title, renderFn) {
+  if (_modalCleanup) { _modalCleanup(); _modalCleanup = null; }
+  const overlay = document.getElementById('preview-modal-overlay');
+  const body    = document.getElementById('preview-modal-body');
+  document.getElementById('preview-modal-title').textContent = title;
+  body.innerHTML = '';
+  _modalCleanup = renderFn(body) || null;
+  overlay.style.display = 'flex';
+}
+function closePreviewModal(e) {
+  if (e && e.target !== document.getElementById('preview-modal-overlay')) return;
+  document.getElementById('preview-modal-overlay').style.display = 'none';
+  if (_modalCleanup) { _modalCleanup(); _modalCleanup = null; }
+  document.getElementById('preview-modal-body').innerHTML = '';
+}
+
+// T9: Image provider
+PreviewRegistry.register({
+  kinds: ['image'],
+  thumb(url, meta, onClick) {
+    const img = Object.assign(document.createElement('img'), {
+      src: url, className: 'preview-thumb', title: meta.name
+    });
+    img.addEventListener('click', onClick);
+    return img;
+  },
+  renderDetail(container, url) {
+    const img = Object.assign(document.createElement('img'), { src: url });
+    container.appendChild(img);
+    return null;
+  }
+});
+
+// T9: Video provider
+PreviewRegistry.register({
+  kinds: ['video'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon';
+    el.textContent = '🎬';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    const v = Object.assign(document.createElement('video'), {
+      src: url, controls: true
+    });
+    container.appendChild(v);
+    return () => { v.pause(); v.src = ''; };
+  }
+});
+
+// T9: Audio provider
+PreviewRegistry.register({
+  kinds: ['audio'],
+  thumb(url, meta, onClick) {
+    const el = document.createElement('div');
+    el.className = 'preview-thumb-icon';
+    el.textContent = '🎵';
+    el.addEventListener('click', onClick);
+    return el;
+  },
+  renderDetail(container, url) {
+    const a = Object.assign(document.createElement('audio'), {
+      src: url, controls: true
+    });
+    container.appendChild(a);
+    return () => { a.pause(); a.src = ''; };
+  }
+});
+
+// Build a thumb element for a File/Blob; returns { el, dispose } or null
+function buildPreviewThumb(source, name, mime) {
+  const kind     = previewKind(name, mime);
+  const provider = kind && PreviewRegistry.find(kind);
+  if (!provider) return null;
+  const url = _createPreviewUrl(source);
+  const el  = provider.thumb(url, { name, mime }, () => {
+    openPreviewModal(name, body => provider.renderDetail(body, url, { name, mime }));
+  });
+  return { el, dispose: () => _revokePreviewUrl(url) };
+}
+
 function renderFileList() {
   const list = document.getElementById('file-list');
+  // Dispose any previous preview Object URLs
+  if (list._previewDisposers) list._previewDisposers.forEach(d => d());
+  list._previewDisposers = [];
   list.innerHTML = '';
   selFiles.forEach(({ file }, i) => {
     const item = document.createElement('div');
     item.className = 'file-list-item';
     item.id = `fli-${i}`;
-    item.innerHTML =
-      `<div class="file-list-item-icon">📄</div>` +
-      `<div class="file-list-item-info">` +
-        `<div class="file-list-item-name">${escHtml(file.name)}</div>` +
-        `<div class="file-list-item-meta">${fmt(file.size)} · ${escHtml(file.type || 'application/octet-stream')}</div>` +
-      `</div>` +
-      `<div class="file-list-item-status" id="fli-status-${i}">—</div>`;
+
+    const thumb = buildPreviewThumb(file, file.name, file.type || '');
+    if (thumb) {
+      list._previewDisposers.push(thumb.dispose);
+      item.appendChild(thumb.el);
+    } else {
+      const icon = document.createElement('div');
+      icon.className = 'file-list-item-icon';
+      icon.textContent = '📄';
+      item.appendChild(icon);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'file-list-item-info';
+    info.innerHTML =
+      `<div class="file-list-item-name">${escHtml(file.name)}</div>` +
+      `<div class="file-list-item-meta">${fmt(file.size)} · ${escHtml(file.type || 'application/octet-stream')}</div>`;
+    item.appendChild(info);
+
+    const status = document.createElement('div');
+    status.className = 'file-list-item-status';
+    status.id = `fli-status-${i}`;
+    status.textContent = '—';
+    item.appendChild(status);
+
+    if (thumb) {
+      const previewBtn = document.createElement('button');
+      previewBtn.className = 'preview-open-btn';
+      previewBtn.textContent = '👁';
+      previewBtn.title = currentLang === 'ja' ? 'プレビュー' : 'Preview';
+      previewBtn.addEventListener('click', () => thumb.el.click());
+      item.appendChild(previewBtn);
+    }
+
     list.appendChild(item);
   });
   list.classList.add('visible');
@@ -3350,7 +3643,10 @@ function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
 function resetSend() {
   selFiles = []; fi.value = '';
   const fileList = document.getElementById('file-list');
-  if (fileList) { fileList.innerHTML = ''; fileList.classList.remove('visible'); }
+  if (fileList) {
+    if (fileList._previewDisposers) { fileList._previewDisposers.forEach(d => d()); fileList._previewDisposers = []; }
+    fileList.innerHTML = ''; fileList.classList.remove('visible');
+  }
   ['file-card','send-url-block','prog-wrap'].forEach(id =>
     document.getElementById(id).style.display = 'none');
   hideQR('send-qr-wrap');
@@ -3379,6 +3675,8 @@ function _recvStart() {
   document.getElementById('recv-prog-bar').style.width = '0%';
   document.getElementById('recv-prog-text').textContent = '';
   setRecvSender('recv-from', null);
+  const previewArea = document.getElementById('recv-preview-area');
+  if (previewArea) previewArea.innerHTML = '';
 }
 function _recvEnd() {
   document.getElementById('recv-btn').disabled          = false;
@@ -3627,6 +3925,43 @@ function triggerDownload(blob, filename) {
   const a   = Object.assign(document.createElement('a'), { href: url, download: filename });
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  _showRecvPreview(blob, filename);
+}
+
+function _showRecvPreview(blob, filename) {
+  const mime     = blob.type || '';
+  const kind     = previewKind(filename, mime);
+  const provider = kind && PreviewRegistry.find(kind);
+  if (!provider) return;
+  const area = document.getElementById('recv-preview-area');
+  if (!area) return;
+
+  const url  = _createPreviewUrl(blob);
+  const card = document.createElement('div');
+  card.className = 'recv-preview-card';
+
+  const thumbEl = provider.thumb(url, { name: filename, mime }, () => {
+    openPreviewModal(filename, body => provider.renderDetail(body, url, { name: filename, mime }));
+  });
+  card.appendChild(thumbEl);
+
+  const info = document.createElement('div');
+  info.className = 'recv-preview-card-info';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'recv-preview-card-name';
+  nameEl.textContent = filename;
+  info.appendChild(nameEl);
+  card.appendChild(info);
+
+  const openBtn = document.createElement('button');
+  openBtn.className = 'preview-open-btn';
+  openBtn.textContent = currentLang === 'ja' ? '👁 プレビュー' : '👁 Preview';
+  openBtn.addEventListener('click', () => {
+    openPreviewModal(filename, body => provider.renderDetail(body, url, { name: filename, mime }));
+  });
+  card.appendChild(openBtn);
+
+  area.appendChild(card);
 }
 
 function resolveChunking(pc) {
@@ -4038,5 +4373,16 @@ window.addEventListener('beforeunload', () => {
   unregisterAllLocalSeeders();
 });
 </script>
+
+<!-- ── Preview Modal ── -->
+<div class="preview-modal-overlay" id="preview-modal-overlay" style="display:none" onclick="closePreviewModal(event)">
+  <div class="preview-modal" id="preview-modal">
+    <div class="preview-modal-header">
+      <div class="preview-modal-title" id="preview-modal-title"></div>
+      <button class="preview-modal-close" onclick="closePreviewModal()">✕</button>
+    </div>
+    <div class="preview-modal-body" id="preview-modal-body"></div>
+  </div>
+</div>
 </body>
 </html>
