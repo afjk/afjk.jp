@@ -1196,6 +1196,9 @@ const I18N = {
     gdriveDownloading: 'Driveからダウンロード中…',
     gdriveDone:        n => `${n}件のファイルを読み込みました`,
     gdriveError:       msg => `Google Drive エラー: ${msg}`,
+    previewCsvRows:    n => `…(${n}行まで表示)`,
+    previewTruncated:  n => `…(${n}文字で打ち切り)`,
+    previewLoadError:  'プレビューの表示に失敗しました',
   },
   en: {
     copying:            'Copied ✓',
@@ -1284,6 +1287,9 @@ const I18N = {
     gdriveDownloading: 'Downloading from Drive…',
     gdriveDone:        n => `${n} file${n === 1 ? '' : 's'} loaded from Drive`,
     gdriveError:       msg => `Google Drive error: ${msg}`,
+    previewCsvRows:    n => `…(showing up to ${n} rows)`,
+    previewTruncated:  n => `…(truncated at ${n} chars)`,
+    previewLoadError:  'Failed to load preview',
   }
 };
 
@@ -3407,10 +3413,9 @@ PreviewRegistry.register({
   kinds: ['image'],
   thumb(url, meta, onClick) {
     const img = Object.assign(document.createElement('img'), {
-      src: url, className: 'preview-thumb', title: meta.name
+      src: url, className: 'preview-thumb'
     });
-    img.addEventListener('click', onClick);
-    return img;
+    return _a11yBtn(img, onClick, meta.name);
   },
   renderDetail(container, url) {
     const img = Object.assign(document.createElement('img'), { src: url });
@@ -3426,8 +3431,7 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon';
     el.textContent = '🎬';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
     const v = Object.assign(document.createElement('video'), {
@@ -3445,8 +3449,7 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon';
     el.textContent = '🎵';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
     const a = Object.assign(document.createElement('audio'), {
@@ -3456,6 +3459,16 @@ PreviewRegistry.register({
     return () => { a.pause(); a.src = ''; };
   }
 });
+
+// Accessibility: make any element act as a keyboard-accessible button
+function _a11yBtn(el, onClick, label) {
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+  if (label) el.setAttribute('aria-label', label);
+  el.addEventListener('click', onClick);
+  el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); } });
+  return el;
+}
 
 // T13: Size limits
 const PREVIEW_MAX_BYTES = 30 * 1024 * 1024; // 30 MB – skip preview above this
@@ -3467,12 +3480,15 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon preview-thumb-pdf';
     el.textContent = 'PDF';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
-    const iframe = document.createElement('iframe');
-    iframe.src = url;
+    const iframe = Object.assign(document.createElement('iframe'), {
+      src: url,
+      title: 'PDF preview',
+      referrerPolicy: 'no-referrer',
+      sandbox: 'allow-same-origin allow-scripts allow-downloads'
+    });
     container.style.padding = '0';
     container.appendChild(iframe);
     return () => { iframe.src = ''; };
@@ -3486,20 +3502,25 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon';
     el.textContent = '📝';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
-    fetch(url)
-      .then(r => r.text())
+    const ac = new AbortController();
+    const pre = document.createElement('pre');
+    pre.className = 'preview-text-pre';
+    pre.textContent = '…';
+    container.style.alignItems = 'flex-start';
+    container.appendChild(pre);
+    fetch(url, { signal: ac.signal })
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
       .then(text => {
-        const pre = document.createElement('pre');
-        pre.className = 'preview-text-pre';
-        pre.textContent = text.length > 100_000 ? text.slice(0, 100_000) + '\n…(truncated)' : text;
-        container.style.alignItems = 'flex-start';
-        container.appendChild(pre);
-      });
-    return null;
+        const LIMIT = 100_000;
+        pre.textContent = text.length > LIMIT
+          ? text.slice(0, LIMIT) + '\n' + t('previewTruncated')(LIMIT)
+          : text;
+      })
+      .catch(e => { if (e.name !== 'AbortError') pre.textContent = t('previewLoadError'); });
+    return () => ac.abort();
   }
 });
 
@@ -3510,25 +3531,45 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon';
     el.textContent = '📋';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
+    const ac = new AbortController();
+    let disposed = false;
     const div = document.createElement('div');
     div.className = 'preview-md-body';
     div.textContent = '…';
     container.style.alignItems = 'flex-start';
     container.appendChild(div);
 
-    const loadLibs = () => Promise.all([
-      typeof marked !== 'undefined'       ? Promise.resolve() : new Promise(res => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'; s.onload = res; document.head.appendChild(s); }),
-      typeof DOMPurify !== 'undefined'    ? Promise.resolve() : new Promise(res => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js'; s.onload = res; document.head.appendChild(s); })
-    ]);
+    const loadLib = (varName, src) => varName in window
+      ? Promise.resolve()
+      : new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = src;
+          s.onload = res;
+          s.onerror = () => rej(new Error(`Failed to load ${src}`));
+          document.head.appendChild(s);
+        });
 
-    fetch(url).then(r => r.text()).then(text => loadLibs().then(() => {
-      div.innerHTML = DOMPurify.sanitize(marked.parse(text));
-    }));
-    return null;
+    (async () => {
+      try {
+        const r = await fetch(url, { signal: ac.signal });
+        if (!r.ok) throw new Error(r.status);
+        const text = await r.text();
+        await Promise.all([
+          loadLib('marked',     'https://cdn.jsdelivr.net/npm/marked/marked.min.js'),
+          loadLib('DOMPurify',  'https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js')
+        ]);
+        if (disposed || !div.isConnected) return;
+        div.innerHTML = DOMPurify.sanitize(marked.parse(text));
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!disposed && div.isConnected) div.textContent = t('previewLoadError');
+      }
+    })();
+
+    return () => { disposed = true; ac.abort(); };
   }
 });
 
@@ -3539,49 +3580,71 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon';
     el.textContent = '📊';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
-    fetch(url).then(r => r.text()).then(text => {
-      const rows = text.split(/\r?\n/).filter(Boolean).slice(0, 201);
-      const parse = line => {
-        const cells = []; let cur = '', inQ = false;
-        for (const c of line) {
-          if (c === '"') { inQ = !inQ; continue; }
-          if (c === ',' && !inQ) { cells.push(cur); cur = ''; continue; }
-          cur += c;
+    const ac = new AbortController();
+    const wrap = document.createElement('div');
+    wrap.className = 'preview-csv-wrap';
+    wrap.textContent = '…';
+    container.style.alignItems = 'flex-start';
+    container.appendChild(wrap);
+
+    const parseCsv = (input, maxRows) => {
+      const rows = []; let row = [], cell = '', inQ = false, started = false;
+      const pushCell = () => { row.push(cell); cell = ''; started = true; };
+      const pushRow  = () => { row.push(cell); rows.push(row); row = []; cell = ''; started = false; };
+      for (let i = 0; i < input.length; i++) {
+        const c = input[i];
+        if (c === '"') {
+          if (inQ && input[i + 1] === '"') { cell += '"'; i++; }
+          else if (inQ) { inQ = false; }
+          else if (cell === '') { inQ = true; started = true; }
+          else { cell += c; started = true; }
+          continue;
         }
-        cells.push(cur);
-        return cells;
-      };
-      const table = document.createElement('table');
-      table.className = 'preview-csv-table';
-      rows.forEach((row, ri) => {
-        const tr = document.createElement('tr');
-        parse(row).forEach(cell => {
-          const td = document.createElement(ri === 0 ? 'th' : 'td');
-          td.textContent = cell;
-          tr.appendChild(td);
-        });
-        table.appendChild(tr);
-      });
-      if (rows.length > 200) {
-        const tr = document.createElement('tr');
-        const td = document.createElement('td');
-        td.colSpan = 999;
-        td.style.textAlign = 'center';
-        td.style.color = 'var(--muted)';
-        td.textContent = '…(200行まで表示)';
-        tr.appendChild(td); table.appendChild(tr);
+        if (c === ',' && !inQ) { pushCell(); continue; }
+        if ((c === '\n' || c === '\r') && !inQ) {
+          if (c === '\r' && input[i + 1] === '\n') i++;
+          if (started || cell || row.length) { pushRow(); if (rows.length >= maxRows) break; }
+          continue;
+        }
+        cell += c; started = true;
       }
-      const wrap = document.createElement('div');
-      wrap.className = 'preview-csv-wrap';
-      wrap.appendChild(table);
-      container.style.alignItems = 'flex-start';
-      container.appendChild(wrap);
-    });
-    return null;
+      if (rows.length < maxRows && (started || cell || row.length)) pushRow();
+      return rows;
+    };
+
+    fetch(url, { signal: ac.signal })
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(text => {
+        const MAX = 200;
+        const rows = parseCsv(text, MAX + 1);
+        const table = document.createElement('table');
+        table.className = 'preview-csv-table';
+        rows.slice(0, MAX).forEach((row, ri) => {
+          const tr = document.createElement('tr');
+          row.forEach(cell => {
+            const td = document.createElement(ri === 0 ? 'th' : 'td');
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+        if (rows.length > MAX) {
+          const tr = document.createElement('tr');
+          const td = Object.assign(document.createElement('td'), {
+            colSpan: 999, textContent: t('previewCsvRows')(MAX)
+          });
+          td.style.cssText = 'text-align:center;color:var(--muted)';
+          tr.appendChild(td); table.appendChild(tr);
+        }
+        wrap.textContent = '';
+        wrap.appendChild(table);
+      })
+      .catch(e => { if (e.name !== 'AbortError') wrap.textContent = t('previewLoadError'); });
+
+    return () => ac.abort();
   }
 });
 
@@ -3592,11 +3655,12 @@ PreviewRegistry.register({
     const el = document.createElement('div');
     el.className = 'preview-thumb-icon';
     el.textContent = '🧊';
-    el.addEventListener('click', onClick);
-    return el;
+    return _a11yBtn(el, onClick, meta.name);
   },
   renderDetail(container, url) {
+    let disposed = false;
     const load = () => {
+      if (disposed || !container.isConnected) return;
       const mv = document.createElement('model-viewer');
       mv.setAttribute('src', url);
       mv.setAttribute('camera-controls', '');
@@ -3614,7 +3678,7 @@ PreviewRegistry.register({
       s.onload = load;
       document.head.appendChild(s);
     }
-    return null;
+    return () => { disposed = true; };
   }
 });
 
