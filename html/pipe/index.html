@@ -3482,18 +3482,21 @@ PreviewRegistry.register({
     progressEl.className = 'img-edit-progress';
 
     let _resultUrl = null;
+    let _disposed = false;
 
     removeBgBtn.addEventListener('click', async () => {
       removeBgBtn.disabled = true;
       progressEl.textContent = currentLang === 'ja' ? 'モデル読み込み中…' : 'Loading model…';
       try {
-        const { removeBackground } = await import('https://esm.sh/@imgly/background-removal');
+        const { removeBackground } = await import('https://esm.sh/@imgly/background-removal@1.7.0?target=es2022');
+        if (_disposed) return;
         progressEl.textContent = currentLang === 'ja' ? '処理中…' : 'Processing…';
         const blob = await removeBackground(url, {
           progress(key, cur, total) {
             if (total > 0) progressEl.textContent = `${Math.round(cur / total * 100)}%`;
           }
         });
+        if (_disposed) return;
         if (_resultUrl) URL.revokeObjectURL(_resultUrl);
         _resultUrl = URL.createObjectURL(blob);
 
@@ -3511,13 +3514,16 @@ PreviewRegistry.register({
           toolbar.appendChild(dlBtn);
         }
         dlBtn.href = _resultUrl;
-        dlBtn.download = (meta && meta.name ? meta.name.replace(/\.[^.]+$/, '') : 'image') + '_nobg.png';
+        const safeName = (meta && meta.name ? meta.name.replace(/\.[^.]+$/, '') : 'image')
+          .replace(/[/\\?%*:|"<>]/g, '_');
+        dlBtn.download = safeName + '_nobg.png';
 
         progressEl.textContent = '';
         removeBgBtn.disabled = false;
         removeBgBtn.textContent = currentLang === 'ja' ? '↺ 再実行' : '↺ Retry';
       } catch (err) {
-        progressEl.textContent = err.message || 'Error';
+        if (_disposed) return;
+        progressEl.textContent = err?.message || String(err ?? 'Error');
         removeBgBtn.disabled = false;
       }
     });
@@ -3526,7 +3532,10 @@ PreviewRegistry.register({
     toolbar.appendChild(progressEl);
     wrap.appendChild(toolbar);
     container.appendChild(wrap);
-    return () => { if (_resultUrl) URL.revokeObjectURL(_resultUrl); };
+    return () => {
+      _disposed = true;
+      if (_resultUrl) URL.revokeObjectURL(_resultUrl);
+    };
   }
 });
 
