@@ -483,7 +483,7 @@
       margin-top: 2px;
     }
     .swarm-item-actions { flex-shrink: 0; display: flex; gap: 8px; }
-    .swarm-item .btn-ghost { padding: 6px 12px; font-size: 0.78rem; }
+    .swarm-item .btn-ghost { padding: 5px 8px; font-size: 1rem; line-height: 1; }
 
     /* ── Received files block ── */
     .rcvd-block {
@@ -556,7 +556,7 @@
       flex-wrap: wrap;
       justify-content: flex-end;
     }
-    .rcvd-item .btn-ghost { padding: 5px 10px; font-size: 0.76rem; }
+    .rcvd-item .btn-ghost { padding: 5px 8px; font-size: 1rem; line-height: 1; }
     .rcvd-item .seed-active { color: #4fc; border-color: #4fc; }
 
     /* ── Notification toast ── */
@@ -2630,8 +2630,8 @@ function renderSwarmList() {
     const dlBtn = document.createElement('button');
     dlBtn.type = 'button';
     dlBtn.className = 'btn btn-ghost';
-    dlBtn.textContent = t('swarmDownload');
-    if (isCatalogOnly) dlBtn.title = t('swarmCatalogOnly');
+    dlBtn.textContent = '📥';
+    dlBtn.title = isCatalogOnly ? t('swarmCatalogOnly') : t('swarmDownload');
     dlBtn.onclick = () => {
       const label = swarmEntryLabel(entry);
       requestSwarmPeerConnection(entry);
@@ -2643,7 +2643,8 @@ function renderSwarmList() {
       const prevBtn = document.createElement('button');
       prevBtn.type = 'button';
       prevBtn.className = 'btn btn-ghost';
-      prevBtn.textContent = t('rcvdPreview');
+      prevBtn.textContent = '👁';
+      prevBtn.title = t('rcvdPreview');
       prevBtn.onclick = async () => {
         const stored = localCatalog.get(infoHash) || await swarmIDBGet(infoHash);
         if (!stored?.files?.length) return;
@@ -2659,13 +2660,13 @@ function renderSwarmList() {
           return () => { _revokePreviewUrl(url); if (cleanup) cleanup(); };
         });
       };
-      prevBtn.style.visibility = '';
       actions.appendChild(prevBtn);
     }
     const rmBtn = document.createElement('button');
     rmBtn.type = 'button';
     rmBtn.className = 'btn btn-ghost';
-    rmBtn.textContent = t('swarmRemoveLocal');
+    rmBtn.textContent = '🗑';
+    rmBtn.title = t('swarmRemoveLocal');
     rmBtn.onclick = () => removeLocalArchive(infoHash);
     rmBtn.style.visibility = ownsLocal ? '' : 'hidden';
     actions.appendChild(rmBtn);
@@ -4675,7 +4676,8 @@ function renderReceivedList() {
       const prevBtn = document.createElement('button');
       prevBtn.type = 'button';
       prevBtn.className = 'btn btn-ghost';
-      prevBtn.textContent = t('rcvdPreview');
+      prevBtn.textContent = '👁';
+      prevBtn.title = t('rcvdPreview');
       prevBtn.onclick = async () => {
         const blob = await getBlobForRecord(record.id);
         if (!blob) return;
@@ -4691,7 +4693,8 @@ function renderReceivedList() {
     const dlBtn = document.createElement('button');
     dlBtn.type = 'button';
     dlBtn.className = 'btn btn-ghost';
-    dlBtn.textContent = t('rcvdDownload');
+    dlBtn.textContent = '📥';
+    dlBtn.title = t('rcvdDownload');
     dlBtn.onclick = async () => {
       const blob = await getBlobForRecord(record.id);
       if (blob) triggerDownload(blob, record.filename);
@@ -4701,7 +4704,8 @@ function renderReceivedList() {
     const seedBtn = document.createElement('button');
     seedBtn.type = 'button';
     seedBtn.className = 'btn btn-ghost' + (record.infoHash ? ' seed-active' : '');
-    seedBtn.textContent = record.infoHash ? t('rcvdSeeding') : t('rcvdSeed');
+    seedBtn.textContent = record.infoHash ? '📡' : '🌐';
+    seedBtn.title = record.infoHash ? t('rcvdSeeding') : t('rcvdSeed');
     seedBtn.disabled = !!record.infoHash;
     seedBtn.onclick = () => seedReceivedFile(record.id);
     actions.appendChild(seedBtn);
@@ -4709,7 +4713,8 @@ function renderReceivedList() {
     const rmBtn = document.createElement('button');
     rmBtn.type = 'button';
     rmBtn.className = 'btn btn-ghost';
-    rmBtn.textContent = t('rcvdRemove');
+    rmBtn.textContent = '🗑';
+    rmBtn.title = t('rcvdRemove');
     rmBtn.onclick = () => deleteReceivedFile(record.id);
     actions.appendChild(rmBtn);
 
