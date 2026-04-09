@@ -485,6 +485,103 @@
     .swarm-item-actions { flex-shrink: 0; display: flex; gap: 8px; }
     .swarm-item .btn-ghost { padding: 6px 12px; font-size: 0.78rem; }
 
+    /* ── Received files block ── */
+    .rcvd-block {
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .rcvd-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .rcvd-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .rcvd-empty {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      padding: 6px 0;
+    }
+    .rcvd-list { display: flex; flex-direction: column; gap: 0; }
+    .rcvd-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 0;
+      border-top: 1px solid var(--border2);
+    }
+    .rcvd-item:first-child { border-top: none; padding-top: 0; }
+    .rcvd-item:last-child { padding-bottom: 0; }
+    .rcvd-item-thumb {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+    .rcvd-item-thumb img,
+    .rcvd-item-thumb video,
+    .rcvd-item-thumb canvas { width: 100%; height: 100%; object-fit: cover; }
+    .rcvd-item-main { flex: 1; min-width: 0; }
+    .rcvd-item-name {
+      font-weight: 600;
+      font-size: 0.88rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .rcvd-item-meta {
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .rcvd-item-actions {
+      flex-shrink: 0;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .rcvd-item .btn-ghost { padding: 5px 10px; font-size: 0.76rem; }
+    .rcvd-item .seed-active { color: #4fc; border-color: #4fc; }
+
+    /* ── Notification toast ── */
+    .rcvd-toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 12px 18px;
+      font-size: 0.82rem;
+      color: var(--text);
+      box-shadow: 0 4px 24px rgba(0,0,0,.5);
+      z-index: 9999;
+      max-width: 320px;
+      word-break: break-all;
+      animation: rcvd-fadein .25s ease;
+    }
+    @keyframes rcvd-fadein {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .rcvd-toast-title { font-weight: 600; margin-bottom: 2px; color: #4fc; }
+
     /* ── Sender badge ── */
     .recv-from {
       display: none;
@@ -1011,6 +1108,13 @@
     </div>
     <div class="status" id="recv-status" style="margin-top:14px"></div>
     <div class="recv-preview-area" id="recv-preview-area"></div>
+    <div class="rcvd-block" id="rcvd-block">
+      <div class="rcvd-head">
+        <div class="rcvd-title" id="rcvd-title"></div>
+      </div>
+      <div class="rcvd-empty" id="rcvd-empty"></div>
+      <div class="rcvd-list" id="rcvd-list"></div>
+    </div>
     <div class="swarm-block" id="swarm-block">
       <div class="swarm-head">
         <div class="swarm-title" id="swarm-title"></div>
@@ -1199,6 +1303,16 @@ const I18N = {
     previewCsvRows:    n => `…(${n}行まで表示)`,
     previewTruncated:  n => `…(${n}文字で打ち切り)`,
     previewLoadError:  'プレビューの表示に失敗しました',
+    rcvdHeading:       '受信したファイル',
+    rcvdEmpty:         'まだ受信したファイルはありません。',
+    rcvdDownload:      'ダウンロード',
+    rcvdPreview:       'プレビュー',
+    rcvdSeed:          'ルームに共有',
+    rcvdRemove:        '削除',
+    rcvdFrom:          name => `${name} から受信`,
+    rcvdNotify:        (sender, name) => `${sender} からファイルが届きました: ${name}`,
+    rcvdAdded:         name => `「${name}」を受信しました。リストに追加しました。`,
+    rcvdSeeding:       'シーディング中',
   },
   en: {
     copying:            'Copied ✓',
@@ -1290,6 +1404,16 @@ const I18N = {
     previewCsvRows:    n => `…(showing up to ${n} rows)`,
     previewTruncated:  n => `…(truncated at ${n} chars)`,
     previewLoadError:  'Failed to load preview',
+    rcvdHeading:       'Received Files',
+    rcvdEmpty:         'No files received yet.',
+    rcvdDownload:      'Download',
+    rcvdPreview:       'Preview',
+    rcvdSeed:          'Share to Room',
+    rcvdRemove:        'Remove',
+    rcvdFrom:          name => `From ${name}`,
+    rcvdNotify:        (sender, name) => `File received from ${sender}: ${name}`,
+    rcvdAdded:         name => `"${name}" received. Added to list.`,
+    rcvdSeeding:       'Seeding',
   }
 };
 
@@ -1334,6 +1458,7 @@ function setLang(lang) {
   }
   renderHistory();
   renderSwarmList();
+  renderReceivedList();
 }
 
 // ── Stats reporting ───────────────────────────────────────────────────────────
@@ -1446,6 +1571,69 @@ async function swarmIDBDelete(infoHash) {
     await new Promise(resolve => {
       const tx  = db.transaction(SWARM_IDB_STORE, 'readwrite');
       const req = tx.objectStore(SWARM_IDB_STORE).delete(infoHash);
+      req.onsuccess = () => resolve();
+      req.onerror   = () => resolve();
+    });
+  } catch {}
+}
+
+// ── Received files IndexedDB (pipe-received) ──────────────────────────────────
+const RCVD_IDB_NAME    = 'pipe-received';
+const RCVD_IDB_STORE   = 'files';
+const RCVD_IDB_VERSION = 1;
+let _rcvdDb = null;
+
+function openReceivedDb() {
+  if (_rcvdDb) return Promise.resolve(_rcvdDb);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(RCVD_IDB_NAME, RCVD_IDB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(RCVD_IDB_STORE)) {
+        db.createObjectStore(RCVD_IDB_STORE, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = e => { _rcvdDb = e.target.result; resolve(_rcvdDb); };
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function rcvdIDBPut(record) {
+  try {
+    const db = await openReceivedDb();
+    return await new Promise((resolve, reject) => {
+      const tx  = db.transaction(RCVD_IDB_STORE, 'readwrite');
+      const req = tx.objectStore(RCVD_IDB_STORE).put(record);
+      req.onsuccess = () => resolve(req.result); // returns id
+      req.onerror   = () => reject(req.error);
+    });
+  } catch (e) {
+    console.warn('[rcvd] IDB put failed', e);
+    return null;
+  }
+}
+
+async function rcvdIDBGetAll() {
+  try {
+    const db = await openReceivedDb();
+    return await new Promise(resolve => {
+      const tx  = db.transaction(RCVD_IDB_STORE, 'readonly');
+      const req = tx.objectStore(RCVD_IDB_STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror   = () => resolve([]);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function rcvdIDBDelete(id) {
+  if (!id) return;
+  try {
+    const db = await openReceivedDb();
+    await new Promise(resolve => {
+      const tx  = db.transaction(RCVD_IDB_STORE, 'readwrite');
+      const req = tx.objectStore(RCVD_IDB_STORE).delete(id);
       req.onsuccess = () => resolve();
       req.onerror   = () => resolve();
     });
@@ -2426,6 +2614,30 @@ function renderSwarmList() {
       setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
       receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
     };
+    // Preview button — only if we have the blobs locally
+    if (ownsLocal) {
+      const prevBtn = document.createElement('button');
+      prevBtn.type = 'button';
+      prevBtn.className = 'btn btn-ghost';
+      prevBtn.textContent = t('rcvdPreview');
+      prevBtn.onclick = async () => {
+        const stored = localCatalog.get(infoHash) || await swarmIDBGet(infoHash);
+        if (!stored?.files?.length) return;
+        const first = stored.files[0];
+        if (!first?.blob) return;
+        const mime = first.type || first.blob.type || '';
+        const kind = previewKind(first.name || '', mime);
+        const provider = kind && PreviewRegistry.find(kind);
+        if (!provider) { triggerDownload(first.blob, first.name || 'file'); return; }
+        const url = _createPreviewUrl(first.blob);
+        openPreviewModal(first.name || 'file', body => {
+          const cleanup = provider.renderDetail(body, url, { name: first.name || 'file', mime });
+          return () => { _revokePreviewUrl(url); if (cleanup) cleanup(); };
+        });
+      };
+      prevBtn.style.visibility = '';
+      actions.appendChild(prevBtn);
+    }
     const rmBtn = document.createElement('button');
     rmBtn.type = 'button';
     rmBtn.className = 'btn btn-ghost';
@@ -2830,12 +3042,14 @@ async function receiveTorrent(magnetURI, sender) {
     document.getElementById('recv-prog-bar').style.width = '100%';
     setStatus('recv-status', t('torrentDone'), 'ok');
     logSwarm('torrent done', torrent.infoHash);
-    triggerTorrentDownloads(torrent);
     registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
     reportTransfer('torrent', torrent.length || 0);
     collectFilesFromTorrent(torrent).then(files => {
       if (files.length) {
         persistLocalArchive(torrent.infoHash || extractInfoHash(magnetURI), magnetURI, files);
+        // Notify for each received file instead of auto-downloading
+        files.forEach(f => notifyFileShared(f.name, sender));
+        renderSwarmList();
       }
     });
   });
@@ -3985,7 +4199,7 @@ async function startReceive(sender = null) {
 
   const ok = await tryRecvWebRTC(path,
     msg => setStatus('recv-status', msg, 'waiting'),
-    (msg, blob, filename) => { triggerDownload(blob, filename); setStatus('recv-status', msg, 'ok'); _recvEnd(); },
+    (msg, blob, filename) => { saveReceivedAndNotify(blob, filename, sender); _recvEnd(); },
     (received, total) => _recvProgress(received, total)
   );
 
@@ -4016,17 +4230,15 @@ async function startReceiveFiles(sigPath, fileInfos, sender) {
   const ok = await tryRecvWebRTC(sigPath,
     msg => setStatus('recv-status', msg, 'waiting'),
     (msg, blob, filename) => {
-      triggerDownload(blob, filename);
+      saveReceivedAndNotify(blob, filename, sender);
       filesReceived++;
       if (filesReceived >= fileCount) {
-        const finalMsg = fileCount > 1 ? t('allDone')(fileCount) : msg;
-        setStatus('recv-status', finalMsg, 'ok');
         _recvEnd();
       } else {
         setStatus('recv-status',
           currentLang === 'ja'
-            ? `${filesReceived}/${fileCount} 完了…`
-            : `${filesReceived}/${fileCount} done…`,
+            ? `${filesReceived}/${fileCount} 受信済み…`
+            : `${filesReceived}/${fileCount} received…`,
           'waiting');
       }
     },
@@ -4238,6 +4450,207 @@ function _showRecvPreview(blob, filename) {
   card.appendChild(openBtn);
 
   area.appendChild(card);
+}
+
+// ── Received files: save + notify + render ────────────────────────────────────
+
+// In-page toast notification (fallback when Notification API unavailable)
+function _showToast(title, body) {
+  const el = document.createElement('div');
+  el.className = 'rcvd-toast';
+  const h = document.createElement('div');
+  h.className = 'rcvd-toast-title';
+  h.textContent = title;
+  el.appendChild(h);
+  if (body) {
+    const b = document.createElement('div');
+    b.textContent = body;
+    el.appendChild(b);
+  }
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+function notifyFileShared(filename, sender) {
+  const title = currentLang === 'ja' ? '📥 ファイル受信' : '📥 File Received';
+  const body  = t('rcvdNotify')(sender || t('stranger'), filename);
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try { new Notification(title, { body, icon: '/favicon-192x192.png' }); } catch {}
+  } else {
+    _showToast(title, body);
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }
+}
+
+// In-memory list (mirrors IDB, keyed by id)
+const _rcvdMemory = new Map(); // id → record
+
+async function saveReceivedAndNotify(blob, filename, sender) {
+  if (!blob || !filename) return;
+  const record = {
+    filename,
+    size:       blob.size,
+    type:       blob.type || 'application/octet-stream',
+    sender:     sender || '',
+    receivedAt: Date.now(),
+    blob,
+    magnetURI:  null,
+    infoHash:   null,
+  };
+  const id = await rcvdIDBPut(record);
+  if (id != null) record.id = id;
+  _rcvdMemory.set(id, record);
+  notifyFileShared(filename, sender);
+  setStatus('recv-status', t('rcvdAdded')(filename), 'ok');
+  renderReceivedList();
+}
+
+async function loadAllReceivedFiles() {
+  const rows = await rcvdIDBGetAll();
+  _rcvdMemory.clear();
+  rows.forEach(r => _rcvdMemory.set(r.id, r));
+  renderReceivedList();
+}
+
+async function deleteReceivedFile(id) {
+  await rcvdIDBDelete(id);
+  _rcvdMemory.delete(id);
+  renderReceivedList();
+}
+
+async function seedReceivedFile(id) {
+  const record = _rcvdMemory.get(id);
+  if (!record?.blob) return null;
+  try {
+    await loadWebTorrent();
+    const client = getWtClient();
+    const file   = new File([record.blob], record.filename, { type: record.type });
+    return await new Promise(resolve => {
+      client.seed(file, torrent => {
+        record.magnetURI = torrent.magnetURI;
+        record.infoHash  = torrent.infoHash;
+        rcvdIDBPut(record).catch(() => {});
+        registerLocalSeederInfoHash(torrent.infoHash);
+        publishLocalSwarmEntry(torrent.magnetURI, [file], torrent.infoHash);
+        renderReceivedList();
+        resolve(torrent);
+      });
+    });
+  } catch (e) {
+    console.warn('[rcvd] seed failed', e);
+    return null;
+  }
+}
+
+function renderReceivedList() {
+  const block = document.getElementById('rcvd-block');
+  const title = document.getElementById('rcvd-title');
+  const empty = document.getElementById('rcvd-empty');
+  const list  = document.getElementById('rcvd-list');
+  if (!block || !title || !empty || !list) return;
+  title.textContent = t('rcvdHeading');
+
+  // Dispose previous preview Object URLs
+  if (list._previewDisposers) list._previewDisposers.forEach(d => d?.());
+  list._previewDisposers = [];
+  list.innerHTML = '';
+
+  const records = Array.from(_rcvdMemory.values())
+    .sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
+
+  if (!records.length) {
+    empty.style.display = '';
+    empty.textContent = t('rcvdEmpty');
+    return;
+  }
+  empty.style.display = 'none';
+
+  records.forEach(record => {
+    const item = document.createElement('div');
+    item.className = 'rcvd-item';
+
+    // Thumbnail
+    const thumbWrap = document.createElement('div');
+    thumbWrap.className = 'rcvd-item-thumb';
+    const mime = record.type || '';
+    const kind = record.blob ? previewKind(record.filename, mime) : null;
+    const provider = kind && PreviewRegistry.find(kind);
+    if (provider && record.blob && record.blob.size <= PREVIEW_MAX_BYTES) {
+      const url = _createPreviewUrl(record.blob);
+      list._previewDisposers.push(() => _revokePreviewUrl(url));
+      const thumbEl = provider.thumb(url, { name: record.filename, mime }, () => {
+        openPreviewModal(record.filename, body => provider.renderDetail(body, url, { name: record.filename, mime }));
+      });
+      thumbWrap.appendChild(thumbEl);
+      thumbWrap.onclick = () => openPreviewModal(record.filename, body => provider.renderDetail(body, url, { name: record.filename, mime }));
+    } else {
+      thumbWrap.textContent = '📄';
+    }
+    item.appendChild(thumbWrap);
+
+    // Info
+    const main = document.createElement('div');
+    main.className = 'rcvd-item-main';
+    const name = document.createElement('div');
+    name.className = 'rcvd-item-name';
+    name.textContent = record.filename;
+    const meta = document.createElement('div');
+    meta.className = 'rcvd-item-meta';
+    const metaBits = [];
+    if (record.size) metaBits.push(fmt(record.size));
+    if (record.sender) metaBits.push(t('rcvdFrom')(record.sender));
+    if (record.infoHash) metaBits.push(t('rcvdSeeding'));
+    meta.textContent = metaBits.join(' · ');
+    main.appendChild(name);
+    main.appendChild(meta);
+    item.appendChild(main);
+
+    // Actions
+    const actions = document.createElement('div');
+    actions.className = 'rcvd-item-actions';
+
+    if (provider && record.blob) {
+      const prevBtn = document.createElement('button');
+      prevBtn.type = 'button';
+      prevBtn.className = 'btn btn-ghost';
+      prevBtn.textContent = t('rcvdPreview');
+      prevBtn.onclick = () => {
+        const url = _createPreviewUrl(record.blob);
+        openPreviewModal(record.filename, body => {
+          const cleanup = provider.renderDetail(body, url, { name: record.filename, mime });
+          return () => { _revokePreviewUrl(url); if (cleanup) cleanup(); };
+        });
+      };
+      actions.appendChild(prevBtn);
+    }
+
+    const dlBtn = document.createElement('button');
+    dlBtn.type = 'button';
+    dlBtn.className = 'btn btn-ghost';
+    dlBtn.textContent = t('rcvdDownload');
+    dlBtn.onclick = () => triggerDownload(record.blob, record.filename);
+    actions.appendChild(dlBtn);
+
+    const seedBtn = document.createElement('button');
+    seedBtn.type = 'button';
+    seedBtn.className = 'btn btn-ghost' + (record.infoHash ? ' seed-active' : '');
+    seedBtn.textContent = record.infoHash ? t('rcvdSeeding') : t('rcvdSeed');
+    seedBtn.disabled = !!record.infoHash;
+    seedBtn.onclick = () => seedReceivedFile(record.id);
+    actions.appendChild(seedBtn);
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'btn btn-ghost';
+    rmBtn.textContent = t('rcvdRemove');
+    rmBtn.onclick = () => deleteReceivedFile(record.id);
+    actions.appendChild(rmBtn);
+
+    item.appendChild(actions);
+    list.appendChild(item);
+  });
 }
 
 function resolveChunking(pc) {
@@ -4630,7 +5043,9 @@ const browserLang = navigator.language.startsWith('ja') ? 'ja' : 'en';
 setLang(savedLang || browserLang);
 renderHistory();
 renderSwarmList();
+renderReceivedList();
 loadLocalSwarmCatalog();
+loadAllReceivedFiles();
 
 // Pre-load Google APIs in background so the OAuth popup fires synchronously
 // within the user gesture when the button is clicked (required on iOS Safari).
