@@ -77,6 +77,11 @@ services:
     environment:
       - PORT=8787
       - STATS_FILE=/data/stats.json
+      # TURN server config (optional) — set these to enable TURN relay for Symmetric NAT environments
+      # e.g. coturn: TURN_URL=turn:turn.example.com:3478
+      - TURN_URL=${TURN_URL:-}
+      - TURN_USERNAME=${TURN_USERNAME:-}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
     volumes:
       - presence-stats:/data
 

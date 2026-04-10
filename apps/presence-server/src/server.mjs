@@ -304,6 +304,22 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // GET /api/ice-config — STUN + optional TURN (set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL env vars)
+  if (req.method === 'GET' && path === '/api/ice-config') {
+    const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+    const turnUrl = process.env.TURN_URL;
+    if (turnUrl) {
+      iceServers.push({
+        urls: turnUrl,
+        username: process.env.TURN_USERNAME || '',
+        credential: process.env.TURN_CREDENTIAL || '',
+      });
+    }
+    res.writeHead(200, { 'content-type': 'application/json', ...CORS })
+       .end(JSON.stringify(iceServers));
+    return;
+  }
+
   res.writeHead(200, { 'content-type': 'text/plain' }).end('presence ok');
 });
 

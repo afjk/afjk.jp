@@ -1246,6 +1246,8 @@ const I18N = {
     previewCsvRows:    n => `…(${n}行まで表示)`,
     previewTruncated:  n => `…(${n}文字で打ち切り)`,
     previewLoadError:  'プレビューの表示に失敗しました',
+    torrentFallback:   'P2P 接続なし — HTTP 経由でフォールバック中…',
+    torrentFallbackDL: 'HTTP でダウンロード中…',
   },
   en: {
     copying:            'Copied ✓',
@@ -1337,6 +1339,8 @@ const I18N = {
     previewCsvRows:    n => `…(showing up to ${n} rows)`,
     previewTruncated:  n => `…(truncated at ${n} chars)`,
     previewLoadError:  'Failed to load preview',
+    torrentFallback:   'No P2P peers — falling back to HTTP…',
+    torrentFallbackDL: 'Downloading via HTTP…',
   }
 };
 
@@ -1402,6 +1406,19 @@ const GDRIVE_CLIENT_ID = '109611024015-h8dt5416re6edbun25a5iq1a3spuj0qc.apps.goo
 const GDRIVE_API_KEY   = 'AIzaSyCHXozZm9QMqLRgQOrKmq74Q6yutFHHeA0';
 const PIPE        = 'https://pipe.afjk.jp';
 const PIPE_MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+
+// ICE server config — fetched once from presence-server; TURN credentials are set via env vars
+const ICE_CONFIG_URL = '/presence/api/ice-config';
+let _iceServersPromise = null;
+function fetchIceServers() {
+  if (!_iceServersPromise) {
+    _iceServersPromise = fetch(ICE_CONFIG_URL, { signal: AbortSignal.timeout(3000) })
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => null)
+      .then(data => data || [{ urls: 'stun:stun.l.google.com:19302' }]);
+  }
+  return _iceServersPromise;
+}
 const params      = new URLSearchParams(location.search);
 const ROOM_CODE   = sanitizeRoomCode(params.get('room'));
 const PRESENCE_OVERRIDE = params.get('presence');
@@ -2619,15 +2636,18 @@ function getWtClient() {
 const _wtPendingPeers = new Map();   // `${peerId}:${infoHash}` → { sp, torrent, infoHash }
 // Receiver queues offers that arrive before the torrent is ready
 const _wtPendingSignals = [];        // { fromId, signal, infoHash }
+// Seeder stores original File[] by infoHash for piping-server fallback delivery
+const _torrentSeedFiles = new Map(); // infoHash → File[]
 
 // Seeder: open a direct SimplePeer connection to each room peer
 async function _wtConnectRoomPeers(torrent, roomPeers) {
   await loadSimplePeer().catch(() => {});
   const SP = window.SimplePeer;
   if (!SP) return;
+  const iceServers = await fetchIceServers();
   const infoHash = torrent?.infoHash || extractInfoHash(torrent?.magnetURI || '') || '';
   for (const peer of roomPeers) {
-    const sp = new SP({ initiator: true, trickle: false });
+    const sp = new SP({ initiator: true, trickle: false, config: { iceServers } });
     const key = infoHash ? `${peer.id}:${infoHash}` : peer.id;
     _wtPendingPeers.set(key, { sp, torrent, infoHash });
     sp.on('signal', offer => {
@@ -2643,10 +2663,11 @@ async function _wtConnectRoomPeers(torrent, roomPeers) {
 }
 
 // Receiver: handle an offer → create answer → add peer to torrent
-function _wtHandleOffer(torrent, fromId, signal) {
+async function _wtHandleOffer(torrent, fromId, signal) {
   const SP = window.SimplePeer;
   if (!SP) return;
-  const sp = new SP({ initiator: false, trickle: false });
+  const iceServers = await fetchIceServers();
+  const sp = new SP({ initiator: false, trickle: false, config: { iceServers } });
   sp.on('signal', answer => {
     presenceState.ws?.send(JSON.stringify({
       type: 'handoff', targetId: fromId,
@@ -2749,6 +2770,7 @@ async function seedFilesAsTorrent() {
     torrent.on('error',   e => console.warn('[wt] torrent error:', e?.message || e));
     torrent.once('ready', () => {
       persistLocalArchive(torrent.infoHash, torrent.magnetURI, files);
+      _torrentSeedFiles.set(torrent.infoHash, files); // Store for piping-server fallback
     });
 
     const magnetURI = torrent.magnetURI;
@@ -2793,12 +2815,13 @@ function stopSeeding() {
   if (_wtClient) {
     _wtClient.destroy(() => { _wtClient = null; });
   }
+  _torrentSeedFiles.clear();
   unregisterAllLocalSeeders();
   hideMagnetInfo();
   setStatus('send-status', '');
 }
 
-async function receiveTorrent(magnetURI, sender) {
+async function receiveTorrent(magnetURI, sender, senderId = null) {
   logSwarm('receiveTorrent start', { magnetURI, sender });
   switchTab('receive');
   setRecvSender('recv-from', sender);
@@ -2865,6 +2888,22 @@ async function receiveTorrent(magnetURI, sender) {
 
   torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
   torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
+
+  // Piping-server fallback: if no peers connect within 30 s, request HTTP delivery from seeder
+  if (senderId) {
+    const _fallbackTimer = setTimeout(() => {
+      if (torrent.done || torrent.destroyed || torrent.numPeers > 0) return;
+      const basePath = Math.random().toString(36).slice(2, 10);
+      presenceState.ws?.send(JSON.stringify({
+        type: 'handoff', targetId: senderId,
+        payload: { kind: 'torrent-piping-request', infoHash: torrent.infoHash, basePath },
+      }));
+      setStatus('recv-status', t('torrentFallback'), 'waiting');
+    }, 30_000);
+    torrent.on('wire',    () => clearTimeout(_fallbackTimer));
+    torrent.on('done',    () => clearTimeout(_fallbackTimer));
+    torrent.on('destroy', () => clearTimeout(_fallbackTimer));
+  }
 
   torrent.on('download', () => {
     const p  = Math.round(torrent.progress * 100);
@@ -2978,7 +3017,46 @@ async function handleIncomingHandoff(msg) {
       ? t('filesLabel')(payload.fileCount)
       : (payload.fileNames || t('fileGeneric'));
     setStatus('recv-status', t('torrentIncoming')(sender, label), 'waiting');
-    receiveTorrent(payload.magnetURI, sender);
+    receiveTorrent(payload.magnetURI, sender, msg.from?.id);
+    return;
+  }
+
+  // Seeder: receiver requests HTTP fallback delivery when WebTorrent stalled
+  if (payload.kind === 'torrent-piping-request') {
+    const files = _torrentSeedFiles.get(payload.infoHash);
+    const requesterId = msg.from?.id;
+    if (!files || !files.length || !requesterId) return;
+    const basePath = payload.basePath || Math.random().toString(36).slice(2, 10);
+    files.forEach((file, i) => {
+      fetch(`${PIPE}/${basePath}-${i}`, { method: 'POST', body: file }).catch(() => {});
+    });
+    presenceState.ws?.send(JSON.stringify({
+      type: 'handoff', targetId: requesterId,
+      payload: {
+        kind: 'torrent-piping-ready',
+        infoHash: payload.infoHash,
+        files: files.map((f, i) => ({
+          url: `${PIPE}/${basePath}-${i}`,
+          name: f.name,
+          size: f.size,
+          mime: f.type || 'application/octet-stream',
+        })),
+      },
+    }));
+    return;
+  }
+
+  // Receiver: seeder confirmed HTTP delivery — download files from piping-server
+  if (payload.kind === 'torrent-piping-ready') {
+    setStatus('recv-status', t('torrentFallbackDL'), 'waiting');
+    Promise.all((payload.files || []).map(({ url, name }) =>
+      fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+        .then(blob => triggerDownload(blob, name))
+    )).then(() => {
+      setStatus('recv-status', t('torrentDone'), 'ok');
+    }).catch(e => {
+      setStatus('recv-status', '✗ ' + (e?.message || e), 'err');
+    });
     return;
   }
 
@@ -4449,7 +4527,7 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
   const ac    = new AbortController();
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
   try {
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
     _sendPC = pc;
     const dc = pc.createDataChannel('pipe', { ordered: true });
 
@@ -4542,7 +4620,7 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
   const ac    = new AbortController();
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
   try {
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
     _sendPC = pc;
     const dc = pc.createDataChannel('pipe', { ordered: true });
 
@@ -4634,7 +4712,7 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
     const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
     if (!res.ok) throw new Error('no offer');
 
-    const pc        = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const pc        = new RTCPeerConnection({ iceServers: await fetchIceServers() });
     _recvPC = pc;
     const dcPromise = new Promise(resolve => {
       pc.ondatachannel = e => resolve(e.channel);
