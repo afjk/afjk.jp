@@ -103,9 +103,9 @@ curl -o file.zip https://pipe.afjk.jp/mypath
 
 ICE サーバー設定（STUN / TURN）は `GET /presence/api/ice-config` で配信される。
 
-### TURN サーバー (coturn) — オプション
+### TURN サーバー (coturn)
 
-企業ネットワークや 4G など Symmetric NAT 環境での WebRTC 接続を中継するリレーサーバー。通常の起動には含まれないため、`--profile turn` で明示的に有効化する。
+企業ネットワークや 4G など Symmetric NAT 環境での WebRTC 接続を中継するリレーサーバー。通常起動（`docker compose up -d`）に含まれており、常時起動する。
 
 | ポート | プロトコル | 用途 |
 |---|---|---|
@@ -169,15 +169,14 @@ docker compose down
 docker compose up -d
 ```
 
-### TURN サーバーの有効化
+### TURN の広告設定
 
-Symmetric NAT 環境（4G・企業ネットワーク）でも WebRTC が繋がるようになる。
-`.env` に認証情報を設定するだけで有効になり、未設定でも他のサービスには影響しない。
+coturn は常時起動しているが、クライアントへの ICE 候補として広告するには `TURN_URL` の設定が必要。未設定の場合は STUN のみで動作する。
 
-**1. `.env` を作成**
+**`.env` を作成（任意）**
 
 ```bash
-# TURN サーバーの URL（これを設定しないと TURN は広告されない）
+# TURN サーバーの URL（設定すると ICE 候補に含まれる）
 TURN_URL=turns:afjk.jp:5349
 
 # 認証情報（省略時は pipe/pipe が使われる）
@@ -188,7 +187,7 @@ TURN_URL=turns:afjk.jp:5349
 # COTURN_EXTERNAL_IP=サーバーの公開IPアドレス
 ```
 
-**2. ファイアウォール設定**
+**ファイアウォール設定**
 
 | ポート | プロトコル |
 |---|---|
@@ -196,13 +195,10 @@ TURN_URL=turns:afjk.jp:5349
 | 5349 | TCP |
 | 49152–49200 | UDP |
 
-**3. 起動・確認**
+**確認**
 
 ```bash
-docker compose up -d          # coturn も含めて起動
 docker compose logs -f coturn # ログ確認
 ```
 
 `/presence/api/ice-config` のレスポンスに TURN エントリが含まれていれば有効。
-
-> **Note:** `.env` に認証情報が未設定の場合、coturn は即座に正常終了し TURN なしで動作する。
