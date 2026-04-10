@@ -79,8 +79,8 @@ services:
       - STATS_FILE=/data/stats.json
       # TURN server config — coturn が起動していれば自動的に有効になる
       - TURN_URL=${TURN_URL:-turns:afjk.jp:5349}
-      - TURN_USERNAME=${TURN_USERNAME:-}
-      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      - TURN_USERNAME=${TURN_USERNAME:-pipe}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-pipe}
     volumes:
       - presence-stats:/data
 
@@ -99,8 +99,8 @@ services:
       - "5349:5349/tcp"         # TURNS (TLS) — ファイアウォール越えに最適
       - "49152-49200:49152-49200/udp"  # リレーポート範囲
     environment:
-      - TURN_USERNAME=${TURN_USERNAME:-}
-      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      - TURN_USERNAME=${TURN_USERNAME:-pipe}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-pipe}
       - COTURN_EXTERNAL_IP=${COTURN_EXTERNAL_IP:-}
     volumes:
       - ./coturn:/etc/coturn:ro
