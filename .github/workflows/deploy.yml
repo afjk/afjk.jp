@@ -26,3 +26,4 @@ jobs:
             git reset --hard origin/main
             docker compose up -d --build presence-server
             docker compose up -d https-portal
+            docker compose up -d coturn

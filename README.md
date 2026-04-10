@@ -101,6 +101,20 @@ curl -o file.zip https://pipe.afjk.jp/mypath
 
 `html/pipe/index.html` から利用するプレゼンス兼シグナリング通知用の WebSocket。クライアントは接続元 IP もしくは `?room=` パラメータで同じルームに入り、端末一覧やハンドオフメッセージ（受信パスの自動共有）をやり取りする。ブラウザ側で `?presence=ws://localhost:8787` のようにクエリを指定すると任意のエンドポイントを強制できる。`wss://afjk.jp/presence` にプロキシされるため、追加ドメインは不要。
 
+ICE サーバー設定（STUN / TURN）は `GET /presence/api/ice-config` で配信される。
+
+### TURN サーバー (coturn)
+
+企業ネットワークや 4G など Symmetric NAT 環境での WebRTC 接続を中継するリレーサーバー。通常起動（`docker compose up -d`）に含まれており、常時起動する。
+
+| ポート | プロトコル | 用途 |
+|---|---|---|
+| 3478 UDP/TCP | TURN | 標準 TURN |
+| 5349 TCP | TURNS (TLS) | ファイアウォール越え |
+| 49152–49200 UDP | リレー | WebRTC データ中継 |
+
+TLS 証明書は https-portal が取得した `afjk.jp` の証明書を共有する。
+
 ---
 
 ## セットアップ
@@ -144,3 +158,47 @@ docker compose --profile production -f docker-compose.yml -f docker-compose.loca
 ```bash
 docker compose down
 ```
+
+---
+
+## 本番環境
+
+### 通常起動
+
+```bash
+docker compose up -d
+```
+
+### TURN の広告設定
+
+coturn は常時起動しているが、クライアントへの ICE 候補として広告するには `TURN_URL` の設定が必要。未設定の場合は STUN のみで動作する。
+
+**`.env` を作成（任意）**
+
+```bash
+# TURN サーバーの URL（設定すると ICE 候補に含まれる）
+TURN_URL=turns:afjk.jp:5349
+
+# 認証情報（省略時は pipe/pipe が使われる）
+# TURN_USERNAME=pipe
+# TURN_CREDENTIAL=pipe
+
+# Docker の NAT 越えで公開 IP を自動検出できない場合のみ設定
+# COTURN_EXTERNAL_IP=サーバーの公開IPアドレス
+```
+
+**ファイアウォール設定**
+
+| ポート | プロトコル |
+|---|---|
+| 3478 | UDP + TCP |
+| 5349 | TCP |
+| 49152–49200 | UDP |
+
+**確認**
+
+```bash
+docker compose logs -f coturn # ログ確認
+```
+
+`/presence/api/ice-config` のレスポンスに TURN エントリが含まれていれば有効。
