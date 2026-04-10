@@ -58,6 +58,16 @@ npm publish --registry https://upm.afjk.jp
 - **転送モード**: WebRTC P2P を優先試行し、失敗時は piping-server 中継にフォールバック
 - **ルームに共有**: WebTorrent + SimplePeer による BitTorrent 方式の実験的転送。「ルームに共有」ボタンでトレントをルーム内に公開し、受信タブの「ルームで保持中のファイル」リストから任意のタイミングでダウンロード可能。プレゼンスサーバーをシグナリングに使ったトラッカー不要の P2P 転送
 - **デバイスピン留め**: よく使うデバイスを IndexedDB に保存して優先表示
+- **ファイルプレビュー**: 送受信ファイルを 👁 ボタンでモーダルプレビュー。対応フォーマット:
+  - 画像 (`jpg` / `jpeg` / `png` / `gif` / `webp` / `avif` / `svg` / `bmp` / `ico`)
+  - 動画 (`mp4` / `webm` / `ogg` / `ogv` / `mov` / `avi` / `mkv`)
+  - 音声 (`mp3` / `wav` / `ogg` / `oga` / `flac` / `aac` / `m4a` / `opus`)
+  - PDF
+  - 3D モデル (`glb` / `gltf`、model-viewer によるインタラクティブ表示)
+  - Markdown (レンダリング表示)
+  - CSV (テーブル表示)
+  - テキスト / コード (`txt` / `log` / `json` / `xml` / `yaml` / `yml` / `toml` / `ini` / `sh` / `py` / `js` / `ts` / `html` / `css` / `rs` / `go` / `java` / `c` / `cpp` / `h`)
+- **画像編集（背景削除）**: 画像プレビュー中に「✂ 背景を削除」ボタンで背景を自動除去。処理後はモバイルで「フォトに保存」(Web Share API)、デスクトップで「ダウンロード」として保存可能。「➤ 送信」ボタンで結果画像をそのまま送信タブに渡すことも可能
 
 詳細な技術仕様は [`docs/pipe-spec.md`](docs/pipe-spec.md) を参照。
 
