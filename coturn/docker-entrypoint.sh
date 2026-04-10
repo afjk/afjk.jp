@@ -13,12 +13,12 @@ if [ -z "$TURN_USERNAME" ] || [ -z "$TURN_CREDENTIAL" ]; then
 fi
 
 ARGS="-c /etc/coturn/turnserver.conf"
-ARGS="$ARGS --user=$TURN_USERNAME:$TURN_CREDENTIAL"
+ARGS="$ARGS --user=${TURN_USERNAME}:${TURN_CREDENTIAL}"
 
 # 外部 IP (Docker でポートマッピングを使う場合は設定が必要)
 # 未設定の場合は coturn が自動検出を試みる
 if [ -n "$COTURN_EXTERNAL_IP" ]; then
-  ARGS="$ARGS --external-ip=$COTURN_EXTERNAL_IP"
+  ARGS="$ARGS --external-ip=${COTURN_EXTERNAL_IP}"
 fi
 
 # TLS 証明書が未発行の場合 (https-portal 初回起動直後など) は TLS を無効化して起動

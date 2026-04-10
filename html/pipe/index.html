@@ -2714,7 +2714,7 @@ async function handleWtSignal(fromId, signal, infoHash = '') {
   }
   const target = findTorrentByInfoHash(infoHash) || _wtClient.torrents[0];
   if (target) {
-    _wtHandleOffer(target, fromId, signal);
+    _wtHandleOffer(target, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
   } else {
     _wtPendingSignals.push({ fromId, signal, infoHash });
   }
@@ -2782,9 +2782,11 @@ async function seedFilesAsTorrent() {
     // Suppress tracker connection errors (non-fatal warnings)
     torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
     torrent.on('error',   e => console.warn('[wt] torrent error:', e?.message || e));
+    // Store immediately (infoHash is available before ready) so piping-request
+    // that arrives before ready is not dropped.
+    _torrentSeedFiles.set(torrent.infoHash, files);
     torrent.once('ready', () => {
       persistLocalArchive(torrent.infoHash, torrent.magnetURI, files);
-      _torrentSeedFiles.set(torrent.infoHash, files); // Store for piping-server fallback
     });
 
     const magnetURI = torrent.magnetURI;
@@ -2875,7 +2877,7 @@ async function receiveTorrent(magnetURI, sender, senderId = null) {
       } else {
         setStatus('recv-status', t('torrentRecv'), 'waiting');
       }
-      _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal));
+      _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message)));
       return;
     }
     // Stale/destroyed reference — remove before re-adding
@@ -2947,7 +2949,7 @@ async function receiveTorrent(magnetURI, sender, senderId = null) {
     const remaining = [];
     _wtPendingSignals.forEach(({ fromId, signal, infoHash }) => {
       if (!targetHash || !infoHash || infoHash === targetHash) {
-        _wtHandleOffer(torrent, fromId, signal);
+        _wtHandleOffer(torrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
       } else {
         remaining.push({ fromId, signal, infoHash });
       }
@@ -3066,9 +3068,15 @@ async function handleIncomingHandoff(msg) {
     (async () => {
       try {
         for (const { url, name } of (payload.files || [])) {
-          const r = await fetch(url);
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          triggerDownload(await r.blob(), name);
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), 120_000); // 2 min timeout per file
+          try {
+            const r = await fetch(url, { signal: ac.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            triggerDownload(await r.blob(), name);
+          } finally {
+            clearTimeout(timer);
+          }
         }
         setStatus('recv-status', t('torrentDone'), 'ok');
       } catch (e) {
