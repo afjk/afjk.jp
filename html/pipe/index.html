@@ -3519,10 +3519,12 @@ PreviewRegistry.register({
           saveBtn.className = 'img-edit-btn img-edit-dl-btn';
           toolbar.appendChild(saveBtn);
         }
+        const useShare = _isMobile && !!navigator.canShare &&
+          navigator.canShare({ files: [new File([], 'x.png', { type: 'image/png' })] });
         saveBtn.onclick = async () => {
           if (!_resultBlob) return;
           const file = new File([_resultBlob], filename, { type: 'image/png' });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          if (useShare) {
             try {
               await navigator.share({ files: [file], title: filename });
             } catch (e) {
@@ -3532,7 +3534,9 @@ PreviewRegistry.register({
             _fallbackDownload(_resultUrl, filename);
           }
         };
-        saveBtn.textContent = currentLang === 'ja' ? '📤 フォトに保存' : '📤 Save to Photos';
+        saveBtn.textContent = useShare
+          ? (currentLang === 'ja' ? '📤 フォトに保存' : '📤 Save to Photos')
+          : (currentLang === 'ja' ? '⬇ ダウンロード' : '⬇ Download');
 
         progressEl.textContent = '';
         removeBgBtn.disabled = false;
@@ -3561,6 +3565,7 @@ function _fallbackDownload(url, filename) {
   a.click();
   document.body.removeChild(a);
 }
+const _isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // T9: Video provider
 PreviewRegistry.register({
