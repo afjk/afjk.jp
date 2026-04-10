@@ -3522,17 +3522,37 @@ PreviewRegistry.register({
         saveBtn.onclick = async () => {
           if (!_resultBlob) return;
           const file = new File([_resultBlob], filename, { type: 'image/png' });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          if (_isMobile && navigator.canShare) {
             try {
-              await navigator.share({ files: [file], title: filename });
+              if (navigator.canShare({ files: [file] })) {
+                await navigator.share({ files: [file], title: filename });
+                return;
+              }
             } catch (e) {
-              if (e.name !== 'AbortError') _fallbackDownload(_resultUrl, filename);
+              if (e.name === 'AbortError') return;
+              // その他のエラーはダウンロードにフォールバック
             }
-          } else {
-            _fallbackDownload(_resultUrl, filename);
           }
+          _fallbackDownload(_resultUrl, filename);
         };
-        saveBtn.textContent = currentLang === 'ja' ? '📤 フォトに保存' : '📤 Save to Photos';
+        saveBtn.textContent = _isMobile
+          ? (currentLang === 'ja' ? '📤 フォトに保存' : '📤 Save to Photos')
+          : (currentLang === 'ja' ? '⬇ ダウンロード' : '⬇ Download');
+
+        let sendBtn = toolbar.querySelector('.img-edit-send-btn');
+        if (!sendBtn) {
+          sendBtn = document.createElement('button');
+          sendBtn.className = 'img-edit-btn img-edit-send-btn';
+          toolbar.appendChild(sendBtn);
+        }
+        sendBtn.onclick = () => {
+          if (!_resultBlob) return;
+          const file = new File([_resultBlob], filename, { type: 'image/png' });
+          closePreviewModal();
+          setFiles([file]);
+          switchTab('send');
+        };
+        sendBtn.textContent = currentLang === 'ja' ? '➤ 送信' : '➤ Send';
 
         progressEl.textContent = '';
         removeBgBtn.disabled = false;
@@ -3561,6 +3581,8 @@ function _fallbackDownload(url, filename) {
   a.click();
   document.body.removeChild(a);
 }
+const _isMobile = navigator.userAgentData?.mobile ??
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // T9: Video provider
 PreviewRegistry.register({
