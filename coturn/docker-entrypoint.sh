@@ -21,5 +21,12 @@ if [ -n "$COTURN_EXTERNAL_IP" ]; then
   ARGS="$ARGS --external-ip=$COTURN_EXTERNAL_IP"
 fi
 
+# TLS 証明書が未発行の場合 (https-portal 初回起動直後など) は TLS を無効化して起動
+CERT="/etc/certs/afjk.jp/production/signed.crt"
+if [ ! -f "$CERT" ]; then
+  echo "[coturn] 証明書未発行 — TLS 無効で起動します (TURNS は無効、TURN のみ有効)"
+  ARGS="$ARGS --no-tls"
+fi
+
 echo "[coturn] starting: turnserver $ARGS"
 exec turnserver $ARGS

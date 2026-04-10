@@ -1408,14 +1408,28 @@ const PIPE        = 'https://pipe.afjk.jp';
 const PIPE_MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
 
 // ICE server config — fetched once from presence-server; TURN credentials are set via env vars
-const ICE_CONFIG_URL = '/presence/api/ice-config';
+const ICE_CONFIG_URL =
+  (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? `http://${location.hostname}:8787/api/ice-config`
+    : '/presence/api/ice-config';
 let _iceServersPromise = null;
 function fetchIceServers() {
   if (!_iceServersPromise) {
-    _iceServersPromise = fetch(ICE_CONFIG_URL, { signal: AbortSignal.timeout(3000) })
-      .then(r => r.ok ? r.json() : null)
-      .catch(() => null)
-      .then(data => data || [{ urls: 'stun:stun.l.google.com:19302' }]);
+    _iceServersPromise = (async () => {
+      try {
+        let signal;
+        if (typeof AbortSignal?.timeout === 'function') {
+          signal = AbortSignal.timeout(3000);
+        } else {
+          const ac = new AbortController();
+          setTimeout(() => ac.abort(), 3000);
+          signal = ac.signal;
+        }
+        const r = await fetch(ICE_CONFIG_URL, { signal });
+        if (r.ok) return await r.json();
+      } catch {}
+      return [{ urls: 'stun:stun.l.google.com:19302' }];
+    })();
   }
   return _iceServersPromise;
 }
@@ -3049,14 +3063,18 @@ async function handleIncomingHandoff(msg) {
   // Receiver: seeder confirmed HTTP delivery — download files from piping-server
   if (payload.kind === 'torrent-piping-ready') {
     setStatus('recv-status', t('torrentFallbackDL'), 'waiting');
-    Promise.all((payload.files || []).map(({ url, name }) =>
-      fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
-        .then(blob => triggerDownload(blob, name))
-    )).then(() => {
-      setStatus('recv-status', t('torrentDone'), 'ok');
-    }).catch(e => {
-      setStatus('recv-status', '✗ ' + (e?.message || e), 'err');
-    });
+    (async () => {
+      try {
+        for (const { url, name } of (payload.files || [])) {
+          const r = await fetch(url);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          triggerDownload(await r.blob(), name);
+        }
+        setStatus('recv-status', t('torrentDone'), 'ok');
+      } catch (e) {
+        setStatus('recv-status', '✗ ' + (e?.message || e), 'err');
+      }
+    })();
     return;
   }
 

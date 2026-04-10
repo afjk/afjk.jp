@@ -174,14 +174,15 @@ docker compose up -d
 Symmetric NAT 環境（4G・企業ネットワーク）でも WebRTC が繋がるようになる。
 `.env` に認証情報を設定するだけで有効になり、未設定でも他のサービスには影響しない。
 
-**1. `.env` を作成（省略可）**
-
-デフォルトでは `pipe` / `pipe` で動作する。変更したい場合のみ `.env` を作成する。
+**1. `.env` を作成**
 
 ```bash
-# 変更したい場合のみ設定（省略時はデフォルト値 pipe/pipe が使われる）
-TURN_USERNAME=任意のユーザー名
-TURN_CREDENTIAL=任意のパスワード
+# TURN サーバーの URL（これを設定しないと TURN は広告されない）
+TURN_URL=turns:afjk.jp:5349
+
+# 認証情報（省略時は pipe/pipe が使われる）
+# TURN_USERNAME=pipe
+# TURN_CREDENTIAL=pipe
 
 # Docker の NAT 越えで公開 IP を自動検出できない場合のみ設定
 # COTURN_EXTERNAL_IP=サーバーの公開IPアドレス

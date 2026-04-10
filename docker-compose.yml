@@ -77,8 +77,8 @@ services:
     environment:
       - PORT=8787
       - STATS_FILE=/data/stats.json
-      # TURN server config — coturn が起動していれば自動的に有効になる
-      - TURN_URL=${TURN_URL:-turns:afjk.jp:5349}
+      # TURN server config — .env で TURN_URL を設定すると ICE 候補に含まれる
+      - TURN_URL=${TURN_URL:-}
       - TURN_USERNAME=${TURN_USERNAME:-pipe}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-pipe}
     volumes:
@@ -89,7 +89,7 @@ services:
   # 未設定の場合は起動直後に正常終了し、TURN なしで動作する
   # 外部 IP が自動検出できない場合は COTURN_EXTERNAL_IP も設定する
   coturn:
-    image: coturn/coturn:latest
+    image: coturn/coturn:4.9.0
     container_name: coturn
     restart: on-failure
     entrypoint: ["/bin/sh", "/etc/coturn/docker-entrypoint.sh"]

@@ -305,7 +305,20 @@ const server = createServer((req, res) => {
   }
 
   // GET /api/ice-config — STUN + optional TURN (set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL env vars)
+  // CORS は同一サイト・ローカル開発のみ許可（外部サイトから credentials を取得されないよう制限）
   if (req.method === 'GET' && path === '/api/ice-config') {
+    const origin = req.headers['origin'] || '';
+    const allowed = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      || origin === (process.env.ALLOWED_ORIGIN || 'https://afjk.jp');
+    if (!allowed) {
+      res.writeHead(403, { 'content-type': 'text/plain' }).end('Forbidden');
+      return;
+    }
+    const iceCors = {
+      'content-type': 'application/json',
+      'access-control-allow-origin': origin || '*',
+      'access-control-allow-methods': 'GET',
+    };
     const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
     const turnUrl = process.env.TURN_URL;
     if (turnUrl) {
@@ -315,8 +328,7 @@ const server = createServer((req, res) => {
         credential: process.env.TURN_CREDENTIAL || '',
       });
     }
-    res.writeHead(200, { 'content-type': 'application/json', ...CORS })
-       .end(JSON.stringify(iceServers));
+    res.writeHead(200, iceCors).end(JSON.stringify(iceServers));
     return;
   }
 
