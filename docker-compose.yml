@@ -85,9 +85,11 @@ services:
       - presence-stats:/data
 
   # TURN サーバー (Symmetric NAT 環境での WebRTC 中継)
+  # docker compose --profile turn up -d coturn で起動 (通常起動には含まれない)
   # 起動前に .env で TURN_USERNAME / TURN_CREDENTIAL を必ず設定すること
   # 外部 IP が自動検出できない場合は COTURN_EXTERNAL_IP も設定する
   coturn:
+    profiles: [turn]
     image: coturn/coturn:latest
     container_name: coturn
     restart: always

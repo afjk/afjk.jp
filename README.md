@@ -101,6 +101,20 @@ curl -o file.zip https://pipe.afjk.jp/mypath
 
 `html/pipe/index.html` から利用するプレゼンス兼シグナリング通知用の WebSocket。クライアントは接続元 IP もしくは `?room=` パラメータで同じルームに入り、端末一覧やハンドオフメッセージ（受信パスの自動共有）をやり取りする。ブラウザ側で `?presence=ws://localhost:8787` のようにクエリを指定すると任意のエンドポイントを強制できる。`wss://afjk.jp/presence` にプロキシされるため、追加ドメインは不要。
 
+ICE サーバー設定（STUN / TURN）は `GET /presence/api/ice-config` で配信される。
+
+### TURN サーバー (coturn) — オプション
+
+企業ネットワークや 4G など Symmetric NAT 環境での WebRTC 接続を中継するリレーサーバー。通常の起動には含まれないため、`--profile turn` で明示的に有効化する。
+
+| ポート | プロトコル | 用途 |
+|---|---|---|
+| 3478 UDP/TCP | TURN | 標準 TURN |
+| 5349 TCP | TURNS (TLS) | ファイアウォール越え |
+| 49152–49200 UDP | リレー | WebRTC データ中継 |
+
+TLS 証明書は https-portal が取得した `afjk.jp` の証明書を共有する。
+
 ---
 
 ## セットアップ
@@ -144,3 +158,57 @@ docker compose --profile production -f docker-compose.yml -f docker-compose.loca
 ```bash
 docker compose down
 ```
+
+---
+
+## 本番環境
+
+### 通常起動
+
+```bash
+docker compose up -d
+```
+
+coturn は通常起動に含まれない。TURN サーバーも有効にする場合は後述の手順を参照。
+
+### TURN サーバーの有効化 (オプション)
+
+Symmetric NAT 環境（4G・企業ネットワーク）でも WebRTC が繋がるようになる。
+
+**1. `.env` を作成**
+
+```bash
+# プロジェクトルートに .env を作成
+TURN_USERNAME=任意のユーザー名
+TURN_CREDENTIAL=強いパスワード（推奨: openssl rand -base64 32）
+
+# Docker の NAT 越えに必要な場合のみ設定
+# COTURN_EXTERNAL_IP=サーバーの公開IPアドレス
+```
+
+**2. https-portal で TLS 証明書が取得済みであることを確認**
+
+coturn は `afjk.jp` の証明書を共有するため、先に https-portal を起動してから coturn を起動する。
+
+```bash
+docker compose up -d          # 通常サービスを先に起動（証明書取得）
+docker compose --profile turn up -d coturn   # coturn を追加起動
+```
+
+**3. ファイアウォール設定**
+
+以下のポートを開放する。
+
+| ポート | プロトコル |
+|---|---|
+| 3478 | UDP + TCP |
+| 5349 | TCP |
+| 49152–49200 | UDP |
+
+**4. 動作確認**
+
+```bash
+docker compose logs -f coturn
+```
+
+`ICE_CONFIG_URL` (`/presence/api/ice-config`) のレスポンスに TURN エントリが含まれていれば有効。
