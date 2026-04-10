@@ -77,13 +77,33 @@ services:
     environment:
       - PORT=8787
       - STATS_FILE=/data/stats.json
-      # TURN server config (optional) — set these to enable TURN relay for Symmetric NAT environments
-      # e.g. coturn: TURN_URL=turn:turn.example.com:3478
-      - TURN_URL=${TURN_URL:-}
+      # TURN server config — coturn が起動していれば自動的に有効になる
+      - TURN_URL=${TURN_URL:-turns:afjk.jp:5349}
       - TURN_USERNAME=${TURN_USERNAME:-}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
     volumes:
       - presence-stats:/data
+
+  # TURN サーバー (Symmetric NAT 環境での WebRTC 中継)
+  # 起動前に .env で TURN_USERNAME / TURN_CREDENTIAL を必ず設定すること
+  # 外部 IP が自動検出できない場合は COTURN_EXTERNAL_IP も設定する
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    restart: always
+    entrypoint: ["/bin/sh", "/etc/coturn/docker-entrypoint.sh"]
+    ports:
+      - "3478:3478/udp"         # TURN (UDP)
+      - "3478:3478/tcp"         # TURN (TCP)
+      - "5349:5349/tcp"         # TURNS (TLS) — ファイアウォール越えに最適
+      - "49152-49200:49152-49200/udp"  # リレーポート範囲
+    environment:
+      - TURN_USERNAME=${TURN_USERNAME:-}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      - COTURN_EXTERNAL_IP=${COTURN_EXTERNAL_IP:-}
+    volumes:
+      - ./coturn:/etc/coturn:ro
+      - ./https-portal-certs:/etc/certs:ro  # https-portal の TLS 証明書を共有
 
 volumes:
   presence-stats:
