@@ -169,35 +169,23 @@ docker compose down
 docker compose up -d
 ```
 
-coturn は通常起動に含まれない。TURN サーバーも有効にする場合は後述の手順を参照。
-
-### TURN サーバーの有効化 (オプション)
+### TURN サーバーの有効化
 
 Symmetric NAT 環境（4G・企業ネットワーク）でも WebRTC が繋がるようになる。
+`.env` に認証情報を設定するだけで有効になり、未設定でも他のサービスには影響しない。
 
 **1. `.env` を作成**
 
 ```bash
 # プロジェクトルートに .env を作成
 TURN_USERNAME=任意のユーザー名
-TURN_CREDENTIAL=強いパスワード（推奨: openssl rand -base64 32）
+TURN_CREDENTIAL=強いパスワード  # 推奨: openssl rand -base64 32
 
-# Docker の NAT 越えに必要な場合のみ設定
+# Docker の NAT 越えで公開 IP を自動検出できない場合のみ設定
 # COTURN_EXTERNAL_IP=サーバーの公開IPアドレス
 ```
 
-**2. https-portal で TLS 証明書が取得済みであることを確認**
-
-coturn は `afjk.jp` の証明書を共有するため、先に https-portal を起動してから coturn を起動する。
-
-```bash
-docker compose up -d          # 通常サービスを先に起動（証明書取得）
-docker compose --profile turn up -d coturn   # coturn を追加起動
-```
-
-**3. ファイアウォール設定**
-
-以下のポートを開放する。
+**2. ファイアウォール設定**
 
 | ポート | プロトコル |
 |---|---|
@@ -205,10 +193,13 @@ docker compose --profile turn up -d coturn   # coturn を追加起動
 | 5349 | TCP |
 | 49152–49200 | UDP |
 
-**4. 動作確認**
+**3. 起動・確認**
 
 ```bash
-docker compose logs -f coturn
+docker compose up -d          # coturn も含めて起動
+docker compose logs -f coturn # ログ確認
 ```
 
-`ICE_CONFIG_URL` (`/presence/api/ice-config`) のレスポンスに TURN エントリが含まれていれば有効。
+`/presence/api/ice-config` のレスポンスに TURN エントリが含まれていれば有効。
+
+> **Note:** `.env` に認証情報が未設定の場合、coturn は即座に正常終了し TURN なしで動作する。

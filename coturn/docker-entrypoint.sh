@@ -4,13 +4,15 @@
 
 set -e
 
-ARGS="-c /etc/coturn/turnserver.conf"
-
-# 認証情報 (必須)
+# 認証情報が未設定の場合は TURN サーバーを無効化して正常終了
+# (restart: on-failure を使っているため再起動ループにはならない)
 if [ -z "$TURN_USERNAME" ] || [ -z "$TURN_CREDENTIAL" ]; then
-  echo "[coturn] ERROR: TURN_USERNAME / TURN_CREDENTIAL が未設定です" >&2
-  exit 1
+  echo "[coturn] TURN_USERNAME / TURN_CREDENTIAL が未設定のため TURN サーバーを無効化します"
+  echo "[coturn] .env に TURN_USERNAME と TURN_CREDENTIAL を設定して再起動してください"
+  exit 0
 fi
+
+ARGS="-c /etc/coturn/turnserver.conf"
 ARGS="$ARGS --user=$TURN_USERNAME:$TURN_CREDENTIAL"
 
 # 外部 IP (Docker でポートマッピングを使う場合は設定が必要)
