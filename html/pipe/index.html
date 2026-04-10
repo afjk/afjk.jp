@@ -3519,22 +3519,23 @@ PreviewRegistry.register({
           saveBtn.className = 'img-edit-btn img-edit-dl-btn';
           toolbar.appendChild(saveBtn);
         }
-        const useShare = _isMobile && !!navigator.canShare &&
-          navigator.canShare({ files: [new File([], 'x.png', { type: 'image/png' })] });
         saveBtn.onclick = async () => {
           if (!_resultBlob) return;
           const file = new File([_resultBlob], filename, { type: 'image/png' });
-          if (useShare) {
+          if (_isMobile && navigator.canShare) {
             try {
-              await navigator.share({ files: [file], title: filename });
+              if (navigator.canShare({ files: [file] })) {
+                await navigator.share({ files: [file], title: filename });
+                return;
+              }
             } catch (e) {
-              if (e.name !== 'AbortError') _fallbackDownload(_resultUrl, filename);
+              if (e.name === 'AbortError') return;
+              // その他のエラーはダウンロードにフォールバック
             }
-          } else {
-            _fallbackDownload(_resultUrl, filename);
           }
+          _fallbackDownload(_resultUrl, filename);
         };
-        saveBtn.textContent = useShare
+        saveBtn.textContent = _isMobile
           ? (currentLang === 'ja' ? '📤 フォトに保存' : '📤 Save to Photos')
           : (currentLang === 'ja' ? '⬇ ダウンロード' : '⬇ Download');
 
@@ -3580,7 +3581,8 @@ function _fallbackDownload(url, filename) {
   a.click();
   document.body.removeChild(a);
 }
-const _isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const _isMobile = navigator.userAgentData?.mobile ??
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // T9: Video provider
 PreviewRegistry.register({
