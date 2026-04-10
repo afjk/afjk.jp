@@ -2187,8 +2187,8 @@ async function sendTextToAllPeers() {
 }
 
 // ── WebTorrent (swarm) ────────────────────────────────────────────────────────
-const WT_CDN = 'https://cdn.jsdelivr.net/npm/webtorrent/dist/webtorrent.min.js';
-const SP_CDN = 'https://cdn.jsdelivr.net/npm/simple-peer/simplepeer.min.js';
+const WT_CDN = '/pipe/vendor/webtorrent@2.8.5.min.js';
+const SP_CDN = '/pipe/vendor/simplepeer@9.11.1.min.js';
 let _wtClient = null;
 let _wtClass  = null;   // WebTorrent constructor (ES module, loaded via import())
 let _spLoaded = false;  // SimplePeer UMD loaded via <script> tag → window.SimplePeer
