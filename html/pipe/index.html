@@ -2888,10 +2888,10 @@ async function receiveTorrent(magnetURI, sender) {
   });
 
   // Process any wt-signal offers already queued
+  const targetHash = torrent.infoHash || null;
   if (_wtPendingSignals.length) {
     logSwarm('flushing pending signals', { count: _wtPendingSignals.length, targetHash });
     const remaining = [];
-    const targetHash = torrent.infoHash || null;
     _wtPendingSignals.forEach(({ fromId, signal, infoHash }) => {
       if (!targetHash || !infoHash || infoHash === targetHash) {
         _wtHandleOffer(torrent, fromId, signal);
