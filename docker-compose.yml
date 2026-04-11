@@ -74,6 +74,8 @@ services:
     build: ./apps/presence-server
     container_name: presence-server
     restart: always
+    ports:
+      - "8787:8787"
     environment:
       - PORT=8787
       - STATS_FILE=/data/stats.json

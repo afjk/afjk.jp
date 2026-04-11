@@ -7,11 +7,21 @@ const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
+const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 
 // ── Stats persistence ─────────────────────────────────────────────────────────
-const EMPTY_STATS = () => ({ p2p: { count: 0, bytes: 0 }, pipe: { count: 0, bytes: 0 }, torrent: { count: 0, bytes: 0 } });
+const STATS_LOG_LIMIT = Number(process.env.STATS_LOG_LIMIT || 500);
+const STATS_ARCHIVE_AFTER = Number(process.env.STATS_ARCHIVE_AFTER || 2000);
+const EMPTY_STATS = () => ({
+  summary: {
+    p2p: { count: 0, bytes: 0 },
+    pipe: { count: 0, bytes: 0 },
+    torrent: { count: 0, bytes: 0 }
+  },
+  logs: []
+});
 
 function loadStats() {
   try {
@@ -21,16 +31,40 @@ function loadStats() {
   }
 }
 
+function writeStatsFile(data) {
+  mkdirSync(STATS_FILE.replace(/\/[^/]+$/, ''), { recursive: true });
+  writeFileSync(STATS_FILE, JSON.stringify(data), 'utf8');
+}
+
 function saveStats(data) {
   try {
-    mkdirSync(STATS_FILE.replace(/\/[^/]+$/, ''), { recursive: true });
-    writeFileSync(STATS_FILE, JSON.stringify(data), 'utf8');
+    writeStatsFile(data);
+    if (stats.logs.length >= STATS_ARCHIVE_AFTER) {
+      archiveStats();
+    }
   } catch (err) {
     log('stats write error', err.message);
   }
 }
 
+function archiveStats() {
+  try {
+    mkdirSync(STATS_ARCHIVE_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = `${STATS_ARCHIVE_DIR}/stats-${ts}.json`;
+    const snapshot = { summary: stats.summary, logs: stats.logs.slice() };
+    writeFileSync(filePath, JSON.stringify(snapshot), 'utf8');
+    stats.logs = [];
+    writeStatsFile(stats);
+    log('stats archived to', filePath);
+  } catch (err) {
+    log('archive error', err.message);
+  }
+}
+
 const stats = loadStats();
+if (!stats.summary) stats.summary = EMPTY_STATS().summary;
+if (!stats.logs) stats.logs = [];
 
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
@@ -268,6 +302,41 @@ const CORS = {
   'access-control-allow-headers': 'content-type',
 };
 
+function buildTurnServers() {
+  const raw = process.env.TURN_URLS || process.env.TURN_URL || '';
+  const username = process.env.TURN_USERNAME || '';
+  const credential = process.env.TURN_CREDENTIAL || '';
+  const urls = raw.split(',').map(u => u.trim()).filter(Boolean);
+  if (!urls.length) {
+    const devTurn = process.env.DEV_TURN_URL || 'turn:localhost:3478?transport=udp';
+    const enableDev = process.env.ENABLE_DEV_TURN !== 'false';
+    if (enableDev && process.env.NODE_ENV !== 'production') {
+      urls.push(devTurn);
+    }
+  }
+  return urls.map(url => ({
+    urls: url,
+    username,
+    credential
+  }));
+}
+
+function recordTransfer(entry) {
+  const { type, bytes = 0, meta = null, timestamp = Date.now() } = entry || {};
+  if (!type || !stats.summary[type]) return;
+  stats.summary[type].count += 1;
+  stats.summary[type].bytes += Number(bytes) || 0;
+  const logEntry = { type, bytes: Number(bytes) || 0, ts: timestamp };
+  if (meta && typeof meta === 'object') {
+    logEntry.meta = meta;
+  }
+  stats.logs.push(logEntry);
+  if (stats.logs.length > STATS_LOG_LIMIT) {
+    stats.logs.splice(0, stats.logs.length - STATS_LOG_LIMIT);
+  }
+  saveStats(stats);
+}
+
 const server = createServer((req, res) => {
   const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
@@ -278,9 +347,31 @@ const server = createServer((req, res) => {
   }
 
   // GET /stats
-  if (req.method === 'GET' && path === '/stats') {
+  if (req.method === 'GET' && (path === '/stats' || path === '/stats/export')) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const limit = Math.min(Number(url.searchParams.get('limit')) || STATS_LOG_LIMIT, STATS_LOG_LIMIT);
+    const typeFilter = url.searchParams.get('type');
+    const format = (url.searchParams.get('format') || 'json').toLowerCase();
+    let logs = stats.logs.slice(-limit);
+    if (typeFilter) {
+      logs = logs.filter(entry => entry.type === typeFilter);
+    }
+    if (format === 'csv') {
+      const header = 'ts,type,bytes,meta\n';
+      const rows = logs.map(entry => {
+        const meta = entry.meta ? JSON.stringify(entry.meta) : '';
+        return `${entry.ts},${entry.type},${entry.bytes},"${meta.replace(/"/g, '""')}"`;
+      }).join('\n');
+      res.writeHead(200, { 'content-type': 'text/csv', ...CORS })
+         .end(header + rows);
+      return;
+    }
+    const payload = {
+      summary: stats.summary,
+      logs,
+    };
     res.writeHead(200, { 'content-type': 'application/json', ...CORS })
-       .end(JSON.stringify(stats));
+       .end(JSON.stringify(payload));
     return;
   }
 
@@ -290,13 +381,9 @@ const server = createServer((req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { type, bytes } = JSON.parse(body);
-        if (type === 'p2p' || type === 'pipe' || type === 'torrent') {
-          if (!stats[type]) stats[type] = { count: 0, bytes: 0 };
-          stats[type].count += 1;
-          stats[type].bytes += Number(bytes) || 0;
-          saveStats(stats);
-          log('stats recorded', type, bytes);
+        const payload = JSON.parse(body);
+        if (payload && typeof payload === 'object') {
+          recordTransfer(payload);
         }
       } catch {}
       res.writeHead(204, CORS).end();
@@ -307,9 +394,16 @@ const server = createServer((req, res) => {
   // GET /api/ice-config — STUN + optional TURN (set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL env vars)
   // CORS は同一サイト・ローカル開発のみ許可（外部サイトから credentials を取得されないよう制限）
   if (req.method === 'GET' && path === '/api/ice-config') {
-    const origin = req.headers['origin'] || '';
-    const allowed = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-      || origin === (process.env.ALLOWED_ORIGIN || 'https://afjk.jp');
+    const origin = (req.headers['origin'] || '').replace(/\/$/, '');
+    const prodOrigin = (process.env.ALLOWED_ORIGIN || 'https://afjk.jp').replace(/\/$/, '');
+    const devOrigins = (process.env.ALLOWED_DEV_ORIGINS || 'http://localhost:8888,http://127.0.0.1:8888')
+      .split(',')
+      .map(o => o.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+    const allowed = !origin
+      || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      || origin === prodOrigin
+      || devOrigins.includes(origin);
     if (!allowed) {
       res.writeHead(403, { 'content-type': 'text/plain' }).end('Forbidden');
       return;
@@ -317,16 +411,14 @@ const server = createServer((req, res) => {
     const iceCors = {
       'content-type': 'application/json',
       'access-control-allow-origin': origin || '*',
-      'access-control-allow-methods': 'GET',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': 'content-type',
+      vary: 'Origin',
     };
     const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
-    const turnUrl = process.env.TURN_URL;
-    if (turnUrl) {
-      iceServers.push({
-        urls: turnUrl,
-        username: process.env.TURN_USERNAME || '',
-        credential: process.env.TURN_CREDENTIAL || '',
-      });
+    const turnServers = buildTurnServers();
+    if (turnServers.length) {
+      turnServers.forEach(entry => iceServers.push(entry));
     }
     res.writeHead(200, iceCors).end(JSON.stringify(iceServers));
     return;

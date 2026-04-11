@@ -1149,7 +1149,7 @@
 </main>
 
 <footer>
-  <a href="/">afjk.jp</a> &nbsp;·&nbsp; Powered by <a href="https://github.com/nicowillis/piping-server" target="_blank" rel="noopener">piping-server</a> &nbsp;·&nbsp; <a href="https://github.com/afjk/afjk.jp/blob/main/docs/pipe-spec.md" target="_blank" rel="noopener">Technical Spec</a> &nbsp;·&nbsp; <a href="/privacy/">Privacy Policy</a>
+  <a href="/">afjk.jp</a> &nbsp;·&nbsp; Powered by <a href="https://github.com/nicowillis/piping-server" target="_blank" rel="noopener">piping-server</a> &nbsp;·&nbsp; <a href="https://github.com/afjk/afjk.jp/blob/main/docs/pipe-spec.md" target="_blank" rel="noopener">Technical Spec</a> &nbsp;·&nbsp; <a href="/privacy/">Privacy Policy</a> &nbsp;·&nbsp; <a href="/pipe/stats.html" target="_blank" rel="noopener">Stats</a>
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -1190,6 +1190,8 @@ const I18N = {
     tryingP2P:    'ローカル P2P を試みています…',
     transferringP2P: '転送中… (P2P)',
     transferring: '転送中…',
+    sendPreparing: '接続を準備中…',
+    sendReady: '接続が確立しました。送信を開始します…',
     transferDone: (size, secs, spd) => `✓ 転送完了 (中継) — ${size} / ${secs}秒 / ${spd}/s`,
     transferFail: '✗ エラー',
     waitingRcvr:  '受信者を待っています…',
@@ -1284,6 +1286,8 @@ const I18N = {
     tryingP2P:    'Trying local P2P...',
     transferringP2P: 'Transferring... (P2P)',
     transferring: 'Transferring...',
+    sendPreparing: 'Preparing connection…',
+    sendReady: 'Connection ready. Starting transfer…',
     transferDone: (size, secs, spd) => `✓ Transfer complete (relay) — ${size} / ${secs}s / ${spd}/s`,
     transferFail: '✗ Error',
     waitingRcvr:  'Waiting for receiver...',
@@ -1394,11 +1398,15 @@ const STATS_URL = (location.hostname === 'localhost' || location.hostname === '1
   ? `http://${location.hostname}:8787/stats`
   : `${location.protocol}//${location.hostname}/presence/stats`;
 
-function reportTransfer(type, bytes) {
+function reportTransfer(type, bytes, meta = null) {
+  const payload = { type, bytes };
+  if (meta && typeof meta === 'object') {
+    payload.meta = meta;
+  }
   fetch(STATS_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type, bytes }),
+    body: JSON.stringify(payload),
     keepalive: true
   }).catch(() => {});
 }
@@ -1418,6 +1426,7 @@ let _iceServersPromise = null;
 function fetchIceServers() {
   if (!_iceServersPromise) {
     _iceServersPromise = (async () => {
+      const fallback = [{ urls: 'stun:stun.l.google.com:19302' }];
       try {
         let signal;
         if (typeof AbortSignal?.timeout === 'function') {
@@ -1428,9 +1437,39 @@ function fetchIceServers() {
           signal = ac.signal;
         }
         const r = await fetch(ICE_CONFIG_URL, { signal });
-        if (r.ok) return await r.json();
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data) && data.length) {
+            const normalized = data
+              .map(entry => {
+                if (!entry) return null;
+                const urls = entry.urls;
+                if (!urls || (Array.isArray(urls) && !urls.length)) return null;
+                return entry;
+              })
+              .filter(Boolean);
+            if (normalized.length) {
+              normalized.sort((a, b) => {
+                const aTurn = Array.isArray(a.urls)
+                  ? a.urls.some(u => /^turn/i.test(u))
+                  : /^turn/i.test(a.urls);
+                const bTurn = Array.isArray(b.urls)
+                  ? b.urls.some(u => /^turn/i.test(u))
+                  : /^turn/i.test(b.urls);
+                return Number(bTurn) - Number(aTurn);
+              });
+              const hasStun = normalized.some(entry => {
+                return Array.isArray(entry.urls)
+                  ? entry.urls.some(u => /^stun/i.test(u))
+                  : /^stun/i.test(entry.urls);
+              });
+              if (!hasStun) normalized.push({ urls: 'stun:stun.l.google.com:19302' });
+              return normalized;
+            }
+          }
+        }
       } catch {}
-      return [{ urls: 'stun:stun.l.google.com:19302' }];
+      return fallback;
     })();
   }
   return _iceServersPromise;
@@ -1642,15 +1681,32 @@ async function unpairPeer(peerId) {
 // ── Cancellation state ────────────────────────────────────────────────────────
 let _sendXHR = null, _sendPC = null;   // file send
 let _recvPC  = null, _recvAC = null;   // file receive
+let _activeSendSession = null;
+let _activeRecvSession = null;
 let _txtSendPC = null;                 // text send
 let _txtRecvAC = null;                 // text receive
-const SIG_TIMEOUT    = 8000;   // ms: wait for WebRTC signaling peer
-const ICE_TIMEOUT    = 3000;   // ms: max ICE gathering time
-const DC_TIMEOUT     = 5000;   // ms: wait for DataChannel open
-const MAX_CHUNK_SZ   = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
-const MIN_CHUNK_SZ   = 65536;  // Safari 16.x では 64 KB 程度が安全
-const FLOW_HIGH_MULT = 32;     // bufferedAmount を chunkSize * 32 まで許容
-const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
+const SIG_TIMEOUT      = 8000;   // ms: wait for WebRTC signaling peer
+const ICE_TIMEOUT      = 3000;   // ms: max ICE gathering time
+const DC_TIMEOUT       = 5000;   // ms: wait for DataChannel open
+const MAX_CHUNK_SZ     = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
+const MIN_CHUNK_SZ     = 65536;  // Safari 16.x では 64 KB 程度が安全
+const FLOW_HIGH_MULT   = 32;     // bufferedAmount を chunkSize * 32 まで許容
+const FLOW_LOW_MULT    = 8;      // bufferedamountlow が発火する閾値倍率
+const CHUNK_PROFILE = (() => {
+  const ua = navigator.userAgent || '';
+  const isiOS = /iP(hone|ad|od)/.test(ua);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+  const isFirefox = /firefox/i.test(ua);
+  const isChromium = /chrome|crios|edg|opr\//i.test(ua);
+  if (isiOS || isSafari) return 'safari';
+  if (isFirefox) return 'firefox';
+  if (isChromium) return 'chromium';
+  return 'default';
+})();
+const ENABLE_RTC_POOL  = false;  // 予備: ピアごとの PC/DC を再利用する実験機能
+const RTC_IDLE_TIMEOUT = 30000;  // ms: 再利用セッションのアイドル期限（将来利用）
+const RTC_DRAIN_DELAY  = 1500;   // ms: 正常終了時に接続を閉じるまで待つ
+const FLOW_STALL_MS    = 1500;   // ms: bufferedAmount が減らないとみなす閾値
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
@@ -2105,7 +2161,7 @@ function startSendToPeer(peerId) {
 // ── Broadcast (send to all peers) ─────────────────────────────────────────────
 // Send files to a single peer via P2P or HTTP; no UI side-effects.
 async function _sendFilesRawToPeer(fileEntries) {
-  const ok = await trySendWebRTCFiles(fileEntries, () => {}, () => {}, () => {});
+  const ok = await trySendWebRTCFiles(fileEntries, () => {}, () => {}, () => {}, null);
   if (!ok) {
     for (const { file, path } of fileEntries) {
       await fetch(`${PIPE}/${path}`, {
@@ -2184,7 +2240,9 @@ async function sendTextToAllPeers() {
       type: 'handoff', targetId: peer.id,
       payload: { kind: 'text', path },
     }));
-    return trySendWebRTC(blob, path, () => {}, () => {})
+    return trySendWebRTC(blob, path, () => {}, () => {}, () => {
+        setStatus('txt-send-status', t('p2pConnected'), 'waiting');
+      })
       .then(ok => ok ? null : fetch(`${PIPE}/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
@@ -4060,8 +4118,9 @@ function _sendEnd() {
   _sendXHR = null; _sendPC = null;
 }
 function cancelSend() {
-  _sendXHR?.abort(); _sendPC?.close();
-  _sendXHR = null; _sendPC = null;
+  _sendXHR?.abort();
+  _sendXHR = null;
+  disposeRtcSession(_activeSendSession, { force: true });
   document.getElementById('prog-wrap').style.display = 'none';
   document.getElementById('prog-bar').style.width = '0%';
   setStatus('send-status', t('cancelled'), 'err');
@@ -4072,7 +4131,7 @@ async function startSend() {
   if (!selFiles.length) return;
   _sendStart();
   document.getElementById('prog-wrap').style.display = 'block';
-  setStatus('send-status', t('tryingP2P'), 'waiting');
+  setStatus('send-status', t('sendPreparing'), 'waiting');
 
   const ok = await trySendWebRTCFiles(selFiles,
     (fileIdx, loaded, total) => {
@@ -4096,9 +4155,9 @@ async function startSend() {
         ? t('allDone')(selFiles.length)
         : t('p2pSendDone')(fmt(totalSent), elapsed.toFixed(2), fmt(speed));
       setStatus('send-status', msg, 'ok');
-      reportTransfer('p2p', totalSent);
       _sendEnd();
-    }
+    },
+    () => setStatus('send-status', t('sendReady'), 'waiting')
   );
 
   if (!ok) {
@@ -4139,46 +4198,75 @@ async function startSend() {
   }
 }
 
-// Returns a Promise; caller is responsible for _sendEnd()
-function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    _sendXHR = xhr;
-    xhr.open('POST', `${PIPE}/${path}`);
-    xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
-    xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
-    const t0 = performance.now();
-    xhr.upload.addEventListener('progress', e => {
-      if (!e.lengthComputable) return;
-      const p = Math.round(e.loaded / e.total * 100);
-      document.getElementById('prog-bar').style.width = p + '%';
-      const elapsed = (performance.now() - t0) / 1000;
-      const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
-      const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
-      document.getElementById('prog-text').textContent =
-        `${prefix}${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})  ${fmt(speed)}/s`;
-      if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
-    });
-    xhr.addEventListener('load', () => {
-      const elapsed = (performance.now() - t0) / 1000;
-      const speed   = elapsed > 0 ? body.size / elapsed : 0;
-      document.getElementById('prog-bar').style.width = '100%';
-      document.getElementById('prog-text').textContent = totalFiles > 1
-        ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%' : '100%';
-      if (totalFiles === 1) {
-        setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
+async function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
+  const controller = new AbortController();
+  _sendXHR = controller;
+  const total = body.size || 0;
+  let uploaded = 0;
+  const t0 = performance.now();
+
+  const updateProgress = () => {
+    if (!total) return;
+    const p = Math.round(uploaded / total * 100);
+    document.getElementById('prog-bar').style.width = p + '%';
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = elapsed > 0 ? uploaded / elapsed : 0;
+    const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
+    document.getElementById('prog-text').textContent =
+      `${prefix}${p}%  (${fmt(uploaded)} / ${fmt(total)})  ${fmt(speed)}/s`;
+    if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
+  };
+
+  let requestBody = body;
+  if (typeof body.stream === 'function' && typeof ReadableStream === 'function') {
+    const reader = body.stream().getReader();
+    requestBody = new ReadableStream({
+      async pull(ctrl) {
+        const { value, done } = await reader.read();
+        if (done) { ctrl.close(); return; }
+        uploaded += value.byteLength;
+        updateProgress();
+        ctrl.enqueue(value);
+      },
+      cancel() {
+        reader.releaseLock?.();
       }
-      reportTransfer('pipe', body.size);
-      resolve();
     });
-    xhr.addEventListener('abort', () => resolve());  // handled by cancelSend
-    xhr.addEventListener('error', () => {
-      setStatus('send-status', t('transferFail'), 'err');
-      _sendEnd();
-      reject(new Error('transfer failed'));
+  }
+
+  try {
+    const res = await fetch(`${PIPE}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': body.type || 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(body.name || 'file')}"`
+      },
+      body: requestBody,
+      signal: controller.signal,
     });
-    xhr.send(body);
-  });
+    _sendXHR = null;
+    if (!res.ok) throw new Error('HTTP upload failed');
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = elapsed > 0 ? total / elapsed : 0;
+    document.getElementById('prog-bar').style.width = '100%';
+    document.getElementById('prog-text').textContent = totalFiles > 1
+      ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%'
+      : '100%';
+    if (totalFiles === 1) {
+      setStatus('send-status', t('transferDone')(fmt(total), elapsed.toFixed(2), fmt(speed)), 'ok');
+    }
+    reportTransfer('pipe', total, {
+      transport: 'http',
+      files: totalFiles,
+      transferMs: Math.round(elapsed * 1000)
+    });
+  } catch (err) {
+    _sendXHR = null;
+    if (controller.signal.aborted) return;
+    setStatus('send-status', t('transferFail'), 'err');
+    _sendEnd();
+    throw err;
+  }
 }
 
 function resetSend() {
@@ -4236,7 +4324,7 @@ function _recvProgress(received, total) {
   }
 }
 function cancelRecv() {
-  _recvPC?.close(); _recvAC?.abort();
+  disposeRtcSession(_activeRecvSession, { force: true });
   setStatus('recv-status', t('cancelled'), 'err');
   _recvEnd();
 }
@@ -4354,7 +4442,8 @@ async function sendTextToPath(path) {
       setStatus('txt-send-status', msg, 'ok');
       document.getElementById('txt-send-btn').disabled          = false;
       document.getElementById('cancel-txt-send-btn').style.display = 'none';
-    }
+    },
+    () => setStatus('txt-send-status', t('sendReady'), 'waiting')
   );
 
   if (!ok) {
@@ -4507,13 +4596,27 @@ function _showRecvPreview(blob, filename) {
 
 function resolveChunking(pc) {
   const rawMax = pc.sctp?.maxMessageSize;
-  const limit  = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : MAX_CHUNK_SZ;
+  let target = MAX_CHUNK_SZ;
+  if (CHUNK_PROFILE === 'safari') target = 64 * 1024;
+  else if (CHUNK_PROFILE === 'firefox') target = 128 * 1024;
+  else if (CHUNK_PROFILE === 'chromium') target = 512 * 1024;
+  const limit  = Number.isFinite(rawMax) && rawMax > 0 ? Math.min(rawMax, target) : target;
   const chunk  = Math.max(MIN_CHUNK_SZ, Math.min(limit, MAX_CHUNK_SZ));
   return {
     chunkSize: chunk,
     flowHigh : chunk * FLOW_HIGH_MULT,
     flowLow  : chunk * FLOW_LOW_MULT
   };
+}
+
+function shrinkChunk(session) {
+  if (!session || session.chunkSize <= MIN_CHUNK_SZ) return false;
+  const next = Math.max(MIN_CHUNK_SZ, Math.floor(session.chunkSize / 2));
+  if (next === session.chunkSize) return false;
+  session.chunkSize = next;
+  session.flowHigh = next * FLOW_HIGH_MULT;
+  session.flowLow = next * FLOW_LOW_MULT;
+  return true;
 }
 
 function waitForBufferDrain(dc, highWater, lowWater) {
@@ -4547,29 +4650,78 @@ function payloadLength(payload) {
   return 0;
 }
 
-// ── WebRTC send ───────────────────────────────────────────────────────────────
-// onProgress(loaded, total), onDone(message)
-// Returns true if P2P succeeded, false to fall back to HTTP
-async function trySendWebRTC(body, path, onProgress, onDone) {
-  const ac    = new AbortController();
-  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
-  try {
-    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    _sendPC = pc;
-    const dc = pc.createDataChannel('pipe', { ordered: true });
+function disposeRtcSession(session, opts = {}) {
+  if (!session) return;
+  const { force = false } = opts;
+  const performClose = () => {
+    if (session.disposeTimer) {
+      clearTimeout(session.disposeTimer);
+      session.disposeTimer = null;
+    }
+    try { session.dc?.close(); } catch {}
+    try { session.pc?.close(); } catch {}
+    session.ac?.abort();
+    if (session.kind === 'send') {
+      if (_activeSendSession === session) _activeSendSession = null;
+      _sendPC = null;
+    }
+    if (session.kind === 'recv') {
+      if (_activeRecvSession === session) _activeRecvSession = null;
+      _recvPC = null;
+      _recvAC = null;
+    }
+  };
+  if (!force && !ENABLE_RTC_POOL) {
+    if (session.disposeTimer) clearTimeout(session.disposeTimer);
+    session.disposeTimer = setTimeout(performClose, RTC_DRAIN_DELAY);
+    return;
+  }
+  if (force && session.disposeTimer) {
+    clearTimeout(session.disposeTimer);
+    session.disposeTimer = null;
+  }
+  if (force && ENABLE_RTC_POOL) {
+    // even when pooling, allow explicit force-close
+    try { session.dc?.close(); } catch {}
+    try { session.pc?.close(); } catch {}
+    session.ac?.abort();
+    if (session.kind === 'send') {
+      if (_activeSendSession === session) _activeSendSession = null;
+      _sendPC = null;
+    }
+    if (session.kind === 'recv') {
+      if (_activeRecvSession === session) _activeRecvSession = null;
+      _recvPC = null;
+      _recvAC = null;
+    }
+    return;
+  }
+  if (ENABLE_RTC_POOL && !force) {
+    if (session.idleTimer) clearTimeout(session.idleTimer);
+    session.idleTimer = setTimeout(performClose, RTC_IDLE_TIMEOUT);
+    return;
+  }
+  performClose();
+}
 
+async function initSendRtcSession(path) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+  _sendPC = pc;
+  const dc = pc.createDataChannel('pipe', { ordered: true });
+  const session = { kind: 'send', ac, pc, dc, startedAt: performance.now(), chunkSize: 0 };
+  try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIce(pc);
 
-    // POST offer — piping server holds it until receiver reads
     fetch(`${PIPE}/${path}.__offer`, {
       method: 'POST', signal: ac.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pc.localDescription)
     }).catch(() => {});
 
-    // Wait for receiver's answer
     const res = await fetch(`${PIPE}/${path}.__answer`, { signal: ac.signal });
     if (!res.ok) throw new Error('no answer');
     await pc.setRemoteDescription(await res.json());
@@ -4580,9 +4732,85 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     }), DC_TIMEOUT, 'DataChannel timeout');
 
     clearTimeout(timer);
+    const cfg = resolveChunking(pc);
+    dc.bufferedAmountLowThreshold = cfg.flowLow;
+    Object.assign(session, cfg);
+    session.readyAt = performance.now();
+    session.handshakeMs = session.readyAt - session.startedAt;
+    _activeSendSession = session;
+    return session;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    try { pc.close(); } catch {}
+    throw e;
+  }
+}
 
-    const { chunkSize, flowHigh, flowLow } = resolveChunking(pc);
-    dc.bufferedAmountLowThreshold = flowLow;
+async function initRecvRtcSession(path) {
+  const ac = new AbortController();
+  _recvAC = ac;
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+  _recvPC = pc;
+  const session = { kind: 'recv', ac, pc, startedAt: performance.now() };
+  try {
+    const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
+    if (!res.ok) throw new Error('no offer');
+
+    const offer = await res.json();
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitForIce(pc);
+
+    fetch(`${PIPE}/${path}.__answer`, {
+      method: 'POST', signal: ac.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pc.localDescription)
+    }).catch(() => {});
+
+    const dc = await withTimeout(new Promise((resolve, reject) => {
+      pc.ondatachannel = e => resolve(e.channel);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed') reject(new Error('connection failed'));
+      };
+    }), DC_TIMEOUT, 'DataChannel timeout');
+    dc.binaryType = 'arraybuffer';
+
+    clearTimeout(timer);
+    session.dc = dc;
+    session.readyAt = performance.now();
+    session.handshakeMs = session.readyAt - session.startedAt;
+    _activeRecvSession = session;
+    return session;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    try { pc.close(); } catch {}
+    throw e;
+  }
+}
+
+// ── WebRTC send ───────────────────────────────────────────────────────────────
+// onProgress(loaded, total), onDone(message)
+// Returns true if P2P succeeded, false to fall back to HTTP
+async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
+  let session = null;
+  let success = false;
+  try {
+    session = await initSendRtcSession(path);
+    const { pc, dc } = session;
+    let chunkSize = session.chunkSize;
+    let flowHigh = session.flowHigh;
+    let flowLow = session.flowLow;
+    const refreshChunks = () => {
+      chunkSize = session.chunkSize;
+      flowHigh = session.flowHigh;
+      flowLow = session.flowLow;
+    };
+
+    if (typeof onReady === 'function') onReady();
 
     const filename = body instanceof File ? body.name : 'file';
     const mime     = body instanceof Blob ? (body.type || 'application/octet-stream') : 'application/octet-stream';
@@ -4596,7 +4824,12 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
       let offset = 0;
       while (offset < view.byteLength) {
         if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
-        if (dc.bufferedAmount > flowHigh) await waitForBufferDrain(dc, flowHigh, flowLow);
+        if (dc.bufferedAmount > flowHigh) {
+          const stallStart = performance.now();
+          await waitForBufferDrain(dc, flowHigh, flowLow);
+          const stall = performance.now() - stallStart;
+          if (stall > FLOW_STALL_MS && shrinkChunk(session)) refreshChunks();
+        }
         const size  = Math.min(chunkSize, view.byteLength - offset);
         const chunk = view.subarray(offset, offset + size);
         dc.send(chunk);
@@ -4630,50 +4863,42 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
-    reportTransfer('p2p', sent);
+    reportTransfer('p2p', sent, {
+      chunkSize: session.chunkSize,
+      profile: CHUNK_PROFILE,
+      handshakeMs: Math.round(session.handshakeMs || 0),
+      transferMs: Math.round(elapsed * 1000),
+      files: 1
+    });
+    success = true;
     return true;
   } catch (e) {
-    clearTimeout(timer);
-    ac.abort();
     return false;
+  } finally {
+    disposeRtcSession(session, { force: !success });
   }
 }
 
 // ── WebRTC send (multi-file) ──────────────────────────────────────────────────
 // fileEntries: [{file, path}] — uses first path for signaling
 // onProgress(fileIdx, loaded, total), onFileDone(fileIdx), onAllDone(totalSent, elapsed)
-async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone) {
+async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone, onReady) {
   const sigPath = fileEntries[0].path;
-  const ac    = new AbortController();
-  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  let session = null;
+  let success = false;
   try {
-    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    _sendPC = pc;
-    const dc = pc.createDataChannel('pipe', { ordered: true });
+    session = await initSendRtcSession(sigPath);
+    const { pc, dc } = session;
+    let chunkSize = session.chunkSize;
+    let flowHigh = session.flowHigh;
+    let flowLow = session.flowLow;
+    const refreshChunks = () => {
+      chunkSize = session.chunkSize;
+      flowHigh = session.flowHigh;
+      flowLow = session.flowLow;
+    };
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForIce(pc);
-
-    fetch(`${PIPE}/${sigPath}.__offer`, {
-      method: 'POST', signal: ac.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pc.localDescription)
-    }).catch(() => {});
-
-    const res = await fetch(`${PIPE}/${sigPath}.__answer`, { signal: ac.signal });
-    if (!res.ok) throw new Error('no answer');
-    await pc.setRemoteDescription(await res.json());
-
-    await withTimeout(new Promise((resolve, reject) => {
-      dc.onopen  = resolve;
-      dc.onerror = reject;
-    }), DC_TIMEOUT, 'DataChannel timeout');
-
-    clearTimeout(timer);
-
-    const { chunkSize, flowHigh, flowLow } = resolveChunking(pc);
-    dc.bufferedAmountLowThreshold = flowLow;
+    if (typeof onReady === 'function') onReady();
 
     let totalSent = 0;
     const t0 = performance.now();
@@ -4690,7 +4915,12 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
         let offset = 0;
         while (offset < view.byteLength) {
           if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
-          if (dc.bufferedAmount > flowHigh) await waitForBufferDrain(dc, flowHigh, flowLow);
+          if (dc.bufferedAmount > flowHigh) {
+            const stallStart = performance.now();
+            await waitForBufferDrain(dc, flowHigh, flowLow);
+            const stall = performance.now() - stallStart;
+            if (stall > FLOW_STALL_MS && shrinkChunk(session)) refreshChunks();
+          }
           const size  = Math.min(chunkSize, view.byteLength - offset);
           const chunk = view.subarray(offset, offset + size);
           dc.send(chunk);
@@ -4719,11 +4949,19 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
     dc.send(JSON.stringify({ t: 'all-done' }));
     const elapsed = (performance.now() - t0) / 1000;
     onAllDone(totalSent, elapsed);
+    reportTransfer('p2p', totalSent, {
+      chunkSize: session.chunkSize,
+      profile: CHUNK_PROFILE,
+      handshakeMs: Math.round(session.handshakeMs || 0),
+      transferMs: Math.round(elapsed * 1000),
+      files: fileEntries.length
+    });
+    success = true;
     return true;
   } catch (e) {
-    clearTimeout(timer);
-    ac.abort();
     return false;
+  } finally {
+    disposeRtcSession(session, { force: !success });
   }
 }
 
@@ -4731,35 +4969,12 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
 // onStatus(message), onDone(message, blob, filename), onProgress(received, total)
 // Returns true if P2P succeeded
 async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
-  const ac    = new AbortController();
-  _recvAC = ac;
-  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  let session = null;
+  let success = false;
   try {
-    // GET offer (blocks until sender posts it)
-    const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
-    if (!res.ok) throw new Error('no offer');
-
-    const pc        = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    _recvPC = pc;
-    const dcPromise = new Promise(resolve => {
-      pc.ondatachannel = e => resolve(e.channel);
-    });
-
-    await pc.setRemoteDescription(await res.json());
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    await waitForIce(pc);
-
-    fetch(`${PIPE}/${path}.__answer`, {
-      method: 'POST', signal: ac.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pc.localDescription)
-    }).catch(() => {});
-
-    const dc = await withTimeout(dcPromise, DC_TIMEOUT, 'DataChannel timeout');
-    dc.binaryType = 'arraybuffer';
-
-    clearTimeout(timer);
+    session = await initRecvRtcSession(path);
+    const { dc } = session;
+    _recvAC = session.ac;
     onStatus(t('p2pConnected'));
 
     await new Promise(resolve => {
@@ -4778,10 +4993,9 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
             const blob    = new Blob(chunks, { type: meta.mime });
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
-            if (!isMulti) resolve();  // single-file: done
-            // multi-file: keep listening for more files
+            if (!isMulti) resolve();
           } else if (msg.t === 'all-done') {
-            resolve();  // multi-file: all files sent
+            resolve();
           }
         } else {
           if (!t0) t0 = performance.now();
@@ -4795,11 +5009,12 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
       };
       dc.onerror = resolve;
     });
+    success = true;
     return true;
   } catch (e) {
-    clearTimeout(timer);
-    ac.abort();
     return false;
+  } finally {
+    disposeRtcSession(session, { force: !success });
   }
 }
 
