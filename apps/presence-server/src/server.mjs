@@ -11,7 +11,15 @@ const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 
 // ── Stats persistence ─────────────────────────────────────────────────────────
-const EMPTY_STATS = () => ({ p2p: { count: 0, bytes: 0 }, pipe: { count: 0, bytes: 0 }, torrent: { count: 0, bytes: 0 } });
+const STATS_LOG_LIMIT = Number(process.env.STATS_LOG_LIMIT || 500);
+const EMPTY_STATS = () => ({
+  summary: {
+    p2p: { count: 0, bytes: 0 },
+    pipe: { count: 0, bytes: 0 },
+    torrent: { count: 0, bytes: 0 }
+  },
+  logs: []
+});
 
 function loadStats() {
   try {
@@ -31,6 +39,8 @@ function saveStats(data) {
 }
 
 const stats = loadStats();
+if (!stats.summary) stats.summary = EMPTY_STATS().summary;
+if (!stats.logs) stats.logs = [];
 
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
@@ -287,6 +297,22 @@ function buildTurnServers() {
   }));
 }
 
+function recordTransfer(entry) {
+  const { type, bytes = 0, meta = null, timestamp = Date.now() } = entry || {};
+  if (!type || !stats.summary[type]) return;
+  stats.summary[type].count += 1;
+  stats.summary[type].bytes += Number(bytes) || 0;
+  const logEntry = { type, bytes: Number(bytes) || 0, ts: timestamp };
+  if (meta && typeof meta === 'object') {
+    logEntry.meta = meta;
+  }
+  stats.logs.push(logEntry);
+  if (stats.logs.length > STATS_LOG_LIMIT) {
+    stats.logs.splice(0, stats.logs.length - STATS_LOG_LIMIT);
+  }
+  saveStats(stats);
+}
+
 const server = createServer((req, res) => {
   const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
@@ -309,13 +335,9 @@ const server = createServer((req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { type, bytes } = JSON.parse(body);
-        if (type === 'p2p' || type === 'pipe' || type === 'torrent') {
-          if (!stats[type]) stats[type] = { count: 0, bytes: 0 };
-          stats[type].count += 1;
-          stats[type].bytes += Number(bytes) || 0;
-          saveStats(stats);
-          log('stats recorded', type, bytes);
+        const payload = JSON.parse(body);
+        if (payload && typeof payload === 'object') {
+          recordTransfer(payload);
         }
       } catch {}
       res.writeHead(204, CORS).end();
