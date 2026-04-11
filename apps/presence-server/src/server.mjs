@@ -323,9 +323,31 @@ const server = createServer((req, res) => {
   }
 
   // GET /stats
-  if (req.method === 'GET' && path === '/stats') {
+  if (req.method === 'GET' && (path === '/stats' || path === '/stats/export')) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const limit = Math.min(Number(url.searchParams.get('limit')) || STATS_LOG_LIMIT, STATS_LOG_LIMIT);
+    const typeFilter = url.searchParams.get('type');
+    const format = (url.searchParams.get('format') || 'json').toLowerCase();
+    let logs = stats.logs.slice(-limit);
+    if (typeFilter) {
+      logs = logs.filter(entry => entry.type === typeFilter);
+    }
+    if (format === 'csv') {
+      const header = 'ts,type,bytes,meta\n';
+      const rows = logs.map(entry => {
+        const meta = entry.meta ? JSON.stringify(entry.meta) : '';
+        return `${entry.ts},${entry.type},${entry.bytes},"${meta.replace(/"/g, '""')}"`;
+      }).join('\n');
+      res.writeHead(200, { 'content-type': 'text/csv', ...CORS })
+         .end(header + rows);
+      return;
+    }
+    const payload = {
+      summary: stats.summary,
+      logs,
+    };
     res.writeHead(200, { 'content-type': 'application/json', ...CORS })
-       .end(JSON.stringify(stats));
+       .end(JSON.stringify(payload));
     return;
   }
 
