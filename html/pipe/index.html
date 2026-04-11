@@ -1642,15 +1642,20 @@ async function unpairPeer(peerId) {
 // ── Cancellation state ────────────────────────────────────────────────────────
 let _sendXHR = null, _sendPC = null;   // file send
 let _recvPC  = null, _recvAC = null;   // file receive
+let _activeSendSession = null;
+let _activeRecvSession = null;
 let _txtSendPC = null;                 // text send
 let _txtRecvAC = null;                 // text receive
-const SIG_TIMEOUT    = 8000;   // ms: wait for WebRTC signaling peer
-const ICE_TIMEOUT    = 3000;   // ms: max ICE gathering time
-const DC_TIMEOUT     = 5000;   // ms: wait for DataChannel open
-const MAX_CHUNK_SZ   = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
-const MIN_CHUNK_SZ   = 65536;  // Safari 16.x では 64 KB 程度が安全
-const FLOW_HIGH_MULT = 32;     // bufferedAmount を chunkSize * 32 まで許容
-const FLOW_LOW_MULT  = 8;      // bufferedamountlow が発火する閾値倍率
+const SIG_TIMEOUT      = 8000;   // ms: wait for WebRTC signaling peer
+const ICE_TIMEOUT      = 3000;   // ms: max ICE gathering time
+const DC_TIMEOUT       = 5000;   // ms: wait for DataChannel open
+const MAX_CHUNK_SZ     = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
+const MIN_CHUNK_SZ     = 65536;  // Safari 16.x では 64 KB 程度が安全
+const FLOW_HIGH_MULT   = 32;     // bufferedAmount を chunkSize * 32 まで許容
+const FLOW_LOW_MULT    = 8;      // bufferedamountlow が発火する閾値倍率
+const ENABLE_RTC_POOL  = false;  // 予備: ピアごとの PC/DC を再利用する実験機能
+const RTC_IDLE_TIMEOUT = 30000;  // ms: 再利用セッションのアイドル期限（将来利用）
+const RTC_DRAIN_DELAY  = 1500;   // ms: 正常終了時に接続を閉じるまで待つ
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => Math.random().toString(36).slice(2, 10);
@@ -4060,8 +4065,9 @@ function _sendEnd() {
   _sendXHR = null; _sendPC = null;
 }
 function cancelSend() {
-  _sendXHR?.abort(); _sendPC?.close();
-  _sendXHR = null; _sendPC = null;
+  _sendXHR?.abort();
+  _sendXHR = null;
+  disposeRtcSession(_activeSendSession, { force: true });
   document.getElementById('prog-wrap').style.display = 'none';
   document.getElementById('prog-bar').style.width = '0%';
   setStatus('send-status', t('cancelled'), 'err');
@@ -4236,7 +4242,7 @@ function _recvProgress(received, total) {
   }
 }
 function cancelRecv() {
-  _recvPC?.close(); _recvAC?.abort();
+  disposeRtcSession(_activeRecvSession, { force: true });
   setStatus('recv-status', t('cancelled'), 'err');
   _recvEnd();
 }
@@ -4547,29 +4553,78 @@ function payloadLength(payload) {
   return 0;
 }
 
-// ── WebRTC send ───────────────────────────────────────────────────────────────
-// onProgress(loaded, total), onDone(message)
-// Returns true if P2P succeeded, false to fall back to HTTP
-async function trySendWebRTC(body, path, onProgress, onDone) {
-  const ac    = new AbortController();
-  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
-  try {
-    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    _sendPC = pc;
-    const dc = pc.createDataChannel('pipe', { ordered: true });
+function disposeRtcSession(session, opts = {}) {
+  if (!session) return;
+  const { force = false } = opts;
+  const performClose = () => {
+    if (session.disposeTimer) {
+      clearTimeout(session.disposeTimer);
+      session.disposeTimer = null;
+    }
+    try { session.dc?.close(); } catch {}
+    try { session.pc?.close(); } catch {}
+    session.ac?.abort();
+    if (session.kind === 'send') {
+      if (_activeSendSession === session) _activeSendSession = null;
+      _sendPC = null;
+    }
+    if (session.kind === 'recv') {
+      if (_activeRecvSession === session) _activeRecvSession = null;
+      _recvPC = null;
+      _recvAC = null;
+    }
+  };
+  if (!force && !ENABLE_RTC_POOL) {
+    if (session.disposeTimer) clearTimeout(session.disposeTimer);
+    session.disposeTimer = setTimeout(performClose, RTC_DRAIN_DELAY);
+    return;
+  }
+  if (force && session.disposeTimer) {
+    clearTimeout(session.disposeTimer);
+    session.disposeTimer = null;
+  }
+  if (force && ENABLE_RTC_POOL) {
+    // even when pooling, allow explicit force-close
+    try { session.dc?.close(); } catch {}
+    try { session.pc?.close(); } catch {}
+    session.ac?.abort();
+    if (session.kind === 'send') {
+      if (_activeSendSession === session) _activeSendSession = null;
+      _sendPC = null;
+    }
+    if (session.kind === 'recv') {
+      if (_activeRecvSession === session) _activeRecvSession = null;
+      _recvPC = null;
+      _recvAC = null;
+    }
+    return;
+  }
+  if (ENABLE_RTC_POOL && !force) {
+    if (session.idleTimer) clearTimeout(session.idleTimer);
+    session.idleTimer = setTimeout(performClose, RTC_IDLE_TIMEOUT);
+    return;
+  }
+  performClose();
+}
 
+async function initSendRtcSession(path) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+  _sendPC = pc;
+  const dc = pc.createDataChannel('pipe', { ordered: true });
+  const session = { kind: 'send', ac, pc, dc };
+  try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIce(pc);
 
-    // POST offer — piping server holds it until receiver reads
     fetch(`${PIPE}/${path}.__offer`, {
       method: 'POST', signal: ac.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pc.localDescription)
     }).catch(() => {});
 
-    // Wait for receiver's answer
     const res = await fetch(`${PIPE}/${path}.__answer`, { signal: ac.signal });
     if (!res.ok) throw new Error('no answer');
     await pc.setRemoteDescription(await res.json());
@@ -4580,9 +4635,71 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     }), DC_TIMEOUT, 'DataChannel timeout');
 
     clearTimeout(timer);
+    const cfg = resolveChunking(pc);
+    dc.bufferedAmountLowThreshold = cfg.flowLow;
+    Object.assign(session, cfg);
+    _activeSendSession = session;
+    return session;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    try { pc.close(); } catch {}
+    throw e;
+  }
+}
 
-    const { chunkSize, flowHigh, flowLow } = resolveChunking(pc);
-    dc.bufferedAmountLowThreshold = flowLow;
+async function initRecvRtcSession(path) {
+  const ac = new AbortController();
+  _recvAC = ac;
+  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+  _recvPC = pc;
+  const session = { kind: 'recv', ac, pc };
+  try {
+    const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
+    if (!res.ok) throw new Error('no offer');
+
+    const offer = await res.json();
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitForIce(pc);
+
+    fetch(`${PIPE}/${path}.__answer`, {
+      method: 'POST', signal: ac.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pc.localDescription)
+    }).catch(() => {});
+
+    const dc = await withTimeout(new Promise((resolve, reject) => {
+      pc.ondatachannel = e => resolve(e.channel);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed') reject(new Error('connection failed'));
+      };
+    }), DC_TIMEOUT, 'DataChannel timeout');
+    dc.binaryType = 'arraybuffer';
+
+    clearTimeout(timer);
+    session.dc = dc;
+    _activeRecvSession = session;
+    return session;
+  } catch (e) {
+    clearTimeout(timer);
+    ac.abort();
+    try { pc.close(); } catch {}
+    throw e;
+  }
+}
+
+// ── WebRTC send ───────────────────────────────────────────────────────────────
+// onProgress(loaded, total), onDone(message)
+// Returns true if P2P succeeded, false to fall back to HTTP
+async function trySendWebRTC(body, path, onProgress, onDone) {
+  let session = null;
+  let success = false;
+  try {
+    session = await initSendRtcSession(path);
+    const { pc, dc, chunkSize, flowHigh, flowLow } = session;
 
     const filename = body instanceof File ? body.name : 'file';
     const mime     = body instanceof Blob ? (body.type || 'application/octet-stream') : 'application/octet-stream';
@@ -4631,11 +4748,12 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
     reportTransfer('p2p', sent);
+    success = true;
     return true;
   } catch (e) {
-    clearTimeout(timer);
-    ac.abort();
     return false;
+  } finally {
+    disposeRtcSession(session, { force: !success });
   }
 }
 
@@ -4644,36 +4762,11 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 // onProgress(fileIdx, loaded, total), onFileDone(fileIdx), onAllDone(totalSent, elapsed)
 async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone) {
   const sigPath = fileEntries[0].path;
-  const ac    = new AbortController();
-  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  let session = null;
+  let success = false;
   try {
-    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    _sendPC = pc;
-    const dc = pc.createDataChannel('pipe', { ordered: true });
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForIce(pc);
-
-    fetch(`${PIPE}/${sigPath}.__offer`, {
-      method: 'POST', signal: ac.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pc.localDescription)
-    }).catch(() => {});
-
-    const res = await fetch(`${PIPE}/${sigPath}.__answer`, { signal: ac.signal });
-    if (!res.ok) throw new Error('no answer');
-    await pc.setRemoteDescription(await res.json());
-
-    await withTimeout(new Promise((resolve, reject) => {
-      dc.onopen  = resolve;
-      dc.onerror = reject;
-    }), DC_TIMEOUT, 'DataChannel timeout');
-
-    clearTimeout(timer);
-
-    const { chunkSize, flowHigh, flowLow } = resolveChunking(pc);
-    dc.bufferedAmountLowThreshold = flowLow;
+    session = await initSendRtcSession(sigPath);
+    const { pc, dc, chunkSize, flowHigh, flowLow } = session;
 
     let totalSent = 0;
     const t0 = performance.now();
@@ -4719,11 +4812,12 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
     dc.send(JSON.stringify({ t: 'all-done' }));
     const elapsed = (performance.now() - t0) / 1000;
     onAllDone(totalSent, elapsed);
+    success = true;
     return true;
   } catch (e) {
-    clearTimeout(timer);
-    ac.abort();
     return false;
+  } finally {
+    disposeRtcSession(session, { force: !success });
   }
 }
 
@@ -4731,35 +4825,12 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
 // onStatus(message), onDone(message, blob, filename), onProgress(received, total)
 // Returns true if P2P succeeded
 async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
-  const ac    = new AbortController();
-  _recvAC = ac;
-  const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
+  let session = null;
+  let success = false;
   try {
-    // GET offer (blocks until sender posts it)
-    const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
-    if (!res.ok) throw new Error('no offer');
-
-    const pc        = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    _recvPC = pc;
-    const dcPromise = new Promise(resolve => {
-      pc.ondatachannel = e => resolve(e.channel);
-    });
-
-    await pc.setRemoteDescription(await res.json());
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    await waitForIce(pc);
-
-    fetch(`${PIPE}/${path}.__answer`, {
-      method: 'POST', signal: ac.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pc.localDescription)
-    }).catch(() => {});
-
-    const dc = await withTimeout(dcPromise, DC_TIMEOUT, 'DataChannel timeout');
-    dc.binaryType = 'arraybuffer';
-
-    clearTimeout(timer);
+    session = await initRecvRtcSession(path);
+    const { dc } = session;
+    _recvAC = session.ac;
     onStatus(t('p2pConnected'));
 
     await new Promise(resolve => {
@@ -4778,10 +4849,9 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
             const blob    = new Blob(chunks, { type: meta.mime });
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
-            if (!isMulti) resolve();  // single-file: done
-            // multi-file: keep listening for more files
+            if (!isMulti) resolve();
           } else if (msg.t === 'all-done') {
-            resolve();  // multi-file: all files sent
+            resolve();
           }
         } else {
           if (!t0) t0 = performance.now();
@@ -4795,11 +4865,12 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
       };
       dc.onerror = resolve;
     });
+    success = true;
     return true;
   } catch (e) {
-    clearTimeout(timer);
-    ac.abort();
     return false;
+  } finally {
+    disposeRtcSession(session, { force: !success });
   }
 }
 
