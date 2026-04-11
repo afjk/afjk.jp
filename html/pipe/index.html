@@ -1224,6 +1224,7 @@ const I18N = {
     torrentBtn:        'ルームに共有',
     torrentLoading:    'WebTorrent を読み込み中…',
     torrentSeeding:    'シーディング中',
+    torrentShared:     'ルームに共有しました',
     torrentSentToAll:  n => `${n}台にマグネットリンクを送信しました`,
     torrentIncoming:   (sender, n) => `${sender} からトレント (${n}) が届きます…`,
     torrentRecv:       '🌊 トレント受信中…',
@@ -1317,6 +1318,7 @@ const I18N = {
     torrentBtn:        'Share to Room',
     torrentLoading:    'Loading WebTorrent…',
     torrentSeeding:    'Seeding',
+    torrentShared:     'Shared to room.',
     torrentSentToAll:  n => `Magnet link sent to ${n} devices`,
     torrentIncoming:   (sender, n) => `Torrent incoming from ${sender} (${n})…`,
     torrentRecv:       '🌊 Receiving torrent…',
@@ -2813,9 +2815,8 @@ async function seedFilesAsTorrent() {
       setStatus('send-status', t('torrentSentToAll')(count), 'waiting');
       // Also connect directly via presence (tracker-free)
       _wtConnectRoomPeers(torrent, peers);
-    } else {
-      setStatus('send-status', t('torrentSeeding'), 'waiting');
     }
+    setStatus('send-status', t('torrentShared'), 'ok');
 
     // Live upload stats
     const statsInterval = setInterval(() => {
