@@ -1398,11 +1398,15 @@ const STATS_URL = (location.hostname === 'localhost' || location.hostname === '1
   ? `http://${location.hostname}:8787/stats`
   : `${location.protocol}//${location.hostname}/presence/stats`;
 
-function reportTransfer(type, bytes) {
+function reportTransfer(type, bytes, meta = null) {
+  const payload = { type, bytes };
+  if (meta && typeof meta === 'object') {
+    payload.meta = meta;
+  }
   fetch(STATS_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type, bytes }),
+    body: JSON.stringify(payload),
     keepalive: true
   }).catch(() => {});
 }
@@ -4120,7 +4124,6 @@ async function startSend() {
         ? t('allDone')(selFiles.length)
         : t('p2pSendDone')(fmt(totalSent), elapsed.toFixed(2), fmt(speed));
       setStatus('send-status', msg, 'ok');
-      reportTransfer('p2p', totalSent);
       _sendEnd();
     },
     () => setStatus('send-status', t('sendReady'), 'waiting')
@@ -4193,7 +4196,11 @@ function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
       if (totalFiles === 1) {
         setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
       }
-      reportTransfer('pipe', body.size);
+      reportTransfer('pipe', body.size, {
+        transport: 'http',
+        files: totalFiles,
+        transferMs: Math.round(elapsed * 1000)
+      });
       resolve();
     });
     xhr.addEventListener('abort', () => resolve());  // handled by cancelSend
@@ -4647,7 +4654,7 @@ async function initSendRtcSession(path) {
   const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
   _sendPC = pc;
   const dc = pc.createDataChannel('pipe', { ordered: true });
-  const session = { kind: 'send', ac, pc, dc };
+  const session = { kind: 'send', ac, pc, dc, startedAt: performance.now(), chunkSize: 0 };
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -4672,6 +4679,8 @@ async function initSendRtcSession(path) {
     const cfg = resolveChunking(pc);
     dc.bufferedAmountLowThreshold = cfg.flowLow;
     Object.assign(session, cfg);
+    session.readyAt = performance.now();
+    session.handshakeMs = session.readyAt - session.startedAt;
     _activeSendSession = session;
     return session;
   } catch (e) {
@@ -4688,7 +4697,7 @@ async function initRecvRtcSession(path) {
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
   const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
   _recvPC = pc;
-  const session = { kind: 'recv', ac, pc };
+  const session = { kind: 'recv', ac, pc, startedAt: performance.now() };
   try {
     const res = await fetch(`${PIPE}/${path}.__offer`, { signal: ac.signal });
     if (!res.ok) throw new Error('no offer');
@@ -4715,6 +4724,8 @@ async function initRecvRtcSession(path) {
 
     clearTimeout(timer);
     session.dc = dc;
+    session.readyAt = performance.now();
+    session.handshakeMs = session.readyAt - session.startedAt;
     _activeRecvSession = session;
     return session;
   } catch (e) {
@@ -4796,7 +4807,13 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
-    reportTransfer('p2p', sent);
+    reportTransfer('p2p', sent, {
+      chunkSize: session.chunkSize,
+      profile: CHUNK_PROFILE,
+      handshakeMs: Math.round(session.handshakeMs || 0),
+      transferMs: Math.round(elapsed * 1000),
+      files: 1
+    });
     success = true;
     return true;
   } catch (e) {
@@ -4876,6 +4893,13 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
     dc.send(JSON.stringify({ t: 'all-done' }));
     const elapsed = (performance.now() - t0) / 1000;
     onAllDone(totalSent, elapsed);
+    reportTransfer('p2p', totalSent, {
+      chunkSize: session.chunkSize,
+      profile: CHUNK_PROFILE,
+      handshakeMs: Math.round(session.handshakeMs || 0),
+      transferMs: Math.round(elapsed * 1000),
+      files: fileEntries.length
+    });
     success = true;
     return true;
   } catch (e) {
