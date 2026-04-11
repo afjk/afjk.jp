@@ -19,11 +19,9 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          timeout: 30s
+          timeout: 120s
           script: |
             cd ~/github/afjk.jp
             git fetch origin
             git reset --hard origin/main
             docker compose up -d --build presence-server
-            docker compose up -d https-portal
-            docker compose up -d coturn
