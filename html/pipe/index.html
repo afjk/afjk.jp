@@ -1190,6 +1190,8 @@ const I18N = {
     tryingP2P:    'ローカル P2P を試みています…',
     transferringP2P: '転送中… (P2P)',
     transferring: '転送中…',
+    sendPreparing: '接続を準備中…',
+    sendReady: '接続が確立しました。送信を開始します…',
     transferDone: (size, secs, spd) => `✓ 転送完了 (中継) — ${size} / ${secs}秒 / ${spd}/s`,
     transferFail: '✗ エラー',
     waitingRcvr:  '受信者を待っています…',
@@ -1284,6 +1286,8 @@ const I18N = {
     tryingP2P:    'Trying local P2P...',
     transferringP2P: 'Transferring... (P2P)',
     transferring: 'Transferring...',
+    sendPreparing: 'Preparing connection…',
+    sendReady: 'Connection ready. Starting transfer…',
     transferDone: (size, secs, spd) => `✓ Transfer complete (relay) — ${size} / ${secs}s / ${spd}/s`,
     transferFail: '✗ Error',
     waitingRcvr:  'Waiting for receiver...',
@@ -2110,7 +2114,7 @@ function startSendToPeer(peerId) {
 // ── Broadcast (send to all peers) ─────────────────────────────────────────────
 // Send files to a single peer via P2P or HTTP; no UI side-effects.
 async function _sendFilesRawToPeer(fileEntries) {
-  const ok = await trySendWebRTCFiles(fileEntries, () => {}, () => {}, () => {});
+  const ok = await trySendWebRTCFiles(fileEntries, () => {}, () => {}, () => {}, null);
   if (!ok) {
     for (const { file, path } of fileEntries) {
       await fetch(`${PIPE}/${path}`, {
@@ -2189,7 +2193,9 @@ async function sendTextToAllPeers() {
       type: 'handoff', targetId: peer.id,
       payload: { kind: 'text', path },
     }));
-    return trySendWebRTC(blob, path, () => {}, () => {})
+    return trySendWebRTC(blob, path, () => {}, () => {}, () => {
+        setStatus('txt-send-status', t('p2pConnected'), 'waiting');
+      })
       .then(ok => ok ? null : fetch(`${PIPE}/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
@@ -4078,7 +4084,7 @@ async function startSend() {
   if (!selFiles.length) return;
   _sendStart();
   document.getElementById('prog-wrap').style.display = 'block';
-  setStatus('send-status', t('tryingP2P'), 'waiting');
+  setStatus('send-status', t('sendPreparing'), 'waiting');
 
   const ok = await trySendWebRTCFiles(selFiles,
     (fileIdx, loaded, total) => {
@@ -4104,7 +4110,8 @@ async function startSend() {
       setStatus('send-status', msg, 'ok');
       reportTransfer('p2p', totalSent);
       _sendEnd();
-    }
+    },
+    () => setStatus('send-status', t('sendReady'), 'waiting')
   );
 
   if (!ok) {
@@ -4360,7 +4367,8 @@ async function sendTextToPath(path) {
       setStatus('txt-send-status', msg, 'ok');
       document.getElementById('txt-send-btn').disabled          = false;
       document.getElementById('cancel-txt-send-btn').style.display = 'none';
-    }
+    },
+    () => setStatus('txt-send-status', t('sendReady'), 'waiting')
   );
 
   if (!ok) {
@@ -4694,12 +4702,14 @@ async function initRecvRtcSession(path) {
 // ── WebRTC send ───────────────────────────────────────────────────────────────
 // onProgress(loaded, total), onDone(message)
 // Returns true if P2P succeeded, false to fall back to HTTP
-async function trySendWebRTC(body, path, onProgress, onDone) {
+async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
   let session = null;
   let success = false;
   try {
     session = await initSendRtcSession(path);
     const { pc, dc, chunkSize, flowHigh, flowLow } = session;
+
+    if (typeof onReady === 'function') onReady();
 
     const filename = body instanceof File ? body.name : 'file';
     const mime     = body instanceof Blob ? (body.type || 'application/octet-stream') : 'application/octet-stream';
@@ -4760,13 +4770,15 @@ async function trySendWebRTC(body, path, onProgress, onDone) {
 // ── WebRTC send (multi-file) ──────────────────────────────────────────────────
 // fileEntries: [{file, path}] — uses first path for signaling
 // onProgress(fileIdx, loaded, total), onFileDone(fileIdx), onAllDone(totalSent, elapsed)
-async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone) {
+async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone, onReady) {
   const sigPath = fileEntries[0].path;
   let session = null;
   let success = false;
   try {
     session = await initSendRtcSession(sigPath);
     const { pc, dc, chunkSize, flowHigh, flowLow } = session;
+
+    if (typeof onReady === 'function') onReady();
 
     let totalSent = 0;
     const t0 = performance.now();
