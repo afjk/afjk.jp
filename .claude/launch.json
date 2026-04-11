@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "presence-server",
+      "runtimeExecutable": "/usr/local/bin/node",
+      "runtimeArgs": ["apps/presence-server/src/server.mjs"],
+      "port": 8787
+    },
+    {
+      "name": "pipe-ui",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["-m", "http.server", "3000", "--directory", "html/pipe"],
+      "port": 3000
+    },
+    {
+      "name": "www",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["-m", "http.server", "3001", "--directory", "html"],
+      "port": 3001
+    }
+  ]
+}

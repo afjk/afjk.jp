@@ -2,6 +2,6 @@
 https-portal-certs/
 
 # Claude Code
-.claude/
+.claude/settings.local.json
 
 .DS_Store
