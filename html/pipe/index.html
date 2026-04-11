@@ -1657,6 +1657,17 @@ const MAX_CHUNK_SZ     = 262144; // Upper bound per message (Chrome 126 ≈ 256 
 const MIN_CHUNK_SZ     = 65536;  // Safari 16.x では 64 KB 程度が安全
 const FLOW_HIGH_MULT   = 32;     // bufferedAmount を chunkSize * 32 まで許容
 const FLOW_LOW_MULT    = 8;      // bufferedamountlow が発火する閾値倍率
+const CHUNK_PROFILE = (() => {
+  const ua = navigator.userAgent || '';
+  const isiOS = /iP(hone|ad|od)/.test(ua);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+  const isFirefox = /firefox/i.test(ua);
+  const isChromium = /chrome|crios|edg|opr\//i.test(ua);
+  if (isiOS || isSafari) return 'safari';
+  if (isFirefox) return 'firefox';
+  if (isChromium) return 'chromium';
+  return 'default';
+})();
 const ENABLE_RTC_POOL  = false;  // 予備: ピアごとの PC/DC を再利用する実験機能
 const RTC_IDLE_TIMEOUT = 30000;  // ms: 再利用セッションのアイドル期限（将来利用）
 const RTC_DRAIN_DELAY  = 1500;   // ms: 正常終了時に接続を閉じるまで待つ
@@ -4521,7 +4532,11 @@ function _showRecvPreview(blob, filename) {
 
 function resolveChunking(pc) {
   const rawMax = pc.sctp?.maxMessageSize;
-  const limit  = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : MAX_CHUNK_SZ;
+  let target = MAX_CHUNK_SZ;
+  if (CHUNK_PROFILE === 'safari') target = 64 * 1024;
+  else if (CHUNK_PROFILE === 'firefox') target = 128 * 1024;
+  else if (CHUNK_PROFILE === 'chromium') target = 512 * 1024;
+  const limit  = Number.isFinite(rawMax) && rawMax > 0 ? Math.min(rawMax, target) : target;
   const chunk  = Math.max(MIN_CHUNK_SZ, Math.min(limit, MAX_CHUNK_SZ));
   return {
     chunkSize: chunk,
