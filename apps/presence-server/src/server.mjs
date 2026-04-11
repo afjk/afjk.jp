@@ -7,11 +7,13 @@ const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
+const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 
 // ── Stats persistence ─────────────────────────────────────────────────────────
 const STATS_LOG_LIMIT = Number(process.env.STATS_LOG_LIMIT || 500);
+const STATS_ARCHIVE_AFTER = Number(process.env.STATS_ARCHIVE_AFTER || 2000);
 const EMPTY_STATS = () => ({
   summary: {
     p2p: { count: 0, bytes: 0 },
@@ -29,12 +31,34 @@ function loadStats() {
   }
 }
 
+function writeStatsFile(data) {
+  mkdirSync(STATS_FILE.replace(/\/[^/]+$/, ''), { recursive: true });
+  writeFileSync(STATS_FILE, JSON.stringify(data), 'utf8');
+}
+
 function saveStats(data) {
   try {
-    mkdirSync(STATS_FILE.replace(/\/[^/]+$/, ''), { recursive: true });
-    writeFileSync(STATS_FILE, JSON.stringify(data), 'utf8');
+    writeStatsFile(data);
+    if (stats.logs.length >= STATS_ARCHIVE_AFTER) {
+      archiveStats();
+    }
   } catch (err) {
     log('stats write error', err.message);
+  }
+}
+
+function archiveStats() {
+  try {
+    mkdirSync(STATS_ARCHIVE_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = `${STATS_ARCHIVE_DIR}/stats-${ts}.json`;
+    const snapshot = { summary: stats.summary, logs: stats.logs.slice() };
+    writeFileSync(filePath, JSON.stringify(snapshot), 'utf8');
+    stats.logs = [];
+    writeStatsFile(stats);
+    log('stats archived to', filePath);
+  } catch (err) {
+    log('archive error', err.message);
   }
 }
 
