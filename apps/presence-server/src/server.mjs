@@ -268,6 +268,25 @@ const CORS = {
   'access-control-allow-headers': 'content-type',
 };
 
+function buildTurnServers() {
+  const raw = process.env.TURN_URLS || process.env.TURN_URL || '';
+  const username = process.env.TURN_USERNAME || '';
+  const credential = process.env.TURN_CREDENTIAL || '';
+  const urls = raw.split(',').map(u => u.trim()).filter(Boolean);
+  if (!urls.length) {
+    const devTurn = process.env.DEV_TURN_URL || 'turn:localhost:3478?transport=udp';
+    const enableDev = process.env.ENABLE_DEV_TURN !== 'false';
+    if (enableDev && process.env.NODE_ENV !== 'production') {
+      urls.push(devTurn);
+    }
+  }
+  return urls.map(url => ({
+    urls: url,
+    username,
+    credential
+  }));
+}
+
 const server = createServer((req, res) => {
   const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
@@ -329,13 +348,9 @@ const server = createServer((req, res) => {
       vary: 'Origin',
     };
     const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
-    const turnUrl = process.env.TURN_URL;
-    if (turnUrl) {
-      iceServers.push({
-        urls: turnUrl,
-        username: process.env.TURN_USERNAME || '',
-        credential: process.env.TURN_CREDENTIAL || '',
-      });
+    const turnServers = buildTurnServers();
+    if (turnServers.length) {
+      turnServers.forEach(entry => iceServers.push(entry));
     }
     res.writeHead(200, iceCors).end(JSON.stringify(iceServers));
     return;

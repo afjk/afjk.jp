@@ -1426,6 +1426,7 @@ let _iceServersPromise = null;
 function fetchIceServers() {
   if (!_iceServersPromise) {
     _iceServersPromise = (async () => {
+      const fallback = [{ urls: 'stun:stun.l.google.com:19302' }];
       try {
         let signal;
         if (typeof AbortSignal?.timeout === 'function') {
@@ -1436,9 +1437,39 @@ function fetchIceServers() {
           signal = ac.signal;
         }
         const r = await fetch(ICE_CONFIG_URL, { signal });
-        if (r.ok) return await r.json();
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data) && data.length) {
+            const normalized = data
+              .map(entry => {
+                if (!entry) return null;
+                const urls = entry.urls;
+                if (!urls || (Array.isArray(urls) && !urls.length)) return null;
+                return entry;
+              })
+              .filter(Boolean);
+            if (normalized.length) {
+              normalized.sort((a, b) => {
+                const aTurn = Array.isArray(a.urls)
+                  ? a.urls.some(u => /^turn/i.test(u))
+                  : /^turn/i.test(a.urls);
+                const bTurn = Array.isArray(b.urls)
+                  ? b.urls.some(u => /^turn/i.test(u))
+                  : /^turn/i.test(b.urls);
+                return Number(bTurn) - Number(aTurn);
+              });
+              const hasStun = normalized.some(entry => {
+                return Array.isArray(entry.urls)
+                  ? entry.urls.some(u => /^stun/i.test(u))
+                  : /^stun/i.test(entry.urls);
+              });
+              if (!hasStun) normalized.push({ urls: 'stun:stun.l.google.com:19302' });
+              return normalized;
+            }
+          }
+        }
       } catch {}
-      return [{ urls: 'stun:stun.l.google.com:19302' }];
+      return fallback;
     })();
   }
   return _iceServersPromise;
@@ -4167,50 +4198,75 @@ async function startSend() {
   }
 }
 
-// Returns a Promise; caller is responsible for _sendEnd()
-function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    _sendXHR = xhr;
-    xhr.open('POST', `${PIPE}/${path}`);
-    xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
-    xhr.setRequestHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(body.name)}"`);
-    const t0 = performance.now();
-    xhr.upload.addEventListener('progress', e => {
-      if (!e.lengthComputable) return;
-      const p = Math.round(e.loaded / e.total * 100);
-      document.getElementById('prog-bar').style.width = p + '%';
-      const elapsed = (performance.now() - t0) / 1000;
-      const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
-      const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
-      document.getElementById('prog-text').textContent =
-        `${prefix}${p}%  (${fmt(e.loaded)} / ${fmt(e.total)})  ${fmt(speed)}/s`;
-      if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
-    });
-    xhr.addEventListener('load', () => {
-      const elapsed = (performance.now() - t0) / 1000;
-      const speed   = elapsed > 0 ? body.size / elapsed : 0;
-      document.getElementById('prog-bar').style.width = '100%';
-      document.getElementById('prog-text').textContent = totalFiles > 1
-        ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%' : '100%';
-      if (totalFiles === 1) {
-        setStatus('send-status', t('transferDone')(fmt(body.size), elapsed.toFixed(2), fmt(speed)), 'ok');
+async function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
+  const controller = new AbortController();
+  _sendXHR = controller;
+  const total = body.size || 0;
+  let uploaded = 0;
+  const t0 = performance.now();
+
+  const updateProgress = () => {
+    if (!total) return;
+    const p = Math.round(uploaded / total * 100);
+    document.getElementById('prog-bar').style.width = p + '%';
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = elapsed > 0 ? uploaded / elapsed : 0;
+    const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
+    document.getElementById('prog-text').textContent =
+      `${prefix}${p}%  (${fmt(uploaded)} / ${fmt(total)})  ${fmt(speed)}/s`;
+    if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
+  };
+
+  let requestBody = body;
+  if (typeof body.stream === 'function' && typeof ReadableStream === 'function') {
+    const reader = body.stream().getReader();
+    requestBody = new ReadableStream({
+      async pull(ctrl) {
+        const { value, done } = await reader.read();
+        if (done) { ctrl.close(); return; }
+        uploaded += value.byteLength;
+        updateProgress();
+        ctrl.enqueue(value);
+      },
+      cancel() {
+        reader.releaseLock?.();
       }
-      reportTransfer('pipe', body.size, {
-        transport: 'http',
-        files: totalFiles,
-        transferMs: Math.round(elapsed * 1000)
-      });
-      resolve();
     });
-    xhr.addEventListener('abort', () => resolve());  // handled by cancelSend
-    xhr.addEventListener('error', () => {
-      setStatus('send-status', t('transferFail'), 'err');
-      _sendEnd();
-      reject(new Error('transfer failed'));
+  }
+
+  try {
+    const res = await fetch(`${PIPE}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': body.type || 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(body.name || 'file')}"`
+      },
+      body: requestBody,
+      signal: controller.signal,
     });
-    xhr.send(body);
-  });
+    _sendXHR = null;
+    if (!res.ok) throw new Error('HTTP upload failed');
+    const elapsed = (performance.now() - t0) / 1000;
+    const speed   = elapsed > 0 ? total / elapsed : 0;
+    document.getElementById('prog-bar').style.width = '100%';
+    document.getElementById('prog-text').textContent = totalFiles > 1
+      ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%'
+      : '100%';
+    if (totalFiles === 1) {
+      setStatus('send-status', t('transferDone')(fmt(total), elapsed.toFixed(2), fmt(speed)), 'ok');
+    }
+    reportTransfer('pipe', total, {
+      transport: 'http',
+      files: totalFiles,
+      transferMs: Math.round(elapsed * 1000)
+    });
+  } catch (err) {
+    _sendXHR = null;
+    if (controller.signal.aborted) return;
+    setStatus('send-status', t('transferFail'), 'err');
+    _sendEnd();
+    throw err;
+  }
 }
 
 function resetSend() {
