@@ -1,0 +1,96 @@
+:root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #0b0b0f;
+      --card: #15151b;
+      --accent: #7afc4c;
+      --muted: #8a8f9c;
+    }
+    body {
+      margin: 0;
+      padding: 32px;
+      background: var(--bg);
+      color: #f4f4f7;
+      min-height: 100vh;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.8rem;
+    }
+    .controls {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    button, select {
+      border: 1px solid var(--accent);
+      background: transparent;
+      color: inherit;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:hover, select:focus {
+      background: rgba(122,252,76,0.15);
+    }
+.summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+.summary-value {
+      font-size: 2rem;
+      font-weight: 600;
+    }
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.3);
+    }
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 0.9rem;
+    }
+    th {
+      background: rgba(255,255,255,0.04);
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+    }
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge.p2p { background: rgba(122,252,76,0.15); color: var(--accent); }
+    .badge.pipe { background: rgba(255,209,102,0.2); color: #ffd166; }
+    .badge.torrent { background: rgba(147,197,253,0.18); color: #93c5fd; }
+    .muted { color: var(--muted); font-size: 0.85rem; }
