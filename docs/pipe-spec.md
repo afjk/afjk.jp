@@ -190,6 +190,30 @@ sequenceDiagram
 
 ---
 
+### ルーム共有シーケンス（WebTorrent）
+
+```mermaid
+sequenceDiagram
+    participant S as ブラウザA（送信）
+    participant PS as presence-server
+    participant R as ブラウザB（受信）
+    participant WT as WebTorrent網
+
+    S->>WT: client.seed(files) / publishLocalSwarmEntry
+    S->>PS: handoff { kind: "torrent", magnetURI, fileNames, fileCount }
+    Note over PS: 同じルームのピア全員に handoff 転送
+    PS->>R: handoff (kind: "torrent")
+    R->>R: addSwarmEntry → autoReceiveSwarmEntry
+    R->>WT: receiveTorrent(magnetURI) でピア接続
+    WT-->>R: torrent data download
+    R->>R: persistLocalArchive(infoHash, blobs)
+    R->>R: renderSwarmList（ルーム保持中に表示）
+    R->>R: ユーザーが「ダウンロード」ボタン押下
+    R->>R: downloadSwarmEntry → triggerDownload(blob)
+```
+
+---
+
 ## 2. WebRTC P2P 転送
 
 piping-server をシグナリングチャネルとして使い、ICE ネゴシエーションを行う。
