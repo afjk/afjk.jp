@@ -68,6 +68,7 @@ npm publish --registry https://upm.afjk.jp
   - CSV (テーブル表示)
   - テキスト / コード (`txt` / `log` / `json` / `xml` / `yaml` / `yml` / `toml` / `ini` / `sh` / `py` / `js` / `ts` / `html` / `css` / `rs` / `go` / `java` / `c` / `cpp` / `h`)
 - **画像編集（背景削除）**: 画像プレビュー中に「✂ 背景を削除」ボタンで背景を自動除去。処理後はモバイルで「フォトに保存」(Web Share API)、デスクトップで「ダウンロード」として保存可能。「➤ 送信」ボタンで結果画像をそのまま送信タブに渡すことも可能
+- **計測ダッシュボード**: `/pipe/stats.html` で P2P / Pipe / Torrent 転送の件数・バイト数、握手時間・チャンクサイズ・フォールバック状況などをリアルタイムに可視化。CSV ダウンロードとオートリフレッシュ付き
 
 詳細な技術仕様は [`docs/pipe-spec.md`](docs/pipe-spec.md) を参照。
 

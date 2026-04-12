@@ -11,6 +11,7 @@
 | 外部ライブラリ | qrcodejs / webtorrent / simple-peer（いずれも CDN、動的ロード）|
 | 転送モード | WebRTC P2P（常に先行試行）/ piping-server 中継（フォールバック）|
 | 言語切替 | JA / EN（`localStorage` 保存）|
+| 計測 | `reportTransfer()` → presence-server `/stats` で JSON/CSV 出力、`/pipe/stats.html` ダッシュボード |
 
 ---
 
