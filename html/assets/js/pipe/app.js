@@ -1484,11 +1484,26 @@ function renderSwarmList() {
     dlBtn.className = 'btn btn-ghost';
     dlBtn.textContent = t('swarmDownload');
     if (isCatalogOnly) dlBtn.title = t('swarmCatalogOnly');
-    dlBtn.onclick = () => {
+    dlBtn.onclick = async () => {
+      const approvalKey = torrentApprovalKey(entry.infoHash, entry.magnetURI);
+      approveTorrentDownloadKey(approvalKey);
       const label = swarmEntryLabel(entry);
       requestSwarmPeerConnection(entry);
       setStatus('recv-status', t('torrentIncoming')(entry.fromNickname || t('stranger'), label), 'waiting');
-      receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'));
+      let existing = entry.infoHash ? findTorrentByInfoHash(entry.infoHash) : null;
+      if (!existing && _wtClient) {
+        existing = _wtClient.torrents.find(t => t.magnetURI === entry.magnetURI);
+      }
+      if (!existing || existing.destroyed) {
+        try {
+          await receiveTorrent(entry.magnetURI, entry.fromNickname || t('stranger'), entry.senderId || null, {
+            autoDownload: true,
+            approvalKey
+          });
+        } catch (e) {
+          console.warn('[swarm] receiveTorrent failed', e?.message || e);
+        }
+      }
     };
     const rmBtn = document.createElement('button');
     rmBtn.type = 'button';
@@ -1638,6 +1653,29 @@ const _wtPendingPeers = new Map();   // `${peerId}:${infoHash}` → { sp, torren
 const _wtPendingSignals = [];        // { fromId, signal, infoHash }
 // Seeder stores original File[] by infoHash for piping-server fallback delivery
 const _torrentSeedFiles = new Map(); // infoHash → File[]
+const _wtApprovedDownloads = new Set();       // infoHash/magnet keys approved for saving
+const _wtCompletedTorrents = new Map();       // key → torrent waiting for approval
+const _wtPendingFallbacks = new Map();        // key → pending HTTP fallback payload
+
+function torrentApprovalKey(infoHash, magnetURI) {
+  return infoHash || extractInfoHash(magnetURI || '') || magnetURI || null;
+}
+
+function approveTorrentDownloadKey(key) {
+  if (!key) return;
+  if (_wtApprovedDownloads.has(key)) return;
+  _wtApprovedDownloads.add(key);
+  const pendingTorrent = _wtCompletedTorrents.get(key);
+  if (pendingTorrent?.done) {
+    _wtCompletedTorrents.delete(key);
+    triggerTorrentDownloads(pendingTorrent);
+  }
+  const pendingFallback = _wtPendingFallbacks.get(key);
+  if (pendingFallback) {
+    _wtPendingFallbacks.delete(key);
+    startFallbackDownload(pendingFallback);
+  }
+}
 
 // Seeder: open a direct SimplePeer connection to each room peer
 async function _wtConnectRoomPeers(torrent, roomPeers) {
@@ -1822,7 +1860,7 @@ function stopSeeding() {
   setStatus('send-status', '');
 }
 
-async function receiveTorrent(magnetURI, sender, senderId = null) {
+async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
   logSwarm('receiveTorrent start', { magnetURI, sender });
   switchTab('receive');
   setRecvSender('recv-from', sender);
@@ -1838,8 +1876,10 @@ async function receiveTorrent(magnetURI, sender, senderId = null) {
     return;
   }
 
+  const { autoDownload = true, approvalKey = null } = opts || {};
   const client = getWtClient();
   const infoHashFromMagnet = extractInfoHash(magnetURI) || currentSwarmMagnet;
+  const approvalToken = approvalKey || torrentApprovalKey(infoHashFromMagnet, magnetURI);
 
   // Remove any stale torrent with the same infoHash before re-adding.
   // WebTorrent may auto-destroy a torrent (e.g. timeout with no peers) but keep it
@@ -1858,12 +1898,21 @@ async function receiveTorrent(magnetURI, sender, senderId = null) {
       // Active torrent already exists — resume progress or retrigger downloads
       if (existingTorrent.done) {
         setStatus('recv-status', t('torrentDone'), 'ok');
-        triggerTorrentDownloads(existingTorrent);
+        const key = approvalToken || torrentApprovalKey(existingTorrent.infoHash, magnetURI);
+        const approved = autoDownload || (key && _wtApprovedDownloads.has(key));
+        if (approved) {
+          if (key) _wtApprovedDownloads.add(key);
+          triggerTorrentDownloads(existingTorrent);
+          if (key) _wtCompletedTorrents.delete(key);
+        } else if (key) {
+          _wtCompletedTorrents.set(key, existingTorrent);
+          logSwarm('existing torrent done — waiting for approval', { key });
+        }
       } else {
         setStatus('recv-status', t('torrentRecv'), 'waiting');
       }
       _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message)));
-      return;
+      return existingTorrent;
     }
     // Stale/destroyed reference — remove before re-adding
     try {
@@ -1917,7 +1966,16 @@ async function receiveTorrent(magnetURI, sender, senderId = null) {
     document.getElementById('recv-prog-bar').style.width = '100%';
     setStatus('recv-status', t('torrentDone'), 'ok');
     logSwarm('torrent done', torrent.infoHash);
-    triggerTorrentDownloads(torrent);
+    const key = approvalToken || torrentApprovalKey(torrent.infoHash, magnetURI);
+    const shouldDownload = autoDownload || (key && _wtApprovedDownloads.has(key));
+    if (shouldDownload) {
+      if (key) _wtApprovedDownloads.add(key);
+      triggerTorrentDownloads(torrent);
+      if (key) _wtCompletedTorrents.delete(key);
+    } else if (key) {
+      _wtCompletedTorrents.set(key, torrent);
+      logSwarm('torrent done — waiting for download approval', { key });
+    }
     registerLocalSeederInfoHash(torrent.infoHash || extractInfoHash(magnetURI));
     reportTransfer('torrent', torrent.length || 0);
     collectFilesFromTorrent(torrent).then(files => {
@@ -1944,15 +2002,41 @@ async function receiveTorrent(magnetURI, sender, senderId = null) {
 }
 
 function triggerTorrentDownloads(torrent) {
+  console.trace('[dbg]call triggerTorrentDownloads') 
+  
   if (!torrent?.files) return;
   torrent.files.forEach(file => {
     if (!file) return;
     if (typeof file.blob === 'function') {
+      console.trace('[dbg]call triggerTorrentDownloads file.blob') 
       file.blob().then(blob => triggerDownload(blob, file.name)).catch(() => {});
     } else if (typeof file.getBlob === 'function') {
+      console.trace('[dbg]call triggerTorrentDownloads file.getBlob') 
       file.getBlob((err, blob) => { if (!err) triggerDownload(blob, file.name); });
     }
   });
+}
+
+function startFallbackDownload(payload) {
+  setStatus('recv-status', t('torrentFallbackDL'), 'waiting');
+  (async () => {
+    try {
+      for (const { url, name } of (payload.files || [])) {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 120_000); // 2 min timeout per file
+        try {
+          const r = await fetch(url, { signal: ac.signal });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          triggerDownload(await r.blob(), name);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      setStatus('recv-status', t('torrentDone'), 'ok');
+    } catch (e) {
+      setStatus('recv-status', '✗ ' + (e?.message || e), 'err');
+    }
+  })();
 }
 
 async function handleIncomingHandoff(msg) {
@@ -2014,11 +2098,19 @@ async function handleIncomingHandoff(msg) {
   }
 
   if (payload.kind === 'torrent') {
+    const entry = addSwarmEntry(payload, sender);
+    const approvalKey = entry
+      ? torrentApprovalKey(entry.infoHash, entry.magnetURI)
+      : torrentApprovalKey(payload.infoHash, payload.magnetURI);
     const label = payload.fileCount > 1
       ? t('filesLabel')(payload.fileCount)
       : (payload.fileNames || t('fileGeneric'));
-    setStatus('recv-status', t('torrentIncoming')(sender, label), 'waiting');
-    receiveTorrent(payload.magnetURI, sender, msg.from?.id);
+    const prompt = currentLang === 'ja'
+      ? `${t('torrentIncoming')(sender, label)} — ${t('swarmHeading')}で「${t('swarmDownload')}」を押すと受信が始まります`
+      : `${t('torrentIncoming')(sender, label)} — Open “${t('swarmHeading')}” and press “${t('swarmDownload')}” to download.`;
+    setStatus('recv-status', prompt, 'waiting');
+    switchTab('receive');
+    receiveTorrent(payload.magnetURI, sender, msg.from?.id, { autoDownload: false, approvalKey });
     return;
   }
 
@@ -2049,25 +2141,13 @@ async function handleIncomingHandoff(msg) {
 
   // Receiver: seeder confirmed HTTP delivery — download files from piping-server
   if (payload.kind === 'torrent-piping-ready') {
-    setStatus('recv-status', t('torrentFallbackDL'), 'waiting');
-    (async () => {
-      try {
-        for (const { url, name } of (payload.files || [])) {
-          const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 120_000); // 2 min timeout per file
-          try {
-            const r = await fetch(url, { signal: ac.signal });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            triggerDownload(await r.blob(), name);
-          } finally {
-            clearTimeout(timer);
-          }
-        }
-        setStatus('recv-status', t('torrentDone'), 'ok');
-      } catch (e) {
-        setStatus('recv-status', '✗ ' + (e?.message || e), 'err');
-      }
-    })();
+    const key = torrentApprovalKey(payload.infoHash, null);
+    if (key && !_wtApprovedDownloads.has(key)) {
+      _wtPendingFallbacks.set(key, payload);
+      logSwarm('queued fallback download until approval', { key });
+      return;
+    }
+    startFallbackDownload(payload);
     return;
   }
 
