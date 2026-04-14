@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -253,7 +252,14 @@ namespace Afjk.Pipe
                 }
 
                 Debug.Log($"[Swarm] DataChannel 確立 (infoHash={entry.InfoHash}) → ファイル受信開始");
-                var files = await ReceiveFilesOverDc(dc, entry.FileCount, progress, ct);
+
+                if (entry.TotalBytes <= 0)
+                {
+                    tcs.TrySetException(new Exception($"TotalBytes 不明 (infoHash={entry.InfoHash}) — ブラウザが totalBytes を送っていない可能性"));
+                    return;
+                }
+
+                var files = await ReceiveViaWire(dc, entry.InfoHash, entry.TotalBytes, progress, ct);
                 Debug.Log($"[Swarm] ファイル受信完了: {files.Length} 件");
                 tcs.TrySetResult(files);
             }
@@ -270,76 +276,231 @@ namespace Afjk.Pipe
         }
 
         /// <summary>
-        /// DataChannel 上でファイルを受信する。
-        /// 送信側は meta → chunks... → done を各ファイルごとに繰り返し、
-        /// 最後に all-done を送る。
+        /// DataChannel 上で BitTorrent ワイヤープロトコルを使ってファイルを受信する。
+        /// WebTorrent (SimplePeer 経由) との互換プロトコル。
+        ///
+        /// フロー: 送 handshake → 受 handshake → 受 bitfield → 送 interested →
+        ///         受 unchoke → 送 request × N → 受 piece × N → 完了
         /// </summary>
-        private Task<byte[][]> ReceiveFilesOverDc(
+        private Task<byte[][]> ReceiveViaWire(
             RTCDataChannel dc,
-            int fileCount,
+            string infoHashHex,
+            long totalBytes,
             IProgress<float> progress,
             CancellationToken ct)
         {
-            var tcs     = new TaskCompletionSource<byte[][]>();
-            var results = new List<byte[]>();
+            var tcs = new TaskCompletionSource<byte[][]>();
 
-            var chunks       = new List<byte[]>();
-            int received     = 0;
-            int expectedSize = 0;
-            int filesDone    = 0;
+            int pieceLen  = CalcPieceLength(totalBytes);
+            var assembled = new byte[totalBytes];
+            long receivedBytes = 0;
+
+            var infoHashBytes = HexToBytes(infoHashHex);
+            // ピアID: "-UN0001-" + 12桁ランダム (20バイト)
+            var myPeerId = System.Text.Encoding.ASCII.GetBytes(
+                "-UN0001-" + System.Guid.NewGuid().ToString("N").Substring(0, 12));
+
+            // 受信バッファ（DataChannel から来るチャンクを蓄積）
+            var buf      = new List<byte>(64 * 1024);
+            bool hsRecv  = false;
+            bool interested = false;
+            bool unchoked   = false;
+
+            // リクエスト管理（絶対バイトオフセットで追跡）
+            long nextReqOff  = 0;
+            int  pendingReqs = 0;
+            const int BlockSize   = 16384;   // WebTorrent 標準ブロックサイズ
+            const int MaxPipeline = 8;
+
+            void SendRequests()
+            {
+                while (unchoked && pendingReqs < MaxPipeline
+                       && nextReqOff < totalBytes && !tcs.Task.IsCompleted)
+                {
+                    int pIdx  = (int)(nextReqOff / pieceLen);
+                    int bOff  = (int)(nextReqOff % pieceLen);
+                    long pStart = (long)pIdx * pieceLen;
+                    int pSize = (int)Math.Min(pieceLen, totalBytes - pStart);
+                    int bLen  = Math.Min(BlockSize, Math.Min(pSize - bOff,
+                                    (int)(totalBytes - nextReqOff)));
+                    if (bLen <= 0) break;
+
+                    dc.Send(BtWire.Request(pIdx, bOff, bLen));
+                    nextReqOff += bLen;
+                    pendingReqs++;
+                }
+            }
+
+            void ProcessBuf()
+            {
+                while (!tcs.Task.IsCompleted)
+                {
+                    // ── handshake (68 bytes 固定) ─────────────────────────────────
+                    if (!hsRecv)
+                    {
+                        if (buf.Count < 68) return;
+                        buf.RemoveRange(0, 68);
+                        hsRecv = true;
+                        Debug.Log("[Wire] handshake 受信完了");
+                        continue;
+                    }
+
+                    // ── 通常メッセージ: [4バイト長][1バイトID][ペイロード] ─────────
+                    if (buf.Count < 4) return;
+                    int msgLen = BtWire.I32(buf, 0);
+
+                    if (msgLen == 0)           // keep-alive
+                    { buf.RemoveRange(0, 4); continue; }
+
+                    if (buf.Count < 4 + msgLen) return;
+
+                    byte id      = buf[4];
+                    int  payLen  = msgLen - 1;
+                    var  payload = payLen > 0 ? buf.GetRange(5, payLen).ToArray() : Array.Empty<byte>();
+                    buf.RemoveRange(0, 4 + msgLen);
+
+                    switch (id)
+                    {
+                        case 0:  // choke
+                            unchoked = false;
+                            Debug.Log("[Wire] choked");
+                            break;
+
+                        case 1:  // unchoke
+                            unchoked = true;
+                            Debug.Log("[Wire] unchoked → request 送信開始");
+                            SendRequests();
+                            break;
+
+                        case 5:  // bitfield — シーダーが持つピース情報
+                            Debug.Log($"[Wire] bitfield ({payload.Length}B)");
+                            if (!interested)
+                            {
+                                interested = true;
+                                dc.Send(BtWire.Interested());
+                                Debug.Log("[Wire] interested 送信");
+                            }
+                            break;
+
+                        case 4:  // have — 個別ピース通知（interested 送信のトリガーにも使う）
+                            if (!interested)
+                            {
+                                interested = true;
+                                dc.Send(BtWire.Interested());
+                                Debug.Log("[Wire] interested 送信 (have 受信後)");
+                            }
+                            break;
+
+                        case 7:  // piece
+                            if (payload.Length < 8) break;
+                            int pIdx  = BtWire.I32(payload, 0);
+                            int bOff  = BtWire.I32(payload, 4);
+                            int dLen  = payload.Length - 8;
+                            long absOff = (long)pIdx * pieceLen + bOff;
+
+                            if (absOff + dLen > totalBytes)
+                                dLen = (int)(totalBytes - absOff);
+                            if (dLen > 0)
+                                Buffer.BlockCopy(payload, 8, assembled, (int)absOff, dLen);
+
+                            receivedBytes += dLen;
+                            pendingReqs--;
+                            progress?.Report((float)receivedBytes / totalBytes);
+                            Debug.Log($"[Wire] piece[{pIdx}+{bOff}] {dLen}B ({receivedBytes}/{totalBytes})");
+
+                            if (receivedBytes >= totalBytes)
+                            {
+                                Debug.Log("[Wire] ダウンロード完了");
+                                tcs.TrySetResult(new[] { assembled });
+                                return;
+                            }
+                            SendRequests();
+                            break;
+
+                        // ID 20 など不明なメッセージは無視
+                        default:
+                            Debug.Log($"[Wire] 未知メッセージ ID={id} len={msgLen}");
+                            break;
+                    }
+                }
+            }
 
             dc.OnMessage = bytes =>
             {
-                if (tcs.Task.IsCompleted) return;
-
-                // JSON 制御フレーム判定
-                if (bytes.Length > 0 && bytes[0] == (byte)'{')
-                {
-                    try
-                    {
-                        var json  = Encoding.UTF8.GetString(bytes);
-                        var probe = JsonUtility.FromJson<TypeProbe>(json);
-
-                        if (probe.t == "meta")
-                        {
-                            var meta     = JsonUtility.FromJson<MetaFrame>(json);
-                            expectedSize = meta.size;
-                            chunks.Clear();
-                            received = 0;
-                        }
-                        else if (probe.t == "done")
-                        {
-                            var data   = Combine(chunks, received);
-                            results.Add(data);
-                            chunks.Clear();
-                            received = 0;
-                            filesDone++;
-                            progress?.Report((float)filesDone / Mathf.Max(1, fileCount));
-                        }
-                        else if (probe.t == "all-done")
-                        {
-                            tcs.TrySetResult(results.ToArray());
-                        }
-                        return;
-                    }
-                    catch { /* バイナリとして扱う */ }
-                }
-
-                chunks.Add(bytes);
-                received += bytes.Length;
-                if (expectedSize > 0)
-                    progress?.Report((float)received / expectedSize / Mathf.Max(1, fileCount));
+                buf.AddRange(bytes);
+                ProcessBuf();
             };
 
             dc.OnClose = () =>
             {
                 if (!tcs.Task.IsCompleted)
-                    tcs.TrySetException(new Exception("DataChannel が予期せず閉じられた"));
+                    tcs.TrySetException(new Exception("[Wire] DataChannel が受信完了前に閉じた"));
             };
 
             ct.Register(() => tcs.TrySetCanceled());
 
+            // こちらから handshake を送信
+            dc.Send(BtWire.Handshake(infoHashBytes, myPeerId));
+            Debug.Log($"[Wire] handshake 送信 (infoHash={infoHashHex} pieceLen={pieceLen} " +
+                      $"numPieces={((totalBytes + pieceLen - 1) / pieceLen)} totalBytes={totalBytes})");
+
             return tcs.Task;
+        }
+
+        // ── BitTorrent ワイヤープロトコルヘルパー ─────────────────────────────────
+
+        private static int CalcPieceLength(long n)
+        {
+            if (n < 64L * 1024)           return 1024;
+            if (n < 1024L * 1024)         return 16384;
+            if (n < 2L * 1024 * 1024)     return 32768;
+            if (n < 16L * 1024 * 1024)    return 262144;
+            if (n < 512L * 1024 * 1024)   return 524288;
+            return 1048576;
+        }
+
+        private static byte[] HexToBytes(string hex)
+        {
+            hex = hex.ToLowerInvariant();
+            var bytes = new byte[hex.Length / 2];
+            for (int i = 0; i < bytes.Length; i++)
+                bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+            return bytes;
+        }
+
+        private static class BtWire
+        {
+            static readonly byte[] Proto = Encoding.ASCII.GetBytes("BitTorrent protocol");
+
+            public static byte[] Handshake(byte[] infoHash, byte[] peerId)
+            {
+                var m = new byte[68];
+                m[0] = 0x13;
+                Array.Copy(Proto, 0, m, 1, 19);
+                // bytes 20-27: reserved (all zero)
+                Array.Copy(infoHash, 0, m, 28, 20);
+                Array.Copy(peerId,   0, m, 48, 20);
+                return m;
+            }
+
+            public static byte[] Interested() => new byte[] { 0, 0, 0, 1, 2 };
+
+            public static byte[] Request(int piece, int begin, int length)
+            {
+                var m = new byte[17];
+                Wi32(m, 0, 13); m[4] = 6;
+                Wi32(m, 5, piece); Wi32(m, 9, begin); Wi32(m, 13, length);
+                return m;
+            }
+
+            public static int I32(IList<byte> b, int i)
+                => (b[i] << 24) | (b[i+1] << 16) | (b[i+2] << 8) | b[i+3];
+
+            static void Wi32(byte[] b, int i, int v)
+            {
+                b[i] = (byte)(v >> 24); b[i+1] = (byte)(v >> 16);
+                b[i+2] = (byte)(v >> 8);  b[i+3] = (byte)v;
+            }
         }
 
         // ── 内部: エントリ管理 ────────────────────────────────────────────────────
@@ -448,8 +609,5 @@ namespace Afjk.Pipe
             return buf;
         }
 
-        // ── 内部 JSON 型 ──────────────────────────────────────────────────────────
-        [Serializable] private class TypeProbe { public string t; }
-        [Serializable] private class MetaFrame  { public string t; public string name; public string mime; public int size; }
     }
 }
