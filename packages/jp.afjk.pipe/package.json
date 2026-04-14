@@ -1,0 +1,20 @@
+{
+  "name": "jp.afjk.pipe",
+  "version": "0.1.0",
+  "displayName": "afjk Pipe",
+  "description": "Unity client for afjk.jp/pipe — file & text transfer via piping-server HTTP relay and WebRTC P2P",
+  "unity": "2022.3",
+  "dependencies": {},
+  "keywords": ["pipe", "transfer", "p2p"],
+  "author": {
+    "name": "afjk",
+    "url": "https://afjk.jp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/afjk/afjk.jp"
+  },
+  "publishConfig": {
+    "registry": "https://upm.afjk.jp"
+  }
+}
