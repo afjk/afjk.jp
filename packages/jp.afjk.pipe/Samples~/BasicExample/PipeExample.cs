@@ -82,7 +82,7 @@ public class PipeExample : MonoBehaviour
         skin.textField.fontSize = 24;
         skin.box.fontSize    = 22;
 
-        GUILayout.BeginArea(new Rect(10, 10, 860, Screen.height - 20));
+        GUILayout.BeginArea(new Rect(10, 10, 1100, Screen.height - 20));
 
         // ヘッダー
         GUILayout.Label("afjk.jp / pipe — Unity Client", new GUIStyle(skin.label)
@@ -92,11 +92,11 @@ public class PipeExample : MonoBehaviour
 
         // ルームコード
         GUILayout.BeginHorizontal();
-        GUILayout.Label("ルームコード:", GUILayout.Width(90));
-        _roomCodeInput = GUILayout.TextField(_roomCodeInput, GUILayout.Width(110));
-        if (GUILayout.Button("参加", GUILayout.Width(46)))
+        GUILayout.Label("ルームコード:", GUILayout.Width(150));
+        _roomCodeInput = GUILayout.TextField(_roomCodeInput, GUILayout.Width(180));
+        if (GUILayout.Button("参加", GUILayout.Width(80)))
             Connect(string.IsNullOrWhiteSpace(_roomCodeInput) ? null : _roomCodeInput.Trim());
-        if (GUILayout.Button("退場", GUILayout.Width(46)))
+        if (GUILayout.Button("退場", GUILayout.Width(80)))
         { _roomCodeInput = ""; Connect(null); }
         GUILayout.EndHorizontal();
         GUILayout.Space(6);
@@ -114,11 +114,11 @@ public class PipeExample : MonoBehaviour
 
         // ── テキスト送信 ─────────────────────────────────────────────────────────
         DrawSectionLabel("テキスト送信");
-        _textInput = GUILayout.TextField(_textInput, GUILayout.Width(320));
+        _textInput = GUILayout.TextField(_textInput, GUILayout.Width(480));
         GUILayout.BeginHorizontal();
         GUI.enabled = _peers.Count > 0 && !busy;
-        if (GUILayout.Button("全員に送信", GUILayout.Width(100))) DoBroadcastText();
-        if (_peers.Count > 0 && GUILayout.Button("1台目へ", GUILayout.Width(80))) DoSendTextToFirst();
+        if (GUILayout.Button("全員に送信", GUILayout.Width(150))) DoBroadcastText();
+        if (_peers.Count > 0 && GUILayout.Button("1台目へ", GUILayout.Width(120))) DoSendTextToFirst();
         GUI.enabled = true;
         GUILayout.EndHorizontal();
         GUILayout.Space(6);
@@ -127,14 +127,14 @@ public class PipeExample : MonoBehaviour
         DrawSectionLabel("ファイル送信（テスト）");
         GUILayout.BeginHorizontal();
         GUI.enabled = _peers.Count > 0 && !busy;
-        if (GUILayout.Button("テスト PNG を全員へ", GUILayout.Width(160))) DoSendTestPng(toAll: true);
-        if (_peers.Count > 0 && GUILayout.Button("1台目へ PNG", GUILayout.Width(110))) DoSendTestPng(toAll: false);
+        if (GUILayout.Button("テスト PNG を全員へ", GUILayout.Width(230))) DoSendTestPng(toAll: true);
+        if (_peers.Count > 0 && GUILayout.Button("1台目へ PNG", GUILayout.Width(170))) DoSendTestPng(toAll: false);
         GUI.enabled = true;
         GUILayout.EndHorizontal();
         GUILayout.BeginHorizontal();
         GUI.enabled = _peers.Count > 0 && !busy;
-        if (GUILayout.Button("テスト TXT を全員へ", GUILayout.Width(160))) DoSendTestTxt(toAll: true);
-        if (_peers.Count > 0 && GUILayout.Button("1台目へ TXT", GUILayout.Width(110))) DoSendTestTxt(toAll: false);
+        if (GUILayout.Button("テスト TXT を全員へ", GUILayout.Width(230))) DoSendTestTxt(toAll: true);
+        if (_peers.Count > 0 && GUILayout.Button("1台目へ TXT", GUILayout.Width(170))) DoSendTestTxt(toAll: false);
         GUI.enabled = true;
         GUILayout.EndHorizontal();
         GUILayout.Space(6);
@@ -142,9 +142,9 @@ public class PipeExample : MonoBehaviour
         // ── 手動受信 ─────────────────────────────────────────────────────────────
         DrawSectionLabel("手動受信（パス / URL）");
         GUILayout.BeginHorizontal();
-        _manualPath = GUILayout.TextField(_manualPath, GUILayout.Width(230));
+        _manualPath = GUILayout.TextField(_manualPath, GUILayout.Width(400));
         GUI.enabled = !string.IsNullOrWhiteSpace(_manualPath) && !busy;
-        if (GUILayout.Button("受信開始", GUILayout.Width(76))) DoManualReceive();
+        if (GUILayout.Button("受信開始", GUILayout.Width(120))) DoManualReceive();
         GUI.enabled = true;
         GUILayout.EndHorizontal();
 
