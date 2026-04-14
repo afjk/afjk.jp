@@ -75,11 +75,18 @@ public class PipeExample : MonoBehaviour
     private void OnGUI()
     {
         var skin = GUI.skin;
-        GUILayout.BeginArea(new Rect(10, 10, 430, Screen.height - 20));
+
+        // フォントサイズを全体的に2倍にする
+        skin.label.fontSize  = 24;
+        skin.button.fontSize = 24;
+        skin.textField.fontSize = 24;
+        skin.box.fontSize    = 22;
+
+        GUILayout.BeginArea(new Rect(10, 10, 860, Screen.height - 20));
 
         // ヘッダー
         GUILayout.Label("afjk.jp / pipe — Unity Client", new GUIStyle(skin.label)
-            { fontSize = 16, fontStyle = FontStyle.Bold });
+            { fontSize = 32, fontStyle = FontStyle.Bold });
         GUILayout.Label($"状態: {_statusText}  |  ID: {Clip(_client.LocalId)}  |  Room: {_client.RoomId ?? "-"}");
         GUILayout.Space(4);
 
@@ -156,7 +163,7 @@ public class PipeExample : MonoBehaviour
         // ── ログ ─────────────────────────────────────────────────────────────────
         GUILayout.Label("ログ:");
         var logStyle = new GUIStyle(skin.box)
-            { alignment = TextAnchor.UpperLeft, wordWrap = true, fontSize = 11 };
+            { alignment = TextAnchor.UpperLeft, wordWrap = true, fontSize = 22 };
         _logScroll = GUILayout.BeginScrollView(_logScroll,
             GUILayout.Height(Mathf.Min(240, Screen.height - 460)));
         GUILayout.Label(string.Join("\n", _log), logStyle, GUILayout.ExpandWidth(true));
@@ -309,7 +316,7 @@ public class PipeExample : MonoBehaviour
     }
 
     private static void DrawSectionLabel(string text)
-        => GUILayout.Label(text, new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold });
+        => GUILayout.Label(text, new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 24 });
 
     private static string Clip(string s, int len = 8)
         => string.IsNullOrEmpty(s) ? "-" : (s.Length <= len ? s : s.Substring(0, len) + "…");
