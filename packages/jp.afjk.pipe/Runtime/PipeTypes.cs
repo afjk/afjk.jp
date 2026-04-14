@@ -15,7 +15,9 @@ namespace Afjk.Pipe
 
     /// <summary>
     /// handoff ペイロード。kind によって使用フィールドが異なる。
-    /// "file" | "files" | "text" | "wt-signal"
+    /// "file" | "files" | "text" | "wt-signal" |
+    /// "torrent" | "swarm-publish" | "swarm-request" | "swarm-sync" |
+    /// "swarm-join" | "swarm-seeder" | "swarm-catalog"
     /// </summary>
     [Serializable]
     public class HandoffPayload
@@ -33,8 +35,22 @@ namespace Afjk.Pipe
         public List<FileEntry> files;
 
         // kind: "wt-signal"
+        // signal は JSON オブジェクトだが JsonUtility 経由で文字列として扱う
         public string signal;
         public string infoHash;
+
+        // kind: "torrent" / "swarm-publish" / "swarm-sync" / "swarm-catalog"
+        public string       magnetURI;
+        public string       fileNames;   // カンマ区切り
+        public int          fileCount;
+        public long         totalBytes;
+        public bool         active;      // swarm-seeder: true=シード中 false=停止
+
+        // kind: "swarm-sync" (エントリ一覧)
+        public List<SwarmEntryData> entries;
+
+        // kind: "swarm-join" (接続要求)
+        public string peerId;            // 要求者の presence ID
     }
 
     [Serializable]
@@ -45,6 +61,19 @@ namespace Afjk.Pipe
         public long   size;
         public string mime;
         public string url;
+    }
+
+    /// <summary>swarm-sync / swarm-catalog エントリの直列化型。</summary>
+    [Serializable]
+    public class SwarmEntryData
+    {
+        public string infoHash;
+        public string magnetURI;
+        public string fileNames;
+        public int    fileCount;
+        public long   totalBytes;
+        public string fromNickname;
+        public string senderId;
     }
 
     /// <summary>転送に使用された経路。</summary>
@@ -73,5 +102,18 @@ namespace Afjk.Pipe
     {
         public PeerInfo From;
         public string   Text;
+    }
+
+    /// <summary>OnSwarmUpdated イベントで渡されるスウォームエントリ（表示用）。</summary>
+    public class SwarmEntry
+    {
+        public string   InfoHash;
+        public string   MagnetURI;
+        public string[] FileNames;
+        public int      FileCount;
+        public long     TotalBytes;
+        public string   FromNickname;
+        public string   SenderId;
+        public bool     IsSeeding;   // シーダーが active を通知中
     }
 }

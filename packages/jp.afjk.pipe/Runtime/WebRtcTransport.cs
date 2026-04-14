@@ -107,6 +107,79 @@ namespace Afjk.Pipe
             return tcs.Task;
         }
 
+        /// <summary>
+        /// presence 経由でシグナリングされた WebRTC 接続を受け入れる（swarm-join 用）。
+        /// offerSdp: JSON文字列 {"type":"offer","sdp":"..."}
+        /// sendAnswer: answer SDP JSON を相手に返すコールバック（presence handoff 経由で送る）
+        /// 戻り値: DataChannel（失敗時は null）
+        /// </summary>
+        public Task<RTCDataChannel> AcceptOfferAsync(
+            string offerSdp,
+            Action<string> sendAnswer,
+            CancellationToken ct)
+        {
+            var tcs = new TaskCompletionSource<RTCDataChannel>();
+            StartCoroutine(AcceptOfferCoroutine(offerSdp, sendAnswer, ct, tcs));
+            return tcs.Task;
+        }
+
+        private IEnumerator AcceptOfferCoroutine(
+            string offerSdp,
+            Action<string> sendAnswer,
+            CancellationToken ct,
+            TaskCompletionSource<RTCDataChannel> tcs)
+        {
+            RTCPeerConnection pc = null;
+            try
+            {
+                pc = new RTCPeerConnection(ref _rtcConfig);
+
+                var offer = DeserializeSdp(offerSdp, RTCSdpType.Offer);
+                var setRemoteOp = pc.SetRemoteDescription(ref offer);
+                yield return setRemoteOp;
+                if (setRemoteOp.IsError || ct.IsCancellationRequested)
+                    { tcs.TrySetResult(null); yield break; }
+
+                var answerOp = pc.CreateAnswer();
+                yield return answerOp;
+                if (answerOp.IsError || ct.IsCancellationRequested)
+                    { tcs.TrySetResult(null); yield break; }
+
+                var answer = answerOp.Desc;
+                var setLocalOp = pc.SetLocalDescription(ref answer);
+                yield return setLocalOp;
+                if (setLocalOp.IsError || ct.IsCancellationRequested)
+                    { tcs.TrySetResult(null); yield break; }
+
+                // ICE 収集待ち
+                var iceEnd = Time.realtimeSinceStartup + IceTimeoutSec;
+                yield return new WaitUntil(() =>
+                    pc.GatheringState == RTCIceGatheringState.Complete
+                    || Time.realtimeSinceStartup >= iceEnd
+                    || ct.IsCancellationRequested);
+
+                if (ct.IsCancellationRequested) { tcs.TrySetResult(null); yield break; }
+
+                // answer を相手に送信
+                sendAnswer(SerializeSdp(pc.LocalDescription));
+
+                // DataChannel 到着待ち
+                RTCDataChannel dc = null;
+                pc.OnDataChannel = ch => dc = ch;
+
+                var dcEnd = Time.realtimeSinceStartup + DcTimeoutSec;
+                yield return new WaitUntil(() =>
+                    dc != null || Time.realtimeSinceStartup >= dcEnd || ct.IsCancellationRequested);
+
+                tcs.TrySetResult(dc);
+            }
+            finally
+            {
+                // pc は DataChannel が使われる間は GC されないよう dc が参照を持つ
+                // ここでは Close しない（呼び出し元が管理）
+            }
+        }
+
         // ── 送信コルーチン ────────────────────────────────────────────────────────
 
         private IEnumerator SendCoroutine(

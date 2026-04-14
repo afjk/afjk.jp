@@ -15,6 +15,7 @@ namespace Afjk.Pipe
     ///   2. 失敗またはタイムアウト時は piping-server HTTP 中継へ自動フォールバック
     ///
     /// テキスト送受信は piping-server HTTP のみ。
+    /// スウォーム共有は SwarmClient に委譲。
     /// </summary>
     public class PipeClient : MonoBehaviour
     {
@@ -54,6 +55,9 @@ namespace Afjk.Pipe
         /// <summary>Presence が切断されたとき</summary>
         public event Action OnDisconnected;
 
+        /// <summary>スウォームエントリ一覧が更新されたとき</summary>
+        public event Action<IReadOnlyList<SwarmEntry>> OnSwarmUpdated;
+
         // ── Public state ─────────────────────────────────────────────────────────
         public string LocalId => _presence?.LocalId;
         public string RoomId  => _presence?.RoomId;
@@ -62,12 +66,12 @@ namespace Afjk.Pipe
         // ── Internal ─────────────────────────────────────────────────────────────
         private PresenceClient  _presence;
         private List<PeerInfo>  _peers = new List<PeerInfo>();
+        private SwarmClient     _swarm;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────────
 
         private void Awake()
         {
-            // WebRtcTransport シングルトンを事前に確保（WebRTC.Initialize を実行）
             if (useWebRtc) _ = WebRtcTransport.Instance;
             _ = MainThreadDispatcher.Instance;
         }
@@ -81,7 +85,7 @@ namespace Afjk.Pipe
         {
             Disconnect();
             _presence = new PresenceClient(presenceEndpoint, deviceName, deviceType);
-            _presence.Connected       += () => OnConnected?.Invoke();
+            _presence.Connected       += OnPresenceConnected;
             _presence.Disconnected    += () => OnDisconnected?.Invoke();
             _presence.PeersUpdated    += OnPeersUpdatedInternal;
             _presence.HandoffReceived += OnHandoffReceived;
@@ -93,7 +97,18 @@ namespace Afjk.Pipe
         {
             _presence?.Dispose();
             _presence = null;
+            _swarm    = null;
             _peers.Clear();
+        }
+
+        /// <summary>スウォームエントリのファイルをダウンロードする。</summary>
+        public Task<byte[][]> DownloadSwarmEntryAsync(
+            SwarmEntry entry,
+            IProgress<float> progress = null,
+            CancellationToken ct      = default)
+        {
+            if (_swarm == null) throw new InvalidOperationException("未接続");
+            return _swarm.DownloadAsync(entry, progress, ct);
         }
 
         // ── Send ─────────────────────────────────────────────────────────────────
@@ -182,10 +197,33 @@ namespace Afjk.Pipe
 
         // ── Internal handlers ────────────────────────────────────────────────────
 
+        private void OnPresenceConnected()
+        {
+            // SwarmClient を生成
+            _swarm = new SwarmClient(
+                _presence.LocalId,
+                deviceName,
+                (targetId, payload) => _presence != null
+                    ? _presence.SendHandoff(targetId, payload)
+                    : Task.CompletedTask,
+                _ => Task.CompletedTask);   // broadcast は送信者スコープ外のため未使用
+
+            _swarm.OnSwarmUpdated += list => OnSwarmUpdated?.Invoke(list);
+
+            OnConnected?.Invoke();
+
+            // ピアリストが既にある場合は swarm-request を送る
+            if (_peers.Count > 0)
+                _swarm.RequestSync(_peers);
+        }
+
         private void OnPeersUpdatedInternal(List<PeerInfo> peers)
         {
             _peers = peers ?? new List<PeerInfo>();
             OnPeersUpdated?.Invoke(_peers);
+
+            // 新しいピアが来たら swarm-request（まだ sync 未受信の場合のみ内部で判定）
+            _swarm?.RequestSync(_peers);
         }
 
         private void OnHandoffReceived(PeerInfo from, HandoffPayload payload)
@@ -207,6 +245,16 @@ namespace Afjk.Pipe
                 case "text":
                     _ = ReceiveHandoffTextAsync(from, payload.path);
                     break;
+
+                case "torrent":
+                case "swarm-publish":
+                case "swarm-request":
+                case "swarm-sync":
+                case "swarm-catalog":
+                case "swarm-seeder":
+                case "wt-signal":
+                    _swarm?.HandleHandoff(from, payload);
+                    break;
             }
         }
 
@@ -215,10 +263,9 @@ namespace Afjk.Pipe
         {
             try
             {
-                byte[]          bytes      = null;
-                TransferMode    mode       = TransferMode.Relay;
+                byte[]       bytes = null;
+                TransferMode mode  = TransferMode.Relay;
 
-                // P2P 先行試行
                 if (useWebRtc && WebRtcTransport.Instance != null)
                 {
                     var result = await WebRtcTransport.Instance.TryReceiveAsync(
@@ -237,7 +284,6 @@ namespace Afjk.Pipe
                     }
                 }
 
-                // HTTP フォールバック
                 if (bytes == null)
                     bytes = await PipingServerTransport.ReceiveAsync(pipingEndpoint, path);
 

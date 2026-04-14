@@ -17,17 +17,19 @@ using Afjk.Pipe;
 public class PipeExample : MonoBehaviour
 {
     // ── State ─────────────────────────────────────────────────────────────────────
-    private PipeClient     _client;
-    private string         _statusText    = "未接続";
-    private string         _textInput     = "Hello from Unity!";
-    private string         _roomCodeInput = "";
-    private string         _manualPath    = "";
-    private List<PeerInfo> _peers         = new List<PeerInfo>();
-    private List<string>   _log           = new List<string>();
-    private float          _progress      = -1f;
-    private string         _progressLabel = "";
-    private Vector2        _logScroll;
-    private const int      MaxLog         = 60;
+    private PipeClient        _client;
+    private string            _statusText    = "未接続";
+    private string            _textInput     = "Hello from Unity!";
+    private string            _roomCodeInput = "";
+    private string            _manualPath    = "";
+    private List<PeerInfo>    _peers         = new List<PeerInfo>();
+    private List<SwarmEntry>  _swarm         = new List<SwarmEntry>();
+    private List<string>      _log           = new List<string>();
+    private float             _progress      = -1f;
+    private string            _progressLabel = "";
+    private Vector2           _logScroll;
+    private Vector2           _swarmScroll;
+    private const int         MaxLog         = 60;
 
     // ── Unity lifecycle ───────────────────────────────────────────────────────────
 
@@ -42,9 +44,14 @@ public class PipeExample : MonoBehaviour
             _peers = new List<PeerInfo>(peers);
             AddLog($"ピア更新: {peers.Count} 台");
         };
-        _client.OnFileReceived += OnFileReceived;
-        _client.OnTextReceived += args =>
+        _client.OnFileReceived  += OnFileReceived;
+        _client.OnTextReceived  += args =>
             AddLog($"💬 テキスト受信 from {args.From?.nickname ?? "?"}: {args.Text}");
+        _client.OnSwarmUpdated  += entries =>
+        {
+            _swarm = new List<SwarmEntry>(entries);
+            AddLog($"📦 スウォーム更新: {entries.Count} 件");
+        };
     }
 
     private void Start() => Connect(null);
@@ -61,7 +68,6 @@ public class PipeExample : MonoBehaviour
         AddLog($"   保存先: {saved}");
         Debug.Log($"[Pipe] 保存先: {saved}");
 
-        // 画像なら Texture2D で読み込み確認
         if (args.MimeType != null && args.MimeType.StartsWith("image/"))
         {
             var tex = new Texture2D(1, 1);
@@ -76,11 +82,10 @@ public class PipeExample : MonoBehaviour
     {
         var skin = GUI.skin;
 
-        // フォントサイズを全体的に2倍にする
-        skin.label.fontSize  = 24;
-        skin.button.fontSize = 24;
+        skin.label.fontSize     = 24;
+        skin.button.fontSize    = 24;
         skin.textField.fontSize = 24;
-        skin.box.fontSize    = 22;
+        skin.box.fontSize       = 22;
 
         GUILayout.BeginArea(new Rect(10, 10, 1100, Screen.height - 20));
 
@@ -147,6 +152,33 @@ public class PipeExample : MonoBehaviour
         if (GUILayout.Button("受信開始", GUILayout.Width(120))) DoManualReceive();
         GUI.enabled = true;
         GUILayout.EndHorizontal();
+        GUILayout.Space(6);
+
+        // ── スウォーム一覧 ────────────────────────────────────────────────────────
+        DrawSectionLabel($"ルーム共有ファイル ({_swarm.Count} 件)");
+        if (_swarm.Count == 0)
+        {
+            GUILayout.Label("  （なし）");
+        }
+        else
+        {
+            _swarmScroll = GUILayout.BeginScrollView(_swarmScroll,
+                GUILayout.Height(Mathf.Min(200, _swarm.Count * 56 + 8)));
+            foreach (var e in _swarm)
+            {
+                GUILayout.BeginHorizontal();
+                var seederLabel = e.IsSeeding ? "●" : "○";
+                GUILayout.Label(
+                    $"{seederLabel} {e.FromNickname}: {string.Join(", ", e.FileNames)} ({FormatBytes(e.TotalBytes)})",
+                    GUILayout.ExpandWidth(true));
+                GUI.enabled = e.IsSeeding && !busy;
+                if (GUILayout.Button("DL", GUILayout.Width(60)))
+                    DoDownloadSwarm(e);
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+            }
+            GUILayout.EndScrollView();
+        }
 
         // ── プログレスバー ────────────────────────────────────────────────────────
         if (busy)
@@ -165,7 +197,7 @@ public class PipeExample : MonoBehaviour
         var logStyle = new GUIStyle(skin.box)
             { alignment = TextAnchor.UpperLeft, wordWrap = true, fontSize = 22 };
         _logScroll = GUILayout.BeginScrollView(_logScroll,
-            GUILayout.Height(Mathf.Min(240, Screen.height - 460)));
+            GUILayout.Height(Mathf.Min(200, Screen.height - 560)));
         GUILayout.Label(string.Join("\n", _log), logStyle, GUILayout.ExpandWidth(true));
         GUILayout.EndScrollView();
 
@@ -177,10 +209,10 @@ public class PipeExample : MonoBehaviour
     private void Connect(string roomCode)
     {
         _statusText = "接続中…";
+        _swarm.Clear();
         _client.Connect(roomCode);
     }
 
-    // テキスト送信
     private async void DoBroadcastText()
     {
         BeginProgress("送信中");
@@ -205,10 +237,9 @@ public class PipeExample : MonoBehaviour
         finally { EndProgress(); }
     }
 
-    // テスト PNG 送信
     private async void DoSendTestPng(bool toAll)
     {
-        var png = MakeTestPng(64, 64);
+        var png  = MakeTestPng(64, 64);
         var name = $"test_{DateTime.Now:HHmmss}.png";
         BeginProgress("PNG 送信中");
         try
@@ -229,7 +260,6 @@ public class PipeExample : MonoBehaviour
         finally { EndProgress(); }
     }
 
-    // テスト TXT 送信
     private async void DoSendTestTxt(bool toAll)
     {
         var text = $"Test file from Unity at {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n" +
@@ -255,7 +285,6 @@ public class PipeExample : MonoBehaviour
         finally { EndProgress(); }
     }
 
-    // 手動受信
     private async void DoManualReceive()
     {
         var path = _manualPath.Trim();
@@ -274,16 +303,33 @@ public class PipeExample : MonoBehaviour
         finally { EndProgress(); }
     }
 
+    private async void DoDownloadSwarm(SwarmEntry entry)
+    {
+        AddLog($"⬇ スウォームDL開始: {string.Join(", ", entry.FileNames)}");
+        BeginProgress("スウォームDL");
+        try
+        {
+            var progress = new Progress<float>(p => _progress = p);
+            var files = await _client.DownloadSwarmEntryAsync(entry, progress);
+            for (int i = 0; i < files.Length; i++)
+            {
+                var name  = i < entry.FileNames.Length ? entry.FileNames[i].Trim() : $"file_{i}";
+                var saved = SaveFile(name, files[i]);
+                AddLog($"✓ 保存: {name} ({files[i].Length:N0} B)");
+                Debug.Log($"[Pipe] 保存先: {saved}");
+            }
+        }
+        catch (Exception ex) { AddLog($"✗ DL エラー: {ex.Message}"); }
+        finally { EndProgress(); }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────────
 
     private static byte[] MakeTestPng(int w, int h)
     {
         var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
         var rng = new System.Random();
-        var r   = (float)rng.NextDouble();
-        var g   = (float)rng.NextDouble();
-        var b   = (float)rng.NextDouble();
-        var col = new Color(r, g, b);
+        var col = new Color((float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble());
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++)
                 tex.SetPixel(x, y, Color.Lerp(col, Color.white, (float)x / w));
@@ -293,18 +339,12 @@ public class PipeExample : MonoBehaviour
 
     private static string SaveFile(string filename, byte[] data)
     {
-        var dir  = Application.persistentDataPath;
-        var path = Path.Combine(dir, filename);
+        var path = Path.Combine(Application.persistentDataPath, filename);
         File.WriteAllBytes(path, data);
         return path;
     }
 
-    private void BeginProgress(string label)
-    {
-        _progressLabel = label;
-        _progress      = 0f;
-    }
-
+    private void BeginProgress(string label) { _progressLabel = label; _progress = 0f; }
     private void EndProgress() => _progress = -1f;
 
     private void AddLog(string msg)
@@ -320,4 +360,12 @@ public class PipeExample : MonoBehaviour
 
     private static string Clip(string s, int len = 8)
         => string.IsNullOrEmpty(s) ? "-" : (s.Length <= len ? s : s.Substring(0, len) + "…");
+
+    private static string FormatBytes(long b)
+    {
+        if (b < 1024) return $"{b} B";
+        if (b < 1024 * 1024) return $"{b / 1024.0:F1} KB";
+        if (b < 1024L * 1024 * 1024) return $"{b / (1024.0 * 1024):F1} MB";
+        return $"{b / (1024.0 * 1024 * 1024):F1} GB";
+    }
 }
