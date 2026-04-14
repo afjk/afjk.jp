@@ -182,16 +182,15 @@ namespace Afjk.Pipe
             var signalJson = JsonUtility.ToJson(payload.signal);
             Debug.Log($"[Swarm] signal JSON (先頭120文字): {signalJson.Substring(0, Mathf.Min(120, signalJson.Length))}");
 
-            // ダウンロード待機中かチェック
+            // 常にキューへ追加（DL 開始前の先行受信にも対応）
+            if (!_pendingSignals.ContainsKey(infoHash))
+                _pendingSignals[infoHash] = new Queue<string>();
+            _pendingSignals[infoHash].Enqueue(signalJson);
+
+            // ダウンロード待機中なら即座に接続開始
             if (_downloadTcs.TryGetValue(infoHash, out var tcs) && !tcs.Task.IsCompleted)
             {
-                if (!_pendingSignals.ContainsKey(infoHash))
-                    _pendingSignals[infoHash] = new Queue<string>();
-
-                _pendingSignals[infoHash].Enqueue(signalJson);
-                Debug.Log($"[Swarm] signal をキューに追加 (infoHash={infoHash} queueSize={_pendingSignals[infoHash].Count})");
-
-                // エントリを特定して接続
+                Debug.Log($"[Swarm] signal キューイング → 即処理 (infoHash={infoHash} queueSize={_pendingSignals[infoHash].Count})");
                 if (_entries.TryGetValue(infoHash, out var entry))
                     ProcessPendingSignal(entry, null, CancellationToken.None);
                 else
@@ -199,7 +198,7 @@ namespace Afjk.Pipe
             }
             else
             {
-                Debug.LogWarning($"[Swarm] wt-signal 受信したがダウンロード待機なし (infoHash={infoHash} 待機件数={_downloadTcs.Count})");
+                Debug.Log($"[Swarm] signal を先行キャッシュ (infoHash={infoHash} queueSize={_pendingSignals[infoHash].Count}) — DL 開始時に使用");
             }
         }
 
