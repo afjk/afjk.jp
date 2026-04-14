@@ -58,6 +58,7 @@ public class PipeExample : MonoBehaviour
         var saved = SaveFile(args.Filename, args.Data);
         AddLog($"📥 ファイル受信: {args.Filename} ({args.Data.Length:N0} B) from {args.From?.nickname ?? "?"}");
         AddLog($"   保存先: {saved}");
+        Debug.Log($"[Pipe] 保存先: {saved}");
 
         // 画像なら Texture2D で読み込み確認
         if (args.MimeType != null && args.MimeType.StartsWith("image/"))
@@ -259,6 +260,7 @@ public class PipeExample : MonoBehaviour
             var saved = SaveFile("received_" + Path.GetFileName(path), bytes);
             AddLog($"✓ 受信完了: {bytes.Length:N0} B");
             AddLog($"   保存先: {saved}");
+            Debug.Log($"[Pipe] 保存先: {saved}");
         }
         catch (Exception ex) { AddLog($"✗ 受信エラー: {ex.Message}"); }
         finally { EndProgress(); }
