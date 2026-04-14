@@ -35,8 +35,8 @@ namespace Afjk.Pipe
         public List<FileEntry> files;
 
         // kind: "wt-signal"
-        // signal は JSON オブジェクトだが JsonUtility 経由で文字列として扱う
-        public string signal;
+        // signal はブラウザが JSON オブジェクトとして送る → WtSignalData で受ける
+        public WtSignalData signal;
         public string infoHash;
 
         // kind: "torrent" / "swarm-publish" / "swarm-sync" / "swarm-catalog"
@@ -61,6 +61,14 @@ namespace Afjk.Pipe
         public long   size;
         public string mime;
         public string url;
+    }
+
+    /// <summary>wt-signal の signal フィールド。ブラウザ側は JSON オブジェクトとして送受信する。</summary>
+    [Serializable]
+    public class WtSignalData
+    {
+        public string type;   // "offer" | "answer"
+        public string sdp;
     }
 
     /// <summary>swarm-sync / swarm-catalog エントリの直列化型。</summary>

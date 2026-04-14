@@ -130,6 +130,7 @@ namespace Afjk.Pipe
             TaskCompletionSource<RTCDataChannel> tcs)
         {
             RTCPeerConnection pc = null;
+            Debug.Log($"[WebRTC] AcceptOfferCoroutine 開始 (offer先頭80文字: {offerSdp.Substring(0, Mathf.Min(80, offerSdp.Length))})");
             try
             {
                 pc = new RTCPeerConnection(ref _rtcConfig);
@@ -138,18 +139,30 @@ namespace Afjk.Pipe
                 var setRemoteOp = pc.SetRemoteDescription(ref offer);
                 yield return setRemoteOp;
                 if (setRemoteOp.IsError || ct.IsCancellationRequested)
-                    { tcs.TrySetResult(null); yield break; }
+                {
+                    Debug.LogWarning($"[WebRTC] SetRemoteDescription 失敗: error={setRemoteOp.IsError} cancelled={ct.IsCancellationRequested}");
+                    tcs.TrySetResult(null); yield break;
+                }
+                Debug.Log("[WebRTC] SetRemoteDescription 完了");
 
                 var answerOp = pc.CreateAnswer();
                 yield return answerOp;
                 if (answerOp.IsError || ct.IsCancellationRequested)
-                    { tcs.TrySetResult(null); yield break; }
+                {
+                    Debug.LogWarning($"[WebRTC] CreateAnswer 失敗: error={answerOp.IsError} cancelled={ct.IsCancellationRequested}");
+                    tcs.TrySetResult(null); yield break;
+                }
+                Debug.Log("[WebRTC] CreateAnswer 完了");
 
                 var answer = answerOp.Desc;
                 var setLocalOp = pc.SetLocalDescription(ref answer);
                 yield return setLocalOp;
                 if (setLocalOp.IsError || ct.IsCancellationRequested)
-                    { tcs.TrySetResult(null); yield break; }
+                {
+                    Debug.LogWarning($"[WebRTC] SetLocalDescription 失敗: error={setLocalOp.IsError} cancelled={ct.IsCancellationRequested}");
+                    tcs.TrySetResult(null); yield break;
+                }
+                Debug.Log($"[WebRTC] SetLocalDescription 完了 — ICE 収集開始 (timeout={IceTimeoutSec}s state={pc.GatheringState})");
 
                 // ICE 収集待ち
                 var iceEnd = Time.realtimeSinceStartup + IceTimeoutSec;
@@ -158,18 +171,28 @@ namespace Afjk.Pipe
                     || Time.realtimeSinceStartup >= iceEnd
                     || ct.IsCancellationRequested);
 
+                Debug.Log($"[WebRTC] ICE 収集終了: state={pc.GatheringState} timedOut={Time.realtimeSinceStartup >= iceEnd}");
+
                 if (ct.IsCancellationRequested) { tcs.TrySetResult(null); yield break; }
 
                 // answer を相手に送信
-                sendAnswer(SerializeSdp(pc.LocalDescription));
+                var answerJson = SerializeSdp(pc.LocalDescription);
+                Debug.Log($"[WebRTC] answer 送信 (先頭80文字: {answerJson.Substring(0, Mathf.Min(80, answerJson.Length))})");
+                sendAnswer(answerJson);
 
                 // DataChannel 到着待ち
                 RTCDataChannel dc = null;
-                pc.OnDataChannel = ch => dc = ch;
+                pc.OnDataChannel = ch => { Debug.Log("[WebRTC] OnDataChannel 発火"); dc = ch; };
 
+                Debug.Log($"[WebRTC] DataChannel 待機中 (timeout={DcTimeoutSec}s)...");
                 var dcEnd = Time.realtimeSinceStartup + DcTimeoutSec;
                 yield return new WaitUntil(() =>
                     dc != null || Time.realtimeSinceStartup >= dcEnd || ct.IsCancellationRequested);
+
+                if (dc != null)
+                    Debug.Log("[WebRTC] DataChannel 取得成功");
+                else
+                    Debug.LogWarning($"[WebRTC] DataChannel タイムアウト ({DcTimeoutSec}s) — ネットワーク到達不能の可能性");
 
                 tcs.TrySetResult(dc);
             }

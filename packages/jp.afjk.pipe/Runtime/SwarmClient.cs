@@ -125,6 +125,7 @@ namespace Afjk.Pipe
                 infoHash = entry.InfoHash,
                 peerId   = _localId
             };
+            Debug.Log($"[Swarm] swarm-join 送信 → seeder={entry.SenderId} infoHash={entry.InfoHash}");
             _ = _sendHandoff(entry.SenderId, payload);
 
             // キャンセル時のクリーンアップ
@@ -147,10 +148,18 @@ namespace Afjk.Pipe
 
         private void DispatchSignal(PeerInfo from, HandoffPayload payload)
         {
-            var signalJson = payload.signal;
-            var infoHash   = payload.infoHash;
+            var infoHash = payload.infoHash;
+            Debug.Log($"[Swarm] wt-signal 受信 from={from?.nickname ?? "?"} infoHash={infoHash ?? "null"} signal={(payload.signal == null ? "NULL ← JSON パース失敗の可能性" : $"type={payload.signal.type}")}");
 
-            if (string.IsNullOrEmpty(infoHash) || string.IsNullOrEmpty(signalJson)) return;
+            if (string.IsNullOrEmpty(infoHash) || payload.signal == null)
+            {
+                Debug.LogWarning($"[Swarm] wt-signal スキップ: infoHash={infoHash ?? "null"} signal={(payload.signal == null ? "null" : "ok")}");
+                return;
+            }
+
+            // WtSignalData → JSON 文字列に変換して AcceptOfferAsync へ渡す
+            var signalJson = JsonUtility.ToJson(payload.signal);
+            Debug.Log($"[Swarm] signal JSON (先頭100文字): {signalJson.Substring(0, Mathf.Min(100, signalJson.Length))}");
 
             // ダウンロード待機中かチェック
             if (_downloadTcs.TryGetValue(infoHash, out var tcs) && !tcs.Task.IsCompleted)
@@ -159,10 +168,17 @@ namespace Afjk.Pipe
                     _pendingSignals[infoHash] = new Queue<string>();
 
                 _pendingSignals[infoHash].Enqueue(signalJson);
+                Debug.Log($"[Swarm] signal をキューに追加 (infoHash={infoHash} queueSize={_pendingSignals[infoHash].Count})");
 
                 // エントリを特定して接続
                 if (_entries.TryGetValue(infoHash, out var entry))
                     ProcessPendingSignal(entry, null, CancellationToken.None);
+                else
+                    Debug.LogWarning($"[Swarm] エントリが見つからない: infoHash={infoHash}");
+            }
+            else
+            {
+                Debug.LogWarning($"[Swarm] wt-signal 受信したがダウンロード待機なし (infoHash={infoHash})");
             }
         }
 
@@ -170,11 +186,12 @@ namespace Afjk.Pipe
             CancellationToken ct)
         {
             if (!_pendingSignals.TryGetValue(entry.InfoHash, out var queue)) return;
-            if (queue.Count == 0) return;
+            if (queue.Count == 0) { Debug.Log($"[Swarm] ProcessPendingSignal: キュー空 (infoHash={entry.InfoHash})"); return; }
             if (!_downloadTcs.TryGetValue(entry.InfoHash, out var tcs)) return;
             if (tcs.Task.IsCompleted) return;
 
             var signalJson = queue.Dequeue();
+            Debug.Log($"[Swarm] WebRTC 接続開始 (infoHash={entry.InfoHash})");
 
             // WebRtcTransport でオファーを受け入れ、DataChannel 上で受信
             _ = ConnectAndReceiveAsync(entry, signalJson, progress, ct, tcs);
@@ -189,34 +206,40 @@ namespace Afjk.Pipe
         {
             try
             {
-                RTCDataChannel dc = null;
+                Debug.Log($"[Swarm] AcceptOfferAsync 呼び出し (infoHash={entry.InfoHash} seeder={entry.SenderId})");
 
                 // AcceptOfferAsync: answer を相手 (senderId) へ wt-signal で返す
-                dc = await WebRtcTransport.Instance.AcceptOfferAsync(
+                var dc = await WebRtcTransport.Instance.AcceptOfferAsync(
                     offerSdp,
                     answerJson =>
                     {
+                        Debug.Log($"[Swarm] answer 送信 → {entry.SenderId} (先頭80文字: {answerJson.Substring(0, Mathf.Min(80, answerJson.Length))})");
+                        // answer JSON 文字列 → WtSignalData オブジェクトに変換して送信
+                        var answerSignal = JsonUtility.FromJson<WtSignalData>(answerJson);
                         _ = _sendHandoff(entry.SenderId, new HandoffPayload
                         {
                             kind     = "wt-signal",
                             infoHash = entry.InfoHash,
-                            signal   = answerJson
+                            signal   = answerSignal
                         });
                     },
                     ct);
 
                 if (dc == null)
                 {
+                    Debug.LogWarning($"[Swarm] AcceptOfferAsync 失敗: DataChannel = null (infoHash={entry.InfoHash})");
                     tcs.TrySetException(new Exception("WebRTC 接続失敗"));
                     return;
                 }
 
-                // DataChannel 上で BitTorrent ライクな受信
+                Debug.Log($"[Swarm] DataChannel 確立 (infoHash={entry.InfoHash}) → ファイル受信開始");
                 var files = await ReceiveFilesOverDc(dc, entry.FileCount, progress, ct);
+                Debug.Log($"[Swarm] ファイル受信完了: {files.Length} 件");
                 tcs.TrySetResult(files);
             }
             catch (Exception ex)
             {
+                Debug.LogWarning($"[Swarm] ConnectAndReceiveAsync 例外: {ex.Message}");
                 tcs.TrySetException(ex);
             }
             finally
