@@ -100,6 +100,10 @@ namespace Afjk.Pipe
                 case "wt-signal":
                     DispatchSignal(from, payload);
                     break;
+
+                default:
+                    Debug.LogWarning($"[Swarm] 未知の kind: '{payload.kind}' from={from?.nickname ?? "?"}");
+                    break;
             }
         }
 
@@ -151,15 +155,32 @@ namespace Afjk.Pipe
             var infoHash = payload.infoHash;
             Debug.Log($"[Swarm] wt-signal 受信 from={from?.nickname ?? "?"} infoHash={infoHash ?? "null"} signal={(payload.signal == null ? "NULL ← JSON パース失敗の可能性" : $"type={payload.signal.type}")}");
 
-            if (string.IsNullOrEmpty(infoHash) || payload.signal == null)
+            if (payload.signal == null)
             {
-                Debug.LogWarning($"[Swarm] wt-signal スキップ: infoHash={infoHash ?? "null"} signal={(payload.signal == null ? "null" : "ok")}");
+                Debug.LogWarning("[Swarm] wt-signal スキップ: signal=null (WtSignalData のデシリアライズ失敗)");
                 return;
+            }
+
+            // infoHash が省略されている場合（ブラウザ実装によっては含まれない）は
+            // 唯一の保留ダウンロードへフォールバック
+            if (string.IsNullOrEmpty(infoHash))
+            {
+                if (_downloadTcs.Count == 1)
+                {
+                    foreach (var kv in _downloadTcs)
+                        infoHash = kv.Key;
+                    Debug.Log($"[Swarm] infoHash 省略 → 保留ダウンロードへフォールバック: {infoHash}");
+                }
+                else
+                {
+                    Debug.LogWarning($"[Swarm] wt-signal スキップ: infoHash=null かつ保留ダウンロード={_downloadTcs.Count} 件 (特定不能)");
+                    return;
+                }
             }
 
             // WtSignalData → JSON 文字列に変換して AcceptOfferAsync へ渡す
             var signalJson = JsonUtility.ToJson(payload.signal);
-            Debug.Log($"[Swarm] signal JSON (先頭100文字): {signalJson.Substring(0, Mathf.Min(100, signalJson.Length))}");
+            Debug.Log($"[Swarm] signal JSON (先頭120文字): {signalJson.Substring(0, Mathf.Min(120, signalJson.Length))}");
 
             // ダウンロード待機中かチェック
             if (_downloadTcs.TryGetValue(infoHash, out var tcs) && !tcs.Task.IsCompleted)
@@ -178,7 +199,7 @@ namespace Afjk.Pipe
             }
             else
             {
-                Debug.LogWarning($"[Swarm] wt-signal 受信したがダウンロード待機なし (infoHash={infoHash})");
+                Debug.LogWarning($"[Swarm] wt-signal 受信したがダウンロード待機なし (infoHash={infoHash} 待機件数={_downloadTcs.Count})");
             }
         }
 

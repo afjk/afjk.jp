@@ -252,8 +252,15 @@ namespace Afjk.Pipe
                 case "swarm-sync":
                 case "swarm-catalog":
                 case "swarm-seeder":
-                case "wt-signal":
                     _swarm?.HandleHandoff(from, payload);
+                    break;
+
+                case "wt-signal":
+                    Debug.Log($"[Pipe] wt-signal 着信 from={from?.nickname ?? "?"} swarm={(  _swarm == null ? "NULL" : "ok")} infoHash={payload.infoHash ?? "null"} signal={(payload.signal == null ? "NULL" : $"type={payload.signal.type}")}");
+                    if (_swarm == null)
+                        Debug.LogWarning("[Pipe] wt-signal 受信したが _swarm が null — 接続前に受信した可能性");
+                    else
+                        _swarm.HandleHandoff(from, payload);
                     break;
             }
         }
