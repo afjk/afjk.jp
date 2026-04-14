@@ -283,20 +283,4 @@ namespace Afjk.Pipe
         }
     }
 
-    // ── Event argument types ─────────────────────────────────────────────────────
-
-    public class FileReceivedArgs
-    {
-        public PeerInfo From;
-        public string   Filename;
-        public string   MimeType;
-        public long     Size;
-        public byte[]   Data;
-    }
-
-    public class TextReceivedArgs
-    {
-        public PeerInfo From;
-        public string   Text;
-    }
 }
