@@ -1,10 +1,12 @@
 {
   "name": "jp.afjk.pipe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "afjk Pipe",
-  "description": "Unity client for afjk.jp/pipe — file & text transfer via piping-server HTTP relay and WebRTC P2P",
+  "description": "Unity client for afjk.jp/pipe — file & text transfer via WebRTC P2P and piping-server HTTP relay",
   "unity": "2022.3",
-  "dependencies": {},
+  "dependencies": {
+    "com.unity.webrtc": "3.0.0-pre.8"
+  },
   "samples": [
     {
       "displayName": "Basic Example",
@@ -12,7 +14,7 @@
       "path": "Samples~/BasicExample"
     }
   ],
-  "keywords": ["pipe", "transfer", "p2p"],
+  "keywords": ["pipe", "transfer", "webrtc", "p2p"],
   "author": {
     "name": "afjk",
     "url": "https://afjk.jp"

@@ -47,14 +47,25 @@ namespace Afjk.Pipe
         public string url;
     }
 
+    /// <summary>転送に使用された経路。</summary>
+    public enum TransferMode
+    {
+        /// <summary>piping-server 経由 HTTP 中継</summary>
+        Relay,
+        /// <summary>WebRTC DataChannel P2P</summary>
+        P2P
+    }
+
     /// <summary>OnFileReceived イベントの引数。</summary>
     public class FileReceivedArgs
     {
-        public PeerInfo From;
-        public string   Filename;
-        public string   MimeType;
-        public long     Size;
-        public byte[]   Data;
+        public PeerInfo      From;
+        public string        Filename;
+        public string        MimeType;
+        public long          Size;
+        public byte[]        Data;
+        /// <summary>実際に使用された転送経路。</summary>
+        public TransferMode  Mode;
     }
 
     /// <summary>OnTextReceived イベントの引数。</summary>

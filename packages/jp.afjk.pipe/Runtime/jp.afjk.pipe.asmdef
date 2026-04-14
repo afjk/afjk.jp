@@ -1,7 +1,9 @@
 {
     "name": "jp.afjk.pipe",
     "rootNamespace": "Afjk.Pipe",
-    "references": [],
+    "references": [
+        "Unity.WebRTC"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

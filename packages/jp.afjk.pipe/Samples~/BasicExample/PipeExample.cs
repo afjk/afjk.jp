@@ -55,8 +55,9 @@ public class PipeExample : MonoBehaviour
 
     private void OnFileReceived(FileReceivedArgs args)
     {
+        var modeLabel = args.Mode == TransferMode.P2P ? "P2P" : "中継";
         var saved = SaveFile(args.Filename, args.Data);
-        AddLog($"📥 ファイル受信: {args.Filename} ({args.Data.Length:N0} B) from {args.From?.nickname ?? "?"}");
+        AddLog($"📥 ファイル受信 ({modeLabel}): {args.Filename} ({args.Data.Length:N0} B) from {args.From?.nickname ?? "?"}");
         AddLog($"   保存先: {saved}");
         Debug.Log($"[Pipe] 保存先: {saved}");
 
