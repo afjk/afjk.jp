@@ -4,35 +4,54 @@ using UnityEngine;
 using Afjk.Pipe;
 
 /// <summary>
-/// PipeClient の使い方を示すサンプル MonoBehaviour。
+/// PipeClient の動作確認サンプル。OnGUI でシンプルな UI を表示する。
 ///
 /// セットアップ:
 ///   1. 空の GameObject に PipeClient と PipeExample を AddComponent する。
-///   2. PipeClient の Inspector で DeviceName を設定（任意）。
-///   3. Play すると Presence に接続し、同室デバイスが検出されると Console に表示される。
-///   4. Inspector の Send ボタン（Context Menu）から手動送信できる。
+///   2. Play するだけで自動的に Presence へ接続する。
+///   3. 画面上の UI からテキスト送受信・Presence 状態を確認できる。
 /// </summary>
 public class PipeExample : MonoBehaviour
 {
-    private PipeClient _client;
+    // ── State ─────────────────────────────────────────────────────────────────────
+    private PipeClient      _client;
+    private string          _statusText     = "未接続";
+    private string          _roomText       = "";
+    private string          _textInput      = "Hello from Unity!";
+    private string          _roomCodeInput  = "";
+    private string          _manualPath     = "";
+    private List<PeerInfo>  _peers          = new List<PeerInfo>();
+    private List<string>    _log            = new List<string>();
+    private float           _sendProgress   = -1f;
+    private Vector2         _logScroll;
+    private const int       MaxLog          = 50;
+
+    // ── Unity lifecycle ───────────────────────────────────────────────────────────
 
     private void Awake()
     {
         _client = GetComponent<PipeClient>();
 
-        _client.OnConnected       += () => Debug.Log("[PipeExample] Presence connected.");
-        _client.OnDisconnected    += () => Debug.Log("[PipeExample] Presence disconnected.");
-        _client.OnPeersUpdated    += OnPeersUpdated;
-        _client.OnFileReceived    += OnFileReceived;
-        _client.OnTextReceived    += OnTextReceived;
+        _client.OnConnected    += () => { _statusText = "接続済み"; AddLog("✓ Presence 接続"); };
+        _client.OnDisconnected += () => { _statusText = "切断"; AddLog("✗ Presence 切断"); };
+        _client.OnPeersUpdated += peers =>
+        {
+            _peers = new List<PeerInfo>(peers);
+            AddLog($"ピア更新: {peers.Count} 台");
+        };
+        _client.OnFileReceived += args =>
+        {
+            AddLog($"📥 ファイル受信: {args.Filename} ({args.Size:N0} B) from {args.From?.nickname ?? "?"}");
+        };
+        _client.OnTextReceived += args =>
+        {
+            AddLog($"💬 テキスト受信 from {args.From?.nickname ?? "?"}: {args.Text}");
+        };
     }
 
     private void Start()
     {
-        // デフォルトルームで接続
-        _client.Connect();
-
-        // ルームコードを使う場合: _client.Connect("myroom");
+        Connect(null);
     }
 
     private void OnDestroy()
@@ -40,68 +59,172 @@ public class PipeExample : MonoBehaviour
         _client.Disconnect();
     }
 
-    // ── Event handlers ───────────────────────────────────────────────────────────
+    // ── GUI ───────────────────────────────────────────────────────────────────────
 
-    private void OnPeersUpdated(IReadOnlyList<PeerInfo> peers)
+    private void OnGUI()
     {
-        Debug.Log($"[PipeExample] Peers: {peers.Count}");
-        foreach (var p in peers)
-            Debug.Log($"  - {p.id} ({p.nickname} / {p.device})");
-    }
+        var skin = GUI.skin;
+        GUILayout.BeginArea(new Rect(10, 10, 420, Screen.height - 20));
 
-    private void OnFileReceived(FileReceivedArgs args)
-    {
-        Debug.Log($"[PipeExample] File received: {args.Filename} ({args.Size} bytes) from {args.From?.nickname}");
-
-        // 例: テクスチャとして読み込む
-        if (args.MimeType != null && args.MimeType.StartsWith("image/"))
+        // ── ヘッダー ─────────────────────────────────────────────────────────────
+        GUILayout.Label("afjk.jp / pipe — Unity Client", new GUIStyle(skin.label)
         {
-            var tex = new Texture2D(1, 1);
-            if (tex.LoadImage(args.Data))
-                Debug.Log($"[PipeExample] Texture loaded: {tex.width}x{tex.height}");
-        }
-    }
+            fontSize  = 16,
+            fontStyle = FontStyle.Bold
+        });
 
-    private void OnTextReceived(TextReceivedArgs args)
-    {
-        Debug.Log($"[PipeExample] Text received from {args.From?.nickname}: {args.Text}");
-    }
+        GUILayout.Label($"状態: {_statusText}  |  LocalId: {Clip(_client.LocalId)}  |  Room: {_client.RoomId ?? "-"}");
 
-    // ── Manual send (Context Menu for testing) ───────────────────────────────────
+        GUILayout.Space(4);
 
-    [ContextMenu("Send Hello Text to All")]
-    private async void SendHelloToAll()
-    {
-        if (_client.Peers.Count == 0)
+        // ── ルームコード ──────────────────────────────────────────────────────────
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("ルームコード:", GUILayout.Width(90));
+        _roomCodeInput = GUILayout.TextField(_roomCodeInput, GUILayout.Width(120));
+        if (GUILayout.Button("参加", GUILayout.Width(50)))
+            Connect(string.IsNullOrWhiteSpace(_roomCodeInput) ? null : _roomCodeInput.Trim());
+        if (GUILayout.Button("退場", GUILayout.Width(50)))
         {
-            Debug.LogWarning("[PipeExample] No peers found.");
-            return;
+            _roomCodeInput = "";
+            Connect(null);
         }
-        await _client.BroadcastTextAsync("Hello from Unity!");
-        Debug.Log("[PipeExample] Text sent to all peers.");
-    }
+        GUILayout.EndHorizontal();
 
-    [ContextMenu("Send Dummy File to First Peer")]
-    private async void SendDummyFile()
-    {
-        if (_client.Peers.Count == 0)
+        GUILayout.Space(6);
+
+        // ── ピアリスト ────────────────────────────────────────────────────────────
+        GUILayout.Label($"ピア ({_peers.Count} 台):");
+        if (_peers.Count == 0)
         {
-            Debug.LogWarning("[PipeExample] No peers found.");
-            return;
+            GUILayout.Label("  （検出なし）");
         }
-        var data     = Encoding.UTF8.GetBytes("This is a dummy file from Unity.");
-        var firstId  = _client.Peers[0].id;
-        var progress = new Progress<float>(p => Debug.Log($"[PipeExample] Send progress: {p:P0}"));
+        else
+        {
+            foreach (var p in _peers)
+                GUILayout.Label($"  • {p.nickname ?? "?"} [{p.device ?? "?"}]  id={Clip(p.id)}");
+        }
 
-        await _client.SendFileAsync(firstId, data, "dummy.txt", "text/plain", progress);
-        Debug.Log("[PipeExample] Dummy file sent.");
+        GUILayout.Space(6);
+
+        // ── テキスト送信 ──────────────────────────────────────────────────────────
+        GUILayout.Label("テキスト送信:");
+        _textInput = GUILayout.TextField(_textInput, GUILayout.Width(310));
+        GUILayout.BeginHorizontal();
+        GUI.enabled = _peers.Count > 0 && _sendProgress < 0f;
+        if (GUILayout.Button("全員に送信", GUILayout.Width(100)))
+            DoBroadcastText();
+        if (_peers.Count > 0 && GUILayout.Button($"1台目へ送信", GUILayout.Width(100)))
+            DoSendTextToFirst();
+        GUI.enabled = true;
+        GUILayout.EndHorizontal();
+
+        GUILayout.Space(6);
+
+        // ── 手動受信 ──────────────────────────────────────────────────────────────
+        GUILayout.Label("手動受信（パス / URL）:");
+        GUILayout.BeginHorizontal();
+        _manualPath = GUILayout.TextField(_manualPath, GUILayout.Width(220));
+        GUI.enabled = !string.IsNullOrWhiteSpace(_manualPath) && _sendProgress < 0f;
+        if (GUILayout.Button("受信開始", GUILayout.Width(80)))
+            DoManualReceive();
+        GUI.enabled = true;
+        GUILayout.EndHorizontal();
+
+        // ── プログレス ────────────────────────────────────────────────────────────
+        if (_sendProgress >= 0f)
+        {
+            GUILayout.Space(4);
+            var rect = GUILayoutUtility.GetRect(200, 20);
+            GUI.Box(rect, GUIContent.none);
+            var fill = new Rect(rect.x, rect.y, rect.width * _sendProgress, rect.height);
+            GUI.Box(fill, $"{_sendProgress:P0}");
+        }
+
+        GUILayout.Space(8);
+
+        // ── ログ ─────────────────────────────────────────────────────────────────
+        GUILayout.Label("ログ:");
+        var logStyle = new GUIStyle(skin.box)
+        {
+            alignment = TextAnchor.UpperLeft,
+            wordWrap  = true,
+            fontSize  = 11
+        };
+        _logScroll = GUILayout.BeginScrollView(_logScroll,
+            GUILayout.Height(Mathf.Min(200, Screen.height - 400)));
+        GUILayout.Label(string.Join("\n", _log), logStyle, GUILayout.ExpandWidth(true));
+        GUILayout.EndScrollView();
+
+        GUILayout.EndArea();
     }
 
-    [ContextMenu("Receive from Path (abc12345)")]
-    private async void ReceiveFromPath()
+    // ── Actions ───────────────────────────────────────────────────────────────────
+
+    private void Connect(string roomCode)
     {
-        Debug.Log("[PipeExample] Waiting to receive from abc12345 ...");
-        var bytes = await _client.ReceiveFileAsync("abc12345");
-        Debug.Log($"[PipeExample] Received {bytes.Length} bytes.");
+        _statusText = "接続中…";
+        _client.Connect(roomCode);
     }
+
+    private async void DoBroadcastText()
+    {
+        _sendProgress = 0f;
+        try
+        {
+            var progress = new Progress<float>(p => _sendProgress = p);
+            await _client.BroadcastTextAsync(_textInput);
+            AddLog($"✓ テキストを全 {_peers.Count} 台に送信");
+        }
+        catch (System.Exception ex)
+        {
+            AddLog($"✗ 送信エラー: {ex.Message}");
+        }
+        finally { _sendProgress = -1f; }
+    }
+
+    private async void DoSendTextToFirst()
+    {
+        _sendProgress = 0f;
+        try
+        {
+            await _client.SendTextAsync(_peers[0].id, _textInput);
+            AddLog($"✓ テキストを {_peers[0].nickname ?? _peers[0].id} に送信");
+        }
+        catch (System.Exception ex)
+        {
+            AddLog($"✗ 送信エラー: {ex.Message}");
+        }
+        finally { _sendProgress = -1f; }
+    }
+
+    private async void DoManualReceive()
+    {
+        var path = _manualPath.Trim();
+        AddLog($"📡 受信待機: {path}");
+        _sendProgress = 0f;
+        try
+        {
+            var progress = new Progress<float>(p => _sendProgress = p);
+            var bytes = await _client.ReceiveFileAsync(path, progress);
+            AddLog($"✓ 受信完了: {bytes.Length:N0} B");
+        }
+        catch (System.Exception ex)
+        {
+            AddLog($"✗ 受信エラー: {ex.Message}");
+        }
+        finally { _sendProgress = -1f; }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+
+    private void AddLog(string msg)
+    {
+        var ts = System.DateTime.Now.ToString("HH:mm:ss");
+        _log.Insert(0, $"[{ts}] {msg}");
+        if (_log.Count > MaxLog) _log.RemoveAt(_log.Count - 1);
+        _logScroll = Vector2.zero;   // 最新行へスクロール
+    }
+
+    private static string Clip(string s, int len = 8)
+        => string.IsNullOrEmpty(s) ? "-" : (s.Length <= len ? s : s.Substring(0, len) + "…");
 }
