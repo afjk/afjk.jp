@@ -5,6 +5,13 @@
   "description": "Unity client for afjk.jp/pipe — file & text transfer via piping-server HTTP relay and WebRTC P2P",
   "unity": "2022.3",
   "dependencies": {},
+  "samples": [
+    {
+      "displayName": "Basic Example",
+      "description": "Presence 接続・テキスト／ファイルの送受信を確認できる OnGUI サンプル",
+      "path": "Samples~/BasicExample"
+    }
+  ],
   "keywords": ["pipe", "transfer", "p2p"],
   "author": {
     "name": "afjk",
