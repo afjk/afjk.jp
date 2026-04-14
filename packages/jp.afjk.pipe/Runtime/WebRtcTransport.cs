@@ -64,7 +64,7 @@ namespace Afjk.Pipe
                     new RTCIceServer { urls = new[] { "stun:stun.l.google.com:19302" } }
                 }
             };
-            WebRTC.Initialize(EncoderType.Software);
+            WebRTC.Initialize();
             StartCoroutine(WebRTC.Update());
         }
 
