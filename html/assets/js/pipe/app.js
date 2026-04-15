@@ -1536,8 +1536,11 @@ function pruneSwarmEntries() {
   swarmState.entries.forEach((entry, key) => {
     if (entry.catalogOnly) return;
     const seeders = entry.seeders || new Set();
-    const hasActiveSeeder = Array.from(seeders).some(id => activeIds.has(id));
-    if (!hasActiveSeeder) {
+    // Remove departed peer IDs from the seeders set
+    seeders.forEach(id => {
+      if (!activeIds.has(id)) { seeders.delete(id); changed = true; }
+    });
+    if (!seeders.size) {
       swarmState.entries.delete(key);
       changed = true;
     }
@@ -1660,12 +1663,28 @@ function getWtClient() {
 // Seeder holds pending SimplePeer instances awaiting the receiver's answer
 const _wtPendingPeers = new Map();   // `${peerId}:${infoHash}` → { sp, torrent, infoHash }
 // Receiver queues offers that arrive before the torrent is ready
-const _wtPendingSignals = [];        // { fromId, signal, infoHash }
+const _wtPendingSignals = [];        // { fromId, signal, infoHash, ts }
 // Seeder stores original File[] by infoHash for piping-server fallback delivery
 const _torrentSeedFiles = new Map(); // infoHash → File[]
 const _wtApprovedDownloads = new Set();       // infoHash/magnet keys approved for saving
 const _wtCompletedTorrents = new Map();       // key → torrent waiting for approval
 const _wtPendingFallbacks = new Map();        // key → pending HTTP fallback payload
+const WT_SIGNAL_TTL_MS = 30000;  // discard pending signals older than 30s
+const WT_SIGNAL_MAX    = 50;     // keep at most 50 pending signals
+
+function _pruneWtPendingSignals() {
+  const now = Date.now();
+  // Remove expired
+  for (let i = _wtPendingSignals.length - 1; i >= 0; i--) {
+    if (now - _wtPendingSignals[i].ts > WT_SIGNAL_TTL_MS) {
+      _wtPendingSignals.splice(i, 1);
+    }
+  }
+  // Cap size (drop oldest first)
+  while (_wtPendingSignals.length > WT_SIGNAL_MAX) {
+    _wtPendingSignals.shift();
+  }
+}
 
 function torrentApprovalKey(infoHash, magnetURI) {
   return infoHash || extractInfoHash(magnetURI || '') || magnetURI || null;
@@ -1743,14 +1762,16 @@ async function handleWtSignal(fromId, signal, infoHash = '') {
   }
   // Case 2: we're the receiver — this is an offer from the seeder
   if (!_wtClient?.torrents?.length) {
-    _wtPendingSignals.push({ fromId, signal, infoHash });
+    _pruneWtPendingSignals();
+    _wtPendingSignals.push({ fromId, signal, infoHash, ts: Date.now() });
     return;
   }
   const target = findTorrentByInfoHash(infoHash) || _wtClient.torrents[0];
   if (target) {
     _wtHandleOffer(target, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
   } else {
-    _wtPendingSignals.push({ fromId, signal, infoHash });
+    _pruneWtPendingSignals();
+    _wtPendingSignals.push({ fromId, signal, infoHash, ts: Date.now() });
   }
 }
 
@@ -1808,8 +1829,11 @@ async function seedFilesAsTorrent() {
   const files  = selFiles.map(({ file }) => file);
   setStatus('send-status', t('torrentSeeding'), 'waiting');
 
-  // Remove any previous torrent for same files before re-seeding
-  client.torrents.slice().forEach(t => { try { t.destroy(); } catch {} });
+  // Remove only previously-seeded torrents (preserve torrents we are receiving)
+  client.torrents.slice().forEach(t => {
+    if (_torrentSeedFiles.has(t.infoHash)) { try { t.destroy(); } catch {} }
+  });
+  _torrentSeedFiles.clear();
 
   client.seed(files, torrent => {
     // Suppress tracker connection errors (non-fatal warnings)
@@ -2001,10 +2025,11 @@ async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
 
   // Process any wt-signal offers already queued
   const targetHash = torrent.infoHash || null;
+  _pruneWtPendingSignals();
   if (_wtPendingSignals.length) {
     logSwarm('flushing pending signals', { count: _wtPendingSignals.length, targetHash });
     const remaining = [];
-    _wtPendingSignals.forEach(({ fromId, signal, infoHash }) => {
+    _wtPendingSignals.forEach(({ fromId, signal, infoHash, ts }) => {
       // Only dispatch a pending signal to this torrent when:
       //   - both sides have a known infoHash AND they match, OR
       //   - the signal carries no infoHash but targetHash is also absent
@@ -2020,7 +2045,7 @@ async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
       if (shouldDispatch) {
         _wtHandleOffer(torrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
       } else {
-        remaining.push({ fromId, signal, infoHash });
+        remaining.push({ fromId, signal, infoHash, ts });
       }
     });
     _wtPendingSignals.splice(0, _wtPendingSignals.length, ...remaining);
@@ -2028,16 +2053,12 @@ async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
 }
 
 function triggerTorrentDownloads(torrent) {
-  console.trace('[dbg]call triggerTorrentDownloads') 
-  
   if (!torrent?.files) return;
   torrent.files.forEach(file => {
     if (!file) return;
     if (typeof file.blob === 'function') {
-      console.trace('[dbg]call triggerTorrentDownloads file.blob') 
       file.blob().then(blob => triggerDownload(blob, file.name)).catch(() => {});
     } else if (typeof file.getBlob === 'function') {
-      console.trace('[dbg]call triggerTorrentDownloads file.getBlob') 
       file.getBlob((err, blob) => { if (!err) triggerDownload(blob, file.name); });
     }
   });
