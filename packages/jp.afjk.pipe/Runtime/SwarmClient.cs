@@ -325,7 +325,9 @@ namespace Afjk.Pipe
                                     (int)(totalBytes - nextReqOff)));
                     if (bLen <= 0) break;
 
-                    dc.Send(BtWire.Request(pIdx, bOff, bLen));
+                    var reqMsg = BtWire.Request(pIdx, bOff, bLen);
+                    Debug.Log($"[Wire] request piece={pIdx} begin={bOff} length={bLen} hex={ToHex(reqMsg)}");
+                    dc.Send(reqMsg);
                     nextReqOff += bLen;
                     pendingReqs++;
                 }
@@ -339,9 +341,22 @@ namespace Afjk.Pipe
                     if (!hsRecv)
                     {
                         if (buf.Count < 68) return;
+                        // 受信 handshake の hex dump
+                        var recvHs = buf.GetRange(0, 68);
+                        var recvInfoHash = recvHs.GetRange(28, 20);
+                        bool ihMatch = recvInfoHash.Count == infoHashBytes.Length;
+                        if (ihMatch)
+                            for (int i = 0; i < infoHashBytes.Length; i++)
+                                if (recvInfoHash[i] != infoHashBytes[i]) { ihMatch = false; break; }
+                        Debug.Log($"[Wire] === handshake 受信 ===\n" +
+                                  $"  全68B hex: {ToHex(recvHs, 0, 68)}\n" +
+                                  $"  pstrlen byte[0]  = 0x{recvHs[0]:x2} (期待: 0x13)\n" +
+                                  $"  infoHash (28-47): {ToHex(recvInfoHash, 0, 20)}\n" +
+                                  $"  期待 infoHash:    {ToHex(infoHashBytes)}\n" +
+                                  $"  infoHash 一致:    {ihMatch}\n" +
+                                  $"  peerId   (48-67): {ToHex(recvHs, 48, 20)}");
                         buf.RemoveRange(0, 68);
                         hsRecv = true;
-                        Debug.Log("[Wire] handshake 受信完了");
                         continue;
                     }
 
@@ -357,6 +372,9 @@ namespace Afjk.Pipe
                     byte id      = buf[4];
                     int  payLen  = msgLen - 1;
                     var  payload = payLen > 0 ? buf.GetRange(5, payLen).ToArray() : Array.Empty<byte>();
+                    // 全メッセージを先頭8バイトつきでログ
+                    Debug.Log($"[Wire] msg id={id} msgLen={msgLen} payLen={payLen}" +
+                              (payLen > 0 ? $" payload[0..{Math.Min(8,payLen)-1}]={ToHex(payload, 0, Math.Min(8, payLen))}" : ""));
                     buf.RemoveRange(0, 4 + msgLen);
 
                     switch (id)
@@ -373,12 +391,13 @@ namespace Afjk.Pipe
                             break;
 
                         case 5:  // bitfield — シーダーが持つピース情報
-                            Debug.Log($"[Wire] bitfield ({payload.Length}B)");
+                            Debug.Log($"[Wire] bitfield ({payload.Length}B) hex={ToHex(payload, 0, Math.Min(16, payload.Length))}");
                             if (!interested)
                             {
                                 interested = true;
-                                dc.Send(BtWire.Interested());
-                                Debug.Log("[Wire] interested 送信");
+                                var intMsg = BtWire.Interested();
+                                Debug.Log($"[Wire] interested 送信 hex={ToHex(intMsg)}");
+                                dc.Send(intMsg);
                             }
                             break;
 
@@ -386,8 +405,9 @@ namespace Afjk.Pipe
                             if (!interested)
                             {
                                 interested = true;
-                                dc.Send(BtWire.Interested());
-                                Debug.Log("[Wire] interested 送信 (have 受信後)");
+                                var intMsg = BtWire.Interested();
+                                Debug.Log($"[Wire] interested 送信 (have 受信後) hex={ToHex(intMsg)}");
+                                dc.Send(intMsg);
                             }
                             break;
 
@@ -419,7 +439,7 @@ namespace Afjk.Pipe
 
                         // ID 20 など不明なメッセージは無視
                         default:
-                            Debug.Log($"[Wire] 未知メッセージ ID={id} len={msgLen}");
+                            Debug.Log($"[Wire] 未知メッセージ ID={id} len={msgLen} payload[0..{Math.Min(8,payLen)-1}]={ToHex(payload, 0, Math.Min(8, payLen))}");
                             break;
                     }
                 }
@@ -427,6 +447,7 @@ namespace Afjk.Pipe
 
             dc.OnMessage = bytes =>
             {
+                Debug.Log($"[Wire] DC受信 {bytes.Length}B (buf累計={buf.Count + bytes.Length}B) hex[0..{Math.Min(8,bytes.Length)-1}]={ToHex(bytes, 0, Math.Min(8, bytes.Length))}");
                 buf.AddRange(bytes);
                 ProcessBuf();
             };
@@ -440,12 +461,32 @@ namespace Afjk.Pipe
             ct.Register(() => tcs.TrySetCanceled());
 
             // こちらから handshake を送信
-            dc.Send(BtWire.Handshake(infoHashBytes, myPeerId));
-            Debug.Log($"[Wire] handshake 送信 (infoHash={infoHashHex} pieceLen={pieceLen} " +
-                      $"numPieces={((totalBytes + pieceLen - 1) / pieceLen)} totalBytes={totalBytes})");
+            var hsBytes = BtWire.Handshake(infoHashBytes, myPeerId);
+            Debug.Log($"[Wire] === handshake 送信 ===\n" +
+                      $"  infoHash ({infoHashBytes.Length}B): {ToHex(infoHashBytes)}\n" +
+                      $"  peerId   ({myPeerId.Length}B):   {ToHex(myPeerId)}\n" +
+                      $"  全68B hex: {ToHex(hsBytes)}\n" +
+                      $"  pieceLen={pieceLen} numPieces={((totalBytes + pieceLen - 1) / pieceLen)} totalBytes={totalBytes}");
+            dc.Send(hsBytes);
 
             return tcs.Task;
         }
+
+        // ── デバッグ hex dump ─────────────────────────────────────────────────────
+
+        private static string ToHex(IList<byte> b, int offset, int count)
+        {
+            count = Math.Min(count, b.Count - offset);
+            var sb = new System.Text.StringBuilder(count * 3);
+            for (int i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                sb.Append(b[offset + i].ToString("x2"));
+            }
+            return sb.ToString();
+        }
+
+        private static string ToHex(byte[] b) => ToHex(b, 0, b.Length);
 
         // ── BitTorrent ワイヤープロトコルヘルパー ─────────────────────────────────
 
