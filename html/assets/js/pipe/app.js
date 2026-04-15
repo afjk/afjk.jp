@@ -635,10 +635,20 @@ const RTC_DRAIN_DELAY  = 1500;   // ms: 正常終了時に接続を閉じるま�
 const FLOW_STALL_MS    = 1500;   // ms: bufferedAmount が減らないとみなす閾値
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-const randPath = () => Math.random().toString(36).slice(2, 10);
+const randPath = () => {
+  const buf = new Uint8Array(8);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, b => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+};
 const logSwarm = (...args) => { try { console.debug('[swarm]', ...args); } catch {} };
 const localCatalog = new Map();
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+async function hashBlob(blob) {
+  const buf = await blob.arrayBuffer();
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+}
 
 function base32ToHex(str) {
   let bits = '';
@@ -1977,15 +1987,24 @@ async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
   torrent.on('warning', w => console.info('[wt] warning:', w?.message || w));
   torrent.on('error',   e => { if (!torrent.done) setStatus('recv-status', '✗ ' + (e?.message || e), 'err'); });
 
-  // Piping-server fallback: if no peers connect within 30 s, request HTTP delivery from seeder
-  if (senderId) {
+  // Piping-server fallback: if no peers connect within 30 s, request HTTP delivery
+  {
     const _fallbackTimer = setTimeout(() => {
       if (torrent.done || torrent.destroyed || torrent.numPeers > 0) return;
       const basePath = Math.random().toString(36).slice(2, 10);
-      presenceState.ws?.send(JSON.stringify({
-        type: 'handoff', targetId: senderId,
-        payload: { kind: 'torrent-piping-request', infoHash: torrent.infoHash, basePath },
-      }));
+      const fallbackPayload = { kind: 'torrent-piping-request', infoHash: torrent.infoHash, basePath };
+      if (senderId) {
+        presenceState.ws?.send(JSON.stringify({
+          type: 'handoff', targetId: senderId, payload: fallbackPayload,
+        }));
+      } else {
+        // senderId unknown — broadcast to all room peers
+        presenceState.peers.forEach((_, peerId) => {
+          presenceState.ws?.send(JSON.stringify({
+            type: 'handoff', targetId: peerId, payload: fallbackPayload,
+          }));
+        });
+      }
       setStatus('recv-status', t('torrentFallback'), 'waiting');
     }, 30_000);
     torrent.on('wire',    () => clearTimeout(_fallbackTimer));
@@ -3912,7 +3931,8 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
       await feed(raw);
     }
 
-    dc.send(JSON.stringify({ t: 'done' }));
+    const fileHash = await hashBlob(body);
+    dc.send(JSON.stringify({ t: 'done', sha256: fileHash }));
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
@@ -3995,7 +4015,8 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
         reader.releaseLock?.();
       }
 
-      dc.send(JSON.stringify({ t: 'done' }));
+      const fileHash = await hashBlob(file);
+      dc.send(JSON.stringify({ t: 'done', sha256: fileHash }));
       onFileDone(i);
     }
 
@@ -4045,6 +4066,14 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
             const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
             const blob    = new Blob(chunks, { type: meta.mime });
+            // Verify integrity if sender provided a hash
+            if (msg.sha256) {
+              hashBlob(blob).then(recvHash => {
+                if (recvHash !== msg.sha256) {
+                  console.warn('[p2p] checksum mismatch', { expected: msg.sha256, got: recvHash });
+                }
+              }).catch(() => {});
+            }
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
             if (!isMulti) resolve();
           } else if (msg.t === 'all-done') {

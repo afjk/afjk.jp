@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const MAX_MESSAGE_SIZE = 131072; // 128 KB max WebSocket message
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
@@ -105,6 +106,8 @@ class WsConnection {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.alive = true;
+    this._fragBufs = [];
+    this._fragOpcode = 0;
     socket.on('data', chunk => this.#handle(chunk));
     socket.on('close', () => this.onClose && this.onClose());
     socket.on('error', () => this.onClose && this.onClose());
@@ -133,6 +136,7 @@ class WsConnection {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= 2) {
       const first = this.buffer[0];
+      const fin = Boolean(first & 0x80);
       const opcode = first & 0x0f;
       const isMasked = Boolean(this.buffer[1] & 0x80);
       let length = this.buffer[1] & 0x7f;
@@ -149,6 +153,13 @@ class WsConnection {
         offset = 10;
       }
 
+      // Reject oversized messages
+      if (length > MAX_MESSAGE_SIZE) {
+        log('oversized frame', length, '- closing connection');
+        this.close();
+        return;
+      }
+
       const mask = isMasked ? this.buffer.slice(offset, offset + 4) : null;
       offset += isMasked ? 4 : 0;
       if (this.buffer.length < offset + length) return;
@@ -158,24 +169,43 @@ class WsConnection {
 
       if (mask) payload = applyMask(payload, mask);
 
-      if (opcode === 0x8) {
-        this.close();
-        return;
-      }
+      // Control frames (close / ping / pong) — never fragmented
+      if (opcode === 0x8) { this.close(); return; }
       if (opcode === 0x9) {
-        // ping -> respond with pong
         this.socket.write(Buffer.concat([Buffer.from([0x8a, payload.length]), payload]));
         continue;
       }
-      if (opcode === 0xa) {
-        this.alive = true;
-        continue;
-      }
-      if (opcode !== 0x1) continue; // text frames only
+      if (opcode === 0xa) { this.alive = true; continue; }
 
-      this.alive = true;
-      const text = payload.toString('utf8');
-      this.onMessage && this.onMessage(text);
+      // Data frames — handle fragmentation
+      if (opcode !== 0x0) {
+        // First frame of a new message (text or binary)
+        this._fragOpcode = opcode;
+        this._fragBufs = [payload];
+      } else {
+        // Continuation frame
+        this._fragBufs.push(payload);
+      }
+
+      if (fin) {
+        const totalSize = this._fragBufs.reduce((sum, b) => sum + b.length, 0);
+        if (totalSize > MAX_MESSAGE_SIZE) {
+          log('oversized reassembled message', totalSize, '- closing connection');
+          this._fragBufs = [];
+          this.close();
+          return;
+        }
+        const fullPayload = this._fragBufs.length === 1
+          ? this._fragBufs[0]
+          : Buffer.concat(this._fragBufs);
+        this._fragBufs = [];
+        // Only process text frames (opcode 0x1)
+        if (this._fragOpcode === 0x1) {
+          this.alive = true;
+          const text = fullPayload.toString('utf8');
+          this.onMessage && this.onMessage(text);
+        }
+      }
     }
   }
 }
