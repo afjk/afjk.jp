@@ -806,16 +806,26 @@ function connectPresence() {
     presenceState.id = null;
     presenceState.retries += 1;
     if (presenceState.reconnectTimer) clearTimeout(presenceState.reconnectTimer);
-    if (presenceState.retries <= 3) {
-      presenceStatusEl.textContent = t('presenceReconnecting');
-      const delay = Math.min(3000 * Math.pow(2, presenceState.retries - 1), 30000);
-      presenceState.reconnectTimer = setTimeout(connectPresence, delay);
-    } else {
-      presenceStatusEl.textContent = t('presenceUnavailable');
-    }
+    presenceStatusEl.textContent = t('presenceReconnecting');
+    const delay = Math.min(3000 * Math.pow(1.5, presenceState.retries - 1), 60000);
+    presenceState.reconnectTimer = setTimeout(connectPresence, delay);
   });
   ws.addEventListener('error', () => {});
 }
+
+// Reconnect presence when the tab becomes visible or the browser comes back online
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !presenceState.ws) {
+    presenceState.retries = 0;
+    connectPresence();
+  }
+});
+window.addEventListener('online', () => {
+  if (!presenceState.ws) {
+    presenceState.retries = 0;
+    connectPresence();
+  }
+});
 
 function handlePresenceMessage(ev) {
   let data;
@@ -1276,7 +1286,7 @@ function addSwarmEntry(rawEntry, senderFallback) {
     if (entry.totalBytes) existing.totalBytes = entry.totalBytes;
     if (entry.fromNickname) existing.fromNickname = entry.fromNickname;
     if (entry.createdAt) existing.createdAt = entry.createdAt;
-    existing.catalogOnly = Boolean(existing.catalogOnly || entry.catalogOnly);
+    existing.catalogOnly = Boolean(existing.catalogOnly && entry.catalogOnly);
     entry.seeders?.forEach(id => existing.seeders.add(id));
     renderSwarmList();
     return existing;
@@ -1823,7 +1833,7 @@ async function seedFilesAsTorrent() {
 
     // Send handoff to all peers in room
     if (peers.length && presenceState.ws?.readyState === WebSocket.OPEN) {
-      const fileNames = files.map(f => f.name).join(', ');
+      const fileNames = files.map(f => f.name);
       const count = peers.length;
       peers.forEach(peer => {
         presenceState.ws.send(JSON.stringify({
