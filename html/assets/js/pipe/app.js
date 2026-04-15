@@ -1796,7 +1796,6 @@ async function seedFilesAsTorrent() {
 
   const client = getWtClient();
   const files  = selFiles.map(({ file }) => file);
-  const peers  = Array.from(presenceState.peers.values());
   setStatus('send-status', t('torrentSeeding'), 'waiting');
 
   // Remove any previous torrent for same files before re-seeding
@@ -1816,6 +1815,11 @@ async function seedFilesAsTorrent() {
     const magnetURI = torrent.magnetURI;
     showMagnetInfo(magnetURI);
     publishLocalSwarmEntry(magnetURI, files, torrent.infoHash || null);
+
+    // Re-snapshot peers inside the callback: client.seed() is async (hashing),
+    // so peers that joined after the seed() call started would be missed if we
+    // used the snapshot captured before the call.
+    const peers = Array.from(presenceState.peers.values());
 
     // Send handoff to all peers in room
     if (peers.length && presenceState.ws?.readyState === WebSocket.OPEN) {
@@ -1991,7 +1995,19 @@ async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
     logSwarm('flushing pending signals', { count: _wtPendingSignals.length, targetHash });
     const remaining = [];
     _wtPendingSignals.forEach(({ fromId, signal, infoHash }) => {
-      if (!targetHash || !infoHash || infoHash === targetHash) {
+      // Only dispatch a pending signal to this torrent when:
+      //   - both sides have a known infoHash AND they match, OR
+      //   - the signal carries no infoHash but targetHash is also absent
+      //     (legacy / unknown hash on both sides — best-effort match).
+      // Signals with a non-empty infoHash that does NOT match this torrent
+      // are kept for a future torrent; signals with an empty infoHash but
+      // a known targetHash are ambiguous and kept rather than misrouted.
+      const signalHasHash  = !!infoHash;
+      const torrentHasHash = !!targetHash;
+      const shouldDispatch =
+        (torrentHasHash && signalHasHash && infoHash === targetHash) ||
+        (!torrentHasHash && !signalHasHash);
+      if (shouldDispatch) {
         _wtHandleOffer(torrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
       } else {
         remaining.push({ fromId, signal, infoHash });
