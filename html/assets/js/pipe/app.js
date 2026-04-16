@@ -1736,7 +1736,11 @@ async function handleWtSignal(fromId, signal, infoHash = '') {
     _wtPendingSignals.push({ fromId, signal, infoHash });
     return;
   }
-  const target = findTorrentByInfoHash(infoHash) || _wtClient.torrents[0];
+  // Only fall back to the first torrent when there is exactly one active torrent
+  // AND the signal carries no infoHash; with multiple torrents a hashless signal
+  // could be misrouted, so keep it pending instead.
+  const target = findTorrentByInfoHash(infoHash) ||
+    (!infoHash && _wtClient.torrents.length === 1 ? _wtClient.torrents[0] : null);
   if (target) {
     _wtHandleOffer(target, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
   } else {
@@ -1915,7 +1919,25 @@ async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
       } else {
         setStatus('recv-status', t('torrentRecv'), 'waiting');
       }
-      _wtPendingSignals.splice(0).forEach(({ fromId, signal }) => _wtHandleOffer(existingTorrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message)));
+      // Apply the same shouldDispatch logic as the new-torrent flush: only route
+      // signals whose infoHash matches this torrent (or both sides lack a hash).
+      // Unmatched signals stay pending for a future torrent.
+      const existingHash = existingTorrent.infoHash || null;
+      const toDispatch   = _wtPendingSignals.splice(0);
+      const stillPending = [];
+      toDispatch.forEach(({ fromId, signal, infoHash }) => {
+        const signalHasHash  = !!infoHash;
+        const torrentHasHash = !!existingHash;
+        const shouldDispatch =
+          (torrentHasHash && signalHasHash && infoHash === existingHash) ||
+          (!torrentHasHash && !signalHasHash);
+        if (shouldDispatch) {
+          _wtHandleOffer(existingTorrent, fromId, signal).catch(e => console.warn('[wt] handleOffer:', e?.message));
+        } else {
+          stillPending.push({ fromId, signal, infoHash });
+        }
+      });
+      if (stillPending.length) _wtPendingSignals.push(...stillPending);
       return existingTorrent;
     }
     // Stale/destroyed reference — remove before re-adding
