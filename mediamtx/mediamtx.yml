@@ -1,0 +1,46 @@
+logLevel: info
+logDestinations: [stdout]
+
+# 未使用プロトコルを無効化
+rtsp: no
+rtmp: no
+hls: no
+srt: no
+
+###############################################################################
+# WebRTC (WHIP / WHEP)
+###############################################################################
+webrtc: yes
+webrtcAddress: :8889
+
+# ICE 用 UDP リスナー (ホスト側ポートと合わせること)
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+
+# コンテナ NIC の IP を ICE 候補として自動収集
+webrtcIPsFromInterfaces: yes
+webrtcIPsFromInterfacesList: []
+
+# 公開サーバーの実 IP を ICE 候補に追加する場合は
+# .env に MEDIAMTX_EXTERNAL_IP=<サーバーの公開IP> を設定すること
+# docker-compose.yml 側で MTX_WEBRTCADDITIONALHOSTS に渡している
+webrtcAdditionalHosts: []
+
+# CORS — nginx で絞っているので * で問題なし
+webrtcAllowOrigins: ["*"]
+
+# STUN サーバー (公開 IP 検出用)
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+###############################################################################
+# Control API (presence サーバー連携で使用)
+###############################################################################
+api: yes
+apiAddress: :9997
+
+###############################################################################
+# パス設定 — room/{6文字英数字} のみ受け付ける
+###############################################################################
+paths:
+  "~regex:^room/[a-z0-9\\-]{1,24}$": {}

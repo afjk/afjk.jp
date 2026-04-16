@@ -59,6 +59,10 @@
     <button class="tab active" data-tab="send">📤 <span data-ja>送信</span><span data-en>Send</span></button>
     <button class="tab" data-tab="receive">📥 <span data-ja>受信</span><span data-en>Receive</span></button>
     <button class="tab" data-tab="text">📝 <span data-ja>テキスト</span><span data-en>Text</span></button>
+    <button class="tab" data-tab="stream">
+      📹 <span data-ja>配信</span><span data-en>Stream</span>
+      <span class="tab-live-dot" id="tab-live-dot" hidden></span>
+    </button>
   </div>
 
   <!-- ── Send ── -->
@@ -257,6 +261,42 @@
     </div>
     <div id="txt-history"></div>
   </div>
+
+  <!-- ── Stream ── -->
+  <div class="tab-panel" id="tab-stream">
+    <div class="stream-panel">
+
+      <!-- Broadcaster controls -->
+      <div class="stream-broadcast">
+        <video id="stream-local-video" class="stream-video stream-video-local" autoplay muted playsinline style="display:none"></video>
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-primary" id="stream-start-btn" onclick="startBroadcast()">
+            <span data-ja>配信開始</span><span data-en>Go Live</span>
+          </button>
+          <button class="btn btn-stream-stop" id="stream-stop-btn" onclick="stopBroadcast()" style="display:none">
+            <span data-ja>配信停止</span><span data-en>Stop</span>
+          </button>
+        </div>
+        <div class="status" id="stream-status"></div>
+      </div>
+
+      <!-- Viewer section (shown when someone in the room is streaming) -->
+      <div id="stream-watch-section" style="display:none">
+        <div class="stream-who" id="stream-who"></div>
+        <video id="stream-remote-video" class="stream-video" autoplay playsinline controls style="display:none"></video>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-primary" id="stream-watch-btn" onclick="startWatch()" style="display:none">
+            <span data-ja>視聴する</span><span data-en>Watch</span>
+          </button>
+          <button class="btn btn-ghost" id="stream-leave-btn" onclick="stopWatch()" style="display:none">
+            <span data-ja>視聴終了</span><span data-en>Leave</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
 </main>
 
 <footer>
