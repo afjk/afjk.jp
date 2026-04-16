@@ -256,10 +256,70 @@
       font-size: 0.88rem;
       transition: all .15s;
       font-family: inherit;
+      position: relative;
     }
     .tab.active { background: var(--accent); color: #000; font-weight: 700; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
+
+    /* ── Live dot (streaming indicator) ── */
+    .tab-live-dot {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 8px;
+      height: 8px;
+      background: #ff3b30;
+      border-radius: 50%;
+      animation: live-pulse 1.4s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes live-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.6; transform: scale(1.35); }
+    }
+
+    /* ── Stream tab ── */
+    .stream-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .stream-video {
+      width: 100%;
+      border-radius: var(--radius);
+      background: #000;
+      display: block;
+      max-height: 340px;
+      object-fit: contain;
+    }
+    .stream-video-local {
+      margin-bottom: 12px;
+      border: 2px solid #ff3b30;
+    }
+    .stream-who {
+      font-size: 0.82rem;
+      color: var(--text2);
+      margin-bottom: 8px;
+    }
+    .stream-who::before {
+      content: '● ';
+      color: #ff3b30;
+      animation: live-pulse 1.4s ease-in-out infinite;
+    }
+    .btn-stream-stop {
+      background: #3a0f0f;
+      border: 1px solid #8b2020;
+      color: #f87171;
+      padding: 11px 22px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background .15s, border-color .15s;
+    }
+    .btn-stream-stop:hover { background: #4a1414; border-color: #c0392b; }
 
     /* ── Drop zone ── */
     .dropzone {

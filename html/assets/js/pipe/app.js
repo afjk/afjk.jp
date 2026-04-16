@@ -11,6 +11,16 @@ import {
   unregisterAllLocalSeeders,
   handleSwarmHandoff,
 } from './swarm.js';
+import {
+  initStreamModule,
+  onStreamingPeersChange,
+  onStreamTabEntered,
+  startBroadcast,
+  stopBroadcast,
+  startWatch,
+  stopWatch,
+  cleanupStream,
+} from './stream.js';
 
 // ── i18n ──────────────────────────────────────────────────────────────────────
 const I18N = {
@@ -109,6 +119,15 @@ const I18N = {
     previewLoadError:  'プレビューの表示に失敗しました',
     torrentFallback:   'P2P 接続なし — HTTP 経由でフォールバック中…',
     torrentFallbackDL: 'HTTP でダウンロード中…',
+    streamNoRoom:            'ルームに参加してから配信してください',
+    streamAlreadyLive:       '他の人が配信中です',
+    streamGettingMedia:      'カメラ・マイクを取得中…',
+    streamConnecting:        'サーバーに接続中…',
+    streamConnectingViewer:  '配信に接続中…',
+    streamError:             '接続エラー',
+    streamStatusLive:        '● 配信中',
+    streamStatusViewing:     '視聴中',
+    streamFrom:    name => `${name} が配信中`,
   },
   en: {
     copying:            'Copied ✓',
@@ -205,6 +224,15 @@ const I18N = {
     previewLoadError:  'Failed to load preview',
     torrentFallback:   'No P2P peers — falling back to HTTP…',
     torrentFallbackDL: 'Downloading via HTTP…',
+    streamNoRoom:            'Join a room before streaming',
+    streamAlreadyLive:       'Someone else is already streaming',
+    streamGettingMedia:      'Accessing camera & microphone…',
+    streamConnecting:        'Connecting to server…',
+    streamConnectingViewer:  'Joining stream…',
+    streamError:             'Connection error',
+    streamStatusLive:        '● Live',
+    streamStatusViewing:     'Watching',
+    streamFrom:    name => `${name} is live`,
   }
 };
 
@@ -337,6 +365,11 @@ const GDRIVE_CLIENT_ID = '109611024015-h8dt5416re6edbun25a5iq1a3spuj0qc.apps.goo
 const GDRIVE_API_KEY   = 'AIzaSyCHXozZm9QMqLRgQOrKmq74Q6yutFHHeA0';
 const PIPE        = 'https://pipe.afjk.jp';
 const PIPE_MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+
+// MediaMTX streaming base URL
+const STREAM_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+  ? `http://${location.hostname}:8889`
+  : `${location.origin}/stream`;
 
 // ICE server config — fetched once from presence-server; TURN credentials are set via env vars
 class IceConfigService {
@@ -762,6 +795,7 @@ function handlePresenceMessage(ev) {
       requestSwarmSyncFromPeers();
       announceCatalogEntriesOnce();
       pruneSwarmEntries();
+      onStreamingPeersChange(data.peers || []);
       // Auto-select a paired peer if exactly one is present and none selected yet
       if (!selPeerId) {
         const paired = (data.peers || []).filter(p => pairedIds.has(p.id));
@@ -799,9 +833,15 @@ function sendPresenceHello() {
     type: 'hello',
     nickname: deviceName,
     device: deviceInfo,
-    capabilities: { file: true, text: true }
+    capabilities: { file: true, text: true },
+    streaming: streamIsActive(),
   }));
 }
+
+// Returns true while this client is broadcasting (read by sendPresenceHello)
+let _streamingActive = false;
+function streamIsActive() { return _streamingActive; }
+function setStreamingActive(v) { _streamingActive = v; }
 
 function updateSendAllBtns() {
   const count = presenceState.peers.size;
@@ -1316,6 +1356,7 @@ document.querySelectorAll('.tab').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'stream') onStreamTabEntered();
   });
 });
 
@@ -3142,6 +3183,15 @@ initSwarmModule({
   getCurrentLang: () => currentLang,
 });
 
+initStreamModule({
+  t,
+  fetchIceServers,
+  getStreamBase: () => STREAM_BASE,
+  getActiveRoomCode: () => activeRoomCode,
+  sendPresenceHello,
+  setStreamingActive,
+});
+
 languageManager.init();
 renderHistory();
 renderSwarmList();
@@ -3179,8 +3229,13 @@ Object.assign(window, {
   copyHistItem,
   removeFromHistory,
   closePreviewModal,
+  startBroadcast,
+  stopBroadcast,
+  startWatch,
+  stopWatch,
 });
 
 window.addEventListener('beforeunload', () => {
   unregisterAllLocalSeeders();
+  cleanupStream();
 });

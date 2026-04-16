@@ -18,3 +18,8 @@ services:
   presence-server:
     ports:
       - "8787:8787"
+
+  mediamtx:
+    ports:
+      - "8889:8889"   # WHIP / WHEP HTTP (ローカル開発用)
+      - "9997:9997"   # Control API (ローカル開発用)

@@ -32,6 +32,15 @@ services:
           proxy_set_header X-Forwarded-Proto $$scheme;
           proxy_read_timeout 3600s;
         }
+        location /stream/ {
+          proxy_pass http://mediamtx:8889/;
+          proxy_http_version 1.1;
+          proxy_set_header Host $$host;
+          proxy_set_header X-Real-IP $$remote_addr;
+          proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $$scheme;
+          proxy_read_timeout 3600s;
+        }
       # 本番環境の場合は "production" を指定
       STAGE: production
     volumes:
@@ -107,6 +116,20 @@ services:
     volumes:
       - ./coturn:/etc/coturn:ro
       - ./https-portal-certs:/etc/certs:ro  # https-portal の TLS 証明書を共有
+
+  # MediaMTX — WebRTC (WHIP/WHEP) メディアサーバー
+  # .env に MEDIAMTX_EXTERNAL_IP=<公開IP> を設定すると ICE 候補に含まれる
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    restart: always
+    ports:
+      - "8189:8189/udp"   # WebRTC ICE メディア (ファイアウォールで開放必要)
+    environment:
+      # 公開サーバーの実 IP — 設定すると ICE 候補に追加される
+      - MTX_WEBRTCADDITIONALHOSTS=${MEDIAMTX_EXTERNAL_IP:-}
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
 
 volumes:
   presence-stats:

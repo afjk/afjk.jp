@@ -263,6 +263,7 @@ function makeClient(conn, roomId) {
     roomId,
     nickname: '',
     device: '',
+    streaming: false,
     lastSeen: Date.now()
   };
   const room = rooms.get(roomId) ?? new Map();
@@ -289,6 +290,7 @@ function listPeers(roomId, excludeId) {
       id: p.id,
       nickname: p.nickname,
       device: p.device,
+      streaming: p.streaming,
       lastSeen: p.lastSeen
     }));
 }
@@ -486,6 +488,7 @@ server.on('upgrade', (req, socket) => {
       case 'hello':
         client.nickname = sanitizeName(data.nickname);
         client.device = sanitizeDevice(data.device);
+        client.streaming = Boolean(data.streaming);
         broadcastPeers(roomId);
         break;
       case 'handoff':
