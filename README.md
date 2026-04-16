@@ -153,6 +153,7 @@ docker compose --profile production -f docker-compose.yml -f docker-compose.loca
 | Verdaccio (upm.afjk.jp) | http://localhost:4873 |
 | Piping Server (pipe.afjk.jp) | http://localhost:8080 |
 | Presence Server (afjk.jp/presence) | ws://localhost:8787 |
+| MediaMTX WHIP/WHEP | http://localhost:8889 |
 
 ### 停止
 
@@ -169,6 +170,56 @@ docker compose down
 ```bash
 docker compose up -d
 ```
+
+### 映像配信の設定 (MediaMTX)
+
+`afjk.jp/pipe` の「配信」タブで WebRTC ライブ配信を行うためのサーバー設定。
+
+**`.env` に追記（任意）**
+
+```bash
+# MediaMTX が ICE 候補として広告する公開 IP
+# NIC に直接グローバル IP が付いている VPS では不要
+# NAT 越し（AWS EIP / 自宅ルーター等）の場合は設定する
+# MEDIAMTX_EXTERNAL_IP=203.0.113.1
+
+# 公開 IP の確認方法
+# curl ifconfig.me
+```
+
+**ファイアウォール設定**
+
+| ポート | プロトコル | 用途 |
+|---|---|---|
+| 8189 | UDP | MediaMTX WebRTC ICE メディア |
+
+設定方法はサーバー環境によって異なる:
+
+```bash
+# Ubuntu / Debian (UFW)
+sudo ufw allow 8189/udp
+
+# CentOS / AlmaLinux (firewalld)
+sudo firewall-cmd --permanent --add-port=8189/udp
+sudo firewall-cmd --reload
+
+# iptables
+sudo iptables -A INPUT -p udp --dport 8189 -j ACCEPT
+```
+
+AWS EC2 の場合は **セキュリティグループ** でインバウンドルールに `UDP 8189` を追加。  
+GCP の場合は **VPC ファイアウォールルール** から追加。  
+さくらVPS / ConoHa 等は **コントロールパネルのパケットフィルター** または上記 UFW で設定。
+
+**動作確認**
+
+```bash
+docker compose logs -f mediamtx   # 起動ログ確認
+```
+
+ブラウザで `afjk.jp/pipe` を開き、ルームに入室 → 「配信」タブ → 「配信開始」で映像が届けば完了。
+
+---
 
 ### TURN の広告設定
 
@@ -190,11 +241,11 @@ TURN_URL=turns:afjk.jp:5349
 
 **ファイアウォール設定**
 
-| ポート | プロトコル |
-|---|---|
-| 3478 | UDP + TCP |
-| 5349 | TCP |
-| 49152–49200 | UDP |
+| ポート | プロトコル | 用途 |
+|---|---|---|
+| 3478 | UDP + TCP | TURN |
+| 5349 | TCP | TURNS (TLS) |
+| 49152–49200 | UDP | リレー |
 
 **確認**
 
