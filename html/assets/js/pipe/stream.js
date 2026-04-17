@@ -13,6 +13,7 @@ const _state = {
   facingMode: null,      // 'user' | 'environment' | null
   deviceId: null,        // deviceId string | null
   isMobile: navigator.maxTouchPoints > 0,
+  broadcastMode: null,   // 'camera' | 'screen' | null
 };
 
 export function initStreamModule(deps) {
@@ -162,14 +163,47 @@ export async function selectCamera(deviceId) {
 
 // ── WHIP — publish ────────────────────────────────────────────────────────────
 
-export async function startBroadcast() {
-  if (_state.isStreaming || _state.isWatching) return;
+// Shared WHIP publish logic (used by both camera and screen share)
+async function _doPublish(stream) {
   const { t, fetchIceServers, getStreamBase, getActiveRoomCode, sendPresenceHello } = _deps;
   const roomCode = getActiveRoomCode();
-  if (!roomCode) {
-    _setStatus(t('streamNoRoom'), 'err');
-    return;
-  }
+
+  const iceServers = await fetchIceServers();
+  const pc = new RTCPeerConnection({ iceServers });
+  _state.publisherPc = pc;
+  stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await _waitForIce(pc);
+
+  _setStatus(t('streamConnecting'), 'waiting');
+  const res = await fetch(`${getStreamBase()}/room/${roomCode}/whip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/sdp' },
+    body: pc.localDescription.sdp,
+  });
+  if (!res.ok) throw new Error(`WHIP ${res.status}`);
+  await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+
+  _state.isStreaming = true;
+  _deps.setStreamingActive(true);
+  sendPresenceHello();
+  _setLiveDot(true);
+  _setStatus(t('streamStatusLive'), 'ok');
+  _renderTab();
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      stopBroadcast();
+    }
+  };
+}
+
+export async function startBroadcast() {
+  if (_state.isStreaming || _state.isWatching) return;
+  const { t, getActiveRoomCode } = _deps;
+  if (!getActiveRoomCode()) { _setStatus(t('streamNoRoom'), 'err'); return; }
 
   try {
     _setStatus(t('streamGettingMedia'), 'waiting');
@@ -178,47 +212,58 @@ export async function startBroadcast() {
       audio: true,
     });
     _state.localStream = stream;
+    _state.broadcastMode = 'camera';
 
     const localVideo = document.getElementById('stream-local-video');
     if (localVideo) localVideo.srcObject = stream;
 
-    // Update camera list & select after permission granted (labels now available)
     await _loadCameras();
     _renderTab();
+    await _doPublish(stream);
+  } catch (e) {
+    _setStatus(`${_deps.t('streamError')}: ${e.message}`, 'err');
+    _cleanupBroadcast();
+    _state.broadcastMode = null;
+    _renderTab();
+  }
+}
 
-    const iceServers = await fetchIceServers();
-    const pc = new RTCPeerConnection({ iceServers });
-    _state.publisherPc = pc;
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+export async function startScreenShare() {
+  if (_state.isStreaming || _state.isWatching) return;
+  const { t, getActiveRoomCode } = _deps;
+  if (!getActiveRoomCode()) { _setStatus(t('streamNoRoom'), 'err'); return; }
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    _setStatus(t('streamNoDisplayMedia'), 'err');
+    return;
+  }
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await _waitForIce(pc);
+  try {
+    _setStatus(t('streamGettingDisplay'), 'waiting');
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
 
-    _setStatus(t('streamConnecting'), 'waiting');
-    const res = await fetch(`${getStreamBase()}/room/${roomCode}/whip`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/sdp' },
-      body: pc.localDescription.sdp,
-    });
-    if (!res.ok) throw new Error(`WHIP ${res.status}`);
-    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+    // Add mic if display stream has no audio (e.g. iOS, some desktop configs)
+    if (stream.getAudioTracks().length === 0) {
+      try {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        mic.getAudioTracks().forEach(t => stream.addTrack(t));
+      } catch { /* no mic available, proceed without audio */ }
+    }
 
-    _state.isStreaming = true;
-    _deps.setStreamingActive(true);
-    sendPresenceHello();
-    _setLiveDot(true);
-    _setStatus(t('streamStatusLive'), 'ok');
+    _state.localStream = stream;
+    _state.broadcastMode = 'screen';
+
+    const localVideo = document.getElementById('stream-local-video');
+    if (localVideo) localVideo.srcObject = stream;
     _renderTab();
 
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        stopBroadcast();
-      }
-    };
+    // Auto-stop when user ends share via OS/browser UI
+    stream.getVideoTracks()[0].onended = () => stopBroadcast();
+
+    await _doPublish(stream);
   } catch (e) {
-    _setStatus(`${t('streamError')}: ${e.message}`, 'err');
+    _setStatus(`${_deps.t('streamError')}: ${e.message}`, 'err');
     _cleanupBroadcast();
+    _state.broadcastMode = null;
     _renderTab();
   }
 }
@@ -227,6 +272,7 @@ export function stopBroadcast() {
   const { sendPresenceHello, setStreamingActive } = _deps;
   _cleanupBroadcast();
   _state.isStreaming = false;
+  _state.broadcastMode = null;
   setStreamingActive(false);
   sendPresenceHello();
   _setLiveDot(!!_state.activeStreamerNickname);
@@ -346,6 +392,7 @@ export function renderStreamTab() {
 
 function _renderTab() {
   const startBtn     = document.getElementById('stream-start-btn');
+  const screenBtn    = document.getElementById('stream-screen-btn');
   const stopBtn      = document.getElementById('stream-stop-btn');
   const watchBtn     = document.getElementById('stream-watch-btn');
   const leaveBtn     = document.getElementById('stream-leave-btn');
@@ -361,18 +408,25 @@ function _renderTab() {
   const hasStreamer = !!_state.activeStreamerNickname;
   const noRoom     = !getActiveRoomCode();
   const broadcasting = _state.isStreaming || _state.isWatching;
+  const isScreen   = _state.broadcastMode === 'screen';
 
-  // Camera row: visible in broadcast section when not watching
-  if (cameraRow) cameraRow.style.display = _state.isWatching ? 'none' : '';
+  // Camera row: hide when watching or screen sharing
+  if (cameraRow) cameraRow.style.display = (_state.isWatching || isScreen) ? 'none' : '';
 
-  // Flip button: only when streaming (camera already acquired)
+  // Flip button: only when camera-streaming with ≥2 cameras
   if (flipBtn) flipBtn.style.display =
-    (_state.isStreaming && _state.cameras.length >= 2) ? '' : 'none';
+    (_state.isStreaming && !isScreen && _state.cameras.length >= 2) ? '' : 'none';
 
   // Broadcast controls
+  const btnTitle = noRoom ? t('streamNoRoom') : (hasStreamer ? t('streamAlreadyLive') : '');
   startBtn.style.display = broadcasting ? 'none' : '';
   startBtn.disabled      = noRoom || hasStreamer;
-  startBtn.title         = noRoom ? t('streamNoRoom') : (hasStreamer ? t('streamAlreadyLive') : '');
+  startBtn.title         = btnTitle;
+  if (screenBtn) {
+    screenBtn.style.display = broadcasting ? 'none' : '';
+    screenBtn.disabled      = noRoom || hasStreamer;
+    screenBtn.title         = btnTitle;
+  }
   stopBtn.style.display  = _state.isStreaming ? '' : 'none';
   if (localVideo) localVideo.style.display = _state.isStreaming ? 'block' : 'none';
 

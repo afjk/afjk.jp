@@ -17,12 +17,13 @@ import {
   onStreamTabEntered,
   startBroadcast,
   stopBroadcast,
+  startScreenShare,
   startWatch,
   stopWatch,
   flipCamera,
   selectCamera,
   cleanupStream,
-} from './stream.js?v=2';
+} from './stream.js?v=3';
 
 // ── i18n ──────────────────────────────────────────────────────────────────────
 const I18N = {
@@ -133,6 +134,8 @@ const I18N = {
     streamFrom:    name => `${name} が配信中`,
     streamNoCameras:         'カメラが見つかりません',
     streamCameraLabel:       'カメラ',
+    streamGettingDisplay:    '画面共有を開始中…',
+    streamNoDisplayMedia:    '画面共有はこのブラウザでは利用できません',
   },
   en: {
     copying:            'Copied ✓',
@@ -241,6 +244,8 @@ const I18N = {
     streamFrom:    name => `${name} is live`,
     streamNoCameras:         'No cameras found',
     streamCameraLabel:       'Camera',
+    streamGettingDisplay:    'Starting screen share…',
+    streamNoDisplayMedia:    'Screen sharing is not available in this browser',
   }
 };
 
@@ -3239,6 +3244,7 @@ Object.assign(window, {
   closePreviewModal,
   startBroadcast,
   stopBroadcast,
+  startScreenShare,
   startWatch,
   stopWatch,
   flipCamera,
