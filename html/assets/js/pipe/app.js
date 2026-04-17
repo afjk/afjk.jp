@@ -23,7 +23,7 @@ import {
   flipCamera,
   selectCamera,
   cleanupStream,
-} from './stream.js?v=3';
+} from './stream.js?v=4';
 
 // ── i18n ──────────────────────────────────────────────────────────────────────
 const I18N = {
@@ -485,6 +485,7 @@ const peerGrid         = document.getElementById('peer-grid');
 let pairedIds = new Set();
 // activeRoomCode: currently connected room (from URL param, generated, or joined)
 let activeRoomCode = ROOM_CODE;
+let presenceRoomId = null; // room ID assigned by presence server (IP-based or explicit)
 let _pairingDb = null;  // IDBDatabase handle
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
@@ -799,6 +800,7 @@ function handlePresenceMessage(ev) {
         presenceState.id = data.id;
         updateLocalSwarmOwner(prevId, data.id);
       }
+      presenceRoomId = data.room || null;
       updateRoomLabel(data.room);
       sendPresenceHello();
       break;
@@ -3201,6 +3203,7 @@ initStreamModule({
   fetchIceServers,
   getStreamBase: () => STREAM_BASE,
   getActiveRoomCode: () => activeRoomCode,
+  getPresenceRoom: () => presenceRoomId,
   sendPresenceHello,
   setStreamingActive,
 });

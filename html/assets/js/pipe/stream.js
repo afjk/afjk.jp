@@ -161,12 +161,24 @@ export async function selectCamera(deviceId) {
   }
 }
 
+// ── Room resolution ───────────────────────────────────────────────────────────
+
+// Returns the room code to use for WHIP/WHEP.
+// Falls back to the presence server's IP-based room (sanitized for the path regex).
+function _effectiveRoomCode() {
+  const explicit = _deps.getActiveRoomCode();
+  if (explicit) return explicit;
+  const presence = _deps.getPresenceRoom?.();
+  if (!presence) return null;
+  return presence.replace(/\./g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 24) || null;
+}
+
 // ── WHIP — publish ────────────────────────────────────────────────────────────
 
 // Shared WHIP publish logic (used by both camera and screen share)
 async function _doPublish(stream) {
-  const { t, fetchIceServers, getStreamBase, getActiveRoomCode, sendPresenceHello } = _deps;
-  const roomCode = getActiveRoomCode();
+  const { t, fetchIceServers, getStreamBase, sendPresenceHello } = _deps;
+  const roomCode = _effectiveRoomCode();
 
   const iceServers = await fetchIceServers();
   const pc = new RTCPeerConnection({ iceServers });
@@ -202,8 +214,8 @@ async function _doPublish(stream) {
 
 export async function startBroadcast() {
   if (_state.isStreaming || _state.isWatching) return;
-  const { t, getActiveRoomCode } = _deps;
-  if (!getActiveRoomCode()) { _setStatus(t('streamNoRoom'), 'err'); return; }
+  const { t } = _deps;
+  if (!_effectiveRoomCode()) { _setStatus(t('streamNoRoom'), 'err'); return; }
 
   try {
     _setStatus(t('streamGettingMedia'), 'waiting');
@@ -230,8 +242,8 @@ export async function startBroadcast() {
 
 export async function startScreenShare() {
   if (_state.isStreaming || _state.isWatching) return;
-  const { t, getActiveRoomCode } = _deps;
-  if (!getActiveRoomCode()) { _setStatus(t('streamNoRoom'), 'err'); return; }
+  const { t } = _deps;
+  if (!_effectiveRoomCode()) { _setStatus(t('streamNoRoom'), 'err'); return; }
   if (!navigator.mediaDevices?.getDisplayMedia) {
     _setStatus(t('streamNoDisplayMedia'), 'err');
     return;
@@ -284,8 +296,8 @@ export function stopBroadcast() {
 
 export async function startWatch() {
   if (_state.isWatching || _state.isStreaming) return;
-  const { t, fetchIceServers, getStreamBase, getActiveRoomCode } = _deps;
-  const roomCode = getActiveRoomCode();
+  const { t, fetchIceServers, getStreamBase } = _deps;
+  const roomCode = _effectiveRoomCode();
   if (!roomCode) return;
 
   try {
@@ -404,9 +416,8 @@ function _renderTab() {
   const flipBtn      = document.getElementById('stream-flip-btn');
   if (!startBtn) return;
 
-  const { t, getActiveRoomCode } = _deps;
+  const { t } = _deps;
   const hasStreamer = !!_state.activeStreamerNickname;
-  const noRoom     = !getActiveRoomCode();
   const broadcasting = _state.isStreaming || _state.isWatching;
   const isScreen   = _state.broadcastMode === 'screen';
 
@@ -417,14 +428,14 @@ function _renderTab() {
   if (flipBtn) flipBtn.style.display =
     (_state.isStreaming && !isScreen && _state.cameras.length >= 2) ? '' : 'none';
 
-  // Broadcast controls
-  const btnTitle = noRoom ? t('streamNoRoom') : (hasStreamer ? t('streamAlreadyLive') : '');
+  // Broadcast controls — disabled only when someone else is already streaming
+  const btnTitle = hasStreamer ? t('streamAlreadyLive') : '';
   startBtn.style.display = broadcasting ? 'none' : '';
-  startBtn.disabled      = noRoom || hasStreamer;
+  startBtn.disabled      = hasStreamer;
   startBtn.title         = btnTitle;
   if (screenBtn) {
     screenBtn.style.display = broadcasting ? 'none' : '';
-    screenBtn.disabled      = noRoom || hasStreamer;
+    screenBtn.disabled      = hasStreamer;
     screenBtn.title         = btnTitle;
   }
   stopBtn.style.display  = _state.isStreaming ? '' : 'none';
