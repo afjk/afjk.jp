@@ -334,6 +334,26 @@ const CORS = {
   'access-control-allow-headers': 'content-type',
 };
 
+const MEDIAMTX_API = process.env.MEDIAMTX_API_URL || 'http://mediamtx:9997';
+
+async function fetchStreamStats() {
+  try {
+    const res = await globalThis.fetch(MEDIAMTX_API + '/v3/paths/list');
+    if (!res.ok) return { sessions: 0, bytes: 0 };
+    const data = await res.json();
+    const items = data.items || [];
+    let sessions = 0;
+    let bytes = 0;
+    for (const path of items) {
+      if (path.source) sessions += 1;
+      bytes += (path.inboundBytes || 0) + (path.outboundBytes || 0);
+    }
+    return { sessions, bytes };
+  } catch {
+    return { sessions: 0, bytes: 0 };
+  }
+}
+
 function buildTurnServers() {
   const raw = process.env.TURN_URLS || process.env.TURN_URL || '';
   const username = process.env.TURN_USERNAME || '';
@@ -369,7 +389,7 @@ function recordTransfer(entry) {
   saveStats(stats);
 }
 
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
   // CORS preflight
@@ -398,8 +418,10 @@ const server = createServer((req, res) => {
          .end(header + rows);
       return;
     }
+    const streamStats = await fetchStreamStats();
     const payload = {
       summary: stats.summary,
+      stream: streamStats,
       logs,
     };
     res.writeHead(200, { 'content-type': 'application/json', ...CORS })

@@ -20,6 +20,7 @@ export class StatsFetcher {
     const p2p = summary.p2p || { count: 0, bytes: 0 };
     const pipe = summary.pipe || { count: 0, bytes: 0 };
     const torrent = summary.torrent || { count: 0, bytes: 0 };
+    const stream = data.stream || { sessions: 0, bytes: 0 };
     const total = p2p.count + pipe.count + torrent.count;
     const totalBytes = (p2p.bytes || 0) + (pipe.bytes || 0) + (torrent.bytes || 0);
 
@@ -28,6 +29,7 @@ export class StatsFetcher {
     this.setText(this.selectors.relay, this.formatNumber(pipe.count));
     this.setText(this.selectors.torrent, this.formatNumber(torrent.count));
     this.setText(this.selectors.bytes, this.formatBytes(totalBytes));
+    this.setText(this.selectors.stream, this.formatBytes(stream.bytes));
   }
 
   setText(selector, value) {
