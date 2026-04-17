@@ -19,6 +19,8 @@ import {
   stopBroadcast,
   startWatch,
   stopWatch,
+  flipCamera,
+  selectCamera,
   cleanupStream,
 } from './stream.js';
 
@@ -124,10 +126,13 @@ const I18N = {
     streamGettingMedia:      'カメラ・マイクを取得中…',
     streamConnecting:        'サーバーに接続中…',
     streamConnectingViewer:  '配信に接続中…',
+    streamSwitchingCamera:   'カメラを切り替え中…',
     streamError:             '接続エラー',
     streamStatusLive:        '● 配信中',
     streamStatusViewing:     '視聴中',
     streamFrom:    name => `${name} が配信中`,
+    streamNoCameras:         'カメラが見つかりません',
+    streamCameraLabel:       'カメラ',
   },
   en: {
     copying:            'Copied ✓',
@@ -229,10 +234,13 @@ const I18N = {
     streamGettingMedia:      'Accessing camera & microphone…',
     streamConnecting:        'Connecting to server…',
     streamConnectingViewer:  'Joining stream…',
+    streamSwitchingCamera:   'Switching camera…',
     streamError:             'Connection error',
     streamStatusLive:        '● Live',
     streamStatusViewing:     'Watching',
     streamFrom:    name => `${name} is live`,
+    streamNoCameras:         'No cameras found',
+    streamCameraLabel:       'Camera',
   }
 };
 
@@ -3233,6 +3241,8 @@ Object.assign(window, {
   stopBroadcast,
   startWatch,
   stopWatch,
+  flipCamera,
+  selectCamera,
 });
 
 window.addEventListener('beforeunload', () => {

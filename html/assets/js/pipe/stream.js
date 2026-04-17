@@ -1,6 +1,4 @@
 // ── WHIP/WHEP streaming module ────────────────────────────────────────────────
-// Provides startBroadcast / stopBroadcast (WHIP) and startWatch / stopWatch (WHEP).
-// Integrates with presence for live-dot and auto-watch.
 
 let _deps = null;
 
@@ -10,7 +8,11 @@ const _state = {
   localStream: null,
   publisherPc: null,
   viewerPc: null,
-  activeStreamerNickname: null, // nickname of the peer who is currently streaming
+  activeStreamerNickname: null,
+  cameras: [],           // MediaDeviceInfo[]
+  facingMode: null,      // 'user' | 'environment' | null
+  deviceId: null,        // deviceId string | null
+  isMobile: navigator.maxTouchPoints > 0,
 };
 
 export function initStreamModule(deps) {
@@ -23,11 +25,9 @@ export function onStreamingPeersChange(peers) {
   const streamer = peers.find(p => p.streaming);
   _state.activeStreamerNickname = streamer ? (streamer.nickname || '?') : null;
 
-  // Live dot: anyone in the room is streaming (including self)
   _setLiveDot(!!streamer || _state.isStreaming);
 
   if (streamer && !_state.isWatching && !_state.isStreaming) {
-    // Auto-watch if stream tab is already open
     const tab = document.getElementById('tab-stream');
     if (tab?.classList.contains('active')) {
       startWatch();
@@ -35,7 +35,6 @@ export function onStreamingPeersChange(peers) {
     }
   }
 
-  // Streamer disconnected while we were watching
   if (!streamer && _state.isWatching) {
     stopWatch();
     return;
@@ -44,13 +43,121 @@ export function onStreamingPeersChange(peers) {
   _renderTab();
 }
 
-// Called when the user clicks the stream tab
 export function onStreamTabEntered() {
   if (_state.activeStreamerNickname && !_state.isWatching && !_state.isStreaming) {
     startWatch();
     return;
   }
+  // Enumerate cameras when tab opens (labels become available after permission)
+  _loadCameras();
   _renderTab();
+}
+
+// ── Camera management ─────────────────────────────────────────────────────────
+
+async function _loadCameras() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    _state.cameras = devices.filter(d => d.kind === 'videoinput');
+  } catch {
+    _state.cameras = [];
+  }
+  _updateCameraSelect();
+}
+
+function _updateCameraSelect() {
+  const sel = document.getElementById('stream-camera-select');
+  if (!sel) return;
+
+  const currentDeviceId = _state.localStream
+    ?.getVideoTracks()[0]?.getSettings()?.deviceId;
+
+  const prev = sel.value;
+  sel.innerHTML = '';
+
+  if (_state.cameras.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = _deps.t('streamNoCameras');
+    sel.appendChild(opt);
+    return;
+  }
+
+  _state.cameras.forEach((cam, i) => {
+    const opt = document.createElement('option');
+    opt.value = cam.deviceId;
+    opt.textContent = cam.label || `${_deps.t('streamCameraLabel')} ${i + 1}`;
+    if (cam.deviceId === (currentDeviceId || prev)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  // Flip button: show when ≥2 cameras
+  const flipBtn = document.getElementById('stream-flip-btn');
+  if (flipBtn) flipBtn.style.display = _state.cameras.length >= 2 ? '' : 'none';
+}
+
+function _videoConstraints() {
+  if (_state.deviceId) return { deviceId: { exact: _state.deviceId } };
+  if (_state.facingMode) return { facingMode: _state.facingMode };
+  // Mobile default: front camera
+  if (_state.isMobile) return { facingMode: 'user' };
+  return true;
+}
+
+// Replace video track without renegotiation (mid-stream camera switch)
+async function _replaceVideoTrack(videoConstraints) {
+  const newStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+  const newTrack = newStream.getVideoTracks()[0];
+  if (!newTrack) throw new Error('no video track');
+
+  if (_state.publisherPc) {
+    const sender = _state.publisherPc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) await sender.replaceTrack(newTrack);
+  }
+
+  _state.localStream?.getVideoTracks().forEach(t => t.stop());
+
+  const audio = _state.localStream?.getAudioTracks() ?? [];
+  _state.localStream = new MediaStream([newTrack, ...audio]);
+
+  const localVideo = document.getElementById('stream-local-video');
+  if (localVideo) localVideo.srcObject = _state.localStream;
+
+  await _loadCameras();
+}
+
+// Flip between front / back camera
+export async function flipCamera() {
+  const next = (_state.facingMode === 'environment') ? 'user' : 'environment';
+  _state.facingMode = next;
+  _state.deviceId = null;
+
+  if (_state.isStreaming) {
+    try {
+      _setStatus(_deps.t('streamSwitchingCamera'), 'waiting');
+      await _replaceVideoTrack({ facingMode: next });
+      _setStatus(_deps.t('streamStatusLive'), 'ok');
+    } catch (e) {
+      _setStatus(`${_deps.t('streamError')}: ${e.message}`, 'err');
+    }
+  }
+}
+
+// Select a specific camera by deviceId
+export async function selectCamera(deviceId) {
+  if (!deviceId) return;
+  _state.deviceId = deviceId;
+  _state.facingMode = null;
+
+  if (_state.isStreaming) {
+    try {
+      _setStatus(_deps.t('streamSwitchingCamera'), 'waiting');
+      await _replaceVideoTrack({ deviceId: { exact: deviceId } });
+      _setStatus(_deps.t('streamStatusLive'), 'ok');
+    } catch (e) {
+      _setStatus(`${_deps.t('streamError')}: ${e.message}`, 'err');
+    }
+  }
 }
 
 // ── WHIP — publish ────────────────────────────────────────────────────────────
@@ -66,11 +173,17 @@ export async function startBroadcast() {
 
   try {
     _setStatus(t('streamGettingMedia'), 'waiting');
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: _videoConstraints(),
+      audio: true,
+    });
     _state.localStream = stream;
 
     const localVideo = document.getElementById('stream-local-video');
     if (localVideo) localVideo.srcObject = stream;
+
+    // Update camera list & select after permission granted (labels now available)
+    await _loadCameras();
     _renderTab();
 
     const iceServers = await fetchIceServers();
@@ -208,7 +321,7 @@ function _waitForIce(pc) {
       }
     };
     pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(resolve, 4000); // fallback timeout
+    setTimeout(resolve, 4000);
   });
 }
 
@@ -240,14 +353,24 @@ function _renderTab() {
   const remoteVideo  = document.getElementById('stream-remote-video');
   const watchSection = document.getElementById('stream-watch-section');
   const whoEl        = document.getElementById('stream-who');
+  const cameraRow    = document.getElementById('stream-camera-row');
+  const flipBtn      = document.getElementById('stream-flip-btn');
   if (!startBtn) return;
 
   const { t, getActiveRoomCode } = _deps;
   const hasStreamer = !!_state.activeStreamerNickname;
   const noRoom     = !getActiveRoomCode();
+  const broadcasting = _state.isStreaming || _state.isWatching;
+
+  // Camera row: visible in broadcast section when not watching
+  if (cameraRow) cameraRow.style.display = _state.isWatching ? 'none' : '';
+
+  // Flip button: only when streaming (camera already acquired)
+  if (flipBtn) flipBtn.style.display =
+    (_state.isStreaming && _state.cameras.length >= 2) ? '' : 'none';
 
   // Broadcast controls
-  startBtn.style.display = (_state.isStreaming || _state.isWatching) ? 'none' : '';
+  startBtn.style.display = broadcasting ? 'none' : '';
   startBtn.disabled      = noRoom || hasStreamer;
   startBtn.title         = noRoom ? t('streamNoRoom') : (hasStreamer ? t('streamAlreadyLive') : '');
   stopBtn.style.display  = _state.isStreaming ? '' : 'none';
@@ -270,12 +393,8 @@ function _renderTab() {
   }
 
   if (whoEl) {
-    if (hasStreamer) {
-      whoEl.textContent = t('streamFrom')(_state.activeStreamerNickname);
-      whoEl.style.display = '';
-    } else {
-      whoEl.style.display = 'none';
-    }
+    whoEl.textContent = hasStreamer ? t('streamFrom')(_state.activeStreamerNickname) : '';
+    whoEl.style.display = hasStreamer ? '' : 'none';
   }
 }
 

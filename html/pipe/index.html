@@ -269,7 +269,16 @@
       <!-- Broadcaster controls -->
       <div class="stream-broadcast">
         <video id="stream-local-video" class="stream-video stream-video-local" autoplay muted playsinline style="display:none"></video>
-        <div class="btn-row" style="margin-top:0">
+
+        <!-- Camera selector -->
+        <div class="stream-camera-row" id="stream-camera-row">
+          <select class="stream-camera-select" id="stream-camera-select"
+            onchange="selectCamera(this.value)"></select>
+          <button class="btn-camera-flip" id="stream-flip-btn" onclick="flipCamera()" style="display:none"
+            title="カメラ切替 / Flip camera">🔄</button>
+        </div>
+
+        <div class="btn-row" style="margin-top:12px">
           <button class="btn btn-primary" id="stream-start-btn" onclick="startBroadcast()">
             <span data-ja>配信開始</span><span data-en>Go Live</span>
           </button>
