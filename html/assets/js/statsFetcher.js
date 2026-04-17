@@ -16,16 +16,18 @@ export class StatsFetcher {
   }
 
   update(data = {}) {
-    const p2p = data.p2p || { count: 0, bytes: 0 };
-    const pipe = data.pipe || { count: 0, bytes: 0 };
-    const torrent = data.torrent || { count: 0, bytes: 0 };
+    const summary = data.summary || {};
+    const p2p = summary.p2p || { count: 0, bytes: 0 };
+    const pipe = summary.pipe || { count: 0, bytes: 0 };
+    const torrent = summary.torrent || { count: 0, bytes: 0 };
     const total = p2p.count + pipe.count + torrent.count;
+    const totalBytes = (p2p.bytes || 0) + (pipe.bytes || 0) + (torrent.bytes || 0);
 
     this.setText(this.selectors.total, this.formatNumber(total));
     this.setText(this.selectors.p2p, this.formatNumber(p2p.count));
     this.setText(this.selectors.relay, this.formatNumber(pipe.count));
     this.setText(this.selectors.torrent, this.formatNumber(torrent.count));
-    this.setText(this.selectors.bytes, this.formatBytes(pipe.bytes));
+    this.setText(this.selectors.bytes, this.formatBytes(totalBytes));
   }
 
   setText(selector, value) {
