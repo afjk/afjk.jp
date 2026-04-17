@@ -320,6 +320,20 @@
       transition: background .15s, border-color .15s;
     }
     .btn-stream-stop:hover { background: #4a1414; border-color: #c0392b; }
+    .btn-stream-screen {
+      background: #0a1a2e;
+      border: 1px solid #1a4a7a;
+      color: #60a5fa;
+      padding: 11px 22px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background .15s, border-color .15s;
+    }
+    .btn-stream-screen:hover { background: #0f2440; border-color: #2563eb; }
+    .btn-stream-screen:disabled { opacity: 0.45; cursor: not-allowed; }
 
     /* ── Camera selector row ── */
     .stream-camera-row {

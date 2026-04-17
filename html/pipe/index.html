@@ -280,7 +280,10 @@
 
         <div class="btn-row" style="margin-top:12px">
           <button class="btn btn-primary" id="stream-start-btn" onclick="startBroadcast()">
-            <span data-ja>配信開始</span><span data-en>Go Live</span>
+            📹 <span data-ja>カメラ配信</span><span data-en>Camera</span>
+          </button>
+          <button class="btn btn-stream-screen" id="stream-screen-btn" onclick="startScreenShare()">
+            🖥 <span data-ja>画面共有</span><span data-en>Screen</span>
           </button>
           <button class="btn btn-stream-stop" id="stream-stop-btn" onclick="stopBroadcast()" style="display:none">
             <span data-ja>配信停止</span><span data-en>Stop</span>
@@ -313,7 +316,7 @@
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script type="module" src="/assets/js/pipe/app.js?v=2"></script>
+  <script type="module" src="/assets/js/pipe/app.js?v=3"></script>
 
 
 <!-- ── Preview Modal ── -->
