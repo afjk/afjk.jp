@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
       relay: '#stat-relay',
       torrent: '#stat-torrent',
       bytes: '#stat-bytes',
+      stream: '#stat-stream',
     }
   });
   stats.run();

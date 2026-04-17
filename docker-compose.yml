@@ -92,6 +92,7 @@ services:
       - TURN_URL=${TURN_URL:-}
       - TURN_USERNAME=${TURN_USERNAME:-pipe}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-pipe}
+      - MEDIAMTX_API_URL=http://mediamtx:9997
     volumes:
       - presence-stats:/data
 
