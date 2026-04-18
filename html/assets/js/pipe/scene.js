@@ -43,7 +43,8 @@ orbit.enableDamping = true;
 orbit.dampingFactor = 0.1;
 
 const transformCtrl = new TransformControls(camera, renderer.domElement);
-scene.add(transformCtrl);
+// Three.js 0.170+ では getHelper() で Object3D を取得して scene に追加
+scene.add(transformCtrl.getHelper());
 
 let isDragging = false;
 let dragIntervalId = null;
@@ -55,11 +56,11 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
   if (isDragging) {
     dragIntervalId = setInterval(() => {
       sendSelectedDelta();
-    }, 50); // 20fps スロットリング
+    }, 50);
   } else {
     clearInterval(dragIntervalId);
     dragIntervalId = null;
-    sendSelectedDelta(); // 最終値を確実に送信
+    sendSelectedDelta();
   }
 });
 
@@ -67,12 +68,18 @@ function sendSelectedDelta() {
   const obj = transformCtrl.object;
   if (!obj || !obj.userData.objectId) return;
 
+  const pos = obj.position.toArray();
+  const rot = obj.quaternion.toArray();
+  const scl = obj.scale.toArray();
+
+  if (!isFinite(pos[0]) || !isFinite(pos[1]) || !isFinite(pos[2])) return;
+
   broadcast({
     kind: 'scene-delta',
     objectId: obj.userData.objectId,
-    position: obj.position.toArray(),
-    rotation: obj.quaternion.toArray(),
-    scale: obj.scale.toArray(),
+    position: pos,
+    rotation: rot,
+    scale: scl,
   });
 }
 
@@ -113,7 +120,6 @@ renderer.domElement.addEventListener('dblclick', (e) => {
       // ロック確認
       if (locks.has(obj.userData.objectId)
           && locks.get(obj.userData.objectId) !== presenceState.id) {
-        // 他者がロック中 → 選択不可
         return;
       }
       transformCtrl.attach(obj);
