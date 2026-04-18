@@ -45,9 +45,36 @@ orbit.dampingFactor = 0.1;
 const transformCtrl = new TransformControls(camera, renderer.domElement);
 scene.add(transformCtrl);
 
+let isDragging = false;
+let dragIntervalId = null;
+
 transformCtrl.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
+  isDragging = e.value;
+
+  if (isDragging) {
+    dragIntervalId = setInterval(() => {
+      sendSelectedDelta();
+    }, 50); // 20fps スロットリング
+  } else {
+    clearInterval(dragIntervalId);
+    dragIntervalId = null;
+    sendSelectedDelta(); // 最終値を確実に送信
+  }
 });
+
+function sendSelectedDelta() {
+  const obj = transformCtrl.object;
+  if (!obj || !obj.userData.objectId) return;
+
+  broadcast({
+    kind: 'scene-delta',
+    objectId: obj.userData.objectId,
+    position: obj.position.toArray(),
+    rotation: obj.quaternion.toArray(),
+    scale: obj.scale.toArray(),
+  });
+}
 
 // ── サンプルオブジェクト ──────────────────────────────────
 
@@ -215,6 +242,7 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-delta': {
+      if (data.from.id === presenceState.id) break; // 自分の echo は無視
       const obj = managedObjects.get(payload.objectId);
       if (!obj) break;
       if (payload.position) obj.position.fromArray(payload.position);

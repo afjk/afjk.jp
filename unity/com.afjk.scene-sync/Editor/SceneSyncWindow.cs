@@ -23,6 +23,7 @@ namespace Afjk.SceneSync.Editor
         private Dictionary<string, TransformSnapshot> _lastSnapshots = new Dictionary<string, TransformSnapshot>();
         private double _lastSendTime;
         private const double SEND_INTERVAL = 0.05; // 50ms
+        private Dictionary<string, GameObject> _managedObjects = new Dictionary<string, GameObject>();
 
         private void OnEnable()
         {
@@ -124,6 +125,75 @@ namespace Afjk.SceneSync.Editor
             {
                 _ = HandleSceneRequest();
             }
+            else if (raw.Contains("\"kind\":\"scene-delta\""))
+            {
+                HandleSceneDelta(raw);
+            }
+        }
+
+        private void HandleSceneDelta(string raw)
+        {
+            // 簡易 JSON パース（scene-delta 専用）
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            float[] position = ExtractArray(raw, "\"position\":");
+            float[] rotation = ExtractArray(raw, "\"rotation\":");
+            float[] scale = ExtractArray(raw, "\"scale\":");
+
+            var go = FindManagedObject(objectId);
+            if (go == null) return;
+
+            // 現在選択されているオブジェクトなら無視（Last-Writer-Wins）
+            if (Selection.activeGameObject == go) return;
+
+            // ワイヤー（Three.js 座標系）→ Unity 座標系に逆変換
+            if (position != null && position.Length >= 3)
+                go.transform.position = new Vector3(position[0], position[1], -position[2]);
+
+            if (rotation != null && rotation.Length >= 4)
+                go.transform.rotation = new Quaternion(-rotation[0], -rotation[1], rotation[2], rotation[3]);
+
+            if (scale != null && scale.Length >= 3)
+                go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
+        }
+
+        private GameObject FindManagedObject(string objectId)
+        {
+            if (_managedObjects.TryGetValue(objectId, out var go))
+                return go;
+
+            var id = int.Parse(objectId);
+            var rootObjects = UnityEngine.SceneManagement.SceneManager
+                .GetActiveScene().GetRootGameObjects();
+
+            foreach (var root in rootObjects)
+            {
+                if (root.GetInstanceID() == id)
+                {
+                    _managedObjects[objectId] = root;
+                    return root;
+                }
+            }
+
+            return null;
+        }
+
+        private float[] ExtractArray(string json, string key)
+        {
+            var pattern = System.Text.RegularExpressions.Regex.Escape(key) + @"\s*\[([\d\.,\-\s]+)\]";
+            var match = System.Text.RegularExpressions.Regex.Match(json, pattern);
+            if (!match.Success) return null;
+
+            var nums = match.Groups[1].Value.Split(',');
+            var result = new float[nums.Length];
+            for (int i = 0; i < nums.Length; i++)
+            {
+                if (float.TryParse(nums[i].Trim(), out var f))
+                    result[i] = f;
+            }
+            return result;
         }
 
         private async System.Threading.Tasks.Task HandleSceneRequest()
