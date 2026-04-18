@@ -43,10 +43,47 @@
       z-index: 10;
       user-select: none;
     }
+    #add-btn {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(68, 136, 255, 0.8);
+      color: #fff;
+      font-size: 24px;
+      cursor: pointer;
+      z-index: 10;
+      backdrop-filter: blur(6px);
+      user-select: none;
+    }
+    #add-btn:hover {
+      background: rgba(68, 136, 255, 1);
+    }
+    #drop-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(68, 136, 255, 0.15);
+      border: 3px dashed rgba(68, 136, 255, 0.6);
+      z-index: 100;
+      font: 24px/1 monospace;
+      color: #fff;
+      justify-content: center;
+      align-items: center;
+    }
+    #drop-overlay.active {
+      display: flex;
+    }
   </style>
 </head>
 <body>
   <div id="status"><span class="dot off"></span>接続中…</div>
+  <button id="add-btn" title="glB / glTF を追加">＋</button>
+  <input type="file" id="file-input" accept=".glb,.gltf" style="display:none">
+  <div id="drop-overlay">ドロップして追加</div>
   <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
   <script type="importmap">
   {
