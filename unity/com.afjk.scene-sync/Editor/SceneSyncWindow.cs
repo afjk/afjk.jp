@@ -87,6 +87,17 @@ namespace Afjk.SceneSync.Editor
             return url + "/blob";
         }
 
+        /// <summary>
+        /// 同期対象かどうかを判定する。
+        /// MeshFilter または SkinnedMeshRenderer を持つオブジェクトのみ対象。
+        /// </summary>
+        private static bool IsSyncTarget(GameObject go)
+        {
+            if (go.hideFlags != HideFlags.None) return false;
+            return go.GetComponentInChildren<MeshFilter>() != null
+                || go.GetComponentInChildren<SkinnedMeshRenderer>() != null;
+        }
+
         private void EditorUpdate()
         {
             if (!_connected) return;
@@ -98,8 +109,9 @@ namespace Afjk.SceneSync.Editor
             {
                 if (_instanceToObjectId.TryGetValue(selection.GetInstanceID(), out var origId))
                     selectionId = origId;
-                else
+                else if (IsSyncTarget(selection))
                     selectionId = selection.GetInstanceID().ToString();
+                // メッシュなしの Unity オブジェクト（Camera 等）は selectionId = null のまま
             }
 
             // ロック状態の更新
@@ -123,6 +135,11 @@ namespace Afjk.SceneSync.Editor
             _lastSendTime = EditorApplication.timeSinceStartup;
 
             if (selection == null) return;
+
+            // メッシュを持たない && Web 由来でもないオブジェクトは同期しない
+            if (!_instanceToObjectId.ContainsKey(selection.GetInstanceID())
+                && !IsSyncTarget(selection))
+                return;
 
             string id;
             if (_instanceToObjectId.TryGetValue(selection.GetInstanceID(), out var origDeltaId))
@@ -216,23 +233,24 @@ namespace Afjk.SceneSync.Editor
                 var instanceId = go.GetInstanceID();
                 currentInstanceIds.Add(instanceId);
 
-                // Web 由来オブジェクトかチェック
+                // Web 由来オブジェクト
                 if (_instanceToObjectId.TryGetValue(instanceId, out var originalId))
                 {
                     // Web 由来: 元の objectId で管理
                     currentIds.Add(originalId);
+                    continue;
                 }
-                else
-                {
-                    // Unity 由来: InstanceID を objectId として管理
-                    var id = instanceId.ToString();
-                    currentIds.Add(id);
 
-                    if (!_knownObjectIds.Contains(id))
-                    {
-                        // 新規オブジェクト
-                        _ = SendSceneAdd(go);
-                    }
+                // Unity 由来: メッシュを持たないオブジェクトはスキップ
+                if (!IsSyncTarget(go)) continue;
+
+                var id = instanceId.ToString();
+                currentIds.Add(id);
+
+                if (!_knownObjectIds.Contains(id))
+                {
+                    // 新規オブジェクト
+                    _ = SendSceneAdd(go);
                 }
             }
 
@@ -634,7 +652,7 @@ namespace Afjk.SceneSync.Editor
 
             foreach (var go in rootObjects)
             {
-                if (go.hideFlags != HideFlags.None) continue;
+                if (!IsSyncTarget(go)) continue;
 
                 var objectId = go.GetInstanceID().ToString();
                 var pos = go.transform.position;
