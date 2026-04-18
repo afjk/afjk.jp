@@ -561,10 +561,22 @@ function resolveRoom() {
   return new URLSearchParams(location.search).get('room') || null;
 }
 
+function resolveNickname() {
+  const params = new URLSearchParams(location.search);
+  const nameParam = params.get('name');
+  if (nameParam) return nameParam;
+
+  const deviceName = localStorage.getItem('pipe.deviceName');
+  if (deviceName) return deviceName;
+
+  return 'User-' + Math.random().toString(36).slice(2, 6);
+}
+
 const presenceState = {
   ws: null,
   id: null,
   room: null,
+  nickname: null,
   peers: [],
 };
 
@@ -577,9 +589,11 @@ function connectPresence() {
   presenceState.ws = ws;
 
   ws.onopen = () => {
+    const nickname = resolveNickname();
+    presenceState.nickname = nickname;
     ws.send(JSON.stringify({
       type: 'hello',
-      nickname: 'SceneViewer',
+      nickname: nickname,
       device: navigator.userAgent.slice(0, 60),
     }));
   };
@@ -634,7 +648,7 @@ function updateStatus(connected) {
   if (connected) {
     const n = presenceState.peers.length;
     dotEl.className = 'dot on';
-    statusEl.innerHTML = `<span class="dot on"></span>${presenceState.room || '—'} · ${n} peer${n !== 1 ? 's' : ''}`;
+    statusEl.innerHTML = `<span class="dot on"></span>${presenceState.nickname} · ${presenceState.room || '—'} · ${n} peer${n !== 1 ? 's' : ''}`;
   } else {
     dotEl.className = 'dot off';
     statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
