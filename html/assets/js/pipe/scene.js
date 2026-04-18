@@ -334,11 +334,18 @@ function deleteSelectedObject() {
 
   if (deleteId) {
     if (locks.has(deleteId)) {
-      showToast('他のユーザーが編集中です');
-      return;
+      const lockInfo = locks.get(deleteId);
+      const lockOwnerId = lockInfo?.id;
+      if (lockOwnerId && lockOwnerId !== presenceState.id) {
+        showToast('他のユーザーが編集中です');
+        return;
+      }
+      // 自分のロックなら unlock をブロードキャストして解除
+      broadcast({ kind: 'scene-unlock', objectId: deleteId });
     }
 
     removeLockOverlay(deleteId);
+    locks.delete(deleteId);
 
     scene.remove(attached);
     attached.traverse(child => {
@@ -589,11 +596,14 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-remove': {
-      const obj = managedObjects.get(payload.objectId);
+      const objectId = payload.objectId;
+      removeLockOverlay(objectId);
+      locks.delete(objectId);
+      const obj = managedObjects.get(objectId);
       if (obj) {
-        if (transformCtrl.object === obj) transformCtrl.detach();
+        if (transformCtrl.object === obj) { transformCtrl.detach(); hideToolbar(); }
         scene.remove(obj);
-        managedObjects.delete(payload.objectId);
+        managedObjects.delete(objectId);
       }
       break;
     }
