@@ -1,0 +1,223 @@
+// ── scene.js ─────────────────────────────────────────────
+// Three.js ビューア + presence-server 接続
+// ─────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ── Three.js 基本セットアップ ────────────────────────────
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x222222);
+
+const camera = new THREE.PerspectiveCamera(
+  60, innerWidth / innerHeight, 0.1, 1000
+);
+camera.position.set(5, 5, 5);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// ライト
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+
+// グリッド
+scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x333333));
+
+// ── コントロール ─────────────────────────────────────────
+
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.1;
+
+const transformCtrl = new TransformControls(camera, renderer.domElement);
+scene.add(transformCtrl);
+
+transformCtrl.addEventListener('dragging-changed', (e) => {
+  orbit.enabled = !e.value;
+});
+
+// ── サンプルオブジェクト ──────────────────────────────────
+
+const sampleGeo = new THREE.BoxGeometry(1, 1, 1);
+const sampleMat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
+const sampleCube = new THREE.Mesh(sampleGeo, sampleMat);
+sampleCube.position.set(0, 0.5, 0);
+sampleCube.userData.objectId = 'sample-cube';
+scene.add(sampleCube);
+
+// ── オブジェクト管理 ─────────────────────────────────────
+
+// objectId → THREE.Object3D
+const managedObjects = new Map();
+managedObjects.set('sample-cube', sampleCube);
+
+// ── レイキャスト選択 ─────────────────────────────────────
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+renderer.domElement.addEventListener('dblclick', (e) => {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const targets = Array.from(managedObjects.values());
+  const hits = raycaster.intersectObjects(targets, true);
+  if (hits.length > 0) {
+    let obj = hits[0].object;
+    while (obj.parent && !obj.userData.objectId) obj = obj.parent;
+    if (obj.userData.objectId) {
+      transformCtrl.attach(obj);
+    }
+  } else {
+    transformCtrl.detach();
+  }
+});
+
+// ── キーボードショートカット ──────────────────────────────
+
+window.addEventListener('keydown', (e) => {
+  switch (e.key.toLowerCase()) {
+    case 'w': transformCtrl.setMode('translate'); break;
+    case 'e': transformCtrl.setMode('rotate'); break;
+    case 'r': transformCtrl.setMode('scale'); break;
+    case 'escape': transformCtrl.detach(); break;
+  }
+});
+
+// ── リサイズ ─────────────────────────────────────────────
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ── レンダリングループ ────────────────────────────────────
+
+function animate() {
+  requestAnimationFrame(animate);
+  orbit.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── Presence 接続 ────────────────────────────────────────
+
+const statusEl = document.getElementById('status');
+const dotEl = statusEl.querySelector('.dot');
+
+function resolvePresenceUrl() {
+  const params = new URLSearchParams(location.search);
+  const override = params.get('presence');
+  if (override) return override;
+  const isLocal = location.hostname === 'localhost'
+                 || location.hostname === '127.0.0.1';
+  return isLocal ? 'ws://localhost:8787' : 'wss://afjk.jp/presence';
+}
+
+function resolveRoom() {
+  return new URLSearchParams(location.search).get('room') || null;
+}
+
+const presenceState = {
+  ws: null,
+  id: null,
+  room: null,
+  peers: [],
+};
+
+function connectPresence() {
+  const base = resolvePresenceUrl();
+  const room = resolveRoom();
+  const url = room ? `${base}/?room=${room}` : base;
+
+  const ws = new WebSocket(url);
+  presenceState.ws = ws;
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: 'hello',
+      nickname: 'SceneViewer',
+      device: navigator.userAgent.slice(0, 60),
+    }));
+  };
+
+  ws.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+
+    switch (data.type) {
+      case 'welcome':
+        presenceState.id = data.id;
+        presenceState.room = data.room;
+        updateStatus(true);
+        break;
+
+      case 'peers':
+        presenceState.peers = data.peers || [];
+        updateStatus(true);
+        break;
+
+      case 'handoff':
+        handleHandoff(data);
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    updateStatus(false);
+    setTimeout(connectPresence, 3000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+function updateStatus(connected) {
+  if (connected) {
+    const n = presenceState.peers.length;
+    dotEl.className = 'dot on';
+    statusEl.innerHTML = `<span class="dot on"></span>${presenceState.room || '—'} · ${n} peer${n !== 1 ? 's' : ''}`;
+  } else {
+    dotEl.className = 'dot off';
+    statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
+  }
+}
+
+// ── Handoff 受信（Scene Sync 用、次 Step 以降で実装） ────
+
+function handleHandoff(data) {
+  const payload = data.payload;
+  if (!payload || !payload.kind) return;
+
+  switch (payload.kind) {
+    // 次の Step で scene-state, scene-delta 等を実装
+    default:
+      break;
+  }
+}
+
+// ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
+
+function broadcast(payload) {
+  const ws = presenceState.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'broadcast', payload }));
+}
+
+// ── 公開 API（scene.js 内から利用） ──────────────────────
+
+export { scene, camera, renderer, managedObjects, broadcast, presenceState };
+
+// ── 起動 ─────────────────────────────────────────────────
+
+connectPresence();
