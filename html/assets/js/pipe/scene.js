@@ -899,12 +899,7 @@ function handleHandoff(data) {
         const model = gltf.scene;
         model.userData.objectId = payload.objectId;
 
-        // 中心合わせ
-        const box = new THREE.Box3().setFromObject(model);
-        const center = box.getCenter(new THREE.Vector3());
-        model.children.forEach(child => {
-          child.position.sub(center);
-        });
+        // 中心合わせは送信側で実行済み（glB にベイク済み）のため不要
 
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
@@ -967,13 +962,7 @@ function addOrUpdateObject(objectId, info) {
       model.userData.objectId = objectId;
       model.userData.name = info.name;
 
-      // glB 内の子メッシュを中心基準でオフセット
-      const box = new THREE.Box3().setFromObject(model);
-      const center = box.getCenter(new THREE.Vector3());
-      model.children.forEach(child => {
-        child.position.sub(center);
-      });
-
+      // 中心合わせは送信側で実行済み（glB にベイク済み）のため不要
       applyTransform(model, info);
       scene.add(model);
       managedObjects.set(objectId, model);
