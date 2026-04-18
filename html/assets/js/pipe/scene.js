@@ -214,6 +214,14 @@ function handleHandoff(data) {
       }
       break;
     }
+    case 'scene-delta': {
+      const obj = managedObjects.get(payload.objectId);
+      if (!obj) break;
+      if (payload.position) obj.position.fromArray(payload.position);
+      if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
+      if (payload.scale) obj.scale.fromArray(payload.scale);
+      break;
+    }
     default:
       break;
   }

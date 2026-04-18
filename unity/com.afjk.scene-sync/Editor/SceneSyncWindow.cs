@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
@@ -19,6 +20,10 @@ namespace Afjk.SceneSync.Editor
         private bool _connected;
         private List<PeerInfo> _peers = new List<PeerInfo>();
 
+        private Dictionary<string, TransformSnapshot> _lastSnapshots = new Dictionary<string, TransformSnapshot>();
+        private double _lastSendTime;
+        private const double SEND_INTERVAL = 0.05; // 50ms
+
         private void OnEnable()
         {
             _client = new PresenceClient();
@@ -38,7 +43,34 @@ namespace Afjk.SceneSync.Editor
 
         private void EditorUpdate()
         {
-            // Keep editor responsive to async callbacks
+            if (!_connected) return;
+            if (EditorApplication.timeSinceStartup - _lastSendTime < SEND_INTERVAL) return;
+            _lastSendTime = EditorApplication.timeSinceStartup;
+
+            var selection = Selection.activeGameObject;
+            if (selection == null) return;
+
+            var id = selection.GetInstanceID().ToString();
+            var t = selection.transform;
+            var current = new TransformSnapshot(t.position, t.rotation, t.localScale);
+
+            if (_lastSnapshots.TryGetValue(id, out var last) && last.Equals(current))
+                return;
+
+            _lastSnapshots[id] = current;
+
+            var pos = t.position;
+            var rot = t.rotation;
+            var scl = t.localScale;
+
+            var payload = "{" +
+                "\"kind\":\"scene-delta\"," +
+                "\"objectId\":\"" + id + "\"," +
+                "\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]," +
+                "\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]," +
+                "\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                "}";
+            _ = _client.Broadcast(payload);
         }
 
         private void OnGUI()
@@ -131,6 +163,27 @@ namespace Afjk.SceneSync.Editor
 
             var payload = JsonUtility.ToJson(new { kind = "scene-state", objects });
             await _client.Broadcast(payload);
+        }
+
+        private struct TransformSnapshot
+        {
+            public Vector3 position;
+            public Quaternion rotation;
+            public Vector3 scale;
+
+            public TransformSnapshot(Vector3 p, Quaternion r, Vector3 s)
+            {
+                position = p;
+                rotation = r;
+                scale = s;
+            }
+
+            public bool Equals(TransformSnapshot other)
+            {
+                return position == other.position
+                    && rotation == other.rotation
+                    && scale == other.scale;
+            }
         }
     }
 }
