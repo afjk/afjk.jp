@@ -219,16 +219,20 @@ namespace Afjk.SceneSync.Editor
             }
         }
 
-        public static async Task UploadGlb(byte[] glb, string pipingBaseUrl, string path)
+        public static async Task UploadGlb(byte[] glb, string blobBaseUrl, string path)
         {
             if (glb == null || glb.Length == 0) return;
 
             try
             {
-                var url = pipingBaseUrl + "/" + path;
+                var url = blobBaseUrl + "/" + path;
                 var content = new ByteArrayContent(glb);
                 content.Headers.ContentType = new MediaTypeHeaderValue("model/gltf-binary");
-                await _http.PutAsync(url, content);
+                var response = await _http.PostAsync(url, content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Debug.LogWarning("[SceneSync] Upload failed: " + response.StatusCode);
+                }
             }
             catch (Exception ex)
             {

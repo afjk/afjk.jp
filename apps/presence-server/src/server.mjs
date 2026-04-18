@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
@@ -11,6 +11,16 @@ const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
+
+// ── Blob Store ────────────────────────────────────────────────────────────────
+const BLOB_MAX_SIZE = 50 * 1024 * 1024; // 50MB
+const BLOB_MEMORY_THRESHOLD = 1 * 1024 * 1024; // 1MB
+const BLOB_TTL_MS = 10 * 60 * 1000; // 10分
+const BLOB_CLEANUP_INTERVAL = 60 * 1000; // 60秒
+const BLOB_DIR = process.env.BLOB_DIR || '/data/blobs';
+
+// id → { buffer: Buffer|null, file: string|null, size: number, createdAt: number }
+const blobs = new Map();
 
 // ── Stats persistence ─────────────────────────────────────────────────────────
 const STATS_LOG_LIMIT = Number(process.env.STATS_LOG_LIMIT || 500);
@@ -417,6 +427,109 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // ── Blob Store ────────────────────────────────────────────
+  // POST /blob/:id
+  if (req.method === 'POST' && path.startsWith('/blob/')) {
+    const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
+    if (!id) {
+      res.writeHead(400, CORS).end('invalid id');
+      return;
+    }
+    if (blobs.has(id)) {
+      res.writeHead(409, CORS).end('conflict');
+      return;
+    }
+
+    const chunks = [];
+    let totalSize = 0;
+
+    req.on('data', chunk => {
+      totalSize += chunk.length;
+      if (totalSize > BLOB_MAX_SIZE) {
+        res.writeHead(413, CORS).end('too large');
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      if (res.writableEnded) return;
+      const buffer = Buffer.concat(chunks);
+      const entry = {
+        size: buffer.length,
+        createdAt: Date.now(),
+        buffer: null,
+        file: null,
+      };
+
+      if (buffer.length <= BLOB_MEMORY_THRESHOLD) {
+        entry.buffer = buffer;
+      } else {
+        try {
+          mkdirSync(BLOB_DIR, { recursive: true });
+          const filePath = BLOB_DIR + '/' + id + '.glb';
+          writeFileSync(filePath, buffer);
+          entry.file = filePath;
+        } catch (err) {
+          log('blob write error', err.message);
+          res.writeHead(500, CORS).end('write error');
+          return;
+        }
+      }
+
+      blobs.set(id, entry);
+      log('blob stored', id, entry.size, entry.buffer ? 'memory' : 'disk');
+
+      res.writeHead(201, { 'content-type': 'application/json', ...CORS })
+         .end(JSON.stringify({
+           id,
+           size: entry.size,
+           expiresAt: entry.createdAt + BLOB_TTL_MS,
+         }));
+    });
+    return;
+  }
+
+  // GET /blob/:id
+  if (req.method === 'GET' && path.startsWith('/blob/')) {
+    const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
+    const entry = blobs.get(id);
+    if (!entry) {
+      res.writeHead(404, CORS).end('not found');
+      return;
+    }
+
+    let data;
+    if (entry.buffer) {
+      data = entry.buffer;
+    } else if (entry.file) {
+      try {
+        data = readFileSync(entry.file);
+      } catch {
+        res.writeHead(404, CORS).end('file missing');
+        blobs.delete(id);
+        return;
+      }
+    }
+
+    res.writeHead(200, {
+      'content-type': 'model/gltf-binary',
+      'content-length': data.length,
+      'cache-control': 'no-store',
+      ...CORS,
+    }).end(data);
+    return;
+  }
+
+  // DELETE /blob/:id
+  if (req.method === 'DELETE' && path.startsWith('/blob/')) {
+    const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
+    deleteBlob(id);
+    res.writeHead(204, CORS).end();
+    return;
+  }
+
   // GET /stats
   if (req.method === 'GET' && (path === '/stats' || path === '/stats/export')) {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -557,6 +670,28 @@ server.on('upgrade', (req, socket) => {
   };
 });
 
+// ── Blob Store Cleanup ────────────────────────────────────
+function deleteBlob(id) {
+  const entry = blobs.get(id);
+  if (!entry) return;
+  if (entry.file) {
+    try { unlinkSync(entry.file); } catch {}
+  }
+  blobs.delete(id);
+  log('blob deleted', id);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of blobs) {
+    if (now - entry.createdAt > BLOB_TTL_MS) {
+      log('blob expired', id);
+      deleteBlob(id);
+    }
+  }
+}, BLOB_CLEANUP_INTERVAL);
+
+// ── Heartbeat ─────────────────────────────────────────────
 setInterval(() => {
   rooms.forEach(room => {
     room.forEach(client => {
