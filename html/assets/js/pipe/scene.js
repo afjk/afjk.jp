@@ -280,9 +280,9 @@ function removeLockOverlay(objectId) {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
-renderer.domElement.addEventListener('dblclick', (e) => {
-  pointer.x = (e.clientX / innerWidth) * 2 - 1;
-  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+function selectObjectAt(clientX, clientY) {
+  pointer.x = (clientX / innerWidth) * 2 - 1;
+  pointer.y = -(clientY / innerHeight) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
   const targets = Array.from(managedObjects.values());
@@ -290,6 +290,8 @@ renderer.domElement.addEventListener('dblclick', (e) => {
   if (hits.length > 0) {
     let obj = hits[0].object;
     while (obj.parent && !obj.userData.objectId) obj = obj.parent;
+    // ロックオーバーレイは除外
+    if (obj.userData._isLockOverlay) return;
     if (obj.userData.objectId) {
       // ロック確認
       if (locks.has(obj.userData.objectId)) {
@@ -313,7 +315,78 @@ renderer.domElement.addEventListener('dblclick', (e) => {
     transformCtrl.detach();
     hideToolbar();
   }
+}
+
+renderer.domElement.addEventListener('dblclick', (e) => {
+  selectObjectAt(e.clientX, e.clientY);
 });
+
+// ── タッチ操作（iOS Safari 対応） ───────────────────────
+
+let lastTapTime = 0;
+let lastTapX = 0;
+let lastTapY = 0;
+const DOUBLE_TAP_DELAY = 300;
+const DOUBLE_TAP_DISTANCE = 30;
+let touchMoved = false;
+let singleTapTimer = null;
+
+renderer.domElement.addEventListener('touchstart', (e) => {
+  touchMoved = false;
+}, { passive: true });
+
+renderer.domElement.addEventListener('touchmove', (e) => {
+  touchMoved = true;
+}, { passive: true });
+
+function handleDoubleTap(clientX, clientY) {
+  selectObjectAt(clientX, clientY);
+}
+
+renderer.domElement.addEventListener('touchend', (e) => {
+  if (e.touches.length > 0) return;
+  const touch = e.changedTouches[0];
+  if (!touch) return;
+
+  const now = Date.now();
+  const dx = touch.clientX - lastTapX;
+  const dy = touch.clientY - lastTapY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  clearTimeout(singleTapTimer);
+
+  if (now - lastTapTime < DOUBLE_TAP_DELAY && dist < DOUBLE_TAP_DISTANCE) {
+    // ダブルタップ
+    e.preventDefault();
+    handleDoubleTap(touch.clientX, touch.clientY);
+    lastTapTime = 0;
+  } else {
+    lastTapTime = now;
+    lastTapX = touch.clientX;
+    lastTapY = touch.clientY;
+
+    // シングルタップ
+    const tapX = touch.clientX;
+    const tapY = touch.clientY;
+    singleTapTimer = setTimeout(() => {
+      if (!touchMoved && transformCtrl.object) {
+        pointer.x = (tapX / innerWidth) * 2 - 1;
+        pointer.y = -(tapY / innerHeight) * 2 + 1;
+        raycaster.setFromCamera(pointer, camera);
+        const targets = Array.from(managedObjects.values());
+        const hits = raycaster.intersectObjects(targets, true);
+        if (hits.length === 0) {
+          broadcast({
+            kind: 'scene-unlock',
+            objectId: transformCtrl.object.userData.objectId,
+          });
+          transformCtrl.detach();
+          hideToolbar();
+        }
+      }
+    }, DOUBLE_TAP_DELAY + 50);
+  }
+}, { passive: false });
 
 // ── 削除ロジック（共通） ──────────────────────────────────
 
