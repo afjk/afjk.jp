@@ -785,7 +785,6 @@ async function respondToSceneRequest(from) {
     from?.nickname || from?.id);
 
   const objects = {};
-  const uploads = [];
 
   for (const [objectId, obj] of managedObjects) {
     const entry = {
@@ -795,46 +794,12 @@ async function respondToSceneRequest(from) {
       scale: obj.scale.toArray(),
     };
 
-    let hasMesh = false;
-    obj.traverse(child => {
-      if (child.isMesh && !child.userData._isLockOverlay) hasMesh = true;
-    });
-
-    if (hasMesh) {
-      try {
-        // エクスポート用クローンを作成（本体の transform を変更しない）
-        const clone = obj.clone(true);
-        clone.position.set(0, 0, 0);
-        clone.quaternion.identity();
-        clone.scale.set(1, 1, 1);
-
-        const glbBuffer = await exportObjectAsGlb(clone);
-        if (glbBuffer) {
-          const meshPath = generateRandomPath();
-          uploads.push({ meshPath, buffer: glbBuffer });
-          entry.meshPath = meshPath;
-        }
-      } catch (err) {
-        console.warn('[SceneSync] Export failed for', objectId, err);
-      }
+    // 保存済み meshPath を再利用（再エクスポート不要）
+    if (obj.userData.meshPath) {
+      entry.meshPath = obj.userData.meshPath;
     }
 
     objects[objectId] = entry;
-  }
-
-  for (const { meshPath, buffer } of uploads) {
-    try {
-      const resp = await fetch(BLOB_BASE + '/' + meshPath, {
-        method: 'POST',
-        headers: { 'Content-Type': 'model/gltf-binary' },
-        body: buffer,
-      });
-      if (!resp.ok) {
-        console.warn('[SceneSync] Upload failed:', meshPath, resp.status);
-      }
-    } catch (err) {
-      console.warn('[SceneSync] Upload error:', meshPath, err);
-    }
   }
 
   const ws = presenceState.ws;
@@ -898,8 +863,14 @@ function handleHandoff(data) {
       gltfLoader.load(url, (gltf) => {
         const model = gltf.scene;
         model.userData.objectId = payload.objectId;
+        model.userData.meshPath = payload.meshPath;
 
-        // 中心合わせは送信側で実行済み（glB にベイク済み）のため不要
+        // 元ファイルの glB を中心基準でオフセット（全クライアントで同一処理）
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        model.children.forEach(child => {
+          child.position.sub(center);
+        });
 
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
@@ -961,8 +932,15 @@ function addOrUpdateObject(objectId, info) {
       const model = gltf.scene;
       model.userData.objectId = objectId;
       model.userData.name = info.name;
+      model.userData.meshPath = info.meshPath;
 
-      // 中心合わせは送信側で実行済み（glB にベイク済み）のため不要
+      // 元ファイルの glB を中心基準でオフセット（全クライアントで同一処理）
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      model.children.forEach(child => {
+        child.position.sub(center);
+      });
+
       applyTransform(model, info);
       scene.add(model);
       managedObjects.set(objectId, model);
@@ -1097,24 +1075,12 @@ async function handleAddMeshFile(file) {
 
     URL.revokeObjectURL(blobUrl);
 
-    // オフセット済みモデルを再エクスポートしてアップロード
-    // クローンを作成し transform をリセット（本体には触れない）
-    let reExportedBuffer = null;
-    try {
-      const clone = model.clone(true);
-      clone.position.set(0, 0, 0);
-      clone.quaternion.identity();
-      clone.scale.set(1, 1, 1);
-      reExportedBuffer = await exportObjectAsGlb(clone);
-    } catch (err) {
-      console.warn('[SceneSync] Re-export failed:', err);
-    }
-
+    // 元ファイルをそのままアップロード（受信側で中心合わせを行う）
     uploadAndBroadcast(
       objectId,
       file.name,
       model,
-      reExportedBuffer || arrayBuffer
+      arrayBuffer
     );
   }, undefined, (err) => {
     console.error('Failed to load glB:', err);
@@ -1133,7 +1099,6 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     });
   } catch (err) {
     console.warn('POST failed:', err);
-    // エラー時も meshPath: null で broadcast（フォールバック）
     broadcast({
       kind: 'scene-add',
       objectId,
@@ -1146,7 +1111,9 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     return;
   }
 
-  // 全クライアントに broadcast（meshPath 付き）
+  // meshPath をオブジェクトに保存（respondToSceneRequest で再利用）
+  model.userData.meshPath = meshPath;
+
   broadcast({
     kind: 'scene-add',
     objectId,
