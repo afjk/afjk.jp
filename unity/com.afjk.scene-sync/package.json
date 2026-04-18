@@ -1,0 +1,11 @@
+{
+  "name": "com.afjk.scene-sync",
+  "version": "0.1.0",
+  "displayName": "Scene Sync",
+  "description": "Real-time 3D scene sync between Unity Editor and web browsers via afjk.jp/pipe presence-server.",
+  "unity": "2021.3",
+  "author": {
+    "name": "afjk"
+  },
+  "keywords": ["scene", "sync", "collaboration", "websocket"]
+}
