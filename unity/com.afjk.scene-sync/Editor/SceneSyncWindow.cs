@@ -33,6 +33,7 @@ namespace Afjk.SceneSync.Editor
         private Dictionary<string, string> _meshPaths = new Dictionary<string, string>(); // objectId → meshPath
         private bool _sceneReceived = false;
         private bool _firstPeersReceived = false;
+        private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
 
         private void OnEnable()
         {
@@ -92,7 +93,14 @@ namespace Afjk.SceneSync.Editor
 
             // Selection 変更のチェック
             var selection = Selection.activeGameObject;
-            var selectionId = selection != null ? selection.GetInstanceID().ToString() : null;
+            string selectionId = null;
+            if (selection != null)
+            {
+                if (_instanceToObjectId.TryGetValue(selection.GetInstanceID(), out var origId))
+                    selectionId = origId;
+                else
+                    selectionId = selection.GetInstanceID().ToString();
+            }
 
             // ロック状態の更新
             if (selectionId != _currentlyLockedObjectId)
@@ -116,7 +124,12 @@ namespace Afjk.SceneSync.Editor
 
             if (selection == null) return;
 
-            var id = selection.GetInstanceID().ToString();
+            string id;
+            if (_instanceToObjectId.TryGetValue(selection.GetInstanceID(), out var origDeltaId))
+                id = origDeltaId;
+            else
+                id = selection.GetInstanceID().ToString();
+
             var t = selection.transform;
             var current = new TransformSnapshot(t.position, t.rotation, t.localScale);
 
@@ -193,19 +206,33 @@ namespace Afjk.SceneSync.Editor
         {
             if (!_connected) return;
             var currentIds = new HashSet<string>();
+            var currentInstanceIds = new HashSet<int>();
             var rootObjects = UnityEngine.SceneManagement.SceneManager
                 .GetActiveScene().GetRootGameObjects();
 
             foreach (var go in rootObjects)
             {
                 if (go.hideFlags != HideFlags.None) continue;
-                var id = go.GetInstanceID().ToString();
-                currentIds.Add(id);
+                var instanceId = go.GetInstanceID();
+                currentInstanceIds.Add(instanceId);
 
-                if (!_knownObjectIds.Contains(id))
+                // Web 由来オブジェクトかチェック
+                if (_instanceToObjectId.TryGetValue(instanceId, out var originalId))
                 {
-                    // 新規オブジェクト
-                    _ = SendSceneAdd(go);
+                    // Web 由来: 元の objectId で管理
+                    currentIds.Add(originalId);
+                }
+                else
+                {
+                    // Unity 由来: InstanceID を objectId として管理
+                    var id = instanceId.ToString();
+                    currentIds.Add(id);
+
+                    if (!_knownObjectIds.Contains(id))
+                    {
+                        // 新規オブジェクト
+                        _ = SendSceneAdd(go);
+                    }
                 }
             }
 
@@ -215,8 +242,20 @@ namespace Afjk.SceneSync.Editor
                 if (!currentIds.Contains(id))
                 {
                     _ = SendSceneRemove(id);
+                    _meshPaths.Remove(id);
+                    _locks.Remove(id);
                 }
             }
+
+            // _instanceToObjectId のクリーンアップ（削除された GameObject を除去）
+            var staleInstances = new List<int>();
+            foreach (var kvp in _instanceToObjectId)
+            {
+                if (!currentInstanceIds.Contains(kvp.Key))
+                    staleInstances.Add(kvp.Key);
+            }
+            foreach (var key in staleInstances)
+                _instanceToObjectId.Remove(key);
 
             _knownObjectIds = currentIds;
         }
@@ -410,6 +449,13 @@ namespace Afjk.SceneSync.Editor
                     path = PresenceClient.GenerateRandomPath();
             }
 
+            // アップロードを先に完了させてから Broadcast する
+            if (glb != null && path != null)
+            {
+                _meshPaths[go.GetInstanceID().ToString()] = path;
+                await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+            }
+
             var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
                 ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
@@ -417,12 +463,6 @@ namespace Afjk.SceneSync.Editor
                 ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                 meshPathJson + "}";
             await _client.Broadcast(payload);
-
-            if (glb != null && path != null)
-            {
-                _meshPaths[go.GetInstanceID().ToString()] = path;
-                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
-            }
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
@@ -472,6 +512,7 @@ namespace Afjk.SceneSync.Editor
                 ApplyTransform(go, position, rotation, scale);
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
+                _instanceToObjectId[go.GetInstanceID()] = objectId;
             }
         }
 
@@ -484,6 +525,7 @@ namespace Afjk.SceneSync.Editor
             var go = FindManagedObject(objectId);
             if (go != null)
             {
+                _instanceToObjectId.Remove(go.GetInstanceID());
                 DestroyImmediate(go);
                 _managedObjects.Remove(objectId);
                 _knownObjectIds.Remove(objectId);
@@ -549,9 +591,11 @@ namespace Afjk.SceneSync.Editor
 
                 // blob store に POST（全クライアント共有）
                 var path = PresenceClient.GenerateRandomPath();
+                _meshPaths[objectId] = path;
+                await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+
                 var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
                 await _client.Broadcast(payload);
-                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
             }
         }
 
@@ -651,13 +695,13 @@ namespace Afjk.SceneSync.Editor
 
             objectsJson.Append("}");
 
+            // アップロードを先に完了させる
+            foreach (var (glb, path) in pendingUploads)
+                await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+
             // handoff で 1対1 返信（broadcast ではない）
             var payload = "{\"kind\":\"scene-state\",\"objects\":" + objectsJson + "}";
             await _client.SendHandoff(fromId, payload);
-
-            // アップロード
-            foreach (var (glb, path) in pendingUploads)
-                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
         }
 
         private void ApplyTransform(GameObject go, float[] position, float[] rotation, float[] scale)
@@ -694,6 +738,7 @@ namespace Afjk.SceneSync.Editor
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
+                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     return;
                 }
 
@@ -720,6 +765,7 @@ namespace Afjk.SceneSync.Editor
                     ApplyTransform(go, position, rotation, scale);
                     _managedObjects[objectId] = go;
                     _knownObjectIds.Add(objectId);
+                    _instanceToObjectId[go.GetInstanceID()] = objectId;
                     Debug.Log("[SceneSync] Imported mesh: " + name);
                 }
                 else
@@ -730,6 +776,7 @@ namespace Afjk.SceneSync.Editor
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
+                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                 }
 
                 // 一時ファイル削除
