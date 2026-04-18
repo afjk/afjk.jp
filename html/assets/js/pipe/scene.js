@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -626,6 +627,10 @@ const presenceState = {
   peers: [],
 };
 
+let sceneReceived = false;
+let sceneRequestTimer = null;
+let sceneRequestAttempt = 0;
+
 function connectPresence() {
   const base = resolvePresenceUrl();
   const room = resolveRoom();
@@ -654,10 +659,11 @@ function connectPresence() {
         presenceState.room = data.room;
         updateStatus(true);
         updatePeersList();
-        broadcast({ kind: 'scene-request' });
         break;
 
-      case 'peers':
+      case 'peers': {
+        const isFirstPeers = presenceState.peers.length === 0
+          && (data.peers || []).length > 0;
         presenceState.peers = data.peers || [];
         updateStatus(true);
         // 切断したピアのロックを解除
@@ -665,10 +671,16 @@ function connectPresence() {
         for (const [objId, ownerId] of locks) {
           if (!peerIds.has(ownerId) && ownerId !== presenceState.id) {
             locks.delete(objId);
+            removeLockOverlay(objId);
           }
         }
         updatePeersList();
+        // 初回 peers 受信時にシーンリクエスト
+        if (isFirstPeers && !sceneReceived) {
+          requestSceneFromPeer();
+        }
         break;
+      }
 
       case 'handoff':
         handleHandoff(data);
@@ -680,11 +692,10 @@ function connectPresence() {
     updateStatus(false);
     updatePeersList();
     setTimeout(() => {
+      sceneReceived = false;
+      sceneRequestAttempt = 0;
+      clearTimeout(sceneRequestTimer);
       connectPresence();
-      // 再接続後に scene-request を送信して状態を再同期
-      if (presenceState.room) {
-        broadcast({ kind: 'scene-request' });
-      }
     }, 3000);
   };
 
@@ -704,6 +715,132 @@ function updateStatus(connected) {
   }
 }
 
+// ── シーンリクエスト（後から参加したクライアント用） ───────
+
+function requestSceneFromPeer() {
+  const peers = presenceState.peers.filter(p => p.id !== presenceState.id);
+  if (peers.length === 0) {
+    sceneReceived = true;
+    return;
+  }
+
+  if (sceneRequestAttempt >= peers.length) {
+    console.warn('[SceneSync] All peers failed to respond');
+    sceneReceived = true;
+    return;
+  }
+
+  const target = peers[sceneRequestAttempt];
+  console.log('[SceneSync] Requesting scene from:', target.nickname || target.id);
+
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'handoff',
+      targetId: target.id,
+      payload: { kind: 'scene-request' },
+    }));
+  }
+
+  clearTimeout(sceneRequestTimer);
+  sceneRequestTimer = setTimeout(() => {
+    if (!sceneReceived) {
+      sceneRequestAttempt++;
+      requestSceneFromPeer();
+    }
+  }, 5000);
+}
+
+// ── シーン応答（後から参加したクライアント用） ─────────────
+
+const gltfExporter = new GLTFExporter();
+
+function exportObjectAsGlb(obj) {
+  return new Promise((resolve, reject) => {
+    const overlayChildren = [];
+    obj.traverse(child => {
+      if (child.userData._isLockOverlay) {
+        overlayChildren.push(child);
+      }
+    });
+    overlayChildren.forEach(c => { c.visible = false; });
+
+    gltfExporter.parse(
+      obj,
+      (result) => {
+        overlayChildren.forEach(c => { c.visible = true; });
+        resolve(result);
+      },
+      (err) => {
+        overlayChildren.forEach(c => { c.visible = true; });
+        reject(err);
+      },
+      { binary: true }
+    );
+  });
+}
+
+async function respondToSceneRequest(from) {
+  console.log('[SceneSync] Responding to scene-request from:',
+    from?.nickname || from?.id);
+
+  const objects = {};
+  const uploads = [];
+
+  for (const [objectId, obj] of managedObjects) {
+    const entry = {
+      name: obj.userData.name || obj.name || objectId,
+      position: obj.position.toArray(),
+      rotation: obj.quaternion.toArray(),
+      scale: obj.scale.toArray(),
+    };
+
+    let hasMesh = false;
+    obj.traverse(child => {
+      if (child.isMesh && !child.userData._isLockOverlay) hasMesh = true;
+    });
+
+    if (hasMesh) {
+      try {
+        const glbBuffer = await exportObjectAsGlb(obj);
+        if (glbBuffer) {
+          const meshPath = generateRandomPath();
+          uploads.push({ meshPath, buffer: glbBuffer });
+          entry.meshPath = meshPath;
+        }
+      } catch (err) {
+        console.warn('[SceneSync] Export failed for', objectId, err);
+      }
+    }
+
+    objects[objectId] = entry;
+  }
+
+  for (const { meshPath, buffer } of uploads) {
+    try {
+      const resp = await fetch(BLOB_BASE + '/' + meshPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'model/gltf-binary' },
+        body: buffer,
+      });
+      if (!resp.ok) {
+        console.warn('[SceneSync] Upload failed:', meshPath, resp.status);
+      }
+    } catch (err) {
+      console.warn('[SceneSync] Upload error:', meshPath, err);
+    }
+  }
+
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'handoff',
+      targetId: from.id,
+      payload: { kind: 'scene-state', objects },
+    }));
+  }
+}
+
 // ── Handoff 受信（Scene Sync 用） ────────────────────────
 
 function handleHandoff(data) {
@@ -712,10 +849,16 @@ function handleHandoff(data) {
 
   switch (payload.kind) {
     case 'scene-state': {
+      sceneReceived = true;
+      clearTimeout(sceneRequestTimer);
       const objects = payload.objects || {};
       for (const [objectId, info] of Object.entries(objects)) {
         addOrUpdateObject(objectId, info);
       }
+      break;
+    }
+    case 'scene-request': {
+      respondToSceneRequest(data.from);
       break;
     }
     case 'scene-delta': {
