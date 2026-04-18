@@ -304,6 +304,7 @@ function selectObjectAt(clientX, clientY) {
       broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
       showToolbar();
       updateToolbarActive(transformCtrl.mode);
+      updatePeersList();
     }
   } else {
     if (transformCtrl.object) {
@@ -314,6 +315,7 @@ function selectObjectAt(clientX, clientY) {
     }
     transformCtrl.detach();
     hideToolbar();
+    updatePeersList();
   }
 }
 
@@ -572,6 +574,50 @@ function resolveNickname() {
   return 'User-' + Math.random().toString(36).slice(2, 6);
 }
 
+// ── 参加者一覧 ──────────────────────────────────────────
+
+const peersListEl = document.getElementById('peers-list');
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderPeerItem(name, isSelf, editingObjectId) {
+  const dotClass = isSelf ? 'peer-dot self' : 'peer-dot';
+  const editLabel = editingObjectId ? '✏️' : '';
+  const selfLabel = isSelf ? ' (自分)' : '';
+  return `<div class="peer-item">`
+    + `<span class="${dotClass}"></span>`
+    + `<span class="peer-name">${escapeHtml(name)}${selfLabel}</span>`
+    + `${editLabel ? `<span class="peer-editing">${editLabel}</span>` : ''}`
+    + `</div>`;
+}
+
+function updatePeersList() {
+  if (!peersListEl) return;
+
+  const editingMap = new Map();
+  for (const [objectId, owner] of locks) {
+    const ownerId = owner.id || owner;
+    editingMap.set(ownerId, objectId);
+  }
+
+  let html = '';
+
+  const selfEditing = transformCtrl.object
+    ? transformCtrl.object.userData.objectId || ''
+    : '';
+  html += renderPeerItem(presenceState.nickname || '自分', true, selfEditing);
+
+  for (const peer of presenceState.peers) {
+    if (peer.id === presenceState.id) continue;
+    const editing = editingMap.get(peer.id) || '';
+    html += renderPeerItem(peer.nickname || peer.device || '?', false, editing);
+  }
+
+  peersListEl.innerHTML = html;
+}
+
 const presenceState = {
   ws: null,
   id: null,
@@ -607,6 +653,7 @@ function connectPresence() {
         presenceState.id = data.id;
         presenceState.room = data.room;
         updateStatus(true);
+        updatePeersList();
         broadcast({ kind: 'scene-request' });
         break;
 
@@ -620,6 +667,7 @@ function connectPresence() {
             locks.delete(objId);
           }
         }
+        updatePeersList();
         break;
 
       case 'handoff':
@@ -630,6 +678,7 @@ function connectPresence() {
 
   ws.onclose = () => {
     updateStatus(false);
+    updatePeersList();
     setTimeout(() => {
       connectPresence();
       // 再接続後に scene-request を送信して状態を再同期
@@ -728,11 +777,13 @@ function handleHandoff(data) {
     case 'scene-lock': {
       locks.set(payload.objectId, data.from);
       addLockOverlay(payload.objectId, data.from);
+      updatePeersList();
       break;
     }
     case 'scene-unlock': {
       locks.delete(payload.objectId);
       removeLockOverlay(payload.objectId);
+      updatePeersList();
       break;
     }
     default:

@@ -128,10 +128,56 @@
     .tb-btn.btn-danger:hover {
       background: rgba(255,60,60,0.7);
     }
+    #peers-panel {
+      position: fixed;
+      top: 48px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: #fff;
+      font-size: 13px;
+      z-index: 50;
+      min-width: 120px;
+      max-height: 40vh;
+      overflow-y: auto;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    .peer-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 0;
+      white-space: nowrap;
+    }
+    .peer-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4f4;
+      flex-shrink: 0;
+    }
+    .peer-dot.self {
+      background: #48f;
+    }
+    .peer-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .peer-editing {
+      font-size: 11px;
+      color: #ff8800;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
   <div id="status"><span class="dot off"></span>接続中…</div>
+  <div id="peers-panel">
+    <div id="peers-list"></div>
+  </div>
   <button id="add-btn" title="glB / glTF を追加">＋</button>
   <input type="file" id="file-input" accept=".glb,.gltf" style="display:none">
   <div id="drop-overlay">ドロップして追加</div>
