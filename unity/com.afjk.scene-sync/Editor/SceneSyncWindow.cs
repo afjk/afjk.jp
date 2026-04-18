@@ -30,13 +30,36 @@ namespace Afjk.SceneSync.Editor
         private HashSet<string> _knownObjectIds = new HashSet<string>();
         private Dictionary<string, string> _locks = new Dictionary<string, string>(); // objectId → lockOwnerId
         private string _currentlyLockedObjectId;
+        private Dictionary<string, string> _meshPaths = new Dictionary<string, string>(); // objectId → meshPath
+        private bool _sceneReceived = false;
+        private bool _firstPeersReceived = false;
 
         private void OnEnable()
         {
             _client = new PresenceClient();
             _client.OnConnected += () => { _connected = true; Repaint(); };
-            _client.OnDisconnected += () => { _connected = false; Repaint(); };
-            _client.OnPeersUpdated += (peers) => { _peers = peers; Repaint(); };
+            _client.OnDisconnected += () =>
+            {
+                _connected = false;
+                _sceneReceived = false;
+                _firstPeersReceived = false;
+                Repaint();
+            };
+            _client.OnPeersUpdated += (peers) =>
+            {
+                _peers = peers;
+                Repaint();
+
+                // 初回 peers 受信時にシーンリクエストを送信
+                if (!_firstPeersReceived && peers.Count > 0)
+                {
+                    _firstPeersReceived = true;
+                    if (!_sceneReceived)
+                    {
+                        _ = RequestSceneFromPeer();
+                    }
+                }
+            };
             _client.OnHandoffReceived += OnHandoff;
 
             EditorApplication.update += EditorUpdate;
@@ -200,12 +223,25 @@ namespace Afjk.SceneSync.Editor
 
         private void OnHandoff(string raw)
         {
-            // JSON から kind を抽出
             if (!raw.Contains("\"kind\"")) return;
+
+            // from.id を抽出（handoff メッセージに含まれる）
+            string fromId = null;
+            var fromIdMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"from\"\\s*:\\s*\\{[^}]*\"id\"\\s*:\\s*\"([^\"]+)\"");
+            if (fromIdMatch.Success)
+                fromId = fromIdMatch.Groups[1].Value;
 
             if (raw.Contains("\"kind\":\"scene-request\""))
             {
-                _ = HandleSceneRequest();
+                if (fromId != null)
+                    _ = HandleSceneRequest(fromId);
+                else
+                    Debug.LogWarning("[SceneSync] scene-request without from.id");
+            }
+            else if (raw.Contains("\"kind\":\"scene-state\""))
+            {
+                HandleSceneState(raw);
             }
             else if (raw.Contains("\"kind\":\"scene-delta\""))
             {
@@ -230,6 +266,59 @@ namespace Afjk.SceneSync.Editor
             else if (raw.Contains("\"kind\":\"scene-unlock\""))
             {
                 HandleSceneUnlock(raw);
+            }
+        }
+
+        private async System.Threading.Tasks.Task RequestSceneFromPeer()
+        {
+            var peers = _peers;
+            if (peers == null || peers.Count == 0)
+            {
+                _sceneReceived = true;
+                return;
+            }
+
+            // 自分以外の最初のピアに handoff で送信
+            foreach (var peer in peers)
+            {
+                if (peer.id == _client.Id) continue;
+
+                Debug.Log("[SceneSync] Requesting scene from: " +
+                    (peer.nickname ?? peer.id));
+                await _client.SendHandoff(peer.id,
+                    "{\"kind\":\"scene-request\"}");
+                return;
+            }
+
+            // 自分しかいない
+            _sceneReceived = true;
+        }
+
+        private void HandleSceneState(string raw)
+        {
+            _sceneReceived = true;
+            Debug.Log("[SceneSync] Received scene-state");
+
+            // "objects":{...} の中身を簡易パース
+            var objectsMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"objects\"\\s*:\\s*\\{(.+)\\}\\s*\\}\\s*$");
+            if (!objectsMatch.Success) return;
+
+            var objectsBody = objectsMatch.Groups[1].Value;
+
+            // 各 "objectId":{...} を抽出
+            var entryPattern = new System.Text.RegularExpressions.Regex(
+                "\"([^\"]+)\"\\s*:\\s*\\{([^{}]+)\\}");
+            var matches = entryPattern.Matches(objectsBody);
+
+            foreach (System.Text.RegularExpressions.Match m in matches)
+            {
+                var objectId = m.Groups[1].Value;
+                var body = m.Groups[2].Value;
+
+                // scene-add 相当の JSON を構築して処理
+                var fakeJson = "{\"kind\":\"scene-add\",\"objectId\":\"" + objectId + "\"," + body + "}";
+                HandleSceneAdd(fakeJson);
             }
         }
 
@@ -330,7 +419,10 @@ namespace Afjk.SceneSync.Editor
             await _client.Broadcast(payload);
 
             if (glb != null && path != null)
+            {
+                _meshPaths[go.GetInstanceID().ToString()] = path;
                 _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+            }
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
@@ -361,6 +453,12 @@ namespace Afjk.SceneSync.Editor
                 raw, "\"meshPath\":\"([^\"]+)\"");
             var meshPath = meshPathMatch.Success ? meshPathMatch.Groups[1].Value : null;
 
+            // meshPath を保存
+            if (!string.IsNullOrEmpty(meshPath))
+            {
+                _meshPaths[objectId] = meshPath;
+            }
+
             // メッシュがある場合は glB をダウンロードしてインポート
             if (!string.IsNullOrEmpty(meshPath))
             {
@@ -390,6 +488,8 @@ namespace Afjk.SceneSync.Editor
                 _managedObjects.Remove(objectId);
                 _knownObjectIds.Remove(objectId);
             }
+            _meshPaths.Remove(objectId);
+            _locks.Remove(objectId);
         }
 
         private void HandleSceneMesh(string raw)
@@ -403,6 +503,9 @@ namespace Afjk.SceneSync.Editor
                 raw, "\"meshPath\":\"([^\"]+)\"");
             if (!meshPathMatch.Success) return;
             var meshPath = meshPathMatch.Groups[1].Value;
+
+            // meshPath を保存
+            _meshPaths[objectId] = meshPath;
 
             var go = FindManagedObject(objectId);
             var name = go != null ? go.name : objectId;
@@ -473,8 +576,10 @@ namespace Afjk.SceneSync.Editor
             _locks.Remove(objectId);
         }
 
-        private async System.Threading.Tasks.Task HandleSceneRequest()
+        private async System.Threading.Tasks.Task HandleSceneRequest(string fromId)
         {
+            Debug.Log("[SceneSync] Responding to scene-request for: " + fromId);
+
             var rootObjects = UnityEngine.SceneManagement.SceneManager
                 .GetActiveScene().GetRootGameObjects();
 
@@ -487,12 +592,18 @@ namespace Afjk.SceneSync.Editor
             {
                 if (go.hideFlags != HideFlags.None) continue;
 
+                var objectId = go.GetInstanceID().ToString();
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
 
+                // 保存済み meshPath を優先使用
                 string path = null;
-                if (go.GetComponentInChildren<MeshFilter>() != null
+                if (_meshPaths.TryGetValue(objectId, out var savedPath))
+                {
+                    path = savedPath;
+                }
+                else if (go.GetComponentInChildren<MeshFilter>() != null
                     || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
                 {
                     var glb = await PresenceClient.ExportGameObjectAsGlb(go);
@@ -500,24 +611,51 @@ namespace Afjk.SceneSync.Editor
                     {
                         path = PresenceClient.GenerateRandomPath();
                         pendingUploads.Add((glb, path));
+                        _meshPaths[objectId] = path;
                     }
                 }
 
                 if (!first) objectsJson.Append(",");
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-                objectsJson.Append("\"" + go.GetInstanceID() + "\":{\"name\":\"" + go.name + "\"" +
+                objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + "}");
             }
+
+            // Web 由来のオブジェクトも含める
+            foreach (var kvp in _managedObjects)
+            {
+                if (int.TryParse(kvp.Key, out _)) continue; // Unity 由来はスキップ（上で処理済み）
+                var go = kvp.Value;
+                if (go == null) continue;
+
+                var pos = go.transform.position;
+                var rot = go.transform.rotation;
+                var scl = go.transform.localScale;
+
+                string path = null;
+                _meshPaths.TryGetValue(kvp.Key, out path);
+
+                if (!first) objectsJson.Append(",");
+                first = false;
+                var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+                objectsJson.Append("\"" + kvp.Key + "\":{\"name\":\"" + go.name + "\"" +
+                    ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
+                    ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
+                    ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                    meshPathJson + "}");
+            }
+
             objectsJson.Append("}");
 
+            // handoff で 1対1 返信（broadcast ではない）
             var payload = "{\"kind\":\"scene-state\",\"objects\":" + objectsJson + "}";
-            await _client.Broadcast(payload);
+            await _client.SendHandoff(fromId, payload);
 
-            // broadcast 後にアップロード（ブラウザが GET を始めるのを待って PUT）
+            // アップロード
             foreach (var (glb, path) in pendingUploads)
                 _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
         }

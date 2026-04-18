@@ -36,6 +36,7 @@ namespace Afjk.SceneSync.Editor
         public string id;
         public string nickname;
         public string device;
+        public double lastSeen; // サーバが付与する Unix timestamp
     }
 
     public class PresenceClient
@@ -132,17 +133,24 @@ namespace Afjk.SceneSync.Editor
 
         private async Task ReceiveLoop()
         {
+            var buffer = new MemoryStream();
             try
             {
                 while (_ws.State == WebSocketState.Open && !_cts.Token.IsCancellationRequested)
                 {
                     var result = await _ws.ReceiveAsync(
-                        new ArraySegment<byte>(_recvBuf), _cts.Token
-                    );
+                        new ArraySegment<byte>(_recvBuf), _cts.Token);
                     if (result.MessageType == WebSocketMessageType.Close) break;
 
-                    var text = Encoding.UTF8.GetString(_recvBuf, 0, result.Count);
-                    HandleMessage(text);
+                    buffer.Write(_recvBuf, 0, result.Count);
+
+                    if (result.EndOfMessage)
+                    {
+                        var text = Encoding.UTF8.GetString(
+                            buffer.GetBuffer(), 0, (int)buffer.Length);
+                        buffer.SetLength(0);
+                        HandleMessage(text);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
