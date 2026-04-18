@@ -801,6 +801,15 @@ async function respondToSceneRequest(from) {
     });
 
     if (hasMesh) {
+      // エクスポート前にルート transform をリセット
+      const savedPos = obj.position.clone();
+      const savedQuat = obj.quaternion.clone();
+      const savedScale = obj.scale.clone();
+
+      obj.position.set(0, 0, 0);
+      obj.quaternion.identity();
+      obj.scale.set(1, 1, 1);
+
       try {
         const glbBuffer = await exportObjectAsGlb(obj);
         if (glbBuffer) {
@@ -811,6 +820,11 @@ async function respondToSceneRequest(from) {
       } catch (err) {
         console.warn('[SceneSync] Export failed for', objectId, err);
       }
+
+      // ルート transform を復元
+      obj.position.copy(savedPos);
+      obj.quaternion.copy(savedQuat);
+      obj.scale.copy(savedScale);
     }
 
     objects[objectId] = entry;
@@ -1055,7 +1069,7 @@ async function handleAddMeshFile(file) {
   const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const blobUrl = URL.createObjectURL(blob);
 
-  gltfLoader.load(blobUrl, (gltf) => {
+  gltfLoader.load(blobUrl, async (gltf) => {
     const model = gltf.scene;
     model.userData.objectId = objectId;
     model.userData.name = file.name;
@@ -1080,7 +1094,34 @@ async function handleAddMeshFile(file) {
 
     URL.revokeObjectURL(blobUrl);
 
-    uploadAndBroadcast(objectId, file.name, model, arrayBuffer);
+    // オフセット済みモデルを再エクスポートしてアップロード
+    // ルート transform を一時リセットしてエクスポート
+    const savedPos = model.position.clone();
+    const savedQuat = model.quaternion.clone();
+    const savedScale = model.scale.clone();
+
+    model.position.set(0, 0, 0);
+    model.quaternion.identity();
+    model.scale.set(1, 1, 1);
+
+    let reExportedBuffer = null;
+    try {
+      reExportedBuffer = await exportObjectAsGlb(model);
+    } catch (err) {
+      console.warn('[SceneSync] Re-export failed:', err);
+    }
+
+    // ルート transform を復元
+    model.position.copy(savedPos);
+    model.quaternion.copy(savedQuat);
+    model.scale.copy(savedScale);
+
+    uploadAndBroadcast(
+      objectId,
+      file.name,
+      model,
+      reExportedBuffer || arrayBuffer
+    );
   }, undefined, (err) => {
     console.error('Failed to load glB:', err);
     URL.revokeObjectURL(blobUrl);
