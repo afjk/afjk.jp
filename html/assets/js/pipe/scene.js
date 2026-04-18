@@ -801,17 +801,14 @@ async function respondToSceneRequest(from) {
     });
 
     if (hasMesh) {
-      // エクスポート前にルート transform をリセット
-      const savedPos = obj.position.clone();
-      const savedQuat = obj.quaternion.clone();
-      const savedScale = obj.scale.clone();
-
-      obj.position.set(0, 0, 0);
-      obj.quaternion.identity();
-      obj.scale.set(1, 1, 1);
-
       try {
-        const glbBuffer = await exportObjectAsGlb(obj);
+        // エクスポート用クローンを作成（本体の transform を変更しない）
+        const clone = obj.clone(true);
+        clone.position.set(0, 0, 0);
+        clone.quaternion.identity();
+        clone.scale.set(1, 1, 1);
+
+        const glbBuffer = await exportObjectAsGlb(clone);
         if (glbBuffer) {
           const meshPath = generateRandomPath();
           uploads.push({ meshPath, buffer: glbBuffer });
@@ -820,11 +817,6 @@ async function respondToSceneRequest(from) {
       } catch (err) {
         console.warn('[SceneSync] Export failed for', objectId, err);
       }
-
-      // ルート transform を復元
-      obj.position.copy(savedPos);
-      obj.quaternion.copy(savedQuat);
-      obj.scale.copy(savedScale);
     }
 
     objects[objectId] = entry;
@@ -906,6 +898,14 @@ function handleHandoff(data) {
       gltfLoader.load(url, (gltf) => {
         const model = gltf.scene;
         model.userData.objectId = payload.objectId;
+
+        // 中心合わせ
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        model.children.forEach(child => {
+          child.position.sub(center);
+        });
+
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
           model.position.copy(obj.position);
@@ -922,7 +922,7 @@ function handleHandoff(data) {
         // 既存オブジェクトがあれば使用し続ける、なければ Box を生成
         if (!obj) {
           const geo = new THREE.BoxGeometry(1, 1, 1);
-          const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 }); // 赤色でエラーを示す
+          const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 });
           const fallback = new THREE.Mesh(geo, mat);
           fallback.userData.objectId = payload.objectId;
           scene.add(fallback);
@@ -951,43 +951,57 @@ function handleHandoff(data) {
 // ── シーン同期ヘルパー ───────────────────────────────────
 
 function addOrUpdateObject(objectId, info) {
-  let obj = managedObjects.get(objectId);
+  const existing = managedObjects.get(objectId);
 
   if (info.meshPath) {
     const url = BLOB_BASE + '/' + info.meshPath;
     gltfLoader.load(url, (gltf) => {
-      if (obj) scene.remove(obj);
+      // 既存オブジェクトを削除
+      const current = managedObjects.get(objectId);
+      if (current) {
+        if (transformCtrl.object === current) transformCtrl.detach();
+        scene.remove(current);
+      }
+
       const model = gltf.scene;
       model.userData.objectId = objectId;
       model.userData.name = info.name;
+
+      // glB 内の子メッシュを中心基準でオフセット
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      model.children.forEach(child => {
+        child.position.sub(center);
+      });
+
       applyTransform(model, info);
       scene.add(model);
       managedObjects.set(objectId, model);
     }, undefined, (err) => {
       // glB ロード失敗時のフォールバック
       console.warn('Failed to load mesh for', objectId, ':', err);
-      if (!obj) {
+      if (!existing) {
         const geo = new THREE.BoxGeometry(1, 1, 1);
-        const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 }); // 赤色
-        obj = new THREE.Mesh(geo, mat);
-        obj.userData.objectId = objectId;
-        obj.userData.name = info.name;
-        applyTransform(obj, info);
-        scene.add(obj);
-        managedObjects.set(objectId, obj);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 });
+        const fallback = new THREE.Mesh(geo, mat);
+        fallback.userData.objectId = objectId;
+        fallback.userData.name = info.name;
+        applyTransform(fallback, info);
+        scene.add(fallback);
+        managedObjects.set(objectId, fallback);
       }
     });
   } else {
-    if (!obj) {
+    if (!existing) {
       const geo = new THREE.BoxGeometry(1, 1, 1);
       const mat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
-      obj = new THREE.Mesh(geo, mat);
+      const obj = new THREE.Mesh(geo, mat);
       obj.userData.objectId = objectId;
       obj.userData.name = info.name;
       scene.add(obj);
       managedObjects.set(objectId, obj);
     }
-    applyTransform(obj, info);
+    applyTransform(managedObjects.get(objectId), info);
   }
 }
 
@@ -1095,26 +1109,17 @@ async function handleAddMeshFile(file) {
     URL.revokeObjectURL(blobUrl);
 
     // オフセット済みモデルを再エクスポートしてアップロード
-    // ルート transform を一時リセットしてエクスポート
-    const savedPos = model.position.clone();
-    const savedQuat = model.quaternion.clone();
-    const savedScale = model.scale.clone();
-
-    model.position.set(0, 0, 0);
-    model.quaternion.identity();
-    model.scale.set(1, 1, 1);
-
+    // クローンを作成し transform をリセット（本体には触れない）
     let reExportedBuffer = null;
     try {
-      reExportedBuffer = await exportObjectAsGlb(model);
+      const clone = model.clone(true);
+      clone.position.set(0, 0, 0);
+      clone.quaternion.identity();
+      clone.scale.set(1, 1, 1);
+      reExportedBuffer = await exportObjectAsGlb(clone);
     } catch (err) {
       console.warn('[SceneSync] Re-export failed:', err);
     }
-
-    // ルート transform を復元
-    model.position.copy(savedPos);
-    model.quaternion.copy(savedQuat);
-    model.scale.copy(savedScale);
 
     uploadAndBroadcast(
       objectId,
