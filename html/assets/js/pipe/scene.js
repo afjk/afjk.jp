@@ -122,30 +122,58 @@ function addLockOverlay(objectId) {
   const obj = managedObjects.get(objectId);
   if (!obj) return;
 
-  const box = new THREE.Box3().setFromObject(obj);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-
-  const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
-  const mat = new THREE.MeshBasicMaterial({
+  // オブジェクトをクローンしてアウトライン用マテリアルに差し替え
+  const outlineMat = new THREE.MeshBasicMaterial({
     color: 0xff8800,
-    wireframe: true,
+    side: THREE.BackSide,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.6,
   });
-  const wire = new THREE.Mesh(geo, mat);
-  wire.position.copy(center);
-  wire.raycast = () => {}; // レイキャストから除外
-  scene.add(wire);
-  lockOverlays.set(objectId, wire);
+
+  const outline = obj.clone(true);
+  outline.traverse(child => {
+    if (child.isMesh) {
+      child.material = outlineMat;
+      child.castShadow = false;
+      child.receiveShadow = false;
+    }
+  });
+
+  // 少し拡大してアウトラインに見せる
+  outline.scale.multiplyScalar(1.05);
+  outline.raycast = () => {};
+  outline.traverse(child => { child.raycast = () => {}; });
+
+  // 元オブジェクトの子にして追従させる
+  outline.userData._isLockOverlay = true;
+  obj.add(outline);
+
+  // 親の拡大を打ち消す（親の子なのでスケールが二重になる）
+  outline.scale.set(1.05, 1.05, 1.05);
+  outline.position.set(0, 0, 0);
+  outline.rotation.set(0, 0, 0);
+
+  lockOverlays.set(objectId, outline);
 }
 
 function removeLockOverlay(objectId) {
-  const wire = lockOverlays.get(objectId);
-  if (!wire) return;
-  scene.remove(wire);
-  wire.geometry.dispose();
-  wire.material.dispose();
+  const overlay = lockOverlays.get(objectId);
+  if (!overlay) return;
+
+  // 親（元オブジェクト）から除去
+  if (overlay.parent) {
+    overlay.parent.remove(overlay);
+  } else {
+    scene.remove(overlay);
+  }
+
+  overlay.traverse(child => {
+    if (child.isMesh) {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) child.material.dispose();
+    }
+  });
+
   lockOverlays.delete(objectId);
 }
 
@@ -174,6 +202,8 @@ renderer.domElement.addEventListener('dblclick', (e) => {
       }
       transformCtrl.attach(obj);
       broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
+      showToolbar();
+      updateToolbarActive(transformCtrl.mode);
     }
   } else {
     if (transformCtrl.object) {
@@ -183,57 +213,118 @@ renderer.domElement.addEventListener('dblclick', (e) => {
       });
     }
     transformCtrl.detach();
+    hideToolbar();
   }
+});
+
+// ── 削除ロジック（共通） ──────────────────────────────────
+
+function deleteSelectedObject() {
+  const attached = transformCtrl.object;
+  if (!attached) return;
+
+  let deleteId = null;
+  for (const [id, obj] of managedObjects) {
+    if (obj === attached) {
+      deleteId = id;
+      break;
+    }
+  }
+
+  transformCtrl.detach();
+  hideToolbar();
+
+  if (deleteId) {
+    if (locks.has(deleteId)) {
+      showToast('他のユーザーが編集中です');
+      return;
+    }
+
+    scene.remove(attached);
+    attached.traverse(child => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose());
+        } else {
+          child.material.dispose();
+        }
+      }
+    });
+    managedObjects.delete(deleteId);
+    broadcast({ kind: 'scene-remove', objectId: deleteId });
+  }
+}
+
+// ── モバイルツールバー ──────────────────────────────────
+
+const toolbar = document.getElementById('mobile-toolbar');
+const btnMove = document.getElementById('btn-move');
+const btnRotate = document.getElementById('btn-rotate');
+const btnScale = document.getElementById('btn-scale');
+const btnDelete = document.getElementById('btn-delete');
+const btnDeselect = document.getElementById('btn-deselect');
+
+function showToolbar() {
+  if (toolbar) toolbar.style.display = 'flex';
+}
+
+function hideToolbar() {
+  if (toolbar) toolbar.style.display = 'none';
+}
+
+function updateToolbarActive(mode) {
+  [btnMove, btnRotate, btnScale].forEach(b => b?.classList.remove('active'));
+  if (mode === 'translate') btnMove?.classList.add('active');
+  if (mode === 'rotate') btnRotate?.classList.add('active');
+  if (mode === 'scale') btnScale?.classList.add('active');
+}
+
+btnMove?.addEventListener('click', () => {
+  transformCtrl.setMode('translate');
+  updateToolbarActive('translate');
+});
+
+btnRotate?.addEventListener('click', () => {
+  transformCtrl.setMode('rotate');
+  updateToolbarActive('rotate');
+});
+
+btnScale?.addEventListener('click', () => {
+  transformCtrl.setMode('scale');
+  updateToolbarActive('scale');
+});
+
+btnDeselect?.addEventListener('click', () => {
+  if (transformCtrl.object) {
+    broadcast({
+      kind: 'scene-unlock',
+      objectId: transformCtrl.object.userData.objectId,
+    });
+  }
+  transformCtrl.detach();
+  hideToolbar();
+});
+
+btnDelete?.addEventListener('click', () => {
+  deleteSelectedObject();
 });
 
 // ── キーボードショートカット ──────────────────────────────
 
 window.addEventListener('keydown', (e) => {
+  // テキスト入力中は無視
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
   switch (e.key.toLowerCase()) {
     case 'w': transformCtrl.setMode('translate'); break;
     case 'e': transformCtrl.setMode('rotate'); break;
     case 'r': transformCtrl.setMode('scale'); break;
-    case 'escape': transformCtrl.detach(); break;
-    case 'delete': {
-      const attached = transformCtrl.object;
-      if (!attached) break;
-
-      // objectId を探す
-      let deleteId = null;
-      for (const [id, obj] of managedObjects) {
-        if (obj === attached) {
-          deleteId = id;
-          break;
-        }
-      }
-
-      // TransformControls を外す
-      transformCtrl.detach();
-
-      if (deleteId) {
-        // ロック中なら削除不可
-        if (locks.has(deleteId)) {
-          showToast('他のユーザーが編集中です');
-          break;
-        }
-
-        // シーンから削除
-        scene.remove(attached);
-        attached.traverse(child => {
-          if (child.geometry) child.geometry.dispose();
-          if (child.material) {
-            if (Array.isArray(child.material)) {
-              child.material.forEach(m => m.dispose());
-            } else {
-              child.material.dispose();
-            }
-          }
-        });
-        managedObjects.delete(deleteId);
-
-        // ブロードキャスト
-        broadcast({ kind: 'scene-remove', objectId: deleteId });
-      }
+    case 'escape': transformCtrl.detach(); hideToolbar(); break;
+    case 'delete':
+    case 'backspace': {
+      e.preventDefault();
+      deleteSelectedObject();
       break;
     }
   }
