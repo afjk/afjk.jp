@@ -273,6 +273,25 @@ function handleHandoff(data) {
       }
       break;
     }
+    case 'scene-mesh': {
+      const obj = managedObjects.get(payload.objectId);
+      const url = PIPING_BASE + '/' + payload.meshPath;
+      gltfLoader.load(url, (gltf) => {
+        const model = gltf.scene;
+        model.userData.objectId = payload.objectId;
+        if (obj) {
+          // 位置・回転・スケールを引き継ぐ
+          model.position.copy(obj.position);
+          model.quaternion.copy(obj.quaternion);
+          model.scale.copy(obj.scale);
+          if (transformCtrl.object === obj) transformCtrl.detach();
+          scene.remove(obj);
+        }
+        scene.add(model);
+        managedObjects.set(payload.objectId, model);
+      });
+      break;
+    }
     default:
       break;
   }

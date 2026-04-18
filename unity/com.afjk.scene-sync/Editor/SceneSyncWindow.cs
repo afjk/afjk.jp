@@ -112,6 +112,13 @@ namespace Afjk.SceneSync.Editor
                     }
                 }
 
+                GUILayout.Space(8);
+
+                if (GUILayout.Button("Sync Meshes"))
+                {
+                    _ = SyncAllMeshes();
+                }
+
                 if (GUILayout.Button("Disconnect"))
                 {
                     _client.Disconnect();
@@ -171,6 +178,10 @@ namespace Afjk.SceneSync.Editor
             else if (raw.Contains("\"kind\":\"scene-remove\""))
             {
                 HandleSceneRemove(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-mesh\""))
+            {
+                HandleSceneMesh(raw);
             }
         }
 
@@ -293,6 +304,42 @@ namespace Afjk.SceneSync.Editor
                 DestroyImmediate(go);
                 _managedObjects.Remove(objectId);
                 _knownObjectIds.Remove(objectId);
+            }
+        }
+
+        private void HandleSceneMesh(string raw)
+        {
+            // ブラウザが受信した場合の処理
+            // Unity 受信は不要（glB ロード機能がないため）
+        }
+
+        private async System.Threading.Tasks.Task SyncAllMeshes()
+        {
+            var rootObjects = UnityEngine.SceneManagement.SceneManager
+                .GetActiveScene().GetRootGameObjects();
+
+            foreach (var go in rootObjects)
+            {
+                if (go.hideFlags != HideFlags.None) continue;
+                if (go.GetComponentInChildren<MeshFilter>() == null
+                    && go.GetComponentInChildren<SkinnedMeshRenderer>() == null)
+                    continue;
+
+                var glb = await PresenceClient.ExportGameObjectAsGlb(go);
+                if (glb == null) continue;
+
+                var objectId = go.GetInstanceID().ToString();
+
+                // 受信者ごとにパスを分けて PUT
+                foreach (var peer in _peers)
+                {
+                    var meshPath = await PresenceClient.UploadGlb(glb, "https://pipe.afjk.jp");
+                    if (meshPath != null)
+                    {
+                        var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + meshPath + "\"}";
+                        await _client.SendHandoff(peer.id, payload);
+                    }
+                }
             }
         }
 
