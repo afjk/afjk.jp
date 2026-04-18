@@ -163,7 +163,7 @@ namespace Afjk.SceneSync.Editor
                 "\"kind\":\"scene-delta\"," +
                 "\"objectId\":\"" + id + "\"," +
                 "\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]," +
-                "\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]," +
+                "\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]," +
                 "\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                 "}";
             _ = _client.Broadcast(payload);
@@ -401,7 +401,7 @@ namespace Afjk.SceneSync.Editor
                 go.transform.position = new Vector3(position[0], position[1], -position[2]);
 
             if (rotation != null && rotation.Length >= 4)
-                go.transform.rotation = new Quaternion(-rotation[0], -rotation[1], rotation[2], rotation[3]);
+                go.transform.rotation = new Quaternion(rotation[0], rotation[1], -rotation[2], -rotation[3]);
 
             if (scale != null && scale.Length >= 3)
                 go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
@@ -477,7 +477,7 @@ namespace Afjk.SceneSync.Editor
             var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
                 ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
+                ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                 ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                 meshPathJson + "}";
             await _client.Broadcast(payload);
@@ -581,7 +581,7 @@ namespace Afjk.SceneSync.Editor
 
                 _ = DownloadAndCreateObject(objectId, name, meshPath,
                     new float[] { pos.x, pos.y, -pos.z },
-                    new float[] { -rot.x, -rot.y, rot.z, rot.w },
+                    new float[] { rot.x, rot.y, -rot.z, -rot.w },
                     new float[] { scl.x, scl.y, scl.z });
             }
             else
@@ -682,7 +682,7 @@ namespace Afjk.SceneSync.Editor
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
                 objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                    ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
+                    ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + "}");
             }
@@ -706,7 +706,7 @@ namespace Afjk.SceneSync.Editor
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
                 objectsJson.Append("\"" + kvp.Key + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                    ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
+                    ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + "}");
             }
@@ -729,7 +729,7 @@ namespace Afjk.SceneSync.Editor
                 go.transform.position = new Vector3(position[0], position[1], -position[2]);
 
             if (rotation != null && rotation.Length >= 4)
-                go.transform.rotation = new Quaternion(-rotation[0], -rotation[1], rotation[2], rotation[3]);
+                go.transform.rotation = new Quaternion(rotation[0], rotation[1], -rotation[2], -rotation[3]);
 
             if (scale != null && scale.Length >= 3)
                 go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
