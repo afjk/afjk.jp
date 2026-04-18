@@ -413,6 +413,135 @@ function broadcast(payload) {
 
 export { scene, camera, renderer, managedObjects, broadcast, presenceState };
 
+// ── ファイル追加 UI ──────────────────────────────────────
+
+const addBtn = document.getElementById('add-btn');
+const fileInput = document.getElementById('file-input');
+const dropOverlay = document.getElementById('drop-overlay');
+
+addBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) handleAddMeshFile(file);
+  fileInput.value = '';
+});
+
+let dragCounter = 0;
+
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  dropOverlay.classList.add('active');
+});
+
+document.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter <= 0) {
+    dragCounter = 0;
+    dropOverlay.classList.remove('active');
+  }
+});
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('active');
+  const file = e.dataTransfer.files[0];
+  if (file && (file.name.endsWith('.glb') || file.name.endsWith('.gltf'))) {
+    handleAddMeshFile(file);
+  }
+});
+
+function generateObjectId() {
+  return 'web-' + Math.random().toString(36).slice(2, 10);
+}
+
+function generateRandomPath() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+async function handleAddMeshFile(file) {
+  const objectId = generateObjectId();
+  const arrayBuffer = await file.arrayBuffer();
+
+  const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
+  const blobUrl = URL.createObjectURL(blob);
+
+  gltfLoader.load(blobUrl, (gltf) => {
+    const model = gltf.scene;
+    model.userData.objectId = objectId;
+    model.userData.name = file.name;
+
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    model.position.copy(camera.position).add(dir.multiplyScalar(3));
+    model.position.y = 0;
+
+    scene.add(model);
+    managedObjects.set(objectId, model);
+
+    URL.revokeObjectURL(blobUrl);
+
+    uploadAndBroadcast(objectId, file.name, model, arrayBuffer);
+  }, undefined, (err) => {
+    console.error('Failed to load glB:', err);
+    URL.revokeObjectURL(blobUrl);
+  });
+}
+
+async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
+  const peers = presenceState.peers;
+  if (peers.length === 0) {
+    broadcast({
+      kind: 'scene-add',
+      objectId,
+      name,
+      position: model.position.toArray(),
+      rotation: model.quaternion.toArray(),
+      scale: model.scale.toArray(),
+      meshPath: null,
+    });
+    return;
+  }
+
+  const ws = presenceState.ws;
+  for (const peer of peers) {
+    const meshPath = generateRandomPath();
+    try {
+      await fetch(PIPING_BASE + '/' + meshPath, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'model/gltf-binary' },
+        body: arrayBuffer,
+      });
+    } catch (err) {
+      console.warn('PUT failed for peer', peer.id, err);
+      continue;
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'handoff',
+        targetId: peer.id,
+        payload: {
+          kind: 'scene-add',
+          objectId,
+          name,
+          position: model.position.toArray(),
+          rotation: model.quaternion.toArray(),
+          scale: model.scale.toArray(),
+          meshPath,
+        },
+      }));
+    }
+  }
+}
+
 // ── 起動 ─────────────────────────────────────────────────
 
 connectPresence();
