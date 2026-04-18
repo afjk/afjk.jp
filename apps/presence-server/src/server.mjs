@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
@@ -363,6 +363,21 @@ const CORS = {
   'access-control-allow-headers': 'content-type',
 };
 
+function setBlobCors(req, res) {
+  const origin = req.headers['origin'] || '';
+  const allowed = [
+    'https://afjk.jp',
+    'https://staging.afjk.jp',
+    'http://localhost:8888',
+    'http://localhost:3000',
+  ];
+  if (allowed.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
 const MEDIAMTX_API = process.env.MEDIAMTX_API_URL || 'http://mediamtx:9997';
 
 async function fetchStreamStats() {
@@ -423,13 +438,19 @@ const server = createServer(async (req, res) => {
 
   // CORS preflight
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, CORS).end();
+    if (path.startsWith('/blob/')) {
+      setBlobCors(req, res);
+      res.writeHead(204).end();
+    } else {
+      res.writeHead(204, CORS).end();
+    }
     return;
   }
 
   // ── Blob Store ────────────────────────────────────────────
   // POST /blob/:id
   if (req.method === 'POST' && path.startsWith('/blob/')) {
+    setBlobCors(req, res);
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     if (!id) {
       res.writeHead(400, CORS).end('invalid id');
@@ -493,40 +514,57 @@ const server = createServer(async (req, res) => {
 
   // GET /blob/:id
   if (req.method === 'GET' && path.startsWith('/blob/')) {
+    setBlobCors(req, res);
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     const entry = blobs.get(id);
     if (!entry) {
-      res.writeHead(404, CORS).end('not found');
+      res.writeHead(404).end('not found');
       return;
     }
 
-    let data;
-    if (entry.buffer) {
-      data = entry.buffer;
-    } else if (entry.file) {
-      try {
-        data = readFileSync(entry.file);
-      } catch {
-        res.writeHead(404, CORS).end('file missing');
-        blobs.delete(id);
-        return;
-      }
+    const corsHeaders = {};
+    const origin = req.headers['origin'] || '';
+    const allowed = [
+      'https://afjk.jp',
+      'https://staging.afjk.jp',
+      'http://localhost:8888',
+      'http://localhost:3000',
+    ];
+    if (allowed.includes(origin)) {
+      corsHeaders['Access-Control-Allow-Origin'] = origin;
     }
 
-    res.writeHead(200, {
-      'content-type': 'model/gltf-binary',
-      'content-length': data.length,
-      'cache-control': 'no-store',
-      ...CORS,
-    }).end(data);
+    if (entry.buffer) {
+      res.writeHead(200, {
+        'content-type': 'model/gltf-binary',
+        'content-length': entry.size,
+        'cache-control': 'no-store',
+        ...corsHeaders,
+      }).end(entry.buffer);
+    } else if (entry.file) {
+      const stream = createReadStream(entry.file);
+      res.writeHead(200, {
+        'content-type': 'model/gltf-binary',
+        'content-length': entry.size,
+        'cache-control': 'no-store',
+        ...corsHeaders,
+      });
+      stream.pipe(res);
+      stream.on('error', (err) => {
+        log(`[blob] read error ${id}:`, err.message);
+        if (!res.headersSent) res.writeHead(500);
+        res.end();
+      });
+    }
     return;
   }
 
   // DELETE /blob/:id
   if (req.method === 'DELETE' && path.startsWith('/blob/')) {
+    setBlobCors(req, res);
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     deleteBlob(id);
-    res.writeHead(204, CORS).end();
+    res.writeHead(204).end();
     return;
   }
 

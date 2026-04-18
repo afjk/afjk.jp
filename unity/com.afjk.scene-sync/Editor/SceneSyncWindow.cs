@@ -15,7 +15,7 @@ namespace Afjk.SceneSync.Editor
 
         private PresenceClient _client;
         private string _presenceUrl = "wss://afjk.jp/presence";
-        private string _blobUrl = "http://localhost:8787/blob";
+        private string _blobUrl = "";
         private string _room = "";
         private string _nickname = "Unity";
         private bool _connected;
@@ -46,6 +46,19 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.update -= EditorUpdate;
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             _client?.Disconnect();
+        }
+
+        private string GetBlobUrl()
+        {
+            if (!string.IsNullOrEmpty(_blobUrl)) return _blobUrl;
+
+            // wss://staging.afjk.jp/presence → https://staging.afjk.jp/presence/blob
+            // ws://localhost:8787 → http://localhost:8787/blob
+            var url = _presenceUrl
+                .Replace("wss://", "https://")
+                .Replace("ws://", "http://");
+            if (url.EndsWith("/")) url = url.TrimEnd('/');
+            return url + "/blob";
         }
 
         private void EditorUpdate()
@@ -308,7 +321,7 @@ namespace Afjk.SceneSync.Editor
             await _client.Broadcast(payload);
 
             if (glb != null && path != null)
-                _ = PresenceClient.UploadGlb(glb, _blobUrl, path);
+                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
@@ -365,7 +378,7 @@ namespace Afjk.SceneSync.Editor
                 var path = PresenceClient.GenerateRandomPath();
                 var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
                 await _client.Broadcast(payload);
-                _ = PresenceClient.UploadGlb(glb, _blobUrl, path);
+                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
             }
         }
 
@@ -436,7 +449,7 @@ namespace Afjk.SceneSync.Editor
 
             // broadcast 後にアップロード（ブラウザが GET を始めるのを待って PUT）
             foreach (var (glb, path) in pendingUploads)
-                _ = PresenceClient.UploadGlb(glb, _blobUrl, path);
+                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
         }
 
         private struct TransformSnapshot
