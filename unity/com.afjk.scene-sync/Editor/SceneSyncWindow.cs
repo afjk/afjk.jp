@@ -565,15 +565,15 @@ namespace Afjk.SceneSync.Editor
                 System.IO.File.WriteAllBytes(tempPath, glbBytes);
 
                 // Editor モード: UninterruptedDeferAgent（DontDestroyOnLoad を使わない）
-                var deferAgent = new UninterruptedDeferAgent();
-                var importSettings = new ImportSettings
+                var deferAgent = new GLTFast.UninterruptedDeferAgent();
+                var importSettings = new GLTFast.ImportSettings
                 {
-                    AnimationMethod = AnimationMethod.None,
+                    AnimationMethod = GLTFast.AnimationMethod.None,
                 };
-                var gltf = new GltfImport(
-                    deferAgent: deferAgent,
-                    importSettings: importSettings);
-                var success = await gltf.Load("file://" + tempPath);
+                var gltf = new GLTFast.GltfImport(
+                    downloadProvider: null,
+                    deferAgent: deferAgent);
+                var success = await gltf.Load("file://" + tempPath, importSettings);
 
                 if (success)
                 {
