@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
+using GLTFast;
 using UnityEditor;
 using UnityEngine;
 
@@ -262,21 +264,28 @@ namespace Afjk.SceneSync.Editor
         private GameObject FindManagedObject(string objectId)
         {
             if (_managedObjects.TryGetValue(objectId, out var go))
-                return go;
-
-            var id = int.Parse(objectId);
-            var rootObjects = UnityEngine.SceneManagement.SceneManager
-                .GetActiveScene().GetRootGameObjects();
-
-            foreach (var root in rootObjects)
             {
-                if (root.GetInstanceID() == id)
+                if (go != null) return go;
+                _managedObjects.Remove(objectId);
+            }
+
+            // Unity 由来の objectId は数値（InstanceID）
+            if (int.TryParse(objectId, out var id))
+            {
+                var rootObjects = UnityEngine.SceneManagement.SceneManager
+                    .GetActiveScene().GetRootGameObjects();
+
+                foreach (var root in rootObjects)
                 {
-                    _managedObjects[objectId] = root;
-                    return root;
+                    if (root.GetInstanceID() == id)
+                    {
+                        _managedObjects[objectId] = root;
+                        return root;
+                    }
                 }
             }
 
+            // Web 由来の objectId ("web-xxxxx") は _managedObjects にのみ存在
             return null;
         }
 
@@ -332,8 +341,40 @@ namespace Afjk.SceneSync.Editor
 
         private void HandleSceneAdd(string raw)
         {
-            // ブラウザが受信した場合の処理
-            // Unity 受信は簡略化（GameObject 生成は複雑なため省略）
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            // 既に存在する場合はスキップ
+            if (_managedObjects.ContainsKey(objectId)) return;
+
+            var nameMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"name\":\"([^\"]+)\"");
+            var name = nameMatch.Success ? nameMatch.Groups[1].Value : objectId;
+
+            float[] position = ExtractArray(raw, "\"position\":");
+            float[] rotation = ExtractArray(raw, "\"rotation\":");
+            float[] scale = ExtractArray(raw, "\"scale\":");
+
+            var meshPathMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"meshPath\":\"([^\"]+)\"");
+            var meshPath = meshPathMatch.Success ? meshPathMatch.Groups[1].Value : null;
+
+            // メッシュがある場合は glB をダウンロードしてインポート
+            if (!string.IsNullOrEmpty(meshPath))
+            {
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale);
+            }
+            else
+            {
+                // メッシュなしの場合はプレースホルダーの Cube を作成
+                var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                go.name = name;
+                ApplyTransform(go, position, rotation, scale);
+                _managedObjects[objectId] = go;
+                _knownObjectIds.Add(objectId);
+            }
         }
 
         private void HandleSceneRemove(string raw)
@@ -353,8 +394,37 @@ namespace Afjk.SceneSync.Editor
 
         private void HandleSceneMesh(string raw)
         {
-            // ブラウザが受信した場合の処理
-            // Unity 受信は不要（glB ロード機能がないため）
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            var meshPathMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"meshPath\":\"([^\"]+)\"");
+            if (!meshPathMatch.Success) return;
+            var meshPath = meshPathMatch.Groups[1].Value;
+
+            var go = FindManagedObject(objectId);
+            var name = go != null ? go.name : objectId;
+
+            // 既存オブジェクトがあれば削除して再作成
+            if (go != null)
+            {
+                var pos = go.transform.position;
+                var rot = go.transform.rotation;
+                var scl = go.transform.localScale;
+                DestroyImmediate(go);
+                _managedObjects.Remove(objectId);
+
+                _ = DownloadAndCreateObject(objectId, name, meshPath,
+                    new float[] { pos.x, pos.y, -pos.z },
+                    new float[] { -rot.x, -rot.y, rot.z, rot.w },
+                    new float[] { scl.x, scl.y, scl.z });
+            }
+            else
+            {
+                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null);
+            }
         }
 
         private async System.Threading.Tasks.Task SyncAllMeshes()
@@ -450,6 +520,80 @@ namespace Afjk.SceneSync.Editor
             // broadcast 後にアップロード（ブラウザが GET を始めるのを待って PUT）
             foreach (var (glb, path) in pendingUploads)
                 _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+        }
+
+        private void ApplyTransform(GameObject go, float[] position, float[] rotation, float[] scale)
+        {
+            // Wire 形式（Three.js 座標系）→ Unity 座標系
+            if (position != null && position.Length >= 3)
+                go.transform.position = new Vector3(position[0], position[1], -position[2]);
+
+            if (rotation != null && rotation.Length >= 4)
+                go.transform.rotation = new Quaternion(-rotation[0], -rotation[1], rotation[2], rotation[3]);
+
+            if (scale != null && scale.Length >= 3)
+                go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
+        }
+
+        private async System.Threading.Tasks.Task DownloadAndCreateObject(
+            string objectId, string name, string meshPath,
+            float[] position, float[] rotation, float[] scale)
+        {
+            try
+            {
+                var url = GetBlobUrl() + "/" + meshPath;
+                Debug.Log("[SceneSync] Downloading mesh: " + url);
+
+                var http = new HttpClient();
+                var response = await http.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
+                    // フォールバック: Cube を作成
+                    var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    fallback.name = name;
+                    ApplyTransform(fallback, position, rotation, scale);
+                    _managedObjects[objectId] = fallback;
+                    _knownObjectIds.Add(objectId);
+                    return;
+                }
+
+                var glbBytes = await response.Content.ReadAsByteArrayAsync();
+                var tempPath = System.IO.Path.Combine(
+                    Application.temporaryCachePath, meshPath + ".glb");
+                System.IO.File.WriteAllBytes(tempPath, glbBytes);
+
+                // glTFast でインポート
+                var gltf = new GltfImport();
+                var success = await gltf.Load("file://" + tempPath);
+
+                if (success)
+                {
+                    var go = new GameObject(name);
+                    await gltf.InstantiateMainSceneAsync(go.transform);
+                    ApplyTransform(go, position, rotation, scale);
+                    _managedObjects[objectId] = go;
+                    _knownObjectIds.Add(objectId);
+                    Debug.Log("[SceneSync] Imported mesh: " + name);
+                }
+                else
+                {
+                    Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
+                    var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    fallback.name = name;
+                    ApplyTransform(fallback, position, rotation, scale);
+                    _managedObjects[objectId] = fallback;
+                    _knownObjectIds.Add(objectId);
+                }
+
+                // 一時ファイル削除
+                try { System.IO.File.Delete(tempPath); } catch { }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
+            }
         }
 
         private struct TransformSnapshot
