@@ -328,6 +328,25 @@ function deliverHandoff(sender, msg) {
   safeSend(target.conn, payload);
 }
 
+function broadcastHandoff(sender, msg) {
+  const room = rooms.get(sender.roomId);
+  if (!room) return;
+  const payload = {
+    type: 'handoff',
+    from: {
+      id: sender.id,
+      nickname: sender.nickname,
+      device: sender.device
+    },
+    payload: msg.payload || {}
+  };
+  room.forEach(client => {
+    if (client.id !== sender.id) {
+      safeSend(client.conn, payload);
+    }
+  });
+}
+
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
@@ -516,6 +535,11 @@ server.on('upgrade', (req, socket) => {
       case 'handoff':
         if (data.targetId && data.payload) {
           deliverHandoff(client, data);
+        }
+        break;
+      case 'broadcast':
+        if (data.payload) {
+          broadcastHandoff(client, data);
         }
         break;
       case 'ping':
