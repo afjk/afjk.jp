@@ -241,7 +241,13 @@ function connectPresence() {
 
   ws.onclose = () => {
     updateStatus(false);
-    setTimeout(connectPresence, 3000);
+    setTimeout(() => {
+      connectPresence();
+      // 再接続後に scene-request を送信して状態を再同期
+      if (presenceState.room) {
+        broadcast({ kind: 'scene-request' });
+      }
+    }, 3000);
   };
 
   ws.onerror = () => {
@@ -312,6 +318,18 @@ function handleHandoff(data) {
         }
         scene.add(model);
         managedObjects.set(payload.objectId, model);
+      }, undefined, (err) => {
+        // glB ロード失敗時のフォールバック
+        console.warn('Failed to load mesh:', err);
+        // 既存オブジェクトがあれば使用し続ける、なければ Box を生成
+        if (!obj) {
+          const geo = new THREE.BoxGeometry(1, 1, 1);
+          const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 }); // 赤色でエラーを示す
+          const fallback = new THREE.Mesh(geo, mat);
+          fallback.userData.objectId = payload.objectId;
+          scene.add(fallback);
+          managedObjects.set(payload.objectId, fallback);
+        }
       });
       break;
     }
@@ -343,6 +361,19 @@ function addOrUpdateObject(objectId, info) {
       applyTransform(model, info);
       scene.add(model);
       managedObjects.set(objectId, model);
+    }, undefined, (err) => {
+      // glB ロード失敗時のフォールバック
+      console.warn('Failed to load mesh for', objectId, ':', err);
+      if (!obj) {
+        const geo = new THREE.BoxGeometry(1, 1, 1);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 }); // 赤色
+        obj = new THREE.Mesh(geo, mat);
+        obj.userData.objectId = objectId;
+        obj.userData.name = info.name;
+        applyTransform(obj, info);
+        scene.add(obj);
+        managedObjects.set(objectId, obj);
+      }
     });
   } else {
     if (!obj) {
