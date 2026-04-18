@@ -91,6 +91,9 @@ scene.add(sampleCube);
 const managedObjects = new Map();
 managedObjects.set('sample-cube', sampleCube);
 
+// objectId → lockOwnerId
+const locks = new Map();
+
 // ── レイキャスト選択 ─────────────────────────────────────
 
 const raycaster = new THREE.Raycaster();
@@ -107,9 +110,22 @@ renderer.domElement.addEventListener('dblclick', (e) => {
     let obj = hits[0].object;
     while (obj.parent && !obj.userData.objectId) obj = obj.parent;
     if (obj.userData.objectId) {
+      // ロック確認
+      if (locks.has(obj.userData.objectId)
+          && locks.get(obj.userData.objectId) !== presenceState.id) {
+        // 他者がロック中 → 選択不可
+        return;
+      }
       transformCtrl.attach(obj);
+      broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
     }
   } else {
+    if (transformCtrl.object) {
+      broadcast({
+        kind: 'scene-unlock',
+        objectId: transformCtrl.object.userData.objectId
+      });
+    }
     transformCtrl.detach();
   }
 });
@@ -208,6 +224,13 @@ function connectPresence() {
       case 'peers':
         presenceState.peers = data.peers || [];
         updateStatus(true);
+        // 切断したピアのロックを解除
+        const peerIds = new Set(data.peers.map(p => p.id));
+        for (const [objId, ownerId] of locks) {
+          if (!peerIds.has(ownerId) && ownerId !== presenceState.id) {
+            locks.delete(objId);
+          }
+        }
         break;
 
       case 'handoff':
@@ -290,6 +313,14 @@ function handleHandoff(data) {
         scene.add(model);
         managedObjects.set(payload.objectId, model);
       });
+      break;
+    }
+    case 'scene-lock': {
+      locks.set(payload.objectId, data.from.id);
+      break;
+    }
+    case 'scene-unlock': {
+      locks.delete(payload.objectId);
       break;
     }
     default:

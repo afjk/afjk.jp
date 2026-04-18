@@ -25,6 +25,8 @@ namespace Afjk.SceneSync.Editor
         private const double SEND_INTERVAL = 0.05; // 50ms
         private Dictionary<string, GameObject> _managedObjects = new Dictionary<string, GameObject>();
         private HashSet<string> _knownObjectIds = new HashSet<string>();
+        private Dictionary<string, string> _locks = new Dictionary<string, string>(); // objectId → lockOwnerId
+        private string _currentlyLockedObjectId;
 
         private void OnEnable()
         {
@@ -48,10 +50,31 @@ namespace Afjk.SceneSync.Editor
         private void EditorUpdate()
         {
             if (!_connected) return;
+
+            // Selection 変更のチェック
+            var selection = Selection.activeGameObject;
+            var selectionId = selection != null ? selection.GetInstanceID().ToString() : null;
+
+            // ロック状態の更新
+            if (selectionId != _currentlyLockedObjectId)
+            {
+                // 前の選択をアンロック
+                if (_currentlyLockedObjectId != null)
+                {
+                    _ = _client.Broadcast("{\"kind\":\"scene-unlock\",\"objectId\":\"" + _currentlyLockedObjectId + "\"}");
+                }
+
+                // 新しい選択をロック
+                _currentlyLockedObjectId = selectionId;
+                if (selectionId != null)
+                {
+                    _ = _client.Broadcast("{\"kind\":\"scene-lock\",\"objectId\":\"" + selectionId + "\"}");
+                }
+            }
+
             if (EditorApplication.timeSinceStartup - _lastSendTime < SEND_INTERVAL) return;
             _lastSendTime = EditorApplication.timeSinceStartup;
 
-            var selection = Selection.activeGameObject;
             if (selection == null) return;
 
             var id = selection.GetInstanceID().ToString();
@@ -182,6 +205,14 @@ namespace Afjk.SceneSync.Editor
             else if (raw.Contains("\"kind\":\"scene-mesh\""))
             {
                 HandleSceneMesh(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-lock\""))
+            {
+                HandleSceneLock(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-unlock\""))
+            {
+                HandleSceneUnlock(raw);
             }
         }
 
@@ -341,6 +372,27 @@ namespace Afjk.SceneSync.Editor
                     }
                 }
             }
+        }
+
+        private void HandleSceneLock(string raw)
+        {
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            var fromIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"id\":\"([^\"]+)\"");
+            var fromId = fromIdMatch.Success ? fromIdMatch.Groups[1].Value : null;
+
+            _locks[objectId] = fromId;
+        }
+
+        private void HandleSceneUnlock(string raw)
+        {
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            _locks.Remove(objectId);
         }
 
         private async System.Threading.Tasks.Task HandleSceneRequest()
