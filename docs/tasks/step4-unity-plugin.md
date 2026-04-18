@@ -12,21 +12,36 @@ Unity Editor 上で動作する EditorWindow を作成し、presence-server に 
 
 ---
 
-## リポジトリ構成
+## ディレクトリ構成
 
-UPM パッケージとして別リポジトリに作成する。
+afjk.jp リポジトリ内に UPM パッケージとして配置する。
 
-    com.afjk.scene-sync/
-    ├── package.json
-    ├── Editor/
-    │   ├── SceneSyncWindow.cs       # EditorWindow UI
-    │   ├── PresenceClient.cs        # WebSocket 接続・メッセージ処理
-    │   └── SceneSyncEditor.asmdef   # Assembly Definition
-    └── README.md
+    afjk.jp/
+    ├── unity/
+    │   └── com.afjk.scene-sync/
+    │       ├── package.json
+    │       ├── Editor/
+    │       │   ├── SceneSyncWindow.cs
+    │       │   ├── PresenceClient.cs
+    │       │   └── SceneSyncEditor.asmdef
+    │       └── README.md
+    ├── html/
+    ├── apps/
+    └── docs/
+
+Unity プロジェクトから利用する場合は Packages/manifest.json でローカルパス参照する:
+
+    {
+      "dependencies": {
+        "com.afjk.scene-sync": "file:../../afjk.jp/unity/com.afjk.scene-sync"
+      }
+    }
+
+将来的に upm.afjk.jp へ publish して scoped registry 経由でも導入可能にする。
 
 ---
 
-## package.json
+## unity/com.afjk.scene-sync/package.json
 
     {
       "name": "com.afjk.scene-sync",
@@ -42,7 +57,7 @@ UPM パッケージとして別リポジトリに作成する。
 
 ---
 
-## Editor/SceneSyncEditor.asmdef
+## unity/com.afjk.scene-sync/Editor/SceneSyncEditor.asmdef
 
     {
       "name": "SceneSyncEditor",
@@ -61,10 +76,10 @@ UPM パッケージとして別リポジトリに作成する。
 
 ---
 
-## Editor/PresenceClient.cs
+## unity/com.afjk.scene-sync/Editor/PresenceClient.cs
 
 WebSocket 接続と presence プロトコルを処理するクラス。
-Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
+Unity の System.Net.WebSockets.ClientWebSocket を使用する（外部ライブラリ不要）。
 
     using System;
     using System.Collections.Generic;
@@ -85,7 +100,6 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
             public string nickname;
             public string device;
             public string targetId;
-            public string kind;
         }
 
         [Serializable]
@@ -103,20 +117,6 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
             public string device;
         }
 
-        [Serializable]
-        public class HandoffMessage
-        {
-            public string type;
-            public PeerInfo from;
-            public string payload; // JSON string, parsed by caller
-        }
-
-        [Serializable]
-        public class HandoffPayload
-        {
-            public string kind;
-        }
-
         public class PresenceClient
         {
             public string Id { get; private set; }
@@ -127,11 +127,11 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
             public event Action OnConnected;
             public event Action OnDisconnected;
             public event Action<List<PeerInfo>> OnPeersUpdated;
-            public event Action<string, string> OnHandoffReceived; // (fromJson, payloadJson)
+            public event Action<string> OnHandoffReceived; // raw JSON
 
             private ClientWebSocket _ws;
             private CancellationTokenSource _cts;
-            private readonly byte[] _recvBuf = new byte[131072]; // 128KB, matches server limit
+            private readonly byte[] _recvBuf = new byte[131072]; // 128KB
 
             public async Task ConnectAsync(string presenceUrl, string room, string nickname)
             {
@@ -142,13 +142,12 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
 
                 var url = string.IsNullOrEmpty(room)
                     ? presenceUrl
-                    : $"{presenceUrl}/?room={room}";
+                    : presenceUrl + "/?room=" + room;
 
                 try
                 {
                     await _ws.ConnectAsync(new Uri(url), _cts.Token);
 
-                    // Send hello
                     var hello = JsonUtility.ToJson(new PresenceMessage
                     {
                         type = "hello",
@@ -158,13 +157,11 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
                     await SendRaw(hello);
 
                     OnConnected?.Invoke();
-
-                    // Start receive loop
                     _ = ReceiveLoop();
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"[SceneSync] Connect failed: {ex.Message}");
+                    Debug.LogWarning("[SceneSync] Connect failed: " + ex.Message);
                     OnDisconnected?.Invoke();
                 }
             }
@@ -185,14 +182,12 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
 
             public async Task Broadcast(string payloadJson)
             {
-                var msg = $"{{\"type\":\"broadcast\",\"payload\":{payloadJson}}}";
-                await SendRaw(msg);
+                await SendRaw("{\"type\":\"broadcast\",\"payload\":" + payloadJson + "}");
             }
 
             public async Task SendHandoff(string targetId, string payloadJson)
             {
-                var msg = $"{{\"type\":\"handoff\",\"targetId\":\"{targetId}\",\"payload\":{payloadJson}}}";
-                await SendRaw(msg);
+                await SendRaw("{\"type\":\"handoff\",\"targetId\":\"" + targetId + "\",\"payload\":" + payloadJson + "}");
             }
 
             private async Task SendRaw(string text)
@@ -210,7 +205,7 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"[SceneSync] Send failed: {ex.Message}");
+                    Debug.LogWarning("[SceneSync] Send failed: " + ex.Message);
                 }
             }
 
@@ -223,11 +218,7 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
                         var result = await _ws.ReceiveAsync(
                             new ArraySegment<byte>(_recvBuf), _cts.Token
                         );
-
-                        if (result.MessageType == WebSocketMessageType.Close)
-                        {
-                            break;
-                        }
+                        if (result.MessageType == WebSocketMessageType.Close) break;
 
                         var text = Encoding.UTF8.GetString(_recvBuf, 0, result.Count);
                         HandleMessage(text);
@@ -236,7 +227,7 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"[SceneSync] Receive error: {ex.Message}");
+                    Debug.LogWarning("[SceneSync] Receive error: " + ex.Message);
                 }
                 finally
                 {
@@ -246,7 +237,6 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
 
             private void HandleMessage(string raw)
             {
-                // Minimal parse to get type
                 var baseMsg = JsonUtility.FromJson<PresenceMessage>(raw);
                 if (baseMsg == null) return;
 
@@ -264,8 +254,7 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
                         break;
 
                     case "handoff":
-                        // Extract from and payload as raw JSON for flexible handling
-                        OnHandoffReceived?.Invoke(raw, raw);
+                        OnHandoffReceived?.Invoke(raw);
                         break;
 
                     case "ping":
@@ -278,7 +267,7 @@ Unity の ClientWebSocket を使用する（外部ライブラリ不要）。
 
 ---
 
-## Editor/SceneSyncWindow.cs
+## unity/com.afjk.scene-sync/Editor/SceneSyncWindow.cs
 
 EditorWindow UI。接続・切断・状態表示を行う。
 
@@ -306,21 +295,9 @@ EditorWindow UI。接続・切断・状態表示を行う。
             private void OnEnable()
             {
                 _client = new PresenceClient();
-                _client.OnConnected += () =>
-                {
-                    _connected = true;
-                    Repaint();
-                };
-                _client.OnDisconnected += () =>
-                {
-                    _connected = false;
-                    Repaint();
-                };
-                _client.OnPeersUpdated += (peers) =>
-                {
-                    _peers = peers;
-                    Repaint();
-                };
+                _client.OnConnected += () => { _connected = true; Repaint(); };
+                _client.OnDisconnected += () => { _connected = false; Repaint(); };
+                _client.OnPeersUpdated += (peers) => { _peers = peers; Repaint(); };
                 _client.OnHandoffReceived += OnHandoff;
 
                 EditorApplication.update += EditorUpdate;
@@ -358,7 +335,7 @@ EditorWindow UI。接続・切断・状態表示を行う。
                 else
                 {
                     EditorGUILayout.HelpBox(
-                        $"Connected — Room: {_client.Room} / Peers: {_peers.Count}",
+                        "Connected\nRoom: " + _client.Room + "\nPeers: " + _peers.Count,
                         MessageType.Info
                     );
 
@@ -367,7 +344,8 @@ EditorWindow UI。接続・切断・状態表示を行う。
                         GUILayout.Label("Peers:", EditorStyles.miniLabel);
                         foreach (var p in _peers)
                         {
-                            GUILayout.Label($"  {p.nickname} ({p.device})", EditorStyles.miniLabel);
+                            GUILayout.Label("  " + p.nickname + " (" + p.device + ")",
+                                EditorStyles.miniLabel);
                         }
                     }
 
@@ -378,7 +356,7 @@ EditorWindow UI。接続・切断・状態表示を行う。
                 }
             }
 
-            private void OnHandoff(string raw, string payloadRaw)
+            private void OnHandoff(string raw)
             {
                 // 次の Step で scene-state, scene-delta 等を実装
             }
@@ -387,32 +365,20 @@ EditorWindow UI。接続・切断・状態表示を行う。
 
 ---
 
-## Unity プロジェクトへの導入
+## unity/com.afjk.scene-sync/README.md
 
-### ローカル開発（パス参照）
+    # Scene Sync
 
-Packages/manifest.json に追加:
+    Unity Editor と Web ブラウザ間で 3D シーンをリアルタイム共有するプラグイン。
 
-    {
-      "dependencies": {
-        "com.afjk.scene-sync": "file:../../com.afjk.scene-sync"
-      }
-    }
+    afjk.jp/pipe の presence-server を利用して通信する。
 
-### UPM レジストリ経由（公開後）
+    ## 使い方
 
-    {
-      "scopedRegistries": [
-        {
-          "name": "afjk",
-          "url": "https://upm.afjk.jp",
-          "scopes": ["com.afjk"]
-        }
-      ],
-      "dependencies": {
-        "com.afjk.scene-sync": "0.1.0"
-      }
-    }
+    1. Window > Scene Sync を開く
+    2. Presence URL とルームコードを入力
+    3. Connect ボタンを押す
+    4. ブラウザで https://afjk.jp/pipe/scene.html?room=同じルーム を開く
 
 ---
 
@@ -422,8 +388,8 @@ Packages/manifest.json に追加:
 
 ### 2. 接続情報を入力
 
-- Presence URL: `wss://afjk.jp/presence`（またはローカル: `ws://localhost:8787`）
-- Room: `test`
+- Presence URL: wss://afjk.jp/presence（またはローカル: ws://localhost:8787）
+- Room: test
 - Nickname: 任意
 
 ### 3. Connect ボタンを押す
@@ -441,8 +407,8 @@ Packages/manifest.json に追加:
 
 ## 完了条件
 
-- [ ] UPM パッケージ構成でリポジトリが作成されている
+- [ ] unity/com.afjk.scene-sync/ ディレクトリに UPM パッケージ構成で配置されている
 - [ ] PresenceClient.cs が WebSocket 接続・hello・peers・handoff を処理する
 - [ ] SceneSyncWindow.cs が EditorWindow で接続 UI を提供する
-- [ ] Broadcast メソッドが用意されている
+- [ ] Broadcast / SendHandoff メソッドが用意されている
 - [ ] presence-server に接続しルーム参加できる
