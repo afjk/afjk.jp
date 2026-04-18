@@ -101,6 +101,54 @@ managedObjects.set('sample-cube', sampleCube);
 // objectId → lockOwnerId
 const locks = new Map();
 
+// objectId → wireframe mesh
+const lockOverlays = new Map();
+
+// ── トースト通知 ────────────────────────────────────────
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ── ロック表示 ──────────────────────────────────────────
+
+function addLockOverlay(objectId) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return;
+
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xff8800,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.5,
+  });
+  const wire = new THREE.Mesh(geo, mat);
+  wire.position.copy(center);
+  wire.raycast = () => {}; // レイキャストから除外
+  scene.add(wire);
+  lockOverlays.set(objectId, wire);
+}
+
+function removeLockOverlay(objectId) {
+  const wire = lockOverlays.get(objectId);
+  if (!wire) return;
+  scene.remove(wire);
+  wire.geometry.dispose();
+  wire.material.dispose();
+  lockOverlays.delete(objectId);
+}
+
 // ── レイキャスト選択 ─────────────────────────────────────
 
 const raycaster = new THREE.Raycaster();
@@ -118,8 +166,10 @@ renderer.domElement.addEventListener('dblclick', (e) => {
     while (obj.parent && !obj.userData.objectId) obj = obj.parent;
     if (obj.userData.objectId) {
       // ロック確認
-      if (locks.has(obj.userData.objectId)
-          && locks.get(obj.userData.objectId) !== presenceState.id) {
+      if (locks.has(obj.userData.objectId)) {
+        const lockInfo = locks.get(obj.userData.objectId);
+        const who = lockInfo.nickname || lockInfo.from?.nickname || '他のユーザー';
+        showToast(`${who} が編集中です`);
         return;
       }
       transformCtrl.attach(obj);
@@ -144,16 +194,48 @@ window.addEventListener('keydown', (e) => {
     case 'e': transformCtrl.setMode('rotate'); break;
     case 'r': transformCtrl.setMode('scale'); break;
     case 'escape': transformCtrl.detach(); break;
-    case 'delete':
-      if (transformCtrl.object) {
-        const obj = transformCtrl.object;
-        const objectId = obj.userData.objectId;
-        transformCtrl.detach();
-        scene.remove(obj);
-        managedObjects.delete(objectId);
-        broadcast({ kind: 'scene-remove', objectId });
+    case 'delete': {
+      const attached = transformCtrl.object;
+      if (!attached) break;
+
+      // objectId を探す
+      let deleteId = null;
+      for (const [id, obj] of managedObjects) {
+        if (obj === attached) {
+          deleteId = id;
+          break;
+        }
+      }
+
+      // TransformControls を外す
+      transformCtrl.detach();
+
+      if (deleteId) {
+        // ロック中なら削除不可
+        if (locks.has(deleteId)) {
+          showToast('他のユーザーが編集中です');
+          break;
+        }
+
+        // シーンから削除
+        scene.remove(attached);
+        attached.traverse(child => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        });
+        managedObjects.delete(deleteId);
+
+        // ブロードキャスト
+        broadcast({ kind: 'scene-remove', objectId: deleteId });
       }
       break;
+    }
   }
 });
 
@@ -340,11 +422,13 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-lock': {
-      locks.set(payload.objectId, data.from.id);
+      locks.set(payload.objectId, data.from);
+      addLockOverlay(payload.objectId);
       break;
     }
     case 'scene-unlock': {
       locks.delete(payload.objectId);
+      removeLockOverlay(payload.objectId);
       break;
     }
     default:
@@ -478,9 +562,19 @@ async function handleAddMeshFile(file) {
     model.userData.objectId = objectId;
     model.userData.name = file.name;
 
+    // バウンディングボックスでモデルの中心を算出
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+
+    // 子メッシュをオフセットして中心を原点に揃える
+    model.children.forEach(child => {
+      child.position.sub(center);
+    });
+
+    // カメラ前方 5m に配置
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
-    model.position.copy(camera.position).add(dir.multiplyScalar(3));
+    model.position.copy(camera.position).addScaledVector(dir, 5);
     model.position.y = 0;
 
     scene.add(model);

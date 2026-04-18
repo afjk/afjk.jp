@@ -77,6 +77,24 @@
     #drop-overlay.active {
       display: flex;
     }
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 100;
+    }
+    #toast.show {
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -85,6 +103,7 @@
   <input type="file" id="file-input" accept=".glb,.gltf" style="display:none">
   <div id="drop-overlay">ドロップして追加</div>
   <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
+  <div id="toast"></div>
   <script type="importmap">
   {
     "imports": {
