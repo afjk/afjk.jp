@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -178,6 +181,54 @@ namespace Afjk.SceneSync.Editor
                     _ = SendRaw("{\"type\":\"pong\"}");
                     break;
             }
+        }
+
+        // ── glB エクスポート・配信 ────────────────────────────
+
+        private static readonly HttpClient _http = new HttpClient();
+
+        public static async Task<byte[]> ExportGameObjectAsGlb(UnityEngine.GameObject go)
+        {
+            try
+            {
+                // TODO: com.unity.cloud.gltfast 使用時はここで実装
+                // 暫定実装: null を返す（フォールバック Box を使用）
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SceneSync] Export failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        public static async Task<string> UploadGlb(byte[] glb, string pipingBaseUrl)
+        {
+            if (glb == null || glb.Length == 0) return null;
+
+            try
+            {
+                var path = GenerateRandomPath();
+                var url = pipingBaseUrl + "/" + path;
+                var content = new ByteArrayContent(glb);
+                content.Headers.ContentType = new MediaTypeHeaderValue("model/gltf-binary");
+                var response = await _http.PutAsync(url, content);
+                return response.IsSuccessStatusCode ? path : null;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SceneSync] Upload failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static string GenerateRandomPath()
+        {
+            var bytes = new byte[6];
+            new System.Random().NextBytes(bytes);
+            return Convert.ToBase64String(bytes)
+                .Replace("+", "").Replace("/", "").Replace("=", "")
+                .Substring(0, 8).ToLower();
         }
     }
 }

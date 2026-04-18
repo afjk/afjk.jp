@@ -85,7 +85,52 @@ namespace Afjk.SceneSync.Editor
 
         private void OnHandoff(string raw)
         {
-            // 次の Step で scene-state, scene-delta 等を実装
+            // JSON から kind を抽出
+            if (!raw.Contains("\"kind\"")) return;
+
+            if (raw.Contains("\"kind\":\"scene-request\""))
+            {
+                _ = HandleSceneRequest();
+            }
+        }
+
+        private async System.Threading.Tasks.Task HandleSceneRequest()
+        {
+            var objects = new Dictionary<string, object>();
+            var rootObjects = UnityEngine.SceneManagement.SceneManager
+                .GetActiveScene().GetRootGameObjects();
+
+            foreach (var go in rootObjects)
+            {
+                if (go.hideFlags != HideFlags.None) continue;
+
+                var pos = go.transform.position;
+                var rot = go.transform.rotation;
+                var scl = go.transform.localScale;
+
+                string meshPath = null;
+                if (go.GetComponentInChildren<MeshFilter>() != null
+                    || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
+                {
+                    var glb = await PresenceClient.ExportGameObjectAsGlb(go);
+                    if (glb != null)
+                    {
+                        meshPath = await PresenceClient.UploadGlb(glb, "https://pipe.afjk.jp");
+                    }
+                }
+
+                objects[go.GetInstanceID().ToString()] = new
+                {
+                    name = go.name,
+                    position = new[] { pos.x, pos.y, -pos.z },
+                    rotation = new[] { -rot.x, -rot.y, rot.z, rot.w },
+                    scale = new[] { scl.x, scl.y, scl.z },
+                    meshPath = meshPath
+                };
+            }
+
+            var payload = JsonUtility.ToJson(new { kind = "scene-state", objects });
+            await _client.Broadcast(payload);
         }
     }
 }

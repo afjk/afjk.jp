@@ -30,6 +30,12 @@ scene.add(dirLight);
 // グリッド
 scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x333333));
 
+// glB ローダー
+const gltfLoader = new GLTFLoader();
+const PIPING_BASE = location.hostname === 'localhost'
+  ? 'http://localhost:8080'
+  : 'https://pipe.afjk.jp';
+
 // ── コントロール ─────────────────────────────────────────
 
 const orbit = new OrbitControls(camera, renderer.domElement);
@@ -159,6 +165,7 @@ function connectPresence() {
         presenceState.id = data.id;
         presenceState.room = data.room;
         updateStatus(true);
+        broadcast({ kind: 'scene-request' });
         break;
 
       case 'peers':
@@ -193,17 +200,59 @@ function updateStatus(connected) {
   }
 }
 
-// ── Handoff 受信（Scene Sync 用、次 Step 以降で実装） ────
+// ── Handoff 受信（Scene Sync 用） ────────────────────────
 
 function handleHandoff(data) {
   const payload = data.payload;
   if (!payload || !payload.kind) return;
 
   switch (payload.kind) {
-    // 次の Step で scene-state, scene-delta 等を実装
+    case 'scene-state': {
+      const objects = payload.objects || {};
+      for (const [objectId, info] of Object.entries(objects)) {
+        addOrUpdateObject(objectId, info);
+      }
+      break;
+    }
     default:
       break;
   }
+}
+
+// ── シーン同期ヘルパー ───────────────────────────────────
+
+function addOrUpdateObject(objectId, info) {
+  let obj = managedObjects.get(objectId);
+
+  if (info.meshPath) {
+    const url = PIPING_BASE + '/' + info.meshPath;
+    gltfLoader.load(url, (gltf) => {
+      if (obj) scene.remove(obj);
+      const model = gltf.scene;
+      model.userData.objectId = objectId;
+      model.userData.name = info.name;
+      applyTransform(model, info);
+      scene.add(model);
+      managedObjects.set(objectId, model);
+    });
+  } else {
+    if (!obj) {
+      const geo = new THREE.BoxGeometry(1, 1, 1);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
+      obj = new THREE.Mesh(geo, mat);
+      obj.userData.objectId = objectId;
+      obj.userData.name = info.name;
+      scene.add(obj);
+      managedObjects.set(objectId, obj);
+    }
+    applyTransform(obj, info);
+  }
+}
+
+function applyTransform(obj, info) {
+  if (info.position) obj.position.fromArray(info.position);
+  if (info.rotation) obj.quaternion.fromArray(info.rotation);
+  if (info.scale) obj.scale.fromArray(info.scale);
 }
 
 // ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
