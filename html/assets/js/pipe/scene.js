@@ -122,6 +122,16 @@ window.addEventListener('keydown', (e) => {
     case 'e': transformCtrl.setMode('rotate'); break;
     case 'r': transformCtrl.setMode('scale'); break;
     case 'escape': transformCtrl.detach(); break;
+    case 'delete':
+      if (transformCtrl.object) {
+        const obj = transformCtrl.object;
+        const objectId = obj.userData.objectId;
+        transformCtrl.detach();
+        scene.remove(obj);
+        managedObjects.delete(objectId);
+        broadcast({ kind: 'scene-remove', objectId });
+      }
+      break;
   }
 });
 
@@ -248,6 +258,19 @@ function handleHandoff(data) {
       if (payload.position) obj.position.fromArray(payload.position);
       if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
       if (payload.scale) obj.scale.fromArray(payload.scale);
+      break;
+    }
+    case 'scene-add': {
+      addOrUpdateObject(payload.objectId, payload);
+      break;
+    }
+    case 'scene-remove': {
+      const obj = managedObjects.get(payload.objectId);
+      if (obj) {
+        if (transformCtrl.object === obj) transformCtrl.detach();
+        scene.remove(obj);
+        managedObjects.delete(payload.objectId);
+      }
       break;
     }
     default:

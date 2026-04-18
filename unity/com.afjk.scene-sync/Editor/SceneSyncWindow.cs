@@ -24,6 +24,7 @@ namespace Afjk.SceneSync.Editor
         private double _lastSendTime;
         private const double SEND_INTERVAL = 0.05; // 50ms
         private Dictionary<string, GameObject> _managedObjects = new Dictionary<string, GameObject>();
+        private HashSet<string> _knownObjectIds = new HashSet<string>();
 
         private void OnEnable()
         {
@@ -34,11 +35,13 @@ namespace Afjk.SceneSync.Editor
             _client.OnHandoffReceived += OnHandoff;
 
             EditorApplication.update += EditorUpdate;
+            EditorApplication.hierarchyChanged += OnHierarchyChanged;
         }
 
         private void OnDisable()
         {
             EditorApplication.update -= EditorUpdate;
+            EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             _client?.Disconnect();
         }
 
@@ -116,6 +119,38 @@ namespace Afjk.SceneSync.Editor
             }
         }
 
+        private void OnHierarchyChanged()
+        {
+            if (!_connected) return;
+            var currentIds = new HashSet<string>();
+            var rootObjects = UnityEngine.SceneManagement.SceneManager
+                .GetActiveScene().GetRootGameObjects();
+
+            foreach (var go in rootObjects)
+            {
+                if (go.hideFlags != HideFlags.None) continue;
+                var id = go.GetInstanceID().ToString();
+                currentIds.Add(id);
+
+                if (!_knownObjectIds.Contains(id))
+                {
+                    // 新規オブジェクト
+                    _ = SendSceneAdd(go);
+                }
+            }
+
+            // 削除されたオブジェクト
+            foreach (var id in _knownObjectIds)
+            {
+                if (!currentIds.Contains(id))
+                {
+                    _ = SendSceneRemove(id);
+                }
+            }
+
+            _knownObjectIds = currentIds;
+        }
+
         private void OnHandoff(string raw)
         {
             // JSON から kind を抽出
@@ -128,6 +163,14 @@ namespace Afjk.SceneSync.Editor
             else if (raw.Contains("\"kind\":\"scene-delta\""))
             {
                 HandleSceneDelta(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-add\""))
+            {
+                HandleSceneAdd(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-remove\""))
+            {
+                HandleSceneRemove(raw);
             }
         }
 
@@ -194,6 +237,63 @@ namespace Afjk.SceneSync.Editor
                     result[i] = f;
             }
             return result;
+        }
+
+        private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
+        {
+            var pos = go.transform.position;
+            var rot = go.transform.rotation;
+            var scl = go.transform.localScale;
+
+            string meshPath = null;
+            if (go.GetComponentInChildren<MeshFilter>() != null
+                || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
+            {
+                var glb = await PresenceClient.ExportGameObjectAsGlb(go);
+                if (glb != null)
+                {
+                    meshPath = await PresenceClient.UploadGlb(glb, "https://pipe.afjk.jp");
+                }
+            }
+
+            var payload = new
+            {
+                kind = "scene-add",
+                objectId = go.GetInstanceID().ToString(),
+                name = go.name,
+                position = new[] { pos.x, pos.y, -pos.z },
+                rotation = new[] { -rot.x, -rot.y, rot.z, rot.w },
+                scale = new[] { scl.x, scl.y, scl.z },
+                meshPath = meshPath
+            };
+            await _client.Broadcast(JsonUtility.ToJson(payload));
+        }
+
+        private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
+        {
+            var payload = "{\"kind\":\"scene-remove\",\"objectId\":\"" + objectId + "\"}";
+            await _client.Broadcast(payload);
+        }
+
+        private void HandleSceneAdd(string raw)
+        {
+            // ブラウザが受信した場合の処理
+            // Unity 受信は簡略化（GameObject 生成は複雑なため省略）
+        }
+
+        private void HandleSceneRemove(string raw)
+        {
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            var go = FindManagedObject(objectId);
+            if (go != null)
+            {
+                DestroyImmediate(go);
+                _managedObjects.Remove(objectId);
+                _knownObjectIds.Remove(objectId);
+            }
         }
 
         private async System.Threading.Tasks.Task HandleSceneRequest()
