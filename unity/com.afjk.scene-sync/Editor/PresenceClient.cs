@@ -7,6 +7,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GLTFast.Export;
 using UnityEngine;
 
 namespace Afjk.SceneSync.Editor
@@ -191,9 +192,25 @@ namespace Afjk.SceneSync.Editor
         {
             try
             {
-                // TODO: com.unity.cloud.gltfast 使用時はここで実装
-                // 暫定実装: null を返す（フォールバック Box を使用）
-                return null;
+                var exportSettings = new ExportSettings
+                {
+                    Format = GltfFormat.Binary,
+                    FileConflictResolution = FileConflictResolution.Overwrite,
+                };
+                var goSettings = new GameObjectExportSettings
+                {
+                    OnlyActiveInHierarchy = false,
+                };
+                var export = new GameObjectExport(exportSettings, goSettings);
+                export.AddScene(new[] { go }, go.name);
+                using var stream = new MemoryStream();
+                var success = await export.SaveToStreamAndDispose(stream);
+                if (!success)
+                {
+                    Debug.LogWarning("[SceneSync] GLB export returned false for: " + go.name);
+                    return null;
+                }
+                return stream.ToArray();
             }
             catch (Exception ex)
             {
@@ -202,33 +219,31 @@ namespace Afjk.SceneSync.Editor
             }
         }
 
-        public static async Task<string> UploadGlb(byte[] glb, string pipingBaseUrl)
+        public static async Task UploadGlb(byte[] glb, string pipingBaseUrl, string path)
         {
-            if (glb == null || glb.Length == 0) return null;
+            if (glb == null || glb.Length == 0) return;
 
             try
             {
-                var path = GenerateRandomPath();
                 var url = pipingBaseUrl + "/" + path;
                 var content = new ByteArrayContent(glb);
                 content.Headers.ContentType = new MediaTypeHeaderValue("model/gltf-binary");
-                var response = await _http.PutAsync(url, content);
-                return response.IsSuccessStatusCode ? path : null;
+                await _http.PutAsync(url, content);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] Upload failed: " + ex.Message);
-                return null;
             }
         }
 
-        private static string GenerateRandomPath()
+        public static string GenerateRandomPath()
         {
-            var bytes = new byte[6];
+            var bytes = new byte[16];
             new System.Random().NextBytes(bytes);
-            return Convert.ToBase64String(bytes)
+            var s = Convert.ToBase64String(bytes)
                 .Replace("+", "").Replace("/", "").Replace("=", "")
-                .Substring(0, 8).ToLower();
+                .ToLower();
+            return s.Substring(0, Math.Min(8, s.Length));
         }
     }
 }

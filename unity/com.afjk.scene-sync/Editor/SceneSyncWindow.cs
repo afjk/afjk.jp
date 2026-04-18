@@ -15,6 +15,7 @@ namespace Afjk.SceneSync.Editor
 
         private PresenceClient _client;
         private string _presenceUrl = "wss://afjk.jp/presence";
+        private string _pipingUrl = "http://localhost:8080";
         private string _room = "";
         private string _nickname = "Unity";
         private bool _connected;
@@ -106,6 +107,7 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Space(4);
 
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
+            _pipingUrl = EditorGUILayout.TextField("Piping URL", _pipingUrl);
             _room = EditorGUILayout.TextField("Room", _room);
             _nickname = EditorGUILayout.TextField("Nickname", _nickname);
 
@@ -287,28 +289,26 @@ namespace Afjk.SceneSync.Editor
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
 
-            string meshPath = null;
+            byte[] glb = null;
+            string path = null;
             if (go.GetComponentInChildren<MeshFilter>() != null
                 || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
             {
-                var glb = await PresenceClient.ExportGameObjectAsGlb(go);
+                glb = await PresenceClient.ExportGameObjectAsGlb(go);
                 if (glb != null)
-                {
-                    meshPath = await PresenceClient.UploadGlb(glb, "https://pipe.afjk.jp");
-                }
+                    path = PresenceClient.GenerateRandomPath();
             }
 
-            var payload = new
-            {
-                kind = "scene-add",
-                objectId = go.GetInstanceID().ToString(),
-                name = go.name,
-                position = new[] { pos.x, pos.y, -pos.z },
-                rotation = new[] { -rot.x, -rot.y, rot.z, rot.w },
-                scale = new[] { scl.x, scl.y, scl.z },
-                meshPath = meshPath
-            };
-            await _client.Broadcast(JsonUtility.ToJson(payload));
+            var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
+                ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
+                ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
+                ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                meshPathJson + "}";
+            await _client.Broadcast(payload);
+
+            if (glb != null && path != null)
+                _ = PresenceClient.UploadGlb(glb, _pipingUrl, path);
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
@@ -361,15 +361,14 @@ namespace Afjk.SceneSync.Editor
 
                 var objectId = go.GetInstanceID().ToString();
 
-                // 受信者ごとにパスを分けて PUT
+                // piping サーバーは GET と PUT が同時接続しないとブロックするため、
+                // 先に scene-mesh でパスをブラウザに通知し、その後 PUT する
                 foreach (var peer in _peers)
                 {
-                    var meshPath = await PresenceClient.UploadGlb(glb, "https://pipe.afjk.jp");
-                    if (meshPath != null)
-                    {
-                        var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + meshPath + "\"}";
-                        await _client.SendHandoff(peer.id, payload);
-                    }
+                    var path = PresenceClient.GenerateRandomPath();
+                    var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
+                    await _client.SendHandoff(peer.id, payload);
+                    _ = PresenceClient.UploadGlb(glb, _pipingUrl, path);
                 }
             }
         }
@@ -397,9 +396,13 @@ namespace Afjk.SceneSync.Editor
 
         private async System.Threading.Tasks.Task HandleSceneRequest()
         {
-            var objects = new Dictionary<string, object>();
             var rootObjects = UnityEngine.SceneManagement.SceneManager
                 .GetActiveScene().GetRootGameObjects();
+
+            var objectsJson = new System.Text.StringBuilder();
+            objectsJson.Append("{");
+            bool first = true;
+            var pendingUploads = new List<(byte[] glb, string path)>();
 
             foreach (var go in rootObjects)
             {
@@ -409,29 +412,35 @@ namespace Afjk.SceneSync.Editor
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
 
-                string meshPath = null;
+                string path = null;
                 if (go.GetComponentInChildren<MeshFilter>() != null
                     || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
                 {
                     var glb = await PresenceClient.ExportGameObjectAsGlb(go);
                     if (glb != null)
                     {
-                        meshPath = await PresenceClient.UploadGlb(glb, "https://pipe.afjk.jp");
+                        path = PresenceClient.GenerateRandomPath();
+                        pendingUploads.Add((glb, path));
                     }
                 }
 
-                objects[go.GetInstanceID().ToString()] = new
-                {
-                    name = go.name,
-                    position = new[] { pos.x, pos.y, -pos.z },
-                    rotation = new[] { -rot.x, -rot.y, rot.z, rot.w },
-                    scale = new[] { scl.x, scl.y, scl.z },
-                    meshPath = meshPath
-                };
+                if (!first) objectsJson.Append(",");
+                first = false;
+                var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+                objectsJson.Append("\"" + go.GetInstanceID() + "\":{\"name\":\"" + go.name + "\"" +
+                    ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
+                    ",\"rotation\":[" + (-rot.x) + "," + (-rot.y) + "," + rot.z + "," + rot.w + "]" +
+                    ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                    meshPathJson + "}");
             }
+            objectsJson.Append("}");
 
-            var payload = JsonUtility.ToJson(new { kind = "scene-state", objects });
+            var payload = "{\"kind\":\"scene-state\",\"objects\":" + objectsJson + "}";
             await _client.Broadcast(payload);
+
+            // broadcast 後にアップロード（ブラウザが GET を始めるのを待って PUT）
+            foreach (var (glb, path) in pendingUploads)
+                _ = PresenceClient.UploadGlb(glb, _pipingUrl, path);
         }
 
         private struct TransformSnapshot

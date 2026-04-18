@@ -7,5 +7,8 @@
   "author": {
     "name": "afjk"
   },
-  "keywords": ["scene", "sync", "collaboration", "websocket"]
+  "keywords": ["scene", "sync", "collaboration", "websocket"],
+  "dependencies": {
+    "com.unity.cloud.gltfast": "6.0.0"
+  }
 }
