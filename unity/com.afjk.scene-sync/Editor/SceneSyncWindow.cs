@@ -15,7 +15,7 @@ namespace Afjk.SceneSync.Editor
 
         private PresenceClient _client;
         private string _presenceUrl = "wss://afjk.jp/presence";
-        private string _pipingUrl = "http://localhost:8080";
+        private string _blobUrl = "";
         private string _room = "";
         private string _nickname = "Unity";
         private bool _connected;
@@ -46,6 +46,19 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.update -= EditorUpdate;
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             _client?.Disconnect();
+        }
+
+        private string GetBlobUrl()
+        {
+            if (!string.IsNullOrEmpty(_blobUrl)) return _blobUrl;
+
+            // wss://staging.afjk.jp/presence → https://staging.afjk.jp/presence/blob
+            // ws://localhost:8787 → http://localhost:8787/blob
+            var url = _presenceUrl
+                .Replace("wss://", "https://")
+                .Replace("ws://", "http://");
+            if (url.EndsWith("/")) url = url.TrimEnd('/');
+            return url + "/blob";
         }
 
         private void EditorUpdate()
@@ -107,7 +120,7 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Space(4);
 
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
-            _pipingUrl = EditorGUILayout.TextField("Piping URL", _pipingUrl);
+            _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
             _room = EditorGUILayout.TextField("Room", _room);
             _nickname = EditorGUILayout.TextField("Nickname", _nickname);
 
@@ -308,7 +321,7 @@ namespace Afjk.SceneSync.Editor
             await _client.Broadcast(payload);
 
             if (glb != null && path != null)
-                _ = PresenceClient.UploadGlb(glb, _pipingUrl, path);
+                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
@@ -361,15 +374,11 @@ namespace Afjk.SceneSync.Editor
 
                 var objectId = go.GetInstanceID().ToString();
 
-                // piping サーバーは GET と PUT が同時接続しないとブロックするため、
-                // 先に scene-mesh でパスをブラウザに通知し、その後 PUT する
-                foreach (var peer in _peers)
-                {
-                    var path = PresenceClient.GenerateRandomPath();
-                    var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
-                    await _client.SendHandoff(peer.id, payload);
-                    _ = PresenceClient.UploadGlb(glb, _pipingUrl, path);
-                }
+                // blob store に POST（全クライアント共有）
+                var path = PresenceClient.GenerateRandomPath();
+                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
+                await _client.Broadcast(payload);
+                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
             }
         }
 
@@ -440,7 +449,7 @@ namespace Afjk.SceneSync.Editor
 
             // broadcast 後にアップロード（ブラウザが GET を始めるのを待って PUT）
             foreach (var (glb, path) in pendingUploads)
-                _ = PresenceClient.UploadGlb(glb, _pipingUrl, path);
+                _ = PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
         }
 
         private struct TransformSnapshot

@@ -32,9 +32,9 @@ scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x333333));
 
 // glB ローダー
 const gltfLoader = new GLTFLoader();
-const PIPING_BASE = location.hostname === 'localhost'
-  ? 'http://localhost:8080'
-  : 'https://pipe.afjk.jp';
+const BLOB_BASE = location.hostname === 'localhost'
+  ? 'http://localhost:8787/blob'
+  : 'https://afjk.jp/presence/blob';
 
 // ── コントロール ─────────────────────────────────────────
 
@@ -310,7 +310,7 @@ function handleHandoff(data) {
     }
     case 'scene-mesh': {
       const obj = managedObjects.get(payload.objectId);
-      const url = PIPING_BASE + '/' + payload.meshPath;
+      const url = BLOB_BASE + '/' + payload.meshPath;
       gltfLoader.load(url, (gltf) => {
         const model = gltf.scene;
         model.userData.objectId = payload.objectId;
@@ -358,7 +358,7 @@ function addOrUpdateObject(objectId, info) {
   let obj = managedObjects.get(objectId);
 
   if (info.meshPath) {
-    const url = PIPING_BASE + '/' + info.meshPath;
+    const url = BLOB_BASE + '/' + info.meshPath;
     gltfLoader.load(url, (gltf) => {
       if (obj) scene.remove(obj);
       const model = gltf.scene;
@@ -496,8 +496,17 @@ async function handleAddMeshFile(file) {
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
-  const peers = presenceState.peers;
-  if (peers.length === 0) {
+  // blob store に POST（1回だけ）
+  const meshPath = generateRandomPath();
+  try {
+    await fetch(BLOB_BASE + '/' + meshPath, {
+      method: 'POST',
+      headers: { 'Content-Type': 'model/gltf-binary' },
+      body: arrayBuffer,
+    });
+  } catch (err) {
+    console.warn('POST failed:', err);
+    // エラー時も meshPath: null で broadcast（フォールバック）
     broadcast({
       kind: 'scene-add',
       objectId,
@@ -510,36 +519,16 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     return;
   }
 
-  const ws = presenceState.ws;
-  for (const peer of peers) {
-    const meshPath = generateRandomPath();
-    try {
-      await fetch(PIPING_BASE + '/' + meshPath, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'model/gltf-binary' },
-        body: arrayBuffer,
-      });
-    } catch (err) {
-      console.warn('PUT failed for peer', peer.id, err);
-      continue;
-    }
-
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'handoff',
-        targetId: peer.id,
-        payload: {
-          kind: 'scene-add',
-          objectId,
-          name,
-          position: model.position.toArray(),
-          rotation: model.quaternion.toArray(),
-          scale: model.scale.toArray(),
-          meshPath,
-        },
-      }));
-    }
-  }
+  // 全クライアントに broadcast（meshPath 付き）
+  broadcast({
+    kind: 'scene-add',
+    objectId,
+    name,
+    position: model.position.toArray(),
+    rotation: model.quaternion.toArray(),
+    scale: model.scale.toArray(),
+    meshPath,
+  });
 }
 
 // ── 起動 ─────────────────────────────────────────────────
