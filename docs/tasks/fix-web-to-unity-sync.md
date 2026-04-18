@@ -2,7 +2,8 @@
 
 ## 概要
 
-ブラウザから送信された scene-add / scene-delta がUnityに反映されない問題を修正する。
+ブラウザから送信された scene-add / scene-delta が Unity に反映されない問題と
+glTFast の DeferAgent が Editor モードで動作しない問題を修正する。
 
 ## 問題一覧
 
@@ -11,14 +12,24 @@
 | 1 | `FindManagedObject` が Web 由来の objectId (`web-xxxxx`) を `int.Parse` してエラー | 高 |
 | 2 | `HandleSceneAdd` が空実装で Web からのオブジェクト追加が無視される | 高 |
 | 3 | `HandleSceneMesh` が空実装で Web からのメッシュ更新が無視される | 中 |
+| 4 | glTFast の DeferAgent が `DontDestroyOnLoad` を呼び Editor モードでエラー | 高 |
+
+### 対象ファイル
+
+- `unity/com.afjk.scene-sync/Editor/SceneSyncWindow.cs`
+
+### 追加する using
+
+ファイル先頭に以下を追加する。
+
+```csharp
+using System.Net.Http;
+using GLTFast;
+```
 
 ---
 
 ## 修正 1: FindManagedObject の int.Parse エラー
-
-### 対象ファイル
-
-`unity/com.afjk.scene-sync/Editor/SceneSyncWindow.cs`
 
 ### 変更前
 
@@ -77,11 +88,6 @@ private GameObject FindManagedObject(string objectId)
 }
 ```
 
-### ポイント
-
-- `int.Parse` → `int.TryParse` に変更し、数値でない場合はスキップ
-- 破棄済み GameObject の参照をクリーンアップ
-
 ---
 
 ## 修正 2: HandleSceneAdd の実装
@@ -121,93 +127,17 @@ private void HandleSceneAdd(string raw)
         raw, "\"meshPath\":\"([^\"]+)\"");
     var meshPath = meshPathMatch.Success ? meshPathMatch.Groups[1].Value : null;
 
-    // メッシュがある場合は glB をダウンロードしてインポート
     if (!string.IsNullOrEmpty(meshPath))
     {
         _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale);
     }
     else
     {
-        // メッシュなしの場合はプレースホルダーの Cube を作成
         var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
         go.name = name;
         ApplyTransform(go, position, rotation, scale);
         _managedObjects[objectId] = go;
         _knownObjectIds.Add(objectId);
-    }
-}
-
-private void ApplyTransform(GameObject go, float[] position, float[] rotation, float[] scale)
-{
-    // Wire 形式（Three.js 座標系）→ Unity 座標系
-    if (position != null && position.Length >= 3)
-        go.transform.position = new Vector3(position[0], position[1], -position[2]);
-
-    if (rotation != null && rotation.Length >= 4)
-        go.transform.rotation = new Quaternion(-rotation[0], -rotation[1], rotation[2], rotation[3]);
-
-    if (scale != null && scale.Length >= 3)
-        go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
-}
-
-private async System.Threading.Tasks.Task DownloadAndCreateObject(
-    string objectId, string name, string meshPath,
-    float[] position, float[] rotation, float[] scale)
-{
-    try
-    {
-        var url = GetBlobUrl() + "/" + meshPath;
-        Debug.Log("[SceneSync] Downloading mesh: " + url);
-
-        var http = new System.Net.Http.HttpClient();
-        var response = await http.GetAsync(url);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
-            // フォールバック: Cube を作成
-            var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fallback.name = name;
-            ApplyTransform(fallback, position, rotation, scale);
-            _managedObjects[objectId] = fallback;
-            _knownObjectIds.Add(objectId);
-            return;
-        }
-
-        var glbBytes = await response.Content.ReadAsByteArrayAsync();
-        var tempPath = System.IO.Path.Combine(
-            Application.temporaryCachePath, meshPath + ".glb");
-        System.IO.File.WriteAllBytes(tempPath, glbBytes);
-
-        // glTFast でインポート
-        var gltf = new GLTFast.GltfImport();
-        var success = await gltf.Load("file://" + tempPath);
-
-        if (success)
-        {
-            var go = new GameObject(name);
-            await gltf.InstantiateMainSceneAsync(go.transform);
-            ApplyTransform(go, position, rotation, scale);
-            _managedObjects[objectId] = go;
-            _knownObjectIds.Add(objectId);
-            Debug.Log("[SceneSync] Imported mesh: " + name);
-        }
-        else
-        {
-            Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
-            var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fallback.name = name;
-            ApplyTransform(fallback, position, rotation, scale);
-            _managedObjects[objectId] = fallback;
-            _knownObjectIds.Add(objectId);
-        }
-
-        // 一時ファイル削除
-        try { System.IO.File.Delete(tempPath); } catch { }
-    }
-    catch (Exception ex)
-    {
-        Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
     }
 }
 ```
@@ -244,7 +174,6 @@ private void HandleSceneMesh(string raw)
     var go = FindManagedObject(objectId);
     var name = go != null ? go.name : objectId;
 
-    // 既存オブジェクトがあれば削除して再作成
     if (go != null)
     {
         var pos = go.transform.position;
@@ -267,19 +196,88 @@ private void HandleSceneMesh(string raw)
 
 ---
 
-## 追加の using
+## 修正 4: 新規メソッド追加（ApplyTransform, DownloadAndCreateObject）
 
-`PresenceClient.cs` の先頭に既にあるが、`SceneSyncWindow.cs` で `HttpClient` を使うため
-以下が必要。ファイル先頭に追加:
-
-```csharp
-using System.Net.Http;
-```
-
-glTFast インポート用:
+以下の 2 メソッドを `SceneSyncWindow` クラスに追加する。
 
 ```csharp
-using GLTFast;
+private void ApplyTransform(GameObject go, float[] position, float[] rotation, float[] scale)
+{
+    if (position != null && position.Length >= 3)
+        go.transform.position = new Vector3(position[0], position[1], -position[2]);
+
+    if (rotation != null && rotation.Length >= 4)
+        go.transform.rotation = new Quaternion(-rotation[0], -rotation[1], rotation[2], rotation[3]);
+
+    if (scale != null && scale.Length >= 3)
+        go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
+}
+
+private async System.Threading.Tasks.Task DownloadAndCreateObject(
+    string objectId, string name, string meshPath,
+    float[] position, float[] rotation, float[] scale)
+{
+    try
+    {
+        var url = GetBlobUrl() + "/" + meshPath;
+        Debug.Log("[SceneSync] Downloading mesh: " + url);
+
+        var http = new HttpClient();
+        var response = await http.GetAsync(url);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
+            var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fallback.name = name;
+            ApplyTransform(fallback, position, rotation, scale);
+            _managedObjects[objectId] = fallback;
+            _knownObjectIds.Add(objectId);
+            return;
+        }
+
+        var glbBytes = await response.Content.ReadAsByteArrayAsync();
+        var tempPath = System.IO.Path.Combine(
+            Application.temporaryCachePath, meshPath + ".glb");
+        System.IO.File.WriteAllBytes(tempPath, glbBytes);
+
+        // Editor モード: UninterruptedDeferAgent（DontDestroyOnLoad を使わない）
+        var deferAgent = new GLTFast.UninterruptedDeferAgent();
+        var importSettings = new GLTFast.ImportSettings
+        {
+            AnimationMethod = GLTFast.AnimationMethod.None,
+        };
+        var gltf = new GLTFast.GltfImport(
+            deferAgent: deferAgent,
+            importSettings: importSettings);
+        var success = await gltf.Load("file://" + tempPath);
+
+        if (success)
+        {
+            var go = new GameObject(name);
+            await gltf.InstantiateMainSceneAsync(go.transform);
+            ApplyTransform(go, position, rotation, scale);
+            _managedObjects[objectId] = go;
+            _knownObjectIds.Add(objectId);
+            Debug.Log("[SceneSync] Imported mesh: " + name);
+        }
+        else
+        {
+            Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
+            var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fallback.name = name;
+            ApplyTransform(fallback, position, rotation, scale);
+            _managedObjects[objectId] = fallback;
+            _knownObjectIds.Add(objectId);
+        }
+
+        try { System.IO.File.Delete(tempPath); } catch { }
+    }
+    catch (Exception ex)
+    {
+        Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
+    }
+}
 ```
 
 ---
@@ -287,11 +285,12 @@ using GLTFast;
 ## 確認方法
 
 1. Unity で Connect する
-2. ブラウザで scene.html を開き、同じルームに接続
+2. ブラウザで `scene.html` を開き同じルームに接続
 3. ブラウザから glB ファイルを追加（＋ボタンまたはドラッグ＆ドロップ）
-4. Unity の Console にエラーが出ないことを確認
+4. Unity の Console に `[SceneSync] Imported mesh: ...` が出ることを確認
 5. Unity のシーンに glB モデルが表示されることを確認
-6. ブラウザでモデルの Transform を変更し、Unity に反映されることを確認
+6. ブラウザでモデルの Transform を変更し Unity に反映されることを確認
+7. `DontDestroyOnLoad` エラーが出ないことを確認
 
 ## 完了条件
 
@@ -300,4 +299,5 @@ using GLTFast;
 - [ ] meshPath がある場合は blob store から glB をダウンロード・インポート
 - [ ] meshPath がない場合はフォールバック Cube を作成
 - [ ] scene-mesh でメッシュの再ダウンロード・更新ができる
+- [ ] `DontDestroyOnLoad` エラーが発生しない
 - [ ] 既存の Unity → ブラウザ同期に影響がないこと

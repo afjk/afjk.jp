@@ -564,8 +564,15 @@ namespace Afjk.SceneSync.Editor
                     Application.temporaryCachePath, meshPath + ".glb");
                 System.IO.File.WriteAllBytes(tempPath, glbBytes);
 
-                // glTFast でインポート
-                var gltf = new GltfImport();
+                // Editor モード: UninterruptedDeferAgent（DontDestroyOnLoad を使わない）
+                var deferAgent = new UninterruptedDeferAgent();
+                var importSettings = new ImportSettings
+                {
+                    AnimationMethod = AnimationMethod.None,
+                };
+                var gltf = new GltfImport(
+                    deferAgent: deferAgent,
+                    importSettings: importSettings);
                 var success = await gltf.Load("file://" + tempPath);
 
                 if (success)
