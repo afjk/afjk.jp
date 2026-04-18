@@ -118,59 +118,157 @@ function showToast(msg) {
 
 // ── ロック表示 ──────────────────────────────────────────
 
-function addLockOverlay(objectId) {
+function createCornerLines(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const min = box.min;
+  const max = box.max;
+  const size = box.getSize(new THREE.Vector3());
+  const len = Math.max(size.x, size.y, size.z) * 0.2;
+
+  const corners = [
+    [min.x, min.y, min.z],
+    [max.x, min.y, min.z],
+    [min.x, max.y, min.z],
+    [max.x, max.y, min.z],
+    [min.x, min.y, max.z],
+    [max.x, min.y, max.z],
+    [min.x, max.y, max.z],
+    [max.x, max.y, max.z],
+  ];
+
+  const dirs = [
+    [[1,0,0],[0,1,0],[0,0,1]],
+    [[-1,0,0],[0,1,0],[0,0,1]],
+    [[1,0,0],[0,-1,0],[0,0,1]],
+    [[-1,0,0],[0,-1,0],[0,0,1]],
+    [[1,0,0],[0,1,0],[0,0,-1]],
+    [[-1,0,0],[0,1,0],[0,0,-1]],
+    [[1,0,0],[0,-1,0],[0,0,-1]],
+    [[-1,0,0],[0,-1,0],[0,0,-1]],
+  ];
+
+  const points = [];
+  for (let i = 0; i < 8; i++) {
+    const [cx, cy, cz] = corners[i];
+    for (const [dx, dy, dz] of dirs[i]) {
+      points.push(cx, cy, cz);
+      points.push(cx + dx * len, cy + dy * len, cz + dz * len);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xff8800,
+    linewidth: 2,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.raycast = () => {};
+  return lines;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function createLockLabel(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 256;
+  canvas.height = 64;
+
+  ctx.clearRect(0, 0, 256, 64);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  roundRect(ctx, 4, 4, 248, 56, 12);
+  ctx.fill();
+
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ff8800';
+  ctx.fillText(text, 128, 32);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(2, 0.5, 1);
+  sprite.raycast = () => {};
+  return sprite;
+}
+
+function updateLockOverlayPosition(group, obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+
+  const oldLines = group.children.find(c => c.isLineSegments);
+  if (oldLines) {
+    group.remove(oldLines);
+    oldLines.geometry.dispose();
+    oldLines.material.dispose();
+  }
+  const newLines = createCornerLines(obj);
+  group.add(newLines);
+
+  const label = group.children.find(c => c.isSprite);
+  if (label) {
+    label.position.set(center.x, box.max.y + size.y * 0.3 + 0.5, center.z);
+  }
+}
+
+function addLockOverlay(objectId, fromInfo) {
+  removeLockOverlay(objectId);
+
   const obj = managedObjects.get(objectId);
   if (!obj) return;
 
-  // オブジェクトをクローンしてアウトライン用マテリアルに差し替え
-  const outlineMat = new THREE.MeshBasicMaterial({
-    color: 0xff8800,
-    side: THREE.BackSide,
-    transparent: true,
-    opacity: 0.6,
-  });
+  const group = new THREE.Group();
+  group.userData._isLockOverlay = true;
+  group.raycast = () => {};
 
-  const outline = obj.clone(true);
-  outline.traverse(child => {
-    if (child.isMesh) {
-      child.material = outlineMat;
-      child.castShadow = false;
-      child.receiveShadow = false;
-    }
-  });
+  const cornerLines = createCornerLines(obj);
+  group.add(cornerLines);
 
-  // 少し拡大してアウトラインに見せる
-  outline.scale.multiplyScalar(1.05);
-  outline.raycast = () => {};
-  outline.traverse(child => { child.raycast = () => {}; });
+  const nickname = fromInfo?.nickname || fromInfo?.from?.nickname || '?';
+  const label = createLockLabel('🔒 ' + nickname);
+  group.add(label);
 
-  // 元オブジェクトの子にして追従させる
-  outline.userData._isLockOverlay = true;
-  obj.add(outline);
+  updateLockOverlayPosition(group, obj);
 
-  // 親の拡大を打ち消す（親の子なのでスケールが二重になる）
-  outline.scale.set(1.05, 1.05, 1.05);
-  outline.position.set(0, 0, 0);
-  outline.rotation.set(0, 0, 0);
-
-  lockOverlays.set(objectId, outline);
+  scene.add(group);
+  lockOverlays.set(objectId, { group, target: obj });
 }
 
 function removeLockOverlay(objectId) {
-  const overlay = lockOverlays.get(objectId);
-  if (!overlay) return;
+  const entry = lockOverlays.get(objectId);
+  if (!entry) return;
 
-  // 親（元オブジェクト）から除去
-  if (overlay.parent) {
-    overlay.parent.remove(overlay);
-  } else {
-    scene.remove(overlay);
-  }
-
-  overlay.traverse(child => {
-    if (child.isMesh) {
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) child.material.dispose();
+  const { group } = entry;
+  scene.remove(group);
+  group.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map) child.material.map.dispose();
+      child.material.dispose();
     }
   });
 
@@ -239,6 +337,8 @@ function deleteSelectedObject() {
       showToast('他のユーザーが編集中です');
       return;
     }
+
+    removeLockOverlay(deleteId);
 
     scene.remove(attached);
     attached.traverse(child => {
@@ -320,7 +420,16 @@ window.addEventListener('keydown', (e) => {
     case 'w': transformCtrl.setMode('translate'); break;
     case 'e': transformCtrl.setMode('rotate'); break;
     case 'r': transformCtrl.setMode('scale'); break;
-    case 'escape': transformCtrl.detach(); hideToolbar(); break;
+    case 'escape':
+      if (transformCtrl.object) {
+        broadcast({
+          kind: 'scene-unlock',
+          objectId: transformCtrl.object.userData.objectId,
+        });
+      }
+      transformCtrl.detach();
+      hideToolbar();
+      break;
     case 'delete':
     case 'backspace': {
       e.preventDefault();
@@ -343,6 +452,13 @@ window.addEventListener('resize', () => {
 function animate() {
   requestAnimationFrame(animate);
   orbit.update();
+
+  for (const [objectId, entry] of lockOverlays) {
+    if (entry.target && entry.group) {
+      updateLockOverlayPosition(entry.group, entry.target);
+    }
+  }
+
   renderer.render(scene, camera);
 }
 animate();
@@ -514,7 +630,7 @@ function handleHandoff(data) {
     }
     case 'scene-lock': {
       locks.set(payload.objectId, data.from);
-      addLockOverlay(payload.objectId);
+      addLockOverlay(payload.objectId, data.from);
       break;
     }
     case 'scene-unlock': {
