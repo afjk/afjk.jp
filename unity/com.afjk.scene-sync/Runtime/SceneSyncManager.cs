@@ -282,19 +282,22 @@ namespace Afjk.SceneSync
 
             foreach (var go in rootObjects)
             {
-                if (go.hideFlags != HideFlags.None) continue;
                 var instanceId = go.GetInstanceID();
-                currentInstanceIds.Add(instanceId);
 
-                // Web 由来オブジェクト
+                // Web 由来オブジェクト（hideFlags に関係なく同期対象）
                 if (_instanceToObjectId.TryGetValue(instanceId, out var originalId))
                 {
                     // Web 由来: 元の objectId で管理
                     currentIds.Add(originalId);
+                    currentInstanceIds.Add(instanceId);
                     continue;
                 }
 
-                // Unity 由来: メッシュを持たないオブジェクトはスキップ
+                // Unity 由来は hideFlags をチェック
+                if (go.hideFlags != HideFlags.None) continue;
+                currentInstanceIds.Add(instanceId);
+
+                // メッシュを持たないオブジェクトはスキップ
                 if (!IsSyncTarget(go)) continue;
 
                 var id = instanceId.ToString();
