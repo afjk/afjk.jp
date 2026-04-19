@@ -861,16 +861,17 @@ function handleHandoff(data) {
       const obj = managedObjects.get(payload.objectId);
       const url = BLOB_BASE + '/' + payload.meshPath;
       gltfLoader.load(url, (gltf) => {
-        const model = gltf.scene;
+        // gltf.scene は座標変換を含むのでそのまま保持し wrapper で管理
+        const model = new THREE.Group();
         model.userData.objectId = payload.objectId;
         model.userData.meshPath = payload.meshPath;
-
-        // glB 内のルート transform をリセット
-        model.position.set(0, 0, 0);
-        model.quaternion.identity();
-        model.scale.set(1, 1, 1);
+        model.add(gltf.scene);
 
         if (obj) {
+          // 位置・回転・スケールを引き継ぐ
+          model.position.copy(obj.position);
+          model.quaternion.copy(obj.quaternion);
+          model.scale.copy(obj.scale);
           if (transformCtrl.object === obj) transformCtrl.detach();
           scene.remove(obj);
         }
@@ -923,15 +924,13 @@ function addOrUpdateObject(objectId, info) {
         scene.remove(current);
       }
 
-      const model = gltf.scene;
+      // gltf.scene は glTFast の座標変換を含むのでそのまま保持し、
+      // 外側の wrapper に wire の値を適用する
+      const model = new THREE.Group();
       model.userData.objectId = objectId;
       model.userData.name = info.name;
       model.userData.meshPath = info.meshPath;
-
-      // glB 内のルート transform をリセット（配置は wire の値で制御する）
-      model.position.set(0, 0, 0);
-      model.quaternion.identity();
-      model.scale.set(1, 1, 1);
+      model.add(gltf.scene);
 
       applyTransform(model, info);
       scene.add(model);
