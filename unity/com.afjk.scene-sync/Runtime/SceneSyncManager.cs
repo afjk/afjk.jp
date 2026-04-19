@@ -586,16 +586,6 @@ namespace Afjk.SceneSync
             // メッシュがある場合は glB をダウンロードしてインポート
             if (!string.IsNullOrEmpty(meshPath))
             {
-                // プレースホルダーを先行登録（同期フェーズで登録を確実にする）
-                var placeholder = new GameObject(objectId);
-                placeholder.hideFlags = HideFlags.NotEditable;
-                if (_syncRoot != null)
-                    placeholder.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                _managedObjects[objectId] = placeholder;
-                _knownObjectIds.Add(objectId);
-                _instanceToObjectId[placeholder.GetInstanceID()] = objectId;
-
                 // 非同期でダウンロード・インポート開始
                 _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale);
             }
@@ -811,17 +801,13 @@ namespace Afjk.SceneSync
                 if (!response.IsSuccessStatusCode)
                 {
                     Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
-                    // フォールバック: プレースホルダーを Cube で置き換え
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
+                    // フォールバック: Cube を作成
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
 
-                    // プレースホルダーのマッピングを fallback に移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = fallback;
+                    _knownObjectIds.Add(objectId);
+                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
 
                     // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(fallback, position, rotation, scale);
@@ -829,9 +815,6 @@ namespace Afjk.SceneSync
                     // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
                     if (_syncRoot != null)
                         fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
 
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
@@ -855,15 +838,11 @@ namespace Afjk.SceneSync
 
                 if (success)
                 {
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
                     var go = new GameObject(name);
 
-                    // プレースホルダーのマッピングを新オブジェクトに移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[go.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = go;
+                    _knownObjectIds.Add(objectId);
+                    _instanceToObjectId[go.GetInstanceID()] = objectId;
 
                     await gltf.InstantiateMainSceneAsync(go.transform);
                     // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
@@ -881,25 +860,18 @@ namespace Afjk.SceneSync
                     if (_syncRoot != null)
                         go.transform.SetParent(_syncRoot, worldPositionStays: true);
 
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
-
                     Debug.Log("[SceneSync] Imported mesh: " + name);
                     OnObjectAdded?.Invoke(objectId, go);
                 }
                 else
                 {
                     Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
 
-                    // プレースホルダーのマッピングを fallback に移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = fallback;
+                    _knownObjectIds.Add(objectId);
+                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
 
                     // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(fallback, position, rotation, scale);
@@ -907,9 +879,6 @@ namespace Afjk.SceneSync
                     // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
                     if (_syncRoot != null)
                         fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
 
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
