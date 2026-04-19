@@ -74,6 +74,22 @@ npm publish --registry https://upm.afjk.jp
 
 詳細な技術仕様は [`docs/pipe-spec.md`](docs/pipe-spec.md) を参照。
 
+### afjk.jp/pipe/scene.html — 3D Scene Sync ビューア
+
+Unity Editor / Unity Runtime と Web ブラウザ間で 3D シーンをリアルタイム共有するビューア。同じルームコードで参加することで、Unity 上のシーン編集が即座にブラウザに反映される。
+
+- **リアルタイム同期**: Transform（位置・回転・スケール）の変更を 50ms ごとにブロードキャスト
+- **glB メッシュ転送**: presence-server の blob store 経由で glB ファイルを共有（最大 50MB、TTL 10分）
+- **後参加対応**: 参加時に既存クライアントから `scene-state` を受信してシーン全体を再現
+- **編集ロック**: オブジェクト選択時に自動ロック。他クライアントはバウンディングボックス + ラベルで視覚表示
+- **参加者一覧**: 接続中のクライアント名・編集中オブジェクトをリアルタイム表示
+- **モバイル対応**: iPhone Safari タッチ操作（ダブルタップ選択、スワイプカメラ）対応
+- **Unity パッケージ**: `com.afjk.scene-sync`（upm.afjk.jp）で配布。Editor 拡張と Runtime（MonoBehaviour）の両方を提供
+
+URL 例: `https://afjk.jp/pipe/scene.html?room=abc123`
+
+詳細な技術仕様は [`docs/scene-sync-spec.md`](docs/scene-sync-spec.md) を参照。
+
 ### pipe.afjk.jp — Piping Server
 
 ブラウザ・curl間でファイルやテキストを転送できる HTTP 中継サービス。パスは任意の文字列でOK。
