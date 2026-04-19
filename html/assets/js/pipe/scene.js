@@ -861,11 +861,10 @@ function handleHandoff(data) {
       const obj = managedObjects.get(payload.objectId);
       const url = BLOB_BASE + '/' + payload.meshPath;
       gltfLoader.load(url, (gltf) => {
-        // gltf.scene は座標変換を含むのでそのまま保持し wrapper で管理
         const model = new THREE.Group();
         model.userData.objectId = payload.objectId;
         model.userData.meshPath = payload.meshPath;
-        model.add(gltf.scene);
+        attachImportedGlb(model, gltf);
 
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
@@ -924,13 +923,11 @@ function addOrUpdateObject(objectId, info) {
         scene.remove(current);
       }
 
-      // gltf.scene は glTFast の座標変換を含むのでそのまま保持し、
-      // 外側の wrapper に wire の値を適用する
       const model = new THREE.Group();
       model.userData.objectId = objectId;
       model.userData.name = info.name;
       model.userData.meshPath = info.meshPath;
-      model.add(gltf.scene);
+      attachImportedGlb(model, gltf);
 
       applyTransform(model, info);
       scene.add(model);
@@ -967,6 +964,13 @@ function applyTransform(obj, info) {
   if (info.position) obj.position.fromArray(info.position);
   if (info.rotation) obj.quaternion.fromArray(info.rotation);
   if (info.scale) obj.scale.fromArray(info.scale);
+}
+
+function attachImportedGlb(wrapper, gltf) {
+  // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
+  // 見た目が Y 軸 180° ずれるため、読み込み基底に補正を入れる。
+  gltf.scene.rotateY(Math.PI);
+  wrapper.add(gltf.scene);
 }
 
 // ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
