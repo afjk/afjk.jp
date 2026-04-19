@@ -1,12 +1,11 @@
 {
-  "name": "com.afjk.scene-sync.Editor",
-  "rootNamespace": "Afjk.SceneSync.Editor",
+  "name": "com.afjk.scene-sync.Runtime",
+  "rootNamespace": "Afjk.SceneSync",
   "references": [
     "glTFast",
-    "glTFast.Export",
-    "com.afjk.scene-sync.Runtime"
+    "glTFast.Export"
   ],
-  "includePlatforms": ["Editor"],
+  "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": false,
