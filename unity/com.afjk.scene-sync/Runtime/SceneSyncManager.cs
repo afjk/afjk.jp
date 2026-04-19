@@ -601,15 +601,21 @@ namespace Afjk.SceneSync
             }
             else
             {
-                // メッシュなしの場合はプレースホルダーの Cube を作成
+                // メッシュなしの場合は Cube を作成
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
-                if (_syncRoot != null)
-                    go.transform.SetParent(_syncRoot, worldPositionStays: true);
-                ApplyTransform(go, position, rotation, scale);
+
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
                 _instanceToObjectId[go.GetInstanceID()] = objectId;
+
+                // 位置・回転・スケールを設定（SetParent の前）
+                ApplyTransform(go, position, rotation, scale);
+
+                // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
+                if (_syncRoot != null)
+                    go.transform.SetParent(_syncRoot, worldPositionStays: true);
+
                 OnObjectAdded?.Invoke(objectId, go);
             }
         }
@@ -811,15 +817,18 @@ namespace Afjk.SceneSync
 
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
-                    if (_syncRoot != null)
-                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
 
                     // プレースホルダーのマッピングを fallback に移動
                     _instanceToObjectId.Remove(placeholderInstanceId);
                     _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = fallback;
 
+                    // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(fallback, position, rotation, scale);
+
+                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
+                    if (_syncRoot != null)
+                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
 
                     // プレースホルダーを削除
                     Destroy(placeholder);
@@ -850,8 +859,6 @@ namespace Afjk.SceneSync
                     var placeholderInstanceId = placeholder.GetInstanceID();
 
                     var go = new GameObject(name);
-                    if (_syncRoot != null)
-                        go.transform.SetParent(_syncRoot, worldPositionStays: true);
 
                     // プレースホルダーのマッピングを新オブジェクトに移動
                     _instanceToObjectId.Remove(placeholderInstanceId);
@@ -867,7 +874,12 @@ namespace Afjk.SceneSync
                         child.localRotation = y180 * child.localRotation;
                     }
 
+                    // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(go, position, rotation, scale);
+
+                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
+                    if (_syncRoot != null)
+                        go.transform.SetParent(_syncRoot, worldPositionStays: true);
 
                     // プレースホルダーを削除
                     Destroy(placeholder);
@@ -883,15 +895,18 @@ namespace Afjk.SceneSync
 
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
-                    if (_syncRoot != null)
-                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
 
                     // プレースホルダーのマッピングを fallback に移動
                     _instanceToObjectId.Remove(placeholderInstanceId);
                     _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = fallback;
 
+                    // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(fallback, position, rotation, scale);
+
+                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
+                    if (_syncRoot != null)
+                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
 
                     // プレースホルダーを削除
                     Destroy(placeholder);
