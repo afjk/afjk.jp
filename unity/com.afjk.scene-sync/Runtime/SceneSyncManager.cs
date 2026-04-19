@@ -794,6 +794,51 @@ namespace Afjk.SceneSync
                 go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
         }
 
+        private static string FormatArray(float[] values)
+        {
+            if (values == null) return "null";
+            return "[" + string.Join(", ", values) + "]";
+        }
+
+        private static int CountDescendants(Transform root)
+        {
+            if (root == null) return 0;
+
+            var count = 0;
+            foreach (Transform child in root)
+            {
+                count++;
+                count += CountDescendants(child);
+            }
+
+            return count;
+        }
+
+        private static string DescribeGameObject(GameObject go)
+        {
+            if (go == null) return "null";
+
+            return "name=" + go.name
+                + ", instanceId=" + go.GetInstanceID()
+                + ", activeSelf=" + go.activeSelf
+                + ", activeInHierarchy=" + go.activeInHierarchy
+                + ", children=" + go.transform.childCount
+                + ", descendants=" + CountDescendants(go.transform)
+                + ", meshFilters=" + go.GetComponentsInChildren<MeshFilter>(true).Length
+                + ", skinnedMeshes=" + go.GetComponentsInChildren<SkinnedMeshRenderer>(true).Length
+                + ", renderers=" + go.GetComponentsInChildren<Renderer>(true).Length;
+        }
+
+        private string DescribeManagedObjectState(string objectId)
+        {
+            if (string.IsNullOrEmpty(objectId)) return "objectId=null";
+
+            if (!_managedObjects.TryGetValue(objectId, out var managed))
+                return "objectId=" + objectId + ", managedObject=missing";
+
+            return "objectId=" + objectId + ", managedObject={" + DescribeGameObject(managed) + "}";
+        }
+
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale)
@@ -803,14 +848,32 @@ namespace Afjk.SceneSync
             try
             {
                 var url = GetBlobUrl() + "/" + meshPath;
-                Debug.Log("[SceneSync] Downloading mesh: " + url);
+                Debug.Log(
+                    "[SceneSync] Downloading mesh: url=" + url
+                    + ", objectId=" + objectId
+                    + ", name=" + name
+                    + ", meshPath=" + meshPath
+                    + ", position=" + FormatArray(position)
+                    + ", rotation=" + FormatArray(rotation)
+                    + ", scale=" + FormatArray(scale)
+                    + ", managedState=" + DescribeManagedObjectState(objectId));
 
                 var http = new HttpClient();
                 var response = await http.GetAsync(url);
 
+                Debug.Log(
+                    "[SceneSync] Download response: status=" + (int)response.StatusCode + " " + response.StatusCode
+                    + ", contentType=" + response.Content.Headers.ContentType
+                    + ", contentLength=" + response.Content.Headers.ContentLength
+                    + ", requestUri=" + response.RequestMessage?.RequestUri);
+
                 if (!response.IsSuccessStatusCode)
                 {
-                    Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
+                    Debug.LogWarning(
+                        "[SceneSync] Download failed: status=" + (int)response.StatusCode + " " + response.StatusCode
+                        + ", objectId=" + objectId
+                        + ", name=" + name
+                        + ", meshPath=" + meshPath);
                     // フォールバック: プレースホルダーを Cube で置き換え
                     var placeholder = _managedObjects[objectId];
                     var placeholderInstanceId = placeholder.GetInstanceID();
@@ -842,6 +905,11 @@ namespace Afjk.SceneSync
                     Application.temporaryCachePath, meshPath + ".glb");
                 System.IO.File.WriteAllBytes(tempPath, glbBytes);
 
+                Debug.Log(
+                    "[SceneSync] Mesh bytes saved: bytes=" + glbBytes.Length
+                    + ", tempPath=" + tempPath
+                    + ", fileExists=" + System.IO.File.Exists(tempPath));
+
                 // Runtime 用: フレーム時間を考慮した非同期読み込み
                 var deferAgent = gameObject.AddComponent<TimeBudgetPerFrameDeferAgent>();
                 var importSettings = new ImportSettings
@@ -851,7 +919,24 @@ namespace Afjk.SceneSync
                 var gltf = new GltfImport(
                     downloadProvider: null,
                     deferAgent: deferAgent);
+                Debug.Log(
+                    "[SceneSync] Starting glTF load: tempPath=" + tempPath
+                    + ", importSettings.AnimationMethod=" + importSettings.AnimationMethod
+                    + ", deferAgent=" + (deferAgent != null ? deferAgent.GetType().Name : "null"));
                 var success = await gltf.Load("file://" + tempPath, importSettings);
+
+                var root = gltf.GetSourceRoot();
+                Debug.Log(
+                    "[SceneSync] glTF load result: success=" + success
+                    + ", loadingDone=" + gltf.LoadingDone
+                    + ", loadingError=" + gltf.LoadingError
+                    + ", sceneCount=" + gltf.SceneCount
+                    + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null")
+                    + ", nodes=" + (root?.Nodes != null ? root.Nodes.Count.ToString() : "null")
+                    + ", meshes=" + (root?.Meshes != null ? root.Meshes.Count.ToString() : "null")
+                    + ", materials=" + (root?.Materials != null ? root.Materials.Count.ToString() : "null")
+                    + ", images=" + (root?.Images != null ? root.Images.Count.ToString() : "null")
+                    + ", textures=" + (root?.Textures != null ? root.Textures.Count.ToString() : "null"));
 
                 if (success)
                 {
@@ -865,6 +950,9 @@ namespace Afjk.SceneSync
                     _instanceToObjectId[go.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = go;
 
+                    Debug.Log(
+                        "[SceneSync] Instantiating glTF main scene: parent=" + DescribeGameObject(go)
+                        + ", placeholder=" + DescribeGameObject(placeholder));
                     await gltf.InstantiateMainSceneAsync(go.transform);
                     // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
                     // 見た目が Y 軸 180° ずれるため、import 直後に補正する。
@@ -884,12 +972,23 @@ namespace Afjk.SceneSync
                     // プレースホルダーを削除
                     Destroy(placeholder);
 
-                    Debug.Log("[SceneSync] Imported mesh: " + name);
+                    Debug.Log(
+                        "[SceneSync] Imported mesh: name=" + name
+                        + ", objectId=" + objectId
+                        + ", meshPath=" + meshPath
+                        + ", importedObject={" + DescribeGameObject(go) + "}");
                     OnObjectAdded?.Invoke(objectId, go);
                 }
                 else
                 {
-                    Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
+                    Debug.LogWarning(
+                        "[SceneSync] glTF import failed: name=" + name
+                        + ", objectId=" + objectId
+                        + ", meshPath=" + meshPath
+                        + ", loadingDone=" + gltf.LoadingDone
+                        + ", loadingError=" + gltf.LoadingError
+                        + ", sceneCount=" + gltf.SceneCount
+                        + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
                     var placeholder = _managedObjects[objectId];
                     var placeholderInstanceId = placeholder.GetInstanceID();
 
@@ -923,7 +1022,12 @@ namespace Afjk.SceneSync
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
+                Debug.LogWarning(
+                    "[SceneSync] DownloadAndCreate failed: objectId=" + objectId
+                    + ", name=" + name
+                    + ", meshPath=" + meshPath
+                    + ", managedState=" + DescribeManagedObjectState(objectId)
+                    + "\n" + ex);
                 if (!_managedObjects.ContainsKey(objectId))
                     _knownObjectIds.Remove(objectId);
             }
