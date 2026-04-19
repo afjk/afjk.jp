@@ -29,7 +29,7 @@ scan "API key"      'api[_-]?key[[:space:]]*[:=][[:space:]]*[^ ]{8,}'
 scan "token"        '[^a-z]token[[:space:]]*[:=][[:space:]]*[^ ]{8,}'
 scan "AWS key ID"   'AKIA[0-9A-Z]{16}'
 scan "private key"  '-----BEGIN.*(PRIVATE KEY)'
-scan "htpasswd"     '^[+][a-zA-Z0-9_-]+:[^/][a-zA-Z0-9./]{12,}'
+scan "htpasswd"     '^[+][a-zA-Z0-9_-]+:[a-zA-Z0-9.][a-zA-Z0-9./]{12,}'
 
 if [ "$FOUND" -eq 1 ]; then
   printf "\n${RED}コミットを中断しました。上記の行を確認してください。${NC}\n"
