@@ -14,6 +14,7 @@ namespace Afjk.SceneSync
         [SerializeField] private string _nickname = "Unity";
         [SerializeField] private bool _autoConnect = true;
         [SerializeField] private Transform _syncRoot;
+        [SerializeField] private Material _fallbackImportMaterial;
 
         private PresenceClientRuntime _client;
         private bool _connected;
@@ -32,6 +33,7 @@ namespace Afjk.SceneSync
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private double _lastTime;
+        private Material _runtimeFallbackImportMaterial;
 
         public bool IsConnected => _connected;
         public string Room => _client?.Room;
@@ -839,6 +841,119 @@ namespace Afjk.SceneSync
             return "objectId=" + objectId + ", managedObject={" + DescribeGameObject(managed) + "}";
         }
 
+        private Material GetFallbackImportMaterial()
+        {
+            if (_fallbackImportMaterial != null)
+                return _fallbackImportMaterial;
+
+            if (_runtimeFallbackImportMaterial != null)
+                return _runtimeFallbackImportMaterial;
+
+            var shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null)
+                shader = Shader.Find("URP/Lit");
+            if (shader == null)
+                shader = Shader.Find("Standard");
+
+            if (shader == null)
+            {
+                Debug.LogWarning("[SceneSync] Fallback material creation failed: no compatible shader found.");
+                return null;
+            }
+
+            _runtimeFallbackImportMaterial = new Material(shader)
+            {
+                name = "SceneSync Fallback Import Material"
+            };
+
+            return _runtimeFallbackImportMaterial;
+        }
+
+        private int ApplyFallbackMaterialToRenderers(GameObject target, bool replaceAll, string reason)
+        {
+            if (target == null)
+                return 0;
+
+            var fallbackMaterial = GetFallbackImportMaterial();
+            if (fallbackMaterial == null)
+                return 0;
+
+            var replacements = 0;
+            var renderers = target.GetComponentsInChildren<Renderer>(true);
+            foreach (var renderer in renderers)
+            {
+                var materials = renderer.sharedMaterials;
+                if (materials == null || materials.Length == 0)
+                {
+                    renderer.sharedMaterial = fallbackMaterial;
+                    replacements++;
+                    continue;
+                }
+
+                var changed = false;
+                for (var index = 0; index < materials.Length; index++)
+                {
+                    var material = materials[index];
+                    var isBroken = material == null
+                        || material.shader == null
+                        || material.shader.name == "Hidden/InternalErrorShader";
+
+                    if (replaceAll || isBroken)
+                    {
+                        materials[index] = fallbackMaterial;
+                        replacements++;
+                        changed = true;
+                    }
+                }
+
+                if (changed)
+                    renderer.sharedMaterials = materials;
+            }
+
+            if (replacements > 0)
+            {
+                Debug.Log(
+                    "[SceneSync] Applied fallback material: target=" + DescribeGameObject(target)
+                    + ", replaceAll=" + replaceAll
+                    + ", replacements=" + replacements
+                    + ", reason=" + reason
+                    + ", fallbackShader=" + fallbackMaterial.shader.name);
+            }
+
+            return replacements;
+        }
+
+        private GameObject ReplaceWithFallbackPrimitive(
+            string objectId,
+            string name,
+            float[] position,
+            float[] rotation,
+            float[] scale)
+        {
+            var placeholder = _managedObjects[objectId];
+            var placeholderInstanceId = placeholder.GetInstanceID();
+
+            var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fallback.name = name;
+
+            var fallbackMaterial = GetFallbackImportMaterial();
+            var fallbackRenderer = fallback.GetComponent<Renderer>();
+            if (fallbackMaterial != null && fallbackRenderer != null)
+                fallbackRenderer.sharedMaterial = fallbackMaterial;
+
+            _instanceToObjectId.Remove(placeholderInstanceId);
+            _instanceToObjectId[fallback.GetInstanceID()] = objectId;
+            _managedObjects[objectId] = fallback;
+
+            ApplyTransform(fallback, position, rotation, scale);
+
+            if (_syncRoot != null)
+                fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
+
+            Destroy(placeholder);
+            return fallback;
+        }
+
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale)
@@ -874,28 +989,7 @@ namespace Afjk.SceneSync
                         + ", objectId=" + objectId
                         + ", name=" + name
                         + ", meshPath=" + meshPath);
-                    // フォールバック: プレースホルダーを Cube で置き換え
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
-                    var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    fallback.name = name;
-
-                    // プレースホルダーのマッピングを fallback に移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                    _managedObjects[objectId] = fallback;
-
-                    // 位置・回転・スケールを設定（SetParent の前）
-                    ApplyTransform(fallback, position, rotation, scale);
-
-                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
-                    if (_syncRoot != null)
-                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
-
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -962,6 +1056,8 @@ namespace Afjk.SceneSync
                         child.localRotation = y180 * child.localRotation;
                     }
 
+                    ApplyFallbackMaterialToRenderers(go, replaceAll: false, reason: "post-import broken materials");
+
                     // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(go, position, rotation, scale);
 
@@ -989,27 +1085,7 @@ namespace Afjk.SceneSync
                         + ", loadingError=" + gltf.LoadingError
                         + ", sceneCount=" + gltf.SceneCount
                         + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
-                    var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    fallback.name = name;
-
-                    // プレースホルダーのマッピングを fallback に移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                    _managedObjects[objectId] = fallback;
-
-                    // 位置・回転・スケールを設定（SetParent の前）
-                    ApplyTransform(fallback, position, rotation, scale);
-
-                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
-                    if (_syncRoot != null)
-                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
-
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
 
@@ -1028,6 +1104,32 @@ namespace Afjk.SceneSync
                     + ", meshPath=" + meshPath
                     + ", managedState=" + DescribeManagedObjectState(objectId)
                     + "\n" + ex);
+
+                if (_managedObjects.TryGetValue(objectId, out var currentObject) && currentObject != null)
+                {
+                    var replacements = ApplyFallbackMaterialToRenderers(
+                        currentObject,
+                        replaceAll: true,
+                        reason: "exception during import");
+
+                    if (replacements > 0)
+                    {
+                        ApplyTransform(currentObject, position, rotation, scale);
+                        if (_syncRoot != null)
+                            currentObject.transform.SetParent(_syncRoot, worldPositionStays: true);
+
+                        OnObjectAdded?.Invoke(objectId, currentObject);
+                        return;
+                    }
+                }
+
+                if (_managedObjects.ContainsKey(objectId))
+                {
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
+                    OnObjectAdded?.Invoke(objectId, fallback);
+                    return;
+                }
+
                 if (!_managedObjects.ContainsKey(objectId))
                     _knownObjectIds.Remove(objectId);
             }
