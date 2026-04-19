@@ -780,6 +780,16 @@ namespace Afjk.SceneSync.Editor
                 {
                     var go = new GameObject(name);
                     await gltf.InstantiateMainSceneAsync(go.transform);
+
+                    // glTFast / GLTFExporter がルートに付与した transform をリセット
+                    // メッシュ形状のみ残し、配置は wire の値で制御する
+                    foreach (Transform child in go.transform)
+                    {
+                        child.localPosition = Vector3.zero;
+                        child.localRotation = Quaternion.identity;
+                        child.localScale = Vector3.one;
+                    }
+
                     ApplyTransform(go, position, rotation, scale);
                     _managedObjects[objectId] = go;
                     _knownObjectIds.Add(objectId);

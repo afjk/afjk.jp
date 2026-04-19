@@ -865,18 +865,12 @@ function handleHandoff(data) {
         model.userData.objectId = payload.objectId;
         model.userData.meshPath = payload.meshPath;
 
-        // 元ファイルの glB を中心基準でオフセット（全クライアントで同一処理）
-        const box = new THREE.Box3().setFromObject(model);
-        const center = box.getCenter(new THREE.Vector3());
-        model.children.forEach(child => {
-          child.position.sub(center);
-        });
+        // glB 内のルート transform をリセット
+        model.position.set(0, 0, 0);
+        model.quaternion.identity();
+        model.scale.set(1, 1, 1);
 
         if (obj) {
-          // 位置・回転・スケールを引き継ぐ
-          model.position.copy(obj.position);
-          model.quaternion.copy(obj.quaternion);
-          model.scale.copy(obj.scale);
           if (transformCtrl.object === obj) transformCtrl.detach();
           scene.remove(obj);
         }
@@ -934,12 +928,10 @@ function addOrUpdateObject(objectId, info) {
       model.userData.name = info.name;
       model.userData.meshPath = info.meshPath;
 
-      // 元ファイルの glB を中心基準でオフセット（全クライアントで同一処理）
-      const box = new THREE.Box3().setFromObject(model);
-      const center = box.getCenter(new THREE.Vector3());
-      model.children.forEach(child => {
-        child.position.sub(center);
-      });
+      // glB 内のルート transform をリセット（配置は wire の値で制御する）
+      model.position.set(0, 0, 0);
+      model.quaternion.identity();
+      model.scale.set(1, 1, 1);
 
       applyTransform(model, info);
       scene.add(model);
@@ -1055,14 +1047,8 @@ async function handleAddMeshFile(file) {
     model.userData.objectId = objectId;
     model.userData.name = file.name;
 
-    // バウンディングボックスでモデルの中心を算出
-    const box = new THREE.Box3().setFromObject(model);
-    const center = box.getCenter(new THREE.Vector3());
-
-    // 子メッシュをオフセットして中心を原点に揃える
-    model.children.forEach(child => {
-      child.position.sub(center);
-    });
+    // center offset は行わない（glB の原点をそのまま使用）
+    // Unity 側との座標整合性を保つため
 
     // カメラ前方 5m に配置
     const dir = new THREE.Vector3();

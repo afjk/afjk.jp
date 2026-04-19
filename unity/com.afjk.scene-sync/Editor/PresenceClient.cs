@@ -210,7 +210,23 @@ namespace Afjk.SceneSync.Editor
                     OnlyActiveInHierarchy = false,
                 };
                 var export = new GameObjectExport(exportSettings, goSettings);
+                // transform を一時的にリセットしてエクスポート
+                // glB にはメッシュ形状のみを含める（配置は wire で制御）
+                var originalPos = go.transform.position;
+                var originalRot = go.transform.rotation;
+                var originalScale = go.transform.localScale;
+
+                go.transform.position = Vector3.zero;
+                go.transform.rotation = Quaternion.identity;
+                go.transform.localScale = Vector3.one;
+
                 export.AddScene(new[] { go }, go.name);
+
+                // 復元
+                go.transform.position = originalPos;
+                go.transform.rotation = originalRot;
+                go.transform.localScale = originalScale;
+
                 using var stream = new MemoryStream();
                 var success = await export.SaveToStreamAndDispose(stream);
                 if (!success)
