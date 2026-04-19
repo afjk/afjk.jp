@@ -258,12 +258,12 @@ namespace Afjk.SceneSync
             }
 
             var sceneRoots = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
-            var syncRootTransform = _syncRoot != null ? _syncRoot.transform : null;
+            var syncRootGO = _syncRoot != null ? _syncRoot.gameObject : null;
 
             foreach (var sceneRoot in sceneRoots)
             {
                 // _syncRoot 自体は追加しない（既に子として処理済み）
-                if (syncRootTransform != null && sceneRoot.transform == syncRootTransform)
+                if (syncRootGO != null && sceneRoot == syncRootGO)
                     continue;
 
                 rootObjectsList.Add(sceneRoot);
