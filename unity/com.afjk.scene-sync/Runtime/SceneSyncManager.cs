@@ -120,7 +120,7 @@ namespace Afjk.SceneSync
 
             var root = _syncRoot != null ? _syncRoot.gameObject : null;
             var rootObjects = root != null
-                ? new[] { root }
+                ? GetSyncRootChildren(root)
                 : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
 
             foreach (var go in rootObjects)
@@ -240,6 +240,14 @@ namespace Afjk.SceneSync
             _ = _client.Broadcast(payload);
         }
 
+        private static GameObject[] GetSyncRootChildren(GameObject root)
+        {
+            var children = new List<GameObject>();
+            foreach (Transform child in root.transform)
+                children.Add(child.gameObject);
+            return children.ToArray();
+        }
+
         private void DetectHierarchyChanges()
         {
             if (!_connected) return;
@@ -248,7 +256,7 @@ namespace Afjk.SceneSync
 
             var root = _syncRoot != null ? _syncRoot.gameObject : null;
             var rootObjects = root != null
-                ? new[] { root }
+                ? GetSyncRootChildren(root)
                 : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
 
             foreach (var go in rootObjects)
@@ -493,7 +501,7 @@ namespace Afjk.SceneSync
             {
                 var root = _syncRoot != null ? _syncRoot.gameObject : null;
                 var rootObjects = root != null
-                    ? new[] { root }
+                    ? GetSyncRootChildren(root)
                     : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
 
                 foreach (var r in rootObjects)
@@ -564,6 +572,8 @@ namespace Afjk.SceneSync
                 // メッシュなしの場合はプレースホルダーの Cube を作成
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
+                if (_syncRoot != null)
+                    go.transform.SetParent(_syncRoot, worldPositionStays: true);
                 ApplyTransform(go, position, rotation, scale);
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
@@ -656,7 +666,7 @@ namespace Afjk.SceneSync
 
             var root = _syncRoot != null ? _syncRoot.gameObject : null;
             var rootObjects = root != null
-                ? new[] { root }
+                ? GetSyncRootChildren(root)
                 : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
 
             var objectsJson = new System.Text.StringBuilder();
@@ -753,6 +763,8 @@ namespace Afjk.SceneSync
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale)
         {
+            _knownObjectIds.Add(objectId);
+
             try
             {
                 var url = GetBlobUrl() + "/" + meshPath;
@@ -767,9 +779,10 @@ namespace Afjk.SceneSync
                     // フォールバック: Cube を作成
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
+                    if (_syncRoot != null)
+                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
-                    _knownObjectIds.Add(objectId);
                     _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
@@ -794,6 +807,8 @@ namespace Afjk.SceneSync
                 if (success)
                 {
                     var go = new GameObject(name);
+                    if (_syncRoot != null)
+                        go.transform.SetParent(_syncRoot, worldPositionStays: true);
                     await gltf.InstantiateMainSceneAsync(go.transform);
                     // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
                     // 見た目が Y 軸 180° ずれるため、import 直後に補正する。
@@ -805,7 +820,6 @@ namespace Afjk.SceneSync
 
                     ApplyTransform(go, position, rotation, scale);
                     _managedObjects[objectId] = go;
-                    _knownObjectIds.Add(objectId);
                     _instanceToObjectId[go.GetInstanceID()] = objectId;
                     Debug.Log("[SceneSync] Imported mesh: " + name);
                     OnObjectAdded?.Invoke(objectId, go);
@@ -815,9 +829,10 @@ namespace Afjk.SceneSync
                     Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
+                    if (_syncRoot != null)
+                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
-                    _knownObjectIds.Add(objectId);
                     _instanceToObjectId[fallback.GetInstanceID()] = objectId;
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
@@ -832,6 +847,8 @@ namespace Afjk.SceneSync
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
+                if (!_managedObjects.ContainsKey(objectId))
+                    _knownObjectIds.Remove(objectId);
             }
         }
 
