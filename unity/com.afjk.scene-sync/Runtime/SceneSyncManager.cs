@@ -118,10 +118,7 @@ namespace Afjk.SceneSync
         {
             if (!_connected) return;
 
-            var root = _syncRoot != null ? _syncRoot.gameObject : null;
-            var rootObjects = root != null
-                ? GetSyncRootChildren(root)
-                : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+            var rootObjects = GetAllSyncTargets();
 
             foreach (var go in rootObjects)
             {
@@ -248,16 +245,40 @@ namespace Afjk.SceneSync
             return children.ToArray();
         }
 
+        private GameObject[] GetAllSyncTargets()
+        {
+            // _syncRoot が指定されていても Scene Root も監視する
+            // （_syncRoot の外にあるオブジェクトが削除判定されるのを防ぐ）
+            var rootObjectsList = new List<GameObject>();
+
+            if (_syncRoot != null)
+            {
+                foreach (var child in GetSyncRootChildren(_syncRoot))
+                    rootObjectsList.Add(child);
+            }
+
+            var sceneRoots = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+            var syncRootTransform = _syncRoot != null ? _syncRoot.transform : null;
+
+            foreach (var sceneRoot in sceneRoots)
+            {
+                // _syncRoot 自体は追加しない（既に子として処理済み）
+                if (syncRootTransform != null && sceneRoot.transform == syncRootTransform)
+                    continue;
+
+                rootObjectsList.Add(sceneRoot);
+            }
+
+            return rootObjectsList.ToArray();
+        }
+
         private void DetectHierarchyChanges()
         {
             if (!_connected) return;
             var currentIds = new HashSet<string>();
             var currentInstanceIds = new HashSet<int>();
 
-            var root = _syncRoot != null ? _syncRoot.gameObject : null;
-            var rootObjects = root != null
-                ? GetSyncRootChildren(root)
-                : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+            var rootObjects = GetAllSyncTargets();
 
             foreach (var go in rootObjects)
             {
@@ -499,10 +520,7 @@ namespace Afjk.SceneSync
             // Unity 由来の objectId は数値（InstanceID）
             if (int.TryParse(objectId, out var id))
             {
-                var root = _syncRoot != null ? _syncRoot.gameObject : null;
-                var rootObjects = root != null
-                    ? GetSyncRootChildren(root)
-                    : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+                var rootObjects = GetAllSyncTargets();
 
                 foreach (var r in rootObjects)
                 {
@@ -675,10 +693,7 @@ namespace Afjk.SceneSync
         {
             Debug.Log("[SceneSync] Responding to scene-request for: " + fromId);
 
-            var root = _syncRoot != null ? _syncRoot.gameObject : null;
-            var rootObjects = root != null
-                ? GetSyncRootChildren(root)
-                : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+            var rootObjects = GetAllSyncTargets();
 
             var objectsJson = new System.Text.StringBuilder();
             objectsJson.Append("{");
