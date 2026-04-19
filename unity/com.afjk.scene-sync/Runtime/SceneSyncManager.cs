@@ -809,6 +809,8 @@ namespace Afjk.SceneSync
                     var go = new GameObject(name);
                     if (_syncRoot != null)
                         go.transform.SetParent(_syncRoot, worldPositionStays: true);
+                    _instanceToObjectId[go.GetInstanceID()] = objectId;
+                    _managedObjects[objectId] = go;
                     await gltf.InstantiateMainSceneAsync(go.transform);
                     // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
                     // 見た目が Y 軸 180° ずれるため、import 直後に補正する。
@@ -819,8 +821,6 @@ namespace Afjk.SceneSync
                     }
 
                     ApplyTransform(go, position, rotation, scale);
-                    _managedObjects[objectId] = go;
-                    _instanceToObjectId[go.GetInstanceID()] = objectId;
                     Debug.Log("[SceneSync] Imported mesh: " + name);
                     OnObjectAdded?.Invoke(objectId, go);
                 }
