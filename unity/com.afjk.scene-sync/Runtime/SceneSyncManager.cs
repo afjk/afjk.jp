@@ -253,7 +253,7 @@ namespace Afjk.SceneSync
 
             if (_syncRoot != null)
             {
-                foreach (var child in GetSyncRootChildren(_syncRoot))
+                foreach (var child in GetSyncRootChildren(_syncRoot.gameObject))
                     rootObjectsList.Add(child);
             }
 
