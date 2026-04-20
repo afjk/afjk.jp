@@ -660,6 +660,9 @@ animate();
 
 const statusEl = document.getElementById('status');
 const dotEl = statusEl.querySelector('.dot');
+const nicknameLabel = document.getElementById('nickname-label');
+const nicknameChip = document.getElementById('nickname-chip');
+const roomSectionEl = document.getElementById('room-section');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -670,18 +673,21 @@ function resolvePresenceUrl() {
   return isLocal ? 'ws://localhost:8787' : 'wss://afjk.jp/presence';
 }
 
-function resolveRoom() {
-  return new URLSearchParams(location.search).get('room') || null;
+function sanitizeRoomCode(s) {
+  if (!s) return null;
+  const cleaned = String(s).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24);
+  return cleaned || null;
 }
 
-function resolveNickname() {
-  const params = new URLSearchParams(location.search);
-  const nameParam = params.get('name');
-  if (nameParam) return nameParam;
+function randomRoomCode() {
+  return Math.random().toString(36).slice(2, 8);
+}
 
-  const deviceName = localStorage.getItem('pipe.deviceName');
-  if (deviceName) return deviceName;
-
+function loadInitialNickname() {
+  const nameParam = new URLSearchParams(location.search).get('name');
+  if (nameParam) return nameParam.slice(0, 40);
+  const stored = localStorage.getItem('pipe.deviceName');
+  if (stored) return stored;
   return 'User-' + Math.random().toString(36).slice(2, 6);
 }
 
@@ -690,7 +696,7 @@ function resolveNickname() {
 const peersListEl = document.getElementById('peers-list');
 
 function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function renderPeerItem(name, isSelf, editingObjectId) {
@@ -733,28 +739,206 @@ const presenceState = {
   ws: null,
   id: null,
   room: null,
-  nickname: null,
+  nickname: loadInitialNickname(),
   peers: [],
 };
 
+let activeRoomCode = sanitizeRoomCode(new URLSearchParams(location.search).get('room'));
 let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
+let reconnectTimer = null;
+
+// ── ニックネーム編集 ───────────────────────────────────
+
+function updateNicknameLabel() {
+  if (nicknameLabel) nicknameLabel.textContent = presenceState.nickname;
+}
+
+function editNickname() {
+  const next = prompt('表示名を入力してください', presenceState.nickname) || '';
+  const cleaned = next.trim().slice(0, 40);
+  if (!cleaned || cleaned === presenceState.nickname) return;
+  presenceState.nickname = cleaned;
+  localStorage.setItem('pipe.deviceName', cleaned);
+  updateNicknameLabel();
+  updatePeersList();
+  // 接続中なら hello を再送して即時反映
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'hello',
+      nickname: cleaned,
+      device: navigator.userAgent.slice(0, 60),
+    }));
+  }
+}
+
+// ── ルーム制御 ────────────────────────────────────────
+
+function roomShareUrl(code) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = '';
+  u.searchParams.set('room', code);
+  return u.toString();
+}
+
+function pipeUrlForRoom(code) {
+  const u = new URL('/pipe/', location.href);
+  if (code) u.searchParams.set('room', code);
+  return u.toString();
+}
+
+function resetSceneState() {
+  for (const [objectId, obj] of [...managedObjects]) {
+    if (objectId === 'sample-cube') continue;
+    removeLoadingOverlay(objectId);
+    removeLockOverlay(objectId);
+    locks.delete(objectId);
+    if (transformCtrl.object === obj) transformCtrl.detach();
+    scene.remove(obj);
+    obj.traverse(child => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
+    });
+    managedObjects.delete(objectId);
+  }
+  hideToolbar();
+  presenceState.peers = [];
+  sceneReceived = false;
+  sceneRequestAttempt = 0;
+  clearTimeout(sceneRequestTimer);
+  updatePeersList();
+}
+
+function reconnectPresence() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (presenceState.ws) {
+    const old = presenceState.ws;
+    presenceState.ws = null; // intentional close — onclose will skip reconnect
+    try { old.close(); } catch {}
+  }
+  resetSceneState();
+  connectPresence();
+  renderRoomSection();
+}
+
+function applyRoomCode(code) {
+  const cleaned = sanitizeRoomCode(code);
+  if (!cleaned) return;
+  activeRoomCode = cleaned;
+  const u = new URL(location.href);
+  u.searchParams.set('room', cleaned);
+  history.replaceState(null, '', u.toString());
+  reconnectPresence();
+}
+
+function generateRoom() {
+  applyRoomCode(randomRoomCode());
+}
+
+function joinRoom(code) {
+  applyRoomCode(code);
+}
+
+function clearRoom() {
+  activeRoomCode = null;
+  const u = new URL(location.href);
+  u.searchParams.delete('room');
+  history.replaceState(null, '', u.toString());
+  reconnectPresence();
+}
+
+function copyRoomUrl() {
+  if (!activeRoomCode) return;
+  navigator.clipboard.writeText(roomShareUrl(activeRoomCode))
+    .then(() => showToast('URL をコピーしました'))
+    .catch(() => showToast('コピーに失敗しました'));
+}
+
+function renderRoomSection() {
+  if (!roomSectionEl) return;
+  roomSectionEl.innerHTML = '';
+
+  if (activeRoomCode) {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.innerHTML = `🏠 <span id="room-code">${escapeHtml(activeRoomCode)}</span>`;
+    chip.title = 'ルームコード';
+    roomSectionEl.appendChild(chip);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'chip';
+    copyBtn.textContent = '🔗 コピー';
+    copyBtn.title = 'ルーム URL をコピー';
+    copyBtn.addEventListener('click', copyRoomUrl);
+    roomSectionEl.appendChild(copyBtn);
+
+    const pipeLink = document.createElement('a');
+    pipeLink.className = 'chip';
+    pipeLink.href = pipeUrlForRoom(activeRoomCode);
+    pipeLink.textContent = '📥 pipe';
+    pipeLink.title = '同じルームを pipe で開く';
+    roomSectionEl.appendChild(pipeLink);
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.type = 'button';
+    leaveBtn.className = 'chip danger';
+    leaveBtn.textContent = '退場';
+    leaveBtn.addEventListener('click', clearRoom);
+    roomSectionEl.appendChild(leaveBtn);
+  } else {
+    const noRoomChip = document.createElement('div');
+    noRoomChip.className = 'chip';
+    noRoomChip.innerHTML = '🏠 <span style="opacity:0.6">ルーム未設定</span>';
+    roomSectionEl.appendChild(noRoomChip);
+
+    const genBtn = document.createElement('button');
+    genBtn.type = 'button';
+    genBtn.className = 'chip primary';
+    genBtn.textContent = '＋ 作成';
+    genBtn.title = '新しいルームを作成';
+    genBtn.addEventListener('click', generateRoom);
+    roomSectionEl.appendChild(genBtn);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'room-input';
+    input.placeholder = 'コードを入力';
+    input.maxLength = 24;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') joinRoom(input.value);
+    });
+    roomSectionEl.appendChild(input);
+
+    const joinBtn = document.createElement('button');
+    joinBtn.type = 'button';
+    joinBtn.className = 'chip';
+    joinBtn.textContent = '参加';
+    joinBtn.addEventListener('click', () => joinRoom(input.value));
+    roomSectionEl.appendChild(joinBtn);
+  }
+}
 
 function connectPresence() {
   const base = resolvePresenceUrl();
-  const room = resolveRoom();
-  const url = room ? `${base}/?room=${room}` : base;
+  const url = activeRoomCode
+    ? `${base}/?room=${encodeURIComponent(activeRoomCode)}`
+    : base;
 
   const ws = new WebSocket(url);
   presenceState.ws = ws;
 
   ws.onopen = () => {
-    const nickname = resolveNickname();
-    presenceState.nickname = nickname;
     ws.send(JSON.stringify({
       type: 'hello',
-      nickname: nickname,
+      nickname: presenceState.nickname,
       device: navigator.userAgent.slice(0, 60),
     }));
   };
@@ -778,7 +962,8 @@ function connectPresence() {
         updateStatus(true);
         // 切断したピアのロックを解除
         const peerIds = new Set(data.peers.map(p => p.id));
-        for (const [objId, ownerId] of locks) {
+        for (const [objId, ownerInfo] of locks) {
+          const ownerId = ownerInfo?.id || ownerInfo;
           if (!peerIds.has(ownerId) && ownerId !== presenceState.id) {
             locks.delete(objId);
             removeLockOverlay(objId);
@@ -799,9 +984,15 @@ function connectPresence() {
   };
 
   ws.onclose = () => {
+    // 意図的な切断（ルーム切替）では presenceState.ws が先に null になる
+    if (presenceState.ws !== ws) return;
+    presenceState.ws = null;
     updateStatus(false);
     updatePeersList();
-    setTimeout(() => {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (presenceState.ws) return;
       sceneReceived = false;
       sceneRequestAttempt = 0;
       clearTimeout(sceneRequestTimer);
@@ -810,7 +1001,7 @@ function connectPresence() {
   };
 
   ws.onerror = () => {
-    ws.close();
+    try { ws.close(); } catch {}
   };
 }
 
@@ -818,7 +1009,7 @@ function updateStatus(connected) {
   if (connected) {
     const n = presenceState.peers.length;
     dotEl.className = 'dot on';
-    statusEl.innerHTML = `<span class="dot on"></span>${presenceState.nickname} · ${presenceState.room || '—'} · ${n} peer${n !== 1 ? 's' : ''}`;
+    statusEl.innerHTML = `<span class="dot on"></span>${escapeHtml(presenceState.nickname)} · ${escapeHtml(presenceState.room || '—')} · ${n} peer${n !== 1 ? 's' : ''}`;
   } else {
     dotEl.className = 'dot off';
     statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
@@ -1247,4 +1438,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
 
 // ── 起動 ─────────────────────────────────────────────────
 
+nicknameChip?.addEventListener('click', editNickname);
+updateNicknameLabel();
+renderRoomSection();
 connectPresence();

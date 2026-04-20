@@ -56,7 +56,7 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
 1. `Window > Scene Sync` を開く
 2. Presence URL（デフォルト: `wss://afjk.jp/presence`）とルームコードを入力
 3. `Connect` ボタンを押す
-4. ブラウザで `https://afjk.jp/pipe/scene.html?room=<同じルームコード>` を開く
+4. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
 
 ### Runtime（MonoBehaviour）
 
@@ -67,7 +67,7 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
    - `Nickname`: 表示名
    - `Sync Root`: 同期対象の Transform ルート（省略時はシーン直下）
    - `Auto Connect`: 起動時に自動接続する場合はチェック
-3. ブラウザで `https://afjk.jp/pipe/scene.html?room=<同じルームコード>` を開く
+3. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
 
 ## 技術仕様
 
