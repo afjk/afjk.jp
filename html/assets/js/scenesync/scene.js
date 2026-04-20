@@ -914,6 +914,9 @@ function renderRoomSection() {
     pipeLink.title = 'pipe を開く';
     roomSectionEl.appendChild(pipeLink);
 
+    const joinGroup = document.createElement('div');
+    joinGroup.className = 'join-group';
+
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'room-input';
@@ -922,14 +925,16 @@ function renderRoomSection() {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') joinRoom(input.value);
     });
-    roomSectionEl.appendChild(input);
+    joinGroup.appendChild(input);
 
     const joinBtn = document.createElement('button');
     joinBtn.type = 'button';
     joinBtn.className = 'chip';
     joinBtn.textContent = '参加';
     joinBtn.addEventListener('click', () => joinRoom(input.value));
-    roomSectionEl.appendChild(joinBtn);
+    joinGroup.appendChild(joinBtn);
+
+    roomSectionEl.appendChild(joinGroup);
   }
 }
 
