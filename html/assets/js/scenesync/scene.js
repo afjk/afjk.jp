@@ -875,7 +875,7 @@ function renderRoomSection() {
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'chip';
-    copyBtn.textContent = '🔗 コピー';
+    copyBtn.textContent = 'URL コピー';
     copyBtn.title = 'ルーム URL をコピー';
     copyBtn.addEventListener('click', copyRoomUrl);
     roomSectionEl.appendChild(copyBtn);
@@ -896,16 +896,23 @@ function renderRoomSection() {
   } else {
     const noRoomChip = document.createElement('div');
     noRoomChip.className = 'chip';
-    noRoomChip.innerHTML = '🏠 <span style="opacity:0.6">ルーム未設定</span>';
+    noRoomChip.innerHTML = '🏠 <span style="opacity:0.6">未設定</span>';
     roomSectionEl.appendChild(noRoomChip);
 
     const genBtn = document.createElement('button');
     genBtn.type = 'button';
     genBtn.className = 'chip primary';
-    genBtn.textContent = '＋ 作成';
+    genBtn.textContent = '作成';
     genBtn.title = '新しいルームを作成';
     genBtn.addEventListener('click', generateRoom);
     roomSectionEl.appendChild(genBtn);
+
+    const pipeLink = document.createElement('a');
+    pipeLink.className = 'chip';
+    pipeLink.href = pipeUrlForRoom(null);
+    pipeLink.textContent = '📥 pipe';
+    pipeLink.title = 'pipe を開く';
+    roomSectionEl.appendChild(pipeLink);
 
     const input = document.createElement('input');
     input.type = 'text';
