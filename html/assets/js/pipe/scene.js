@@ -276,6 +276,112 @@ function removeLockOverlay(objectId) {
   lockOverlays.delete(objectId);
 }
 
+// ── ロード中オーバーレイ ─────────────────────────────────
+
+// objectId → { group, placeholder }
+const loadingOverlays = new Map();
+
+function createLoadingLabel(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 512;
+  canvas.height = 128;
+
+  ctx.clearRect(0, 0, 512, 128);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  roundRect(ctx, 4, 4, 504, 120, 16);
+  ctx.fill();
+
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#88ccff';
+  ctx.fillText('読み込み中…', 256, 38);
+
+  ctx.font = '24px sans-serif';
+  ctx.fillStyle = '#ffffff';
+  const maxWidth = 480;
+  let label = text;
+  if (ctx.measureText(label).width > maxWidth) {
+    while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
+      label = label.slice(0, -1);
+    }
+    label = label + '…';
+  }
+  ctx.fillText(label, 256, 86);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(3, 0.75, 1);
+  sprite.raycast = () => {};
+  return sprite;
+}
+
+function createLoadingPlaceholder() {
+  const group = new THREE.Group();
+
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const edges = new THREE.EdgesGeometry(geo);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x88ccff,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const box = new THREE.LineSegments(edges, mat);
+  box.raycast = () => {};
+  group.add(box);
+  geo.dispose();
+
+  return group;
+}
+
+function addLoadingOverlay(objectId, name, info) {
+  removeLoadingOverlay(objectId);
+
+  const group = new THREE.Group();
+  group.userData._isLoadingOverlay = true;
+  group.raycast = () => {};
+
+  const placeholder = createLoadingPlaceholder();
+  group.add(placeholder);
+
+  const label = createLoadingLabel(name || objectId);
+  label.position.set(0, 1.1, 0);
+  group.add(label);
+
+  if (info?.position) group.position.fromArray(info.position);
+  if (info?.rotation) group.quaternion.fromArray(info.rotation);
+  if (info?.scale) group.scale.fromArray(info.scale);
+
+  scene.add(group);
+  loadingOverlays.set(objectId, { group, placeholder });
+}
+
+function removeLoadingOverlay(objectId) {
+  const entry = loadingOverlays.get(objectId);
+  if (!entry) return;
+
+  const { group } = entry;
+  scene.remove(group);
+  group.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
+
+  loadingOverlays.delete(objectId);
+}
+
 // ── レイキャスト選択 ─────────────────────────────────────
 
 const raycaster = new THREE.Raycaster();
@@ -539,6 +645,12 @@ function animate() {
   for (const [objectId, entry] of lockOverlays) {
     if (entry.target && entry.group) {
       updateLockOverlayPosition(entry.group, entry.target);
+    }
+  }
+
+  for (const [objectId, entry] of loadingOverlays) {
+    if (entry.placeholder) {
+      entry.placeholder.rotation.y += 0.02;
     }
   }
 
@@ -860,7 +972,15 @@ function handleHandoff(data) {
     case 'scene-mesh': {
       const obj = managedObjects.get(payload.objectId);
       const url = BLOB_BASE + '/' + payload.meshPath;
+      const loadingName = obj?.userData?.name || payload.meshPath;
+      const loadingInfo = obj ? {
+        position: obj.position.toArray(),
+        rotation: obj.quaternion.toArray(),
+        scale: obj.scale.toArray(),
+      } : null;
+      addLoadingOverlay(payload.objectId, loadingName, loadingInfo);
       gltfLoader.load(url, (gltf) => {
+        removeLoadingOverlay(payload.objectId);
         const model = new THREE.Group();
         model.userData.objectId = payload.objectId;
         model.userData.meshPath = payload.meshPath;
@@ -877,6 +997,7 @@ function handleHandoff(data) {
         scene.add(model);
         managedObjects.set(payload.objectId, model);
       }, undefined, (err) => {
+        removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
         console.warn('Failed to load mesh:', err);
         // 既存オブジェクトがあれば使用し続ける、なければ Box を生成
@@ -914,8 +1035,10 @@ function addOrUpdateObject(objectId, info) {
   const existing = managedObjects.get(objectId);
 
   if (info.meshPath) {
+    addLoadingOverlay(objectId, info.name || objectId, info);
     const url = BLOB_BASE + '/' + info.meshPath;
     gltfLoader.load(url, (gltf) => {
+      removeLoadingOverlay(objectId);
       // 既存オブジェクトを削除
       const current = managedObjects.get(objectId);
       if (current) {
@@ -933,6 +1056,7 @@ function addOrUpdateObject(objectId, info) {
       scene.add(model);
       managedObjects.set(objectId, model);
     }, undefined, (err) => {
+      removeLoadingOverlay(objectId);
       // glB ロード失敗時のフォールバック
       console.warn('Failed to load mesh for', objectId, ':', err);
       if (!existing) {
@@ -1040,12 +1164,23 @@ function generateRandomPath() {
 
 async function handleAddMeshFile(file) {
   const objectId = generateObjectId();
+
+  // カメラ前方 5m を配置予定位置として先にローディング表示
+  const placeDir = new THREE.Vector3();
+  camera.getWorldDirection(placeDir);
+  const placePos = new THREE.Vector3()
+    .copy(camera.position)
+    .addScaledVector(placeDir, 5);
+  placePos.y = 0;
+  addLoadingOverlay(objectId, file.name, { position: placePos.toArray() });
+
   const arrayBuffer = await file.arrayBuffer();
 
   const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const blobUrl = URL.createObjectURL(blob);
 
   gltfLoader.load(blobUrl, async (gltf) => {
+    removeLoadingOverlay(objectId);
     const model = gltf.scene;
     model.userData.objectId = objectId;
     model.userData.name = file.name;
@@ -1053,11 +1188,7 @@ async function handleAddMeshFile(file) {
     // center offset は行わない（glB の原点をそのまま使用）
     // Unity 側との座標整合性を保つため
 
-    // カメラ前方 5m に配置
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    model.position.copy(camera.position).addScaledVector(dir, 5);
-    model.position.y = 0;
+    model.position.copy(placePos);
 
     scene.add(model);
     managedObjects.set(objectId, model);
@@ -1072,6 +1203,7 @@ async function handleAddMeshFile(file) {
       arrayBuffer
     );
   }, undefined, (err) => {
+    removeLoadingOverlay(objectId);
     console.error('Failed to load glB:', err);
     URL.revokeObjectURL(blobUrl);
   });
