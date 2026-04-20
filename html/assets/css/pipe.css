@@ -205,6 +205,9 @@
       font-family: inherit;
       transition: all .15s;
       white-space: nowrap;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
     }
     .room-btn:hover { border-color: var(--accent); color: var(--accent); }
     .room-btn.danger:hover { border-color: #f87171; color: #f87171; }
