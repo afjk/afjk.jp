@@ -21,6 +21,24 @@
       z-index: 10;
       user-select: none;
     }
+    #back-link {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font: 13px/1.4 monospace;
+      color: #fff;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      text-decoration: none;
+      z-index: 10;
+      user-select: none;
+    }
+    #back-link:hover {
+      background: rgba(0,0,0,0.75);
+    }
     #status .dot {
       display: inline-block;
       width: 8px; height: 8px;
@@ -174,6 +192,7 @@
   </style>
 </head>
 <body>
+  <a id="back-link" href="/pipe/" title="pipe に戻る">← pipe</a>
   <div id="status"><span class="dot off"></span>接続中…</div>
   <div id="peers-panel">
     <div id="peers-list"></div>
