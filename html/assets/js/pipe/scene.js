@@ -1181,9 +1181,10 @@ async function handleAddMeshFile(file) {
 
   gltfLoader.load(blobUrl, async (gltf) => {
     removeLoadingOverlay(objectId);
-    const model = gltf.scene;
+    const model = new THREE.Group();
     model.userData.objectId = objectId;
     model.userData.name = file.name;
+    attachImportedGlb(model, gltf);
 
     // center offset は行わない（glB の原点をそのまま使用）
     // Unity 側との座標整合性を保つため
