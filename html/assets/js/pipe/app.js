@@ -90,6 +90,8 @@ const I18N = {
     roomJoinPlaceholder: 'コードを入力',
     roomJoin:     '参加',
     roomUrlCopied:'コピー済 ✓',
+    sceneSyncOpen:'🎬 Scene Sync',
+    sceneSyncOpenTitle: 'この部屋を Scene Sync で開く',
     sendToAll:         n      => `全員に送信 (${n}人)`,
     broadcastSending:  n      => `${n}台に送信中…`,
     broadcastProgress: (d, n) => `${d}/${n} 完了…`,
@@ -200,6 +202,8 @@ const I18N = {
     roomJoinPlaceholder: 'Enter code',
     roomJoin:     'Join',
     roomUrlCopied:'Copied ✓',
+    sceneSyncOpen:'🎬 Scene Sync',
+    sceneSyncOpenTitle: 'Open this room in Scene Sync',
     sendToAll:         n      => `Send to All (${n})`,
     broadcastSending:  n      => `Sending to ${n} devices…`,
     broadcastProgress: (d, n) => `${d}/${n} done…`,
@@ -1220,6 +1224,12 @@ function roomUrl(code) {
   return u.toString();
 }
 
+function sceneSyncUrl(code) {
+  const u = new URL('/scenesync/', location.href);
+  if (code) u.searchParams.set('room', code);
+  return u.toString();
+}
+
 function applyRoomCode(code) {
   activeRoomCode = code;
   // Sync URL so reloading stays in the same room
@@ -1307,6 +1317,13 @@ function renderRoomSection() {
     clearBtn.addEventListener('click', clearRoom);
     row.appendChild(clearBtn);
 
+    const sceneLink = document.createElement('a');
+    sceneLink.className = 'room-btn';
+    sceneLink.href = sceneSyncUrl(activeRoomCode);
+    sceneLink.textContent = t('sceneSyncOpen');
+    sceneLink.title = t('sceneSyncOpenTitle');
+    row.appendChild(sceneLink);
+
     wrap.appendChild(row);
   } else {
     const row = document.createElement('div');
@@ -1317,6 +1334,14 @@ function renderRoomSection() {
     genBtn.textContent = t('roomGenerate');
     genBtn.addEventListener('click', generateRoom);
     row.appendChild(genBtn);
+
+    const sceneLink = document.createElement('a');
+    sceneLink.className = 'room-btn';
+    sceneLink.href = sceneSyncUrl(null);
+    sceneLink.textContent = t('sceneSyncOpen');
+    sceneLink.title = t('sceneSyncOpenTitle');
+    row.appendChild(sceneLink);
+
     wrap.appendChild(row);
 
     const joinRow = document.createElement('div');
