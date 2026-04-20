@@ -358,8 +358,6 @@ function addLoadingOverlay(objectId, name, info) {
   group.add(label);
 
   if (info?.position) group.position.fromArray(info.position);
-  if (info?.rotation) group.quaternion.fromArray(info.rotation);
-  if (info?.scale) group.scale.fromArray(info.scale);
 
   scene.add(group);
   loadingOverlays.set(objectId, { group, placeholder });
