@@ -318,11 +318,19 @@ export async function startWatch() {
     await pc.setLocalDescription(offer);
     await _waitForIce(pc);
 
-    const res = await fetch(`${getStreamBase()}/room/${roomCode}/whep`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/sdp' },
-      body: pc.localDescription.sdp,
-    });
+    let res;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, attempt * 500));
+        if (!_state.activeStreamerNickname) { _cleanupViewer(); _renderTab(); return; }
+      }
+      res = await fetch(`${getStreamBase()}/room/${roomCode}/whep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: pc.localDescription.sdp,
+      });
+      if (res.ok || res.status !== 404) break;
+    }
     if (!res.ok) throw new Error(`WHEP ${res.status}`);
     await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
 

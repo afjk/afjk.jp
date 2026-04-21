@@ -23,7 +23,7 @@ import {
   flipCamera,
   selectCamera,
   cleanupStream,
-} from './stream.js?v=4';
+} from './stream.js?v=5';
 
 // ── i18n ──────────────────────────────────────────────────────────────────────
 const I18N = {
