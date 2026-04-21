@@ -122,4 +122,19 @@ export const WORKS = [
       { label: 'Open', url: '/pipe/' },
     ]
   },
+  {
+    id: 'scenesync',
+    type: 'tool',
+    typeLabel: 'Tool',
+    title: { ja: 'Scene Sync', en: 'Scene Sync' },
+    desc: {
+      ja: 'ブラウザと Unity の間で 3D シーンをリアルタイム共有。ルームに参加して glB をドロップするだけで、全員の画面に同じオブジェクトが現れ、移動・回転・スケールが同期します。',
+      en: 'Real-time 3D scene sharing between browsers and Unity. Join a room, drop a glB, and everyone sees the same objects synced for move/rotate/scale.'
+    },
+    stat: '',
+    links: [
+      { label: 'Open', url: '/scenesync/' },
+      { label: 'Unity Package', url: 'https://github.com/afjk/afjk.jp/tree/main/unity/com.afjk.scene-sync' },
+    ]
+  },
 ];

@@ -276,6 +276,110 @@ function removeLockOverlay(objectId) {
   lockOverlays.delete(objectId);
 }
 
+// ── ロード中オーバーレイ ─────────────────────────────────
+
+// objectId → { group, placeholder }
+const loadingOverlays = new Map();
+
+function createLoadingLabel(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 512;
+  canvas.height = 128;
+
+  ctx.clearRect(0, 0, 512, 128);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  roundRect(ctx, 4, 4, 504, 120, 16);
+  ctx.fill();
+
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#88ccff';
+  ctx.fillText('読み込み中…', 256, 38);
+
+  ctx.font = '24px sans-serif';
+  ctx.fillStyle = '#ffffff';
+  const maxWidth = 480;
+  let label = text;
+  if (ctx.measureText(label).width > maxWidth) {
+    while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
+      label = label.slice(0, -1);
+    }
+    label = label + '…';
+  }
+  ctx.fillText(label, 256, 86);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(3, 0.75, 1);
+  sprite.raycast = () => {};
+  return sprite;
+}
+
+function createLoadingPlaceholder() {
+  const group = new THREE.Group();
+
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const edges = new THREE.EdgesGeometry(geo);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x88ccff,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const box = new THREE.LineSegments(edges, mat);
+  box.raycast = () => {};
+  group.add(box);
+  geo.dispose();
+
+  return group;
+}
+
+function addLoadingOverlay(objectId, name, info) {
+  removeLoadingOverlay(objectId);
+
+  const group = new THREE.Group();
+  group.userData._isLoadingOverlay = true;
+  group.raycast = () => {};
+
+  const placeholder = createLoadingPlaceholder();
+  group.add(placeholder);
+
+  const label = createLoadingLabel(name || objectId);
+  label.position.set(0, 1.1, 0);
+  group.add(label);
+
+  if (info?.position) group.position.fromArray(info.position);
+
+  scene.add(group);
+  loadingOverlays.set(objectId, { group, placeholder });
+}
+
+function removeLoadingOverlay(objectId) {
+  const entry = loadingOverlays.get(objectId);
+  if (!entry) return;
+
+  const { group } = entry;
+  scene.remove(group);
+  group.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
+
+  loadingOverlays.delete(objectId);
+}
+
 // ── レイキャスト選択 ─────────────────────────────────────
 
 const raycaster = new THREE.Raycaster();
@@ -555,6 +659,12 @@ function animate() {
     }
   }
 
+  for (const [objectId, entry] of loadingOverlays) {
+    if (entry.placeholder) {
+      entry.placeholder.rotation.y += 0.02;
+    }
+  }
+
   renderer.render(scene, camera);
 }
 animate();
@@ -563,6 +673,9 @@ animate();
 
 const statusEl = document.getElementById('status');
 const dotEl = statusEl.querySelector('.dot');
+const nicknameLabel = document.getElementById('nickname-label');
+const nicknameChip = document.getElementById('nickname-chip');
+const roomSectionEl = document.getElementById('room-section');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -573,18 +686,21 @@ function resolvePresenceUrl() {
   return isLocal ? 'ws://localhost:8787' : 'wss://afjk.jp/presence';
 }
 
-function resolveRoom() {
-  return new URLSearchParams(location.search).get('room') || null;
+function sanitizeRoomCode(s) {
+  if (!s) return null;
+  const cleaned = String(s).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24);
+  return cleaned || null;
 }
 
-function resolveNickname() {
-  const params = new URLSearchParams(location.search);
-  const nameParam = params.get('name');
-  if (nameParam) return nameParam;
+function randomRoomCode() {
+  return Math.random().toString(36).slice(2, 8);
+}
 
-  const deviceName = localStorage.getItem('pipe.deviceName');
-  if (deviceName) return deviceName;
-
+function loadInitialNickname() {
+  const nameParam = new URLSearchParams(location.search).get('name');
+  if (nameParam) return nameParam.slice(0, 40);
+  const stored = localStorage.getItem('pipe.deviceName');
+  if (stored) return stored;
   return 'User-' + Math.random().toString(36).slice(2, 6);
 }
 
@@ -593,7 +709,7 @@ function resolveNickname() {
 const peersListEl = document.getElementById('peers-list');
 
 function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function renderPeerItem(name, isSelf, editingObjectId) {
@@ -636,28 +752,218 @@ const presenceState = {
   ws: null,
   id: null,
   room: null,
-  nickname: null,
+  nickname: loadInitialNickname(),
   peers: [],
 };
 
+let activeRoomCode = sanitizeRoomCode(new URLSearchParams(location.search).get('room'));
 let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
+let reconnectTimer = null;
+
+// ── ニックネーム編集 ───────────────────────────────────
+
+function updateNicknameLabel() {
+  if (nicknameLabel) nicknameLabel.textContent = presenceState.nickname;
+}
+
+function editNickname() {
+  const next = prompt('表示名を入力してください', presenceState.nickname) || '';
+  const cleaned = next.trim().slice(0, 40);
+  if (!cleaned || cleaned === presenceState.nickname) return;
+  presenceState.nickname = cleaned;
+  localStorage.setItem('pipe.deviceName', cleaned);
+  updateNicknameLabel();
+  updatePeersList();
+  // 接続中なら hello を再送して即時反映
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'hello',
+      nickname: cleaned,
+      device: navigator.userAgent.slice(0, 60),
+    }));
+  }
+}
+
+// ── ルーム制御 ────────────────────────────────────────
+
+function roomShareUrl(code) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = '';
+  u.searchParams.set('room', code);
+  return u.toString();
+}
+
+function pipeUrlForRoom(code) {
+  const u = new URL('/pipe/', location.href);
+  if (code) u.searchParams.set('room', code);
+  return u.toString();
+}
+
+function resetSceneState() {
+  for (const [objectId, obj] of [...managedObjects]) {
+    if (objectId === 'sample-cube') continue;
+    removeLoadingOverlay(objectId);
+    removeLockOverlay(objectId);
+    locks.delete(objectId);
+    if (transformCtrl.object === obj) transformCtrl.detach();
+    scene.remove(obj);
+    obj.traverse(child => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
+    });
+    managedObjects.delete(objectId);
+  }
+  hideToolbar();
+  presenceState.peers = [];
+  sceneReceived = false;
+  sceneRequestAttempt = 0;
+  clearTimeout(sceneRequestTimer);
+  updatePeersList();
+}
+
+function reconnectPresence() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (presenceState.ws) {
+    const old = presenceState.ws;
+    presenceState.ws = null; // intentional close — onclose will skip reconnect
+    try { old.close(); } catch {}
+  }
+  resetSceneState();
+  connectPresence();
+  renderRoomSection();
+}
+
+function applyRoomCode(code) {
+  const cleaned = sanitizeRoomCode(code);
+  if (!cleaned) return;
+  activeRoomCode = cleaned;
+  const u = new URL(location.href);
+  u.searchParams.set('room', cleaned);
+  history.replaceState(null, '', u.toString());
+  reconnectPresence();
+}
+
+function generateRoom() {
+  applyRoomCode(randomRoomCode());
+}
+
+function joinRoom(code) {
+  applyRoomCode(code);
+}
+
+function clearRoom() {
+  activeRoomCode = null;
+  const u = new URL(location.href);
+  u.searchParams.delete('room');
+  history.replaceState(null, '', u.toString());
+  reconnectPresence();
+}
+
+function copyRoomUrl() {
+  if (!activeRoomCode) return;
+  navigator.clipboard.writeText(roomShareUrl(activeRoomCode))
+    .then(() => showToast('URL をコピーしました'))
+    .catch(() => showToast('コピーに失敗しました'));
+}
+
+function renderRoomSection() {
+  if (!roomSectionEl) return;
+  roomSectionEl.innerHTML = '';
+
+  if (activeRoomCode) {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.innerHTML = `🏠 <span id="room-code">${escapeHtml(activeRoomCode)}</span>`;
+    chip.title = 'ルームコード';
+    roomSectionEl.appendChild(chip);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'chip';
+    copyBtn.textContent = 'URL コピー';
+    copyBtn.title = 'ルーム URL をコピー';
+    copyBtn.addEventListener('click', copyRoomUrl);
+    roomSectionEl.appendChild(copyBtn);
+
+    const pipeLink = document.createElement('a');
+    pipeLink.className = 'chip';
+    pipeLink.href = pipeUrlForRoom(activeRoomCode);
+    pipeLink.textContent = '📥 pipe';
+    pipeLink.title = '同じルームを pipe で開く';
+    roomSectionEl.appendChild(pipeLink);
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.type = 'button';
+    leaveBtn.className = 'chip danger';
+    leaveBtn.textContent = '退場';
+    leaveBtn.addEventListener('click', clearRoom);
+    roomSectionEl.appendChild(leaveBtn);
+  } else {
+    const noRoomChip = document.createElement('div');
+    noRoomChip.className = 'chip';
+    noRoomChip.innerHTML = '🏠 <span style="opacity:0.6">未設定</span>';
+    roomSectionEl.appendChild(noRoomChip);
+
+    const genBtn = document.createElement('button');
+    genBtn.type = 'button';
+    genBtn.className = 'chip primary';
+    genBtn.textContent = '作成';
+    genBtn.title = '新しいルームを作成';
+    genBtn.addEventListener('click', generateRoom);
+    roomSectionEl.appendChild(genBtn);
+
+    const pipeLink = document.createElement('a');
+    pipeLink.className = 'chip';
+    pipeLink.href = pipeUrlForRoom(null);
+    pipeLink.textContent = '📥 pipe';
+    pipeLink.title = 'pipe を開く';
+    roomSectionEl.appendChild(pipeLink);
+
+    const joinGroup = document.createElement('div');
+    joinGroup.className = 'join-group';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'room-input';
+    input.placeholder = 'コードを入力';
+    input.maxLength = 24;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') joinRoom(input.value);
+    });
+    joinGroup.appendChild(input);
+
+    const joinBtn = document.createElement('button');
+    joinBtn.type = 'button';
+    joinBtn.className = 'chip';
+    joinBtn.textContent = '参加';
+    joinBtn.addEventListener('click', () => joinRoom(input.value));
+    joinGroup.appendChild(joinBtn);
+
+    roomSectionEl.appendChild(joinGroup);
+  }
+}
 
 function connectPresence() {
   const base = resolvePresenceUrl();
-  const room = resolveRoom();
-  const url = room ? `${base}/?room=${room}` : base;
+  const url = activeRoomCode
+    ? `${base}/?room=${encodeURIComponent(activeRoomCode)}`
+    : base;
 
   const ws = new WebSocket(url);
   presenceState.ws = ws;
 
   ws.onopen = () => {
-    const nickname = resolveNickname();
-    presenceState.nickname = nickname;
     ws.send(JSON.stringify({
       type: 'hello',
-      nickname: nickname,
+      nickname: presenceState.nickname,
       device: navigator.userAgent.slice(0, 60),
     }));
   };
@@ -681,7 +987,8 @@ function connectPresence() {
         updateStatus(true);
         // 切断したピアのロックを解除
         const peerIds = new Set(data.peers.map(p => p.id));
-        for (const [objId, ownerId] of locks) {
+        for (const [objId, ownerInfo] of locks) {
+          const ownerId = ownerInfo?.id || ownerInfo;
           if (!peerIds.has(ownerId) && ownerId !== presenceState.id) {
             locks.delete(objId);
             removeLockOverlay(objId);
@@ -702,9 +1009,15 @@ function connectPresence() {
   };
 
   ws.onclose = () => {
+    // 意図的な切断（ルーム切替）では presenceState.ws が先に null になる
+    if (presenceState.ws !== ws) return;
+    presenceState.ws = null;
     updateStatus(false);
     updatePeersList();
-    setTimeout(() => {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (presenceState.ws) return;
       sceneReceived = false;
       sceneRequestAttempt = 0;
       clearTimeout(sceneRequestTimer);
@@ -713,7 +1026,7 @@ function connectPresence() {
   };
 
   ws.onerror = () => {
-    ws.close();
+    try { ws.close(); } catch {}
   };
 }
 
@@ -721,7 +1034,7 @@ function updateStatus(connected) {
   if (connected) {
     const n = presenceState.peers.length;
     dotEl.className = 'dot on';
-    statusEl.innerHTML = `<span class="dot on"></span>${presenceState.nickname} · ${presenceState.room || '—'} · ${n} peer${n !== 1 ? 's' : ''}`;
+    statusEl.innerHTML = `<span class="dot on"></span>${escapeHtml(presenceState.nickname)} · ${escapeHtml(presenceState.room || '—')} · ${n} peer${n !== 1 ? 's' : ''}`;
   } else {
     dotEl.className = 'dot off';
     statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
@@ -873,7 +1186,15 @@ function handleHandoff(data) {
     case 'scene-mesh': {
       const obj = managedObjects.get(payload.objectId);
       const url = BLOB_BASE + '/' + payload.meshPath;
+      const loadingName = obj?.userData?.name || payload.meshPath;
+      const loadingInfo = obj ? {
+        position: obj.position.toArray(),
+        rotation: obj.quaternion.toArray(),
+        scale: obj.scale.toArray(),
+      } : null;
+      addLoadingOverlay(payload.objectId, loadingName, loadingInfo);
       gltfLoader.load(url, (gltf) => {
+        removeLoadingOverlay(payload.objectId);
         const model = new THREE.Group();
         model.userData.objectId = payload.objectId;
         model.userData.meshPath = payload.meshPath;
@@ -890,6 +1211,7 @@ function handleHandoff(data) {
         scene.add(model);
         managedObjects.set(payload.objectId, model);
       }, undefined, (err) => {
+        removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
         console.warn('Failed to load mesh:', err);
         // 既存オブジェクトがあれば使用し続ける、なければ Box を生成
@@ -927,8 +1249,10 @@ function addOrUpdateObject(objectId, info) {
   const existing = managedObjects.get(objectId);
 
   if (info.meshPath) {
+    addLoadingOverlay(objectId, info.name || objectId, info);
     const url = BLOB_BASE + '/' + info.meshPath;
     gltfLoader.load(url, (gltf) => {
+      removeLoadingOverlay(objectId);
       // 既存オブジェクトを削除
       const current = managedObjects.get(objectId);
       if (current) {
@@ -946,6 +1270,7 @@ function addOrUpdateObject(objectId, info) {
       scene.add(model);
       managedObjects.set(objectId, model);
     }, undefined, (err) => {
+      removeLoadingOverlay(objectId);
       // glB ロード失敗時のフォールバック
       console.warn('Failed to load mesh for', objectId, ':', err);
       if (!existing) {
@@ -1053,24 +1378,32 @@ function generateRandomPath() {
 
 async function handleAddMeshFile(file) {
   const objectId = generateObjectId();
+
+  // カメラ前方 5m を配置予定位置として先にローディング表示
+  const placeDir = new THREE.Vector3();
+  camera.getWorldDirection(placeDir);
+  const placePos = new THREE.Vector3()
+    .copy(camera.position)
+    .addScaledVector(placeDir, 5);
+  placePos.y = 0;
+  addLoadingOverlay(objectId, file.name, { position: placePos.toArray() });
+
   const arrayBuffer = await file.arrayBuffer();
 
   const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const blobUrl = URL.createObjectURL(blob);
 
   gltfLoader.load(blobUrl, async (gltf) => {
-    const model = gltf.scene;
+    removeLoadingOverlay(objectId);
+    const model = new THREE.Group();
     model.userData.objectId = objectId;
     model.userData.name = file.name;
+    attachImportedGlb(model, gltf);
 
     // center offset は行わない（glB の原点をそのまま使用）
     // Unity 側との座標整合性を保つため
 
-    // カメラ前方 5m に配置
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    model.position.copy(camera.position).addScaledVector(dir, 5);
-    model.position.y = 0;
+    model.position.copy(placePos);
 
     scene.add(model);
     managedObjects.set(objectId, model);
@@ -1086,6 +1419,7 @@ async function handleAddMeshFile(file) {
       arrayBuffer
     );
   }, undefined, (err) => {
+    removeLoadingOverlay(objectId);
     console.error('Failed to load glB:', err);
     URL.revokeObjectURL(blobUrl);
   });
@@ -1130,4 +1464,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
 
 // ── 起動 ─────────────────────────────────────────────────
 
+nicknameChip?.addEventListener('click', editNickname);
+updateNicknameLabel();
+renderRoomSection();
 connectPresence();

@@ -4,10 +4,39 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scene Sync — afjk.jp</title>
+  <meta name="description" content="ブラウザと Unity の間で 3D シーンをリアルタイム共有する。ルーム参加者全員で glB を配置・編集できる Scene Sync。">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { overflow: hidden; background: #222; touch-action: none; }
     canvas { display: block; touch-action: none; cursor: pointer; -webkit-user-select: none; user-select: none; }
+
+    /* ── 共通 chip スタイル ── */
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      border: none;
+      color: #fff;
+      font: 13px/1.4 monospace;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .chip:hover { background: rgba(0,0,0,0.75); }
+    .chip.danger { background: rgba(255,60,60,0.5); }
+    .chip.danger:hover { background: rgba(255,60,60,0.7); }
+    .chip.primary { background: rgba(68,136,255,0.55); }
+    .chip.primary:hover { background: rgba(68,136,255,0.8); }
+
     #status {
       position: fixed;
       top: 12px;
@@ -30,6 +59,44 @@
     }
     #status .dot.on  { background: #4f4; }
     #status .dot.off { background: #f44; }
+
+    /* ── 左上 設定パネル ── */
+    #settings-panel {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 10;
+      max-width: min(380px, calc(100vw - 24px));
+    }
+    #settings-panel .row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .join-group {
+      display: flex;
+      gap: 6px;
+    }
+    .chip-edit { opacity: 0.6; font-size: 11px; }
+    #room-code {
+      font-weight: bold;
+      letter-spacing: 0.05em;
+    }
+    .room-input {
+      width: 110px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.5);
+      color: #fff;
+      font: 13px/1.4 monospace;
+      outline: none;
+    }
+    .room-input:focus { border-color: rgba(68,136,255,0.7); }
+
     #mode {
       position: fixed;
       bottom: 12px;
@@ -174,6 +241,17 @@
   </style>
 </head>
 <body>
+  <div id="settings-panel">
+    <div class="row">
+      <button id="nickname-chip" class="chip" type="button" title="名前を変更">
+        <span>👤</span>
+        <span id="nickname-label">—</span>
+        <span class="chip-edit">✏️</span>
+      </button>
+    </div>
+    <div class="row" id="room-section"></div>
+  </div>
+
   <div id="status"><span class="dot off"></span>接続中…</div>
   <div id="peers-panel">
     <div id="peers-list"></div>
@@ -198,6 +276,6 @@
     }
   }
   </script>
-  <script type="module" src="/assets/js/pipe/scene.js"></script>
+  <script type="module" src="/assets/js/scenesync/scene.js"></script>
 </body>
 </html>

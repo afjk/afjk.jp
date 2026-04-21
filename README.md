@@ -74,7 +74,7 @@ npm publish --registry https://upm.afjk.jp
 
 詳細な技術仕様は [`docs/pipe-spec.md`](docs/pipe-spec.md) を参照。
 
-### afjk.jp/pipe/scene.html — 3D Scene Sync ビューア
+### afjk.jp/scenesync/ — 3D Scene Sync ビューア
 
 Unity Editor / Unity Runtime と Web ブラウザ間で 3D シーンをリアルタイム共有するビューア。同じルームコードで参加することで、Unity 上のシーン編集が即座にブラウザに反映される。
 
@@ -86,7 +86,7 @@ Unity Editor / Unity Runtime と Web ブラウザ間で 3D シーンをリアル
 - **モバイル対応**: iPhone Safari タッチ操作（ダブルタップ選択、スワイプカメラ）対応
 - **Unity パッケージ**: `com.afjk.scene-sync`（upm.afjk.jp）で配布。Editor 拡張と Runtime（MonoBehaviour）の両方を提供
 
-URL 例: `https://afjk.jp/pipe/scene.html?room=abc123`
+URL 例: `https://afjk.jp/scenesync/?room=abc123`
 
 詳細な技術仕様は [`docs/scene-sync-spec.md`](docs/scene-sync-spec.md) を参照。
 

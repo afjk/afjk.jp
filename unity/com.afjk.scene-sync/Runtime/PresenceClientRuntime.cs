@@ -196,10 +196,28 @@ namespace Afjk.SceneSync
 
         private static readonly HttpClient _http = new HttpClient();
 
+        private static string DescribeGameObject(UnityEngine.GameObject go)
+        {
+            if (go == null) return "null";
+
+            return "name=" + go.name
+                + ", instanceId=" + go.GetInstanceID()
+                + ", activeSelf=" + go.activeSelf
+                + ", activeInHierarchy=" + go.activeInHierarchy
+                + ", position=" + go.transform.position
+                + ", rotation=" + go.transform.rotation.eulerAngles
+                + ", scale=" + go.transform.localScale
+                + ", meshFilters=" + go.GetComponentsInChildren<MeshFilter>(true).Length
+                + ", skinnedMeshes=" + go.GetComponentsInChildren<SkinnedMeshRenderer>(true).Length
+                + ", renderers=" + go.GetComponentsInChildren<Renderer>(true).Length;
+        }
+
         public static async Task<byte[]> ExportGameObjectAsGlb(UnityEngine.GameObject go)
         {
             try
             {
+                Debug.Log("[SceneSync] Export start: " + DescribeGameObject(go));
+
                 var exportSettings = new ExportSettings
                 {
                     Format = GltfFormat.Binary,
@@ -231,36 +249,51 @@ namespace Afjk.SceneSync
                 var success = await export.SaveToStreamAndDispose(stream);
                 if (!success)
                 {
-                    Debug.LogWarning("[SceneSync] GLB export returned false for: " + go.name);
+                    Debug.LogWarning("[SceneSync] GLB export returned false: " + DescribeGameObject(go));
                     return null;
                 }
+
+                Debug.Log("[SceneSync] Export success: name=" + go.name + ", bytes=" + stream.Length);
                 return stream.ToArray();
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[SceneSync] Export failed: " + ex.Message);
+                Debug.LogWarning("[SceneSync] Export failed: " + DescribeGameObject(go) + "\n" + ex);
                 return null;
             }
         }
 
         public static async Task UploadGlb(byte[] glb, string blobBaseUrl, string path)
         {
-            if (glb == null || glb.Length == 0) return;
+            if (glb == null || glb.Length == 0)
+            {
+                Debug.LogWarning("[SceneSync] Upload skipped: glb is null or empty, path=" + path);
+                return;
+            }
 
             try
             {
                 var url = blobBaseUrl + "/" + path;
+                Debug.Log("[SceneSync] Upload start: url=" + url + ", bytes=" + glb.Length);
                 var content = new ByteArrayContent(glb);
                 content.Headers.ContentType = new MediaTypeHeaderValue("model/gltf-binary");
                 var response = await _http.PostAsync(url, content);
                 if (!response.IsSuccessStatusCode)
                 {
-                    Debug.LogWarning("[SceneSync] Upload failed: " + response.StatusCode);
+                    Debug.LogWarning(
+                        "[SceneSync] Upload failed: status=" + (int)response.StatusCode + " " + response.StatusCode
+                        + ", url=" + url);
+                }
+                else
+                {
+                    Debug.Log(
+                        "[SceneSync] Upload success: status=" + (int)response.StatusCode + " " + response.StatusCode
+                        + ", url=" + url);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[SceneSync] Upload failed: " + ex.Message);
+                Debug.LogWarning("[SceneSync] Upload failed: path=" + path + ", blobBaseUrl=" + blobBaseUrl + "\n" + ex);
             }
         }
 

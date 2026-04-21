@@ -5,3 +5,6 @@ https-portal-certs/
 .claude/settings.local.json
 
 .DS_Store
+
+# Verdaccio の設定・データはサーバー上で直接管理
+verdaccio/

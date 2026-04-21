@@ -14,6 +14,7 @@ namespace Afjk.SceneSync
         [SerializeField] private string _nickname = "Unity";
         [SerializeField] private bool _autoConnect = true;
         [SerializeField] private Transform _syncRoot;
+        [SerializeField] private Material _fallbackImportMaterial;
 
         private PresenceClientRuntime _client;
         private bool _connected;
@@ -32,6 +33,7 @@ namespace Afjk.SceneSync
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private double _lastTime;
+        private Material _runtimeFallbackImportMaterial;
 
         public bool IsConnected => _connected;
         public string Room => _client?.Room;
@@ -794,6 +796,164 @@ namespace Afjk.SceneSync
                 go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
         }
 
+        private static string FormatArray(float[] values)
+        {
+            if (values == null) return "null";
+            return "[" + string.Join(", ", values) + "]";
+        }
+
+        private static int CountDescendants(Transform root)
+        {
+            if (root == null) return 0;
+
+            var count = 0;
+            foreach (Transform child in root)
+            {
+                count++;
+                count += CountDescendants(child);
+            }
+
+            return count;
+        }
+
+        private static string DescribeGameObject(GameObject go)
+        {
+            if (go == null) return "null";
+
+            return "name=" + go.name
+                + ", instanceId=" + go.GetInstanceID()
+                + ", activeSelf=" + go.activeSelf
+                + ", activeInHierarchy=" + go.activeInHierarchy
+                + ", children=" + go.transform.childCount
+                + ", descendants=" + CountDescendants(go.transform)
+                + ", meshFilters=" + go.GetComponentsInChildren<MeshFilter>(true).Length
+                + ", skinnedMeshes=" + go.GetComponentsInChildren<SkinnedMeshRenderer>(true).Length
+                + ", renderers=" + go.GetComponentsInChildren<Renderer>(true).Length;
+        }
+
+        private string DescribeManagedObjectState(string objectId)
+        {
+            if (string.IsNullOrEmpty(objectId)) return "objectId=null";
+
+            if (!_managedObjects.TryGetValue(objectId, out var managed))
+                return "objectId=" + objectId + ", managedObject=missing";
+
+            return "objectId=" + objectId + ", managedObject={" + DescribeGameObject(managed) + "}";
+        }
+
+        private Material GetFallbackImportMaterial()
+        {
+            if (_fallbackImportMaterial != null)
+                return _fallbackImportMaterial;
+
+            if (_runtimeFallbackImportMaterial != null)
+                return _runtimeFallbackImportMaterial;
+
+            var shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null)
+                shader = Shader.Find("URP/Lit");
+            if (shader == null)
+                shader = Shader.Find("Standard");
+
+            if (shader == null)
+            {
+                Debug.LogWarning("[SceneSync] Fallback material creation failed: no compatible shader found.");
+                return null;
+            }
+
+            _runtimeFallbackImportMaterial = new Material(shader)
+            {
+                name = "SceneSync Fallback Import Material"
+            };
+
+            return _runtimeFallbackImportMaterial;
+        }
+
+        private int ApplyFallbackMaterialToRenderers(GameObject target, bool replaceAll, string reason)
+        {
+            if (target == null)
+                return 0;
+
+            var fallbackMaterial = GetFallbackImportMaterial();
+            if (fallbackMaterial == null)
+                return 0;
+
+            var replacements = 0;
+            var renderers = target.GetComponentsInChildren<Renderer>(true);
+            foreach (var renderer in renderers)
+            {
+                var materials = renderer.sharedMaterials;
+                if (materials == null || materials.Length == 0)
+                {
+                    renderer.sharedMaterial = fallbackMaterial;
+                    replacements++;
+                    continue;
+                }
+
+                var changed = false;
+                for (var index = 0; index < materials.Length; index++)
+                {
+                    var material = materials[index];
+                    var isBroken = material == null
+                        || material.shader == null
+                        || material.shader.name == "Hidden/InternalErrorShader";
+
+                    if (replaceAll || isBroken)
+                    {
+                        materials[index] = fallbackMaterial;
+                        replacements++;
+                        changed = true;
+                    }
+                }
+
+                if (changed)
+                    renderer.sharedMaterials = materials;
+            }
+
+            if (replacements > 0)
+            {
+                Debug.Log(
+                    "[SceneSync] Applied fallback material: target=" + DescribeGameObject(target)
+                    + ", replaceAll=" + replaceAll
+                    + ", replacements=" + replacements
+                    + ", reason=" + reason
+                    + ", fallbackShader=" + fallbackMaterial.shader.name);
+            }
+
+            return replacements;
+        }
+
+        private GameObject ReplaceWithFallbackPrimitive(
+            string objectId,
+            string name,
+            float[] position,
+            float[] rotation,
+            float[] scale)
+        {
+            var placeholder = _managedObjects[objectId];
+            var placeholderInstanceId = placeholder.GetInstanceID();
+
+            var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fallback.name = name;
+
+            var fallbackMaterial = GetFallbackImportMaterial();
+            var fallbackRenderer = fallback.GetComponent<Renderer>();
+            if (fallbackMaterial != null && fallbackRenderer != null)
+                fallbackRenderer.sharedMaterial = fallbackMaterial;
+
+            _instanceToObjectId.Remove(placeholderInstanceId);
+            _instanceToObjectId[fallback.GetInstanceID()] = objectId;
+            _managedObjects[objectId] = fallback;
+
+            ApplyTransform(fallback, position, rotation, scale);
+
+            if (_syncRoot != null)
+                fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
+
+            Destroy(placeholder);
+            return fallback;
+        }
+
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale)
@@ -803,36 +963,33 @@ namespace Afjk.SceneSync
             try
             {
                 var url = GetBlobUrl() + "/" + meshPath;
-                Debug.Log("[SceneSync] Downloading mesh: " + url);
+                Debug.Log(
+                    "[SceneSync] Downloading mesh: url=" + url
+                    + ", objectId=" + objectId
+                    + ", name=" + name
+                    + ", meshPath=" + meshPath
+                    + ", position=" + FormatArray(position)
+                    + ", rotation=" + FormatArray(rotation)
+                    + ", scale=" + FormatArray(scale)
+                    + ", managedState=" + DescribeManagedObjectState(objectId));
 
                 var http = new HttpClient();
                 var response = await http.GetAsync(url);
 
+                Debug.Log(
+                    "[SceneSync] Download response: status=" + (int)response.StatusCode + " " + response.StatusCode
+                    + ", contentType=" + response.Content.Headers.ContentType
+                    + ", contentLength=" + response.Content.Headers.ContentLength
+                    + ", requestUri=" + response.RequestMessage?.RequestUri);
+
                 if (!response.IsSuccessStatusCode)
                 {
-                    Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
-                    // フォールバック: プレースホルダーを Cube で置き換え
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
-                    var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    fallback.name = name;
-
-                    // プレースホルダーのマッピングを fallback に移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                    _managedObjects[objectId] = fallback;
-
-                    // 位置・回転・スケールを設定（SetParent の前）
-                    ApplyTransform(fallback, position, rotation, scale);
-
-                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
-                    if (_syncRoot != null)
-                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
-
+                    Debug.LogWarning(
+                        "[SceneSync] Download failed: status=" + (int)response.StatusCode + " " + response.StatusCode
+                        + ", objectId=" + objectId
+                        + ", name=" + name
+                        + ", meshPath=" + meshPath);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -841,6 +998,11 @@ namespace Afjk.SceneSync
                 var tempPath = System.IO.Path.Combine(
                     Application.temporaryCachePath, meshPath + ".glb");
                 System.IO.File.WriteAllBytes(tempPath, glbBytes);
+
+                Debug.Log(
+                    "[SceneSync] Mesh bytes saved: bytes=" + glbBytes.Length
+                    + ", tempPath=" + tempPath
+                    + ", fileExists=" + System.IO.File.Exists(tempPath));
 
                 // Runtime 用: フレーム時間を考慮した非同期読み込み
                 var deferAgent = gameObject.AddComponent<TimeBudgetPerFrameDeferAgent>();
@@ -851,7 +1013,24 @@ namespace Afjk.SceneSync
                 var gltf = new GltfImport(
                     downloadProvider: null,
                     deferAgent: deferAgent);
+                Debug.Log(
+                    "[SceneSync] Starting glTF load: tempPath=" + tempPath
+                    + ", importSettings.AnimationMethod=" + importSettings.AnimationMethod
+                    + ", deferAgent=" + (deferAgent != null ? deferAgent.GetType().Name : "null"));
                 var success = await gltf.Load("file://" + tempPath, importSettings);
+
+                var root = gltf.GetSourceRoot();
+                Debug.Log(
+                    "[SceneSync] glTF load result: success=" + success
+                    + ", loadingDone=" + gltf.LoadingDone
+                    + ", loadingError=" + gltf.LoadingError
+                    + ", sceneCount=" + gltf.SceneCount
+                    + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null")
+                    + ", nodes=" + (root?.Nodes != null ? root.Nodes.Count.ToString() : "null")
+                    + ", meshes=" + (root?.Meshes != null ? root.Meshes.Count.ToString() : "null")
+                    + ", materials=" + (root?.Materials != null ? root.Materials.Count.ToString() : "null")
+                    + ", images=" + (root?.Images != null ? root.Images.Count.ToString() : "null")
+                    + ", textures=" + (root?.Textures != null ? root.Textures.Count.ToString() : "null"));
 
                 if (success)
                 {
@@ -865,6 +1044,9 @@ namespace Afjk.SceneSync
                     _instanceToObjectId[go.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = go;
 
+                    Debug.Log(
+                        "[SceneSync] Instantiating glTF main scene: parent=" + DescribeGameObject(go)
+                        + ", placeholder=" + DescribeGameObject(placeholder));
                     await gltf.InstantiateMainSceneAsync(go.transform);
                     // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
                     // 見た目が Y 軸 180° ずれるため、import 直後に補正する。
@@ -873,6 +1055,8 @@ namespace Afjk.SceneSync
                     {
                         child.localRotation = y180 * child.localRotation;
                     }
+
+                    ApplyFallbackMaterialToRenderers(go, replaceAll: false, reason: "post-import broken materials");
 
                     // 位置・回転・スケールを設定（SetParent の前）
                     ApplyTransform(go, position, rotation, scale);
@@ -884,33 +1068,24 @@ namespace Afjk.SceneSync
                     // プレースホルダーを削除
                     Destroy(placeholder);
 
-                    Debug.Log("[SceneSync] Imported mesh: " + name);
+                    Debug.Log(
+                        "[SceneSync] Imported mesh: name=" + name
+                        + ", objectId=" + objectId
+                        + ", meshPath=" + meshPath
+                        + ", importedObject={" + DescribeGameObject(go) + "}");
                     OnObjectAdded?.Invoke(objectId, go);
                 }
                 else
                 {
-                    Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
-                    var placeholder = _managedObjects[objectId];
-                    var placeholderInstanceId = placeholder.GetInstanceID();
-
-                    var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    fallback.name = name;
-
-                    // プレースホルダーのマッピングを fallback に移動
-                    _instanceToObjectId.Remove(placeholderInstanceId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                    _managedObjects[objectId] = fallback;
-
-                    // 位置・回転・スケールを設定（SetParent の前）
-                    ApplyTransform(fallback, position, rotation, scale);
-
-                    // SetParent は ApplyTransform の後で実行（ワールド座標を保持）
-                    if (_syncRoot != null)
-                        fallback.transform.SetParent(_syncRoot, worldPositionStays: true);
-
-                    // プレースホルダーを削除
-                    Destroy(placeholder);
-
+                    Debug.LogWarning(
+                        "[SceneSync] glTF import failed: name=" + name
+                        + ", objectId=" + objectId
+                        + ", meshPath=" + meshPath
+                        + ", loadingDone=" + gltf.LoadingDone
+                        + ", loadingError=" + gltf.LoadingError
+                        + ", sceneCount=" + gltf.SceneCount
+                        + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
 
@@ -923,7 +1098,38 @@ namespace Afjk.SceneSync
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
+                Debug.LogWarning(
+                    "[SceneSync] DownloadAndCreate failed: objectId=" + objectId
+                    + ", name=" + name
+                    + ", meshPath=" + meshPath
+                    + ", managedState=" + DescribeManagedObjectState(objectId)
+                    + "\n" + ex);
+
+                if (_managedObjects.TryGetValue(objectId, out var currentObject) && currentObject != null)
+                {
+                    var replacements = ApplyFallbackMaterialToRenderers(
+                        currentObject,
+                        replaceAll: true,
+                        reason: "exception during import");
+
+                    if (replacements > 0)
+                    {
+                        ApplyTransform(currentObject, position, rotation, scale);
+                        if (_syncRoot != null)
+                            currentObject.transform.SetParent(_syncRoot, worldPositionStays: true);
+
+                        OnObjectAdded?.Invoke(objectId, currentObject);
+                        return;
+                    }
+                }
+
+                if (_managedObjects.ContainsKey(objectId))
+                {
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
+                    OnObjectAdded?.Invoke(objectId, fallback);
+                    return;
+                }
+
                 if (!_managedObjects.ContainsKey(objectId))
                     _knownObjectIds.Remove(objectId);
             }
