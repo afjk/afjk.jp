@@ -385,6 +385,23 @@ function removeLoadingOverlay(objectId) {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
+function selectManagedObject(obj) {
+  if (!obj || !obj.userData.objectId) return;
+
+  if (transformCtrl.object && transformCtrl.object !== obj) {
+    broadcast({
+      kind: 'scene-unlock',
+      objectId: transformCtrl.object.userData.objectId,
+    });
+  }
+
+  transformCtrl.attach(obj);
+  broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
+  showToolbar();
+  updateToolbarActive(transformCtrl.mode);
+  updatePeersList();
+}
+
 function selectObjectAt(clientX, clientY) {
   pointer.x = (clientX / innerWidth) * 2 - 1;
   pointer.y = -(clientY / innerHeight) * 2 + 1;
@@ -405,11 +422,7 @@ function selectObjectAt(clientX, clientY) {
         showToast(`${who} が編集中です`);
         return;
       }
-      transformCtrl.attach(obj);
-      broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
-      showToolbar();
-      updateToolbarActive(transformCtrl.mode);
-      updatePeersList();
+      selectManagedObject(obj);
     }
   } else {
     if (transformCtrl.object) {
@@ -1394,6 +1407,7 @@ async function handleAddMeshFile(file) {
 
     scene.add(model);
     managedObjects.set(objectId, model);
+    selectManagedObject(model);
 
     URL.revokeObjectURL(blobUrl);
 
