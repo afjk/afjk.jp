@@ -325,6 +325,46 @@ function createLoadingLabel(text) {
   return sprite;
 }
 
+function createObjectNameLabel(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 512;
+  canvas.height = 128;
+
+  ctx.clearRect(0, 0, 512, 128);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  roundRect(ctx, 4, 4, 504, 120, 16);
+  ctx.fill();
+
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+
+  const maxWidth = 470;
+  let label = text || '';
+  if (ctx.measureText(label).width > maxWidth) {
+    while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
+      label = label.slice(0, -1);
+    }
+    label = label + '…';
+  }
+  ctx.fillText(label, 256, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(2.4, 0.6, 1);
+  sprite.raycast = () => {};
+  return sprite;
+}
+
 function createLoadingPlaceholder() {
   const group = new THREE.Group();
 
@@ -1124,6 +1164,9 @@ async function respondToSceneRequest(from) {
     if (obj.userData.meshPath) {
       entry.meshPath = obj.userData.meshPath;
     }
+    if (obj.userData.asset) {
+      entry.asset = structuredClone(obj.userData.asset);
+    }
 
     objects[objectId] = entry;
   }
@@ -1247,55 +1290,133 @@ function handleHandoff(data) {
 
 function addOrUpdateObject(objectId, info) {
   const existing = managedObjects.get(objectId);
+  const asset = info.asset;
+
+  if (asset) {
+    switch (asset.type) {
+      case 'primitive':
+        replaceManagedObject(objectId, buildPrimitiveObject(objectId, info, asset), info);
+        return;
+      case 'mesh':
+        if (asset.meshPath) {
+          loadMeshObject(objectId, info, asset.meshPath, existing);
+          return;
+        }
+        break;
+      default:
+        console.warn(`unsupported asset type: ${asset.type}`);
+        replaceManagedObject(objectId, buildUnsupportedAssetObject(objectId, info), info);
+        return;
+    }
+  }
 
   if (info.meshPath) {
-    addLoadingOverlay(objectId, info.name || objectId, info);
-    const url = BLOB_BASE + '/' + info.meshPath;
-    gltfLoader.load(url, (gltf) => {
-      removeLoadingOverlay(objectId);
-      // 既存オブジェクトを削除
-      const current = managedObjects.get(objectId);
-      if (current) {
-        if (transformCtrl.object === current) transformCtrl.detach();
-        scene.remove(current);
-      }
-
-      const model = new THREE.Group();
-      model.userData.objectId = objectId;
-      model.userData.name = info.name;
-      model.userData.meshPath = info.meshPath;
-      attachImportedGlb(model, gltf);
-
-      applyTransform(model, info);
-      scene.add(model);
-      managedObjects.set(objectId, model);
-    }, undefined, (err) => {
-      removeLoadingOverlay(objectId);
-      // glB ロード失敗時のフォールバック
-      console.warn('Failed to load mesh for', objectId, ':', err);
-      if (!existing) {
-        const geo = new THREE.BoxGeometry(1, 1, 1);
-        const mat = new THREE.MeshStandardMaterial({ color: 0xff4444 });
-        const fallback = new THREE.Mesh(geo, mat);
-        fallback.userData.objectId = objectId;
-        fallback.userData.name = info.name;
-        applyTransform(fallback, info);
-        scene.add(fallback);
-        managedObjects.set(objectId, fallback);
-      }
-    });
-  } else {
-    if (!existing) {
-      const geo = new THREE.BoxGeometry(1, 1, 1);
-      const mat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
-      const obj = new THREE.Mesh(geo, mat);
-      obj.userData.objectId = objectId;
-      obj.userData.name = info.name;
-      scene.add(obj);
-      managedObjects.set(objectId, obj);
-    }
-    applyTransform(managedObjects.get(objectId), info);
+    loadMeshObject(objectId, info, info.meshPath, existing);
+    return;
   }
+
+  if (!existing) {
+    replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info), info);
+    return;
+  }
+
+  existing.userData.name = info.name;
+  applyTransform(existing, info);
+}
+
+function loadMeshObject(objectId, info, meshPath, existing) {
+  addLoadingOverlay(objectId, info.name || objectId, info);
+  const url = BLOB_BASE + '/' + meshPath;
+  gltfLoader.load(url, (gltf) => {
+    removeLoadingOverlay(objectId);
+
+    const model = new THREE.Group();
+    model.userData.objectId = objectId;
+    model.userData.name = info.name;
+    model.userData.meshPath = meshPath;
+    if (info.asset) model.userData.asset = structuredClone(info.asset);
+    attachImportedGlb(model, gltf);
+
+    replaceManagedObject(objectId, model, info);
+  }, undefined, (err) => {
+    removeLoadingOverlay(objectId);
+    console.warn('Failed to load mesh for', objectId, ':', err);
+    if (!existing) {
+      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+    }
+  });
+}
+
+function replaceManagedObject(objectId, nextObject, info) {
+  const current = managedObjects.get(objectId);
+  if (current) {
+    if (transformCtrl.object === current) transformCtrl.detach();
+    scene.remove(current);
+  }
+
+  nextObject.userData.objectId = objectId;
+  nextObject.userData.name = info.name;
+  applyTransform(nextObject, info);
+  scene.add(nextObject);
+  managedObjects.set(objectId, nextObject);
+}
+
+function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshStandardMaterial({ color });
+  const object = new THREE.Mesh(geometry, material);
+  object.userData.objectId = objectId;
+  object.userData.name = info.name;
+  return object;
+}
+
+function buildPrimitiveObject(objectId, info, asset) {
+  let geometry;
+  switch (asset?.primitive) {
+    case 'sphere':
+      geometry = new THREE.SphereGeometry(0.5, 32, 32);
+      break;
+    case 'cylinder':
+      geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 32);
+      break;
+    case 'cone':
+      geometry = new THREE.ConeGeometry(0.5, 1, 32);
+      break;
+    case 'plane':
+      geometry = new THREE.PlaneGeometry(1, 1);
+      break;
+    case 'torus':
+      geometry = new THREE.TorusGeometry(0.4, 0.15, 16, 48);
+      break;
+    case 'box':
+    default:
+      geometry = new THREE.BoxGeometry(1, 1, 1);
+      break;
+  }
+
+  const material = new THREE.MeshStandardMaterial({
+    color: asset?.color || '#888888',
+  });
+  const object = new THREE.Mesh(geometry, material);
+  object.userData.objectId = objectId;
+  object.userData.name = info.name;
+  object.userData.asset = structuredClone(asset);
+  return object;
+}
+
+function buildUnsupportedAssetObject(objectId, info) {
+  const group = new THREE.Group();
+  const mesh = buildDefaultBoxObject(objectId, info, 0x888888);
+  group.add(mesh);
+
+  const label = createObjectNameLabel(info.name || objectId);
+  label.position.set(0, 1.1, 0);
+  group.add(label);
+
+  group.userData.objectId = objectId;
+  group.userData.name = info.name;
+  if (info.asset) group.userData.asset = structuredClone(info.asset);
+  return group;
 }
 
 function applyTransform(obj, info) {
