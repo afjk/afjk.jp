@@ -112,6 +112,11 @@ function inferRoomFromReq(req) {
   return ip || 'global';
 }
 
+function getRequestUrl(req) {
+  const rawUrl = req.url.startsWith('//') ? req.url.slice(1) : req.url;
+  return new URL(rawUrl, `http://${req.headers.host}`);
+}
+
 class WsConnection {
   constructor(socket) {
     this.socket = socket;
@@ -647,7 +652,7 @@ function createPresenceServer() {
 
   // GET /stats
     if (req.method === 'GET' && (path === '/stats' || path === '/stats/export')) {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    const url = getRequestUrl(req);
     const limit = Math.min(Number(url.searchParams.get('limit')) || STATS_LOG_LIMIT, STATS_LOG_LIMIT);
     const typeFilter = url.searchParams.get('type');
     const format = (url.searchParams.get('format') || 'json').toLowerCase();
@@ -729,7 +734,7 @@ function createPresenceServer() {
     if (roomApiMatch) {
       const roomId = sanitizeRoom(roomApiMatch[1]);
       const action = roomApiMatch[2];
-      const url = new URL(req.url, `http://${req.headers.host}`);
+      const url = getRequestUrl(req);
       const sender = createApiSender(url.searchParams.get('name'));
 
       if (!roomId) {
@@ -780,7 +785,7 @@ function createPresenceServer() {
   });
 
   server.on('upgrade', (req, socket) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    const url = getRequestUrl(req);
     if (url.pathname !== '/' && url.pathname !== '/ws') {
       socket.destroy();
       return;
