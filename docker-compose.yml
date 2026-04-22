@@ -21,7 +21,10 @@ services:
         proxy_request_buffering off;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
-        location /presence {
+        location = /presence {
+          return 301 /presence/;
+        }
+        location /presence/ {
           proxy_pass http://presence-server:8787/;
           proxy_http_version 1.1;
           proxy_set_header Upgrade $$http_upgrade;
