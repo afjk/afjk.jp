@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import { URL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
 
 const PORT = Number(process.env.PORT || 8787);
@@ -11,6 +11,7 @@ const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
+const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 
 // ── Blob Store ────────────────────────────────────────────────────────────────
 const BLOB_MAX_SIZE = 50 * 1024 * 1024; // 50MB
@@ -116,11 +117,12 @@ class WsConnection {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.alive = true;
+    this.closed = false;
     this._fragBufs = [];
     this._fragOpcode = 0;
     socket.on('data', chunk => this.#handle(chunk));
-    socket.on('close', () => this.onClose && this.onClose());
-    socket.on('error', () => this.onClose && this.onClose());
+    socket.on('close', () => this.#handleClose());
+    socket.on('error', () => this.#handleClose());
   }
 
   send(obj) {
@@ -140,6 +142,12 @@ class WsConnection {
     try {
       this.socket.end();
     } catch {}
+  }
+
+  #handleClose() {
+    if (this.closed) return;
+    this.closed = true;
+    this.onClose && this.onClose();
   }
 
   #handle(chunk) {
@@ -357,6 +365,74 @@ function broadcastHandoff(sender, msg) {
   });
 }
 
+function getRoomClients(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return [];
+  return Array.from(room.values());
+}
+
+function createApiSender(name) {
+  return {
+    id: `api-${randomUUID()}`,
+    nickname: sanitizeName(name) || 'AI',
+    device: 'REST API'
+  };
+}
+
+function sendJson(res, statusCode, payload, extraHeaders = {}) {
+  res.writeHead(statusCode, {
+    'content-type': 'application/json',
+    ...CORS,
+    ...extraHeaders
+  }).end(JSON.stringify(payload));
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
+      if (!raw) {
+        reject(new Error('invalid JSON body'));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          reject(new Error('invalid JSON body'));
+          return;
+        }
+        resolve(parsed);
+      } catch {
+        reject(new Error('invalid JSON body'));
+      }
+    });
+    req.on('error', () => reject(new Error('invalid JSON body')));
+  });
+}
+
+function handlePendingSceneState(data) {
+  if (!data?.targetId || data?.payload?.kind !== 'scene-state') return false;
+  const pending = pendingSceneRequests.get(data.targetId);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  pendingSceneRequests.delete(data.targetId);
+  const { kind, ...sceneState } = data.payload;
+  pending.resolve(sceneState);
+  return true;
+}
+
+function waitForSceneState(requestId, timeoutMs = 5000) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingSceneRequests.delete(requestId);
+      resolve({ objects: {} });
+    }, timeoutMs);
+    pendingSceneRequests.set(requestId, { resolve, timer });
+  });
+}
+
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
@@ -433,87 +509,88 @@ function recordTransfer(entry) {
   saveStats(stats);
 }
 
-const server = createServer(async (req, res) => {
-  const path = req.url.split('?')[0].replace(/\/+/g, '/');
+function createPresenceServer() {
+  const server = createServer(async (req, res) => {
+    const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
   // CORS preflight
-  if (req.method === 'OPTIONS') {
-    if (path.startsWith('/blob/')) {
-      setBlobCors(req, res);
-      res.writeHead(204).end();
-    } else {
-      res.writeHead(204, CORS).end();
+    if (req.method === 'OPTIONS') {
+      if (path.startsWith('/blob/')) {
+        setBlobCors(req, res);
+        res.writeHead(204).end();
+      } else {
+        res.writeHead(204, CORS).end();
+      }
+      return;
     }
-    return;
-  }
 
   // ── Blob Store ────────────────────────────────────────────
   // POST /blob/:id
-  if (req.method === 'POST' && path.startsWith('/blob/')) {
-    setBlobCors(req, res);
-    const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
-    if (!id) {
-      res.writeHead(400, CORS).end('invalid id');
-      return;
-    }
-    if (blobs.has(id)) {
-      res.writeHead(409, CORS).end('conflict');
-      return;
-    }
-
-    const chunks = [];
-    let totalSize = 0;
-
-    req.on('data', chunk => {
-      totalSize += chunk.length;
-      if (totalSize > BLOB_MAX_SIZE) {
-        res.writeHead(413, CORS).end('too large');
-        req.destroy();
+    if (req.method === 'POST' && path.startsWith('/blob/')) {
+      setBlobCors(req, res);
+      const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
+      if (!id) {
+        res.writeHead(400, CORS).end('invalid id');
         return;
       }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      if (res.writableEnded) return;
-      const buffer = Buffer.concat(chunks);
-      const entry = {
-        size: buffer.length,
-        createdAt: Date.now(),
-        buffer: null,
-        file: null,
-      };
-
-      if (buffer.length <= BLOB_MEMORY_THRESHOLD) {
-        entry.buffer = buffer;
-      } else {
-        try {
-          mkdirSync(BLOB_DIR, { recursive: true });
-          const filePath = BLOB_DIR + '/' + id + '.glb';
-          writeFileSync(filePath, buffer);
-          entry.file = filePath;
-        } catch (err) {
-          log('blob write error', err.message);
-          res.writeHead(500, CORS).end('write error');
-          return;
-        }
+      if (blobs.has(id)) {
+        res.writeHead(409, CORS).end('conflict');
+        return;
       }
 
-      blobs.set(id, entry);
-      log('blob stored', id, entry.size, entry.buffer ? 'memory' : 'disk');
+      const chunks = [];
+      let totalSize = 0;
 
-      res.writeHead(201, { 'content-type': 'application/json', ...CORS })
-         .end(JSON.stringify({
-           id,
-           size: entry.size,
-           expiresAt: entry.createdAt + BLOB_TTL_MS,
-         }));
-    });
-    return;
-  }
+      req.on('data', chunk => {
+        totalSize += chunk.length;
+        if (totalSize > BLOB_MAX_SIZE) {
+          res.writeHead(413, CORS).end('too large');
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      req.on('end', () => {
+        if (res.writableEnded) return;
+        const buffer = Buffer.concat(chunks);
+        const entry = {
+          size: buffer.length,
+          createdAt: Date.now(),
+          buffer: null,
+          file: null,
+        };
+
+        if (buffer.length <= BLOB_MEMORY_THRESHOLD) {
+          entry.buffer = buffer;
+        } else {
+          try {
+            mkdirSync(BLOB_DIR, { recursive: true });
+            const filePath = BLOB_DIR + '/' + id + '.glb';
+            writeFileSync(filePath, buffer);
+            entry.file = filePath;
+          } catch (err) {
+            log('blob write error', err.message);
+            res.writeHead(500, CORS).end('write error');
+            return;
+          }
+        }
+
+        blobs.set(id, entry);
+        log('blob stored', id, entry.size, entry.buffer ? 'memory' : 'disk');
+
+        res.writeHead(201, { 'content-type': 'application/json', ...CORS })
+           .end(JSON.stringify({
+             id,
+             size: entry.size,
+             expiresAt: entry.createdAt + BLOB_TTL_MS,
+           }));
+      });
+      return;
+    }
 
   // GET /blob/:id
-  if (req.method === 'GET' && path.startsWith('/blob/')) {
+    if (req.method === 'GET' && path.startsWith('/blob/')) {
     setBlobCors(req, res);
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     const entry = blobs.get(id);
@@ -560,7 +637,7 @@ const server = createServer(async (req, res) => {
   }
 
   // DELETE /blob/:id
-  if (req.method === 'DELETE' && path.startsWith('/blob/')) {
+    if (req.method === 'DELETE' && path.startsWith('/blob/')) {
     setBlobCors(req, res);
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     deleteBlob(id);
@@ -569,7 +646,7 @@ const server = createServer(async (req, res) => {
   }
 
   // GET /stats
-  if (req.method === 'GET' && (path === '/stats' || path === '/stats/export')) {
+    if (req.method === 'GET' && (path === '/stats' || path === '/stats/export')) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const limit = Math.min(Number(url.searchParams.get('limit')) || STATS_LOG_LIMIT, STATS_LOG_LIMIT);
     const typeFilter = url.searchParams.get('type');
@@ -600,7 +677,7 @@ const server = createServer(async (req, res) => {
   }
 
   // POST /stats
-  if (req.method === 'POST' && path === '/stats') {
+    if (req.method === 'POST' && path === '/stats') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -617,7 +694,7 @@ const server = createServer(async (req, res) => {
 
   // GET /api/ice-config — STUN + optional TURN (set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL env vars)
   // CORS は同一サイト・ローカル開発のみ許可（外部サイトから credentials を取得されないよう制限）
-  if (req.method === 'GET' && path === '/api/ice-config') {
+    if (req.method === 'GET' && path === '/api/ice-config') {
     const origin = (req.headers['origin'] || '').replace(/\/$/, '');
     const prodOrigin = (process.env.ALLOWED_ORIGIN || 'https://afjk.jp').replace(/\/$/, '');
     const devOrigins = (process.env.ALLOWED_DEV_ORIGINS || 'http://localhost:8888,http://127.0.0.1:8888')
@@ -648,65 +725,165 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  res.writeHead(200, { 'content-type': 'text/plain' }).end('presence ok');
-});
+    const roomApiMatch = path.match(/^\/api\/room\/([^/]+)\/(broadcast|scene)$/);
+    if (roomApiMatch) {
+      const roomId = sanitizeRoom(roomApiMatch[1]);
+      const action = roomApiMatch[2];
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const sender = createApiSender(url.searchParams.get('name'));
 
-server.on('upgrade', (req, socket) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  if (url.pathname !== '/' && url.pathname !== '/ws') {
-    socket.destroy();
-    return;
-  }
-  const roomOverride = sanitizeRoom(url.searchParams.get('room'));
-  const roomId = roomOverride || inferRoomFromReq(req);
-  const conn = acceptWebSocket(req, socket);
-  if (!conn) return;
+      if (!roomId) {
+        sendJson(res, 404, { error: 'not found' });
+        return;
+      }
 
-  const client = makeClient(conn, roomId);
-  log('client connected', client.id, 'room', roomId);
+      if (req.method === 'POST' && action === 'broadcast') {
+        let payload;
+        try {
+          payload = await readJsonBody(req);
+        } catch {
+          sendJson(res, 400, { error: 'invalid JSON body' });
+          return;
+        }
 
-  conn.send({ type: 'welcome', id: client.id, room: roomId });
-  broadcastPeers(roomId);
+        const peers = getRoomClients(roomId);
+        const message = {
+          type: 'handoff',
+          from: sender,
+          payload
+        };
+        peers.forEach(client => safeSend(client.conn, message));
+        sendJson(res, 200, { ok: true, room: roomId, peers: peers.length });
+        return;
+      }
 
-  conn.onMessage = raw => {
-    client.lastSeen = Date.now();
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
+      if (req.method === 'GET' && action === 'scene') {
+        const peers = getRoomClients(roomId);
+        if (!peers.length) {
+          sendJson(res, 200, { objects: {} });
+          return;
+        }
+
+        const message = {
+          type: 'handoff',
+          from: sender,
+          payload: { kind: 'scene-request' }
+        };
+        safeSend(peers[0].conn, message);
+        const sceneState = await waitForSceneState(sender.id);
+        sendJson(res, 200, sceneState);
+        return;
+      }
+    }
+
+    res.writeHead(200, { 'content-type': 'text/plain' }).end('presence ok');
+  });
+
+  server.on('upgrade', (req, socket) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname !== '/' && url.pathname !== '/ws') {
+      socket.destroy();
       return;
     }
-    switch (data.type) {
-      case 'hello':
-        client.nickname = sanitizeName(data.nickname);
-        client.device = sanitizeDevice(data.device);
-        client.streaming = Boolean(data.streaming);
-        broadcastPeers(roomId);
-        break;
-      case 'handoff':
-        if (data.targetId && data.payload) {
-          deliverHandoff(client, data);
-        }
-        break;
-      case 'broadcast':
-        if (data.payload) {
-          broadcastHandoff(client, data);
-        }
-        break;
-      case 'ping':
-        safeSend(conn, { type: 'pong', at: Date.now() });
-        break;
-      default:
-        break;
+    const roomOverride = sanitizeRoom(url.searchParams.get('room'));
+    const roomId = roomOverride || inferRoomFromReq(req);
+    const conn = acceptWebSocket(req, socket);
+    if (!conn) return;
+
+    const client = makeClient(conn, roomId);
+    log('client connected', client.id, 'room', roomId);
+
+    conn.send({ type: 'welcome', id: client.id, room: roomId });
+    broadcastPeers(roomId);
+
+    conn.onMessage = raw => {
+      client.lastSeen = Date.now();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return;
+      }
+
+      if (handlePendingSceneState(data)) {
+        return;
+      }
+
+      switch (data.type) {
+        case 'hello':
+          client.nickname = sanitizeName(data.nickname);
+          client.device = sanitizeDevice(data.device);
+          client.streaming = Boolean(data.streaming);
+          broadcastPeers(roomId);
+          break;
+        case 'handoff':
+          if (data.targetId && data.payload) {
+            deliverHandoff(client, data);
+          }
+          break;
+        case 'broadcast':
+          if (data.payload) {
+            broadcastHandoff(client, data);
+          }
+          break;
+        case 'ping':
+          safeSend(conn, { type: 'pong', at: Date.now() });
+          break;
+        default:
+          break;
+      }
+    };
+
+    conn.onClose = () => {
+      log('client disconnected', client.id);
+      removeClient(client);
+      broadcastPeers(roomId);
+    };
+  });
+
+  const blobCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of blobs) {
+      if (now - entry.createdAt > BLOB_TTL_MS) {
+        log('blob expired', id);
+        deleteBlob(id);
+      }
     }
+  }, BLOB_CLEANUP_INTERVAL);
+
+  const heartbeatInterval = setInterval(() => {
+    rooms.forEach(room => {
+      room.forEach(client => {
+        if (!client.conn.alive) {
+          client.conn.close();
+          return;
+        }
+        client.conn.alive = false;
+        client.conn.ping();
+      });
+    });
+  }, HEARTBEAT_MS);
+
+  server.on('close', () => {
+    clearInterval(blobCleanupInterval);
+    clearInterval(heartbeatInterval);
+    rooms.clear();
+    pendingSceneRequests.forEach(({ timer, resolve }) => {
+      clearTimeout(timer);
+      resolve({ objects: {} });
+    });
+    pendingSceneRequests.clear();
+  });
+
+  server.stop = () => {
+    rooms.forEach(room => {
+      room.forEach(client => client.conn.close());
+    });
+    return new Promise(resolve => server.close(resolve));
   };
 
-  conn.onClose = () => {
-    log('client disconnected', client.id);
-    removeClient(client);
-    broadcastPeers(roomId);
-  };
-});
+  return server;
+}
 
 // ── Blob Store Cleanup ────────────────────────────────────
 function deleteBlob(id) {
@@ -719,30 +896,11 @@ function deleteBlob(id) {
   log('blob deleted', id);
 }
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, entry] of blobs) {
-    if (now - entry.createdAt > BLOB_TTL_MS) {
-      log('blob expired', id);
-      deleteBlob(id);
-    }
-  }
-}, BLOB_CLEANUP_INTERVAL);
+export { createPresenceServer };
 
-// ── Heartbeat ─────────────────────────────────────────────
-setInterval(() => {
-  rooms.forEach(room => {
-    room.forEach(client => {
-      if (!client.conn.alive) {
-        client.conn.close();
-        return;
-      }
-      client.conn.alive = false;
-      client.conn.ping();
-    });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const server = createPresenceServer();
+  server.listen(PORT, () => {
+    log(`presence server listening on ${PORT}`);
   });
-}, HEARTBEAT_MS);
-
-server.listen(PORT, () => {
-  log(`presence server listening on ${PORT}`);
-});
+}

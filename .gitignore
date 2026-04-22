@@ -8,3 +8,5 @@ https-portal-certs/
 
 # Verdaccio の設定・データはサーバー上で直接管理
 verdaccio/
+
+node_modules/
