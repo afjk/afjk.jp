@@ -52,14 +52,14 @@ static func import_glb(data: PackedByteArray) -> Node3D:
     _convert_importer_meshes(scene)
     _print_node_tree(scene, "  ")
 
-    # generate_scene() が返すシーンルートをコンテナで包む。
-    # コンテナには SceneSyncManager が同期トランスフォームを適用し、
-    # 内側のシーンに Godot ↔ GLTF 座標系差異による Y 180 度補正を保持させる。
-    if scene is Node3D:
-        (scene as Node3D).rotate_y(PI)
+    # GLB バイト列は改変しない。
+    # Godot の glTF instantiate 結果だけが他クライアントと前後反転するため、
+    # 受信表示用のコンテナ配下で見た目補正を持たせる。
     var container := Node3D.new()
     container.name = "ImportedGlb"
     container.add_child(scene)
+    if scene is Node3D:
+        (scene as Node3D).rotate_y(PI)
     return container
 
 

@@ -218,8 +218,11 @@ func _on_handoff_received(data: Dictionary) -> void:
 
 func _handle_scene_delta(payload: Dictionary) -> void:
     var object_id := String(payload.get("objectId", ""))
-    var node: Node3D = _managed_objects.get(object_id)
-    if node == null or not is_instance_valid(node):
+    var node_value = _managed_objects.get(object_id)
+    if node_value == null or not is_instance_valid(node_value):
+        return
+    var node := node_value as Node3D
+    if node == null:
         return
     if _selected_object != null and is_instance_valid(_selected_object):
         if _get_object_id(_selected_object) == object_id:
@@ -294,12 +297,14 @@ func _handle_scene_add(payload: Dictionary) -> void:
 
 func _handle_scene_remove(payload: Dictionary) -> void:
     var object_id := String(payload.get("objectId", ""))
-    var node: Node3D = _managed_objects.get(object_id)
-    if node != null and is_instance_valid(node):
-        if node == _selected_object:
-            _selected_object = null
-            _currently_locked_id = ""
-        node.queue_free()
+    var node_value = _managed_objects.get(object_id)
+    if node_value != null and is_instance_valid(node_value):
+        var node := node_value as Node3D
+        if node != null:
+            if node == _selected_object:
+                _selected_object = null
+                _currently_locked_id = ""
+            node.queue_free()
     _managed_objects.erase(object_id)
     _known_ids.erase(object_id)
     _mesh_paths.erase(object_id)
@@ -314,10 +319,13 @@ func _handle_scene_mesh(payload: Dictionary) -> void:
     if object_id == "" or mesh_path == "":
         return
 
-    var node: Node3D = _managed_objects.get(object_id)
+    var node_value = _managed_objects.get(object_id)
+    var node: Node3D = null
     var transform_data := {}
-    if node != null and is_instance_valid(node):
-        transform_data = _snapshot_for_node(node)
+    if node_value != null and is_instance_valid(node_value):
+        node = node_value as Node3D
+        if node != null:
+            transform_data = _snapshot_for_node(node)
     else:
         node = _create_loading_placeholder(object_id)
         _register_managed_object(object_id, node)
@@ -382,9 +390,11 @@ func _detect_hierarchy_changes() -> void:
     for object_id in _known_ids.keys():
         if current_ids.has(object_id):
             continue
-        var node: Node3D = _managed_objects.get(object_id)
-        if node != null and is_instance_valid(node) and _is_node_within_sync_root(node):
-            continue
+        var node_value = _managed_objects.get(object_id)
+        if node_value != null and is_instance_valid(node_value):
+            var node := node_value as Node3D
+            if node != null and _is_node_within_sync_root(node):
+                continue
         _client.broadcast(SceneSyncProtocol.make_scene_remove(String(object_id)))
         _managed_objects.erase(object_id)
         _mesh_paths.erase(object_id)
@@ -442,7 +452,10 @@ func _sync_mesh_for_node(node: Node3D) -> void:
 
 func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: String) -> void:
     var data := await _blob_client.download_glb(mesh_path)
-    var old_node: Node3D = _managed_objects.get(object_id)
+    var old_node_value = _managed_objects.get(object_id)
+    var old_node: Node3D = null
+    if old_node_value != null and is_instance_valid(old_node_value):
+        old_node = old_node_value as Node3D
     var replacement: Node3D = null
 
     if not data.is_empty():

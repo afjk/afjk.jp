@@ -780,14 +780,6 @@ namespace Afjk.SceneSync.Editor
                 {
                     var go = new GameObject(name);
                     await gltf.InstantiateMainSceneAsync(go.transform);
-                    // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
-                    // 見た目が Y 軸 180° ずれるため、import 直後に補正する。
-                    var y180 = Quaternion.Euler(0f, 180f, 0f);
-                    foreach (Transform child in go.transform)
-                    {
-                        child.localRotation = y180 * child.localRotation;
-                    }
-
                     ApplyTransform(go, position, rotation, scale);
                     _managedObjects[objectId] = go;
                     _knownObjectIds.Add(objectId);
