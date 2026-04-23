@@ -33,6 +33,7 @@ var _connected: bool = false
 
 const SEND_INTERVAL: float = 0.05
 const OBJECT_ID_META := "scene_sync_object_id"
+const RECEIVE_ROOT_NAME := "SceneSyncRoot"
 
 
 func _ready() -> void:
@@ -449,9 +450,7 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
     if replacement == null:
         replacement = _create_primitive("box", "#ff4444")
 
-    var parent: Node = _get_sync_root()
-    if parent == null:
-        parent = get_tree().edited_scene_root if Engine.is_editor_hint() else get_tree().current_scene
+    var parent: Node3D = _get_or_create_sync_root()
     if parent == null:
         return
 
@@ -474,9 +473,7 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
 
 
 func _register_managed_object(object_id: String, node: Node3D) -> void:
-    var parent: Node = _get_sync_root()
-    if parent == null:
-        parent = get_tree().edited_scene_root if Engine.is_editor_hint() else get_tree().current_scene
+    var parent: Node3D = _get_or_create_sync_root()
     if parent == null:
         return
     if node.get_parent() != parent:
@@ -563,7 +560,7 @@ func _primitive_type_for_mesh(mesh: Mesh) -> String:
 
 
 func _snapshot_for_node(node: Node3D) -> Dictionary:
-    var transform := node.global_transform
+    var transform := node.global_transform if node.is_inside_tree() else node.transform
     return {
         "position": transform.origin,
         "rotation": transform.basis.get_rotation_quaternion(),
@@ -572,13 +569,16 @@ func _snapshot_for_node(node: Node3D) -> Dictionary:
 
 
 func _apply_transform_to_node(node: Node3D, transform_data: Dictionary) -> void:
-    var current := node.global_transform
+    var current := node.global_transform if node.is_inside_tree() else node.transform
     var pos: Vector3 = transform_data.get("position", current.origin)
     var rot: Quaternion = transform_data.get("rotation", current.basis.get_rotation_quaternion())
     var scl: Vector3 = transform_data.get("scale", current.basis.get_scale())
     current.origin = pos
     current.basis = Basis(rot).scaled(scl)
-    node.global_transform = current
+    if node.is_inside_tree():
+        node.global_transform = current
+    else:
+        node.transform = current
 
 
 func _snapshots_equal(a: Dictionary, b: Dictionary) -> bool:
@@ -590,7 +590,7 @@ func _snapshots_equal(a: Dictionary, b: Dictionary) -> bool:
 
 
 func _get_all_sync_targets() -> Array:
-    var root := _get_sync_root()
+    var root := _get_or_create_sync_root()
     var nodes: Array = []
     if root == null:
         return nodes
@@ -601,12 +601,38 @@ func _get_all_sync_targets() -> Array:
     return nodes
 
 
-func _get_sync_root() -> Node:
+func _get_sync_root() -> Node3D:
     if sync_root != null and is_instance_valid(sync_root):
         return sync_root
+    var host_root := _get_host_scene_root()
+    if host_root is Node3D:
+        return host_root
+    if host_root != null:
+        var existing := host_root.get_node_or_null(RECEIVE_ROOT_NAME)
+        if existing is Node3D:
+            return existing
+    return null
+
+
+func _get_or_create_sync_root() -> Node3D:
+    var root := _get_sync_root()
+    if root != null:
+        return root
+
+    var host_root := _get_host_scene_root()
+    if host_root == null:
+        return null
+
+    var receive_root := Node3D.new()
+    receive_root.name = RECEIVE_ROOT_NAME
+    host_root.add_child(receive_root)
+
     if Engine.is_editor_hint():
-        return get_tree().edited_scene_root
-    return get_tree().current_scene
+        receive_root.owner = get_tree().edited_scene_root
+    elif get_tree().current_scene != null:
+        receive_root.owner = get_tree().current_scene
+
+    return receive_root
 
 
 func _is_sync_target(node: Node3D) -> bool:
@@ -614,7 +640,7 @@ func _is_sync_target(node: Node3D) -> bool:
 
 
 func _is_node_within_sync_root(node: Node3D) -> bool:
-    var root: Node = _get_sync_root()
+    var root: Node3D = _get_sync_root()
     return root != null and node.get_parent() == root
 
 
@@ -655,3 +681,11 @@ func _get_blob_base_url() -> String:
 
 func _can_operate_in_editor() -> bool:
     return get_tree() != null and get_tree().edited_scene_root != null
+
+
+func _get_host_scene_root() -> Node:
+    if get_tree() == null:
+        return null
+    if Engine.is_editor_hint():
+        return get_tree().edited_scene_root
+    return get_tree().current_scene
