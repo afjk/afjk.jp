@@ -1,3 +1,6 @@
 Godot_v*
 *.zip
 .godot/
+Godot.app/
+node_3d.tscn
+shrine_ao*
