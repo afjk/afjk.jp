@@ -456,7 +456,7 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
 
     parent.add_child(replacement)
     if Engine.is_editor_hint():
-        replacement.owner = get_tree().edited_scene_root
+        _assign_editor_owner_recursive(replacement)
 
     replacement.name = String(payload.get("name", object_id))
     replacement.set_meta(OBJECT_ID_META, object_id)
@@ -479,7 +479,7 @@ func _register_managed_object(object_id: String, node: Node3D) -> void:
     if node.get_parent() != parent:
         parent.add_child(node)
     if Engine.is_editor_hint():
-        node.owner = get_tree().edited_scene_root
+        _assign_editor_owner_recursive(node)
     node.name = String(node.name if node.name != "" else object_id)
     node.set_meta(OBJECT_ID_META, object_id)
     _managed_objects[object_id] = node
@@ -519,8 +519,6 @@ func _create_loading_placeholder(display_name: String) -> Node3D:
     wrapper.name = display_name
     var mesh := _create_primitive("box", "#88ccff")
     wrapper.add_child(mesh)
-    if Engine.is_editor_hint():
-        mesh.owner = get_tree().edited_scene_root
     return wrapper
 
 
@@ -689,3 +687,14 @@ func _get_host_scene_root() -> Node:
     if Engine.is_editor_hint():
         return get_tree().edited_scene_root
     return get_tree().current_scene
+
+
+func _assign_editor_owner_recursive(node: Node) -> void:
+    if not Engine.is_editor_hint():
+        return
+    var edited_root := get_tree().edited_scene_root
+    if edited_root == null:
+        return
+    node.owner = edited_root
+    for child in node.get_children():
+        _assign_editor_owner_recursive(child)
