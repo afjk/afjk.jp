@@ -1,0 +1,16 @@
+; Engine configuration file.
+; Minimal project for SceneSync addon validation.
+
+[application]
+
+config/name="SceneSyncGodot"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+run/main_scene=""
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/scene_sync/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"

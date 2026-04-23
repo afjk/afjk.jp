@@ -1,0 +1,75 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/scene_sync/scene_sync_dock.gd" id="1"]
+
+[node name="SceneSyncDock" type="VBoxContainer"]
+offset_right = 320.0
+offset_bottom = 520.0
+theme_override_constants/separation = 8
+script = ExtResource("1")
+
+[node name="TitleLabel" type="Label" parent="."]
+layout_mode = 2
+text = "Scene Sync"
+
+[node name="UrlRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="UrlLabel" type="Label" parent="UrlRow"]
+layout_mode = 2
+text = "URL"
+
+[node name="PresenceUrlEdit" type="LineEdit" parent="UrlRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "wss://afjk.jp/presence"
+
+[node name="RoomRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="RoomLabel" type="Label" parent="RoomRow"]
+layout_mode = 2
+text = "Room"
+
+[node name="RoomEdit" type="LineEdit" parent="RoomRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="NicknameRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="NicknameLabel" type="Label" parent="NicknameRow"]
+layout_mode = 2
+text = "Name"
+
+[node name="NicknameEdit" type="LineEdit" parent="NicknameRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Godot"
+
+[node name="ConnectButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Connect"
+
+[node name="StatusLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Disconnected"
+
+[node name="PeersHeader" type="Label" parent="."]
+layout_mode = 2
+text = "Peers"
+
+[node name="PeersContainer" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SyncMeshesButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Sync Meshes"

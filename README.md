@@ -76,7 +76,7 @@ npm publish --registry https://upm.afjk.jp
 
 ### afjk.jp/scenesync/ — 3D Scene Sync ビューア
 
-Unity Editor / Unity Runtime と Web ブラウザ間で 3D シーンをリアルタイム共有するビューア。同じルームコードで参加することで、Unity 上のシーン編集が即座にブラウザに反映される。
+Unity Editor / Unity Runtime / Godot 4.x / Web ブラウザ間で 3D シーンをリアルタイム共有するビューア。同じルームコードで参加することで、各クライアント上のシーン編集が即座に他クライアントへ反映される。
 
 - **リアルタイム同期**: Transform（位置・回転・スケール）の変更を 50ms ごとにブロードキャスト
 - **glB メッシュ転送**: presence-server の blob store 経由で glB ファイルを共有（最大 50MB、TTL 10分）
@@ -85,6 +85,7 @@ Unity Editor / Unity Runtime と Web ブラウザ間で 3D シーンをリアル
 - **参加者一覧**: 接続中のクライアント名・編集中オブジェクトをリアルタイム表示
 - **モバイル対応**: iPhone Safari タッチ操作（ダブルタップ選択、スワイプカメラ）対応
 - **Unity パッケージ**: `com.afjk.scene-sync`（upm.afjk.jp）で配布。Editor 拡張と Runtime（MonoBehaviour）の両方を提供
+- **Godot addon**: `godot/addons/scene_sync`。Editor Dock と Runtime `SceneSyncManager` ノードを提供
 
 URL 例: `https://afjk.jp/scenesync/?room=abc123`
 
