@@ -36,6 +36,11 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SceneSync")
     void DeselectObject();
 
+    UFUNCTION(BlueprintCallable, Category = "SceneSync")
+    void SyncAllMeshes();
+
+    const TArray<FSceneSyncPeerInfo>& GetPeers() const;
+
     UPROPERTY(BlueprintAssignable, Category = "SceneSync")
     FOnSceneSyncConnectedBP OnConnectedBP;
 
@@ -58,6 +63,7 @@ private:
     void HandleSceneLock(const TSharedPtr<FJsonObject>& Payload, const FString& FromId);
     void HandleSceneUnlock(const TSharedPtr<FJsonObject>& Payload);
     void HandleSceneRequest(const FString& FromId);
+    void HandleSceneMesh(const TSharedPtr<FJsonObject>& Payload);
 
     // Scene send helpers
     void SendTransformDelta();

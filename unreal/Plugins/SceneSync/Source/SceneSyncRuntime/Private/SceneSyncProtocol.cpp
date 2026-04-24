@@ -177,6 +177,8 @@ FString FSceneSyncProtocol::ExtractFromId(const TSharedPtr<FJsonObject>& Obj)
 {
     if (!Obj.IsValid()) return TEXT("");
     FString FromId;
+    // PresenceClient stores extracted id in _fromId
+    if (Obj->TryGetStringField(TEXT("_fromId"), FromId)) return FromId;
     Obj->TryGetStringField(TEXT("from"), FromId);
     return FromId;
 }

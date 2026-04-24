@@ -12,7 +12,7 @@ static const float ReconnectDelay = 3.0f;
 
 FSceneSyncPresenceClient::FSceneSyncPresenceClient()
 {
-    FModuleManager::LoadModuleChecked<FWebSocketsModule>("WebSockets");
+    // WebSockets module is loaded by FSceneSyncRuntimeModule::StartupModule
 }
 
 FSceneSyncPresenceClient::~FSceneSyncPresenceClient()
@@ -56,42 +56,14 @@ bool FSceneSyncPresenceClient::IsConnected() const
 
 void FSceneSyncPresenceClient::Broadcast(const FString& PayloadJson)
 {
-    TSharedPtr<FJsonObject> PayloadObj = MakeShareable(new FJsonObject);
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
-    TSharedPtr<FJsonObject> Parsed;
-    if (!FJsonSerializer::Deserialize(Reader, Parsed))
-    {
-        return;
-    }
-
-    TSharedPtr<FJsonObject> Msg = MakeShareable(new FJsonObject);
-    Msg->SetStringField(TEXT("type"), TEXT("broadcast"));
-    Msg->SetObjectField(TEXT("payload"), Parsed);
-
-    FString Out;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
-    FJsonSerializer::Serialize(Msg.ToSharedRef(), Writer);
-    SendRaw(Out);
+    // Avoid round-trip parse/serialize; PayloadJson is already valid JSON
+    SendRaw(FString::Printf(TEXT("{\"type\":\"broadcast\",\"payload\":%s}"), *PayloadJson));
 }
 
 void FSceneSyncPresenceClient::SendHandoff(const FString& TargetId, const FString& PayloadJson)
 {
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
-    TSharedPtr<FJsonObject> Parsed;
-    if (!FJsonSerializer::Deserialize(Reader, Parsed))
-    {
-        return;
-    }
-
-    TSharedPtr<FJsonObject> Msg = MakeShareable(new FJsonObject);
-    Msg->SetStringField(TEXT("type"), TEXT("handoff"));
-    Msg->SetStringField(TEXT("targetId"), TargetId);
-    Msg->SetObjectField(TEXT("payload"), Parsed);
-
-    FString Out;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
-    FJsonSerializer::Serialize(Msg.ToSharedRef(), Writer);
-    SendRaw(Out);
+    SendRaw(FString::Printf(TEXT("{\"type\":\"handoff\",\"targetId\":\"%s\",\"payload\":%s}"),
+        *TargetId, *PayloadJson));
 }
 
 void FSceneSyncPresenceClient::SendRaw(const FString& Json)
@@ -225,12 +197,15 @@ void FSceneSyncPresenceClient::HandleHandoff(const TSharedPtr<FJsonObject>& Msg)
         return;
     }
 
-    // Attach "from" field to the payload so handlers can identify the sender
+    // presence-server sends from as an object {id, nickname, device}.
+    // Extract the id and store it as _fromId in the payload for subsystem handlers.
     TSharedPtr<FJsonObject> Payload = MakeShareable(new FJsonObject(**PayloadObj));
-    FString FromId;
-    if (Msg->TryGetStringField(TEXT("from"), FromId))
+    const TSharedPtr<FJsonObject>* FromObj;
+    if (Msg->TryGetObjectField(TEXT("from"), FromObj))
     {
-        Payload->SetStringField(TEXT("from"), FromId);
+        FString FromId;
+        (*FromObj)->TryGetStringField(TEXT("id"), FromId);
+        Payload->SetStringField(TEXT("_fromId"), FromId);
     }
     OnHandoffReceived.Broadcast(Payload);
 }

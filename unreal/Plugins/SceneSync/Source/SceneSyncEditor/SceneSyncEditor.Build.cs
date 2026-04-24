@@ -14,7 +14,6 @@ public class SceneSyncEditor : ModuleRules
             "UnrealEd",
             "Slate",
             "SlateCore",
-            "EditorStyle",
             "LevelEditor",
             "ToolMenus",
             "WorkspaceMenuStructure",

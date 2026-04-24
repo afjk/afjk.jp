@@ -1,6 +1,7 @@
 #include "SceneSyncEditorModule.h"
 #include "SceneSyncSubsystem.h"
 #include "SceneSyncTypes.h"
+#include "SceneSyncBlobClient.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SButton.h"
@@ -170,7 +171,10 @@ FReply SSceneSyncPanel::OnDisconnectClicked()
 
 FReply SSceneSyncPanel::OnSyncMeshesClicked()
 {
-    UE_LOG(LogSceneSyncEditor, Log, TEXT("Sync Meshes requested (glB export not yet implemented)"));
+    if (USceneSyncSubsystem* SS = GetSubsystem())
+    {
+        SS->SyncAllMeshes();
+    }
     return FReply::Handled();
 }
 
@@ -181,7 +185,13 @@ FText SSceneSyncPanel::GetStatusText() const
     {
         return FText::FromString(TEXT("Status: Disconnected"));
     }
-    return FText::FromString(TEXT("Status: Connected"));
+    const TArray<FSceneSyncPeerInfo>& Peers = SS->GetPeers();
+    FString Text = FString::Printf(TEXT("Status: Connected (%d peers)"), Peers.Num());
+    for (const FSceneSyncPeerInfo& P : Peers)
+    {
+        Text += FString::Printf(TEXT("\n  %s (%s)"), *P.Nickname, *P.Device);
+    }
+    return FText::FromString(Text);
 }
 
 USceneSyncSubsystem* SSceneSyncPanel::GetSubsystem() const

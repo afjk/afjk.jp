@@ -111,9 +111,17 @@ void USceneSyncSubsystem::OnPeersUpdated(const TArray<FSceneSyncPeerInfo>& Peers
     if (!bFirstPeersReceived && Peers.Num() > 0)
     {
         bFirstPeersReceived = true;
-        // Request scene state from another peer if available
+        // Send scene-request as handoff to one peer so only that peer responds.
+        // Broadcasting would cause every peer to reply with scene-state.
         FString RequestJson = FSceneSyncProtocol::MakeSceneRequest();
-        Client->Broadcast(RequestJson);
+        for (const FSceneSyncPeerInfo& Peer : Peers)
+        {
+            if (Peer.Id != Client->GetId())
+            {
+                Client->SendHandoff(Peer.Id, RequestJson);
+                break;
+            }
+        }
     }
 }
 
@@ -130,6 +138,7 @@ void USceneSyncSubsystem::OnHandoffReceived(TSharedPtr<FJsonObject> Payload)
     else if (Kind == TEXT("scene-add"))     HandleSceneAdd(Payload);
     else if (Kind == TEXT("scene-delta"))   HandleSceneDelta(Payload);
     else if (Kind == TEXT("scene-remove"))  HandleSceneRemove(Payload);
+    else if (Kind == TEXT("scene-mesh"))    HandleSceneMesh(Payload);
     else if (Kind == TEXT("scene-lock"))    HandleSceneLock(Payload, FromId);
     else if (Kind == TEXT("scene-unlock"))  HandleSceneUnlock(Payload);
     else if (Kind == TEXT("scene-request")) HandleSceneRequest(FromId);
@@ -301,6 +310,28 @@ void USceneSyncSubsystem::HandleSceneRequest(const FString& FromId)
     }
 }
 
+void USceneSyncSubsystem::HandleSceneMesh(const TSharedPtr<FJsonObject>& Payload)
+{
+    FString ObjectId = FSceneSyncProtocol::ExtractObjectId(Payload);
+    FString MeshPath;
+    Payload->TryGetStringField(TEXT("meshPath"), MeshPath);
+    if (ObjectId.IsEmpty() || MeshPath.IsEmpty()) return;
+
+    MeshPaths.Add(ObjectId, MeshPath);
+    UE_LOG(LogSceneSyncSubsystem, Log, TEXT("scene-mesh: %s -> %s"), *ObjectId, *MeshPath);
+
+    AActor* Existing = FindActorByObjectId(ObjectId);
+    if (!Existing) return;
+
+    FVector Pos = Existing->GetActorLocation();
+    FQuat Rot = Existing->GetActorQuat();
+    FVector Scale = Existing->GetActorScale3D();
+    FString Name = Existing->GetActorLabel();
+
+    // Replace the existing actor (or placeholder) with the new glB mesh
+    DownloadAndCreateObject(ObjectId, Name, MeshPath, Pos, Rot, Scale);
+}
+
 // ============================================================
 // Scene send — Step 7 & 8
 // ============================================================
@@ -465,6 +496,47 @@ void USceneSyncSubsystem::SendSceneRemove(const FString& ObjectId)
 {
     Client->Broadcast(FSceneSyncProtocol::MakeSceneRemove(ObjectId));
     UE_LOG(LogSceneSyncSubsystem, Log, TEXT("scene-remove sent: %s"), *ObjectId);
+}
+
+const TArray<FSceneSyncPeerInfo>& USceneSyncSubsystem::GetPeers() const
+{
+    static TArray<FSceneSyncPeerInfo> Empty;
+    return Client.IsValid() ? Client->GetPeers() : Empty;
+}
+
+void USceneSyncSubsystem::SyncAllMeshes()
+{
+    if (!IsConnected()) return;
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (!IsValid(Actor)) continue;
+        if (Actor->Tags.Contains(TagSceneSync)) continue;
+        if (!Actor->FindComponentByClass<UStaticMeshComponent>()) continue;
+
+        FString ObjectId = GetOrAssignObjectId(Actor);
+        TArray<uint8> GlbData;
+        if (!ExportActorAsGlb(Actor, GlbData) || GlbData.Num() == 0) continue;
+
+        FString MeshPath = MeshPaths.Contains(ObjectId)
+            ? MeshPaths[ObjectId]
+            : FSceneSyncBlobClient::GenerateRandomPath();
+        MeshPaths.Add(ObjectId, MeshPath);
+
+        FString CapturedObjectId = ObjectId;
+        BlobClient.UploadGlb(GlbData, MeshPath, FOnBlobUploaded::CreateLambda(
+            [this, CapturedObjectId](bool bSuccess, const FString& Path)
+            {
+                if (bSuccess)
+                {
+                    Client->Broadcast(FSceneSyncProtocol::MakeSceneMesh(CapturedObjectId, Path));
+                    UE_LOG(LogSceneSyncSubsystem, Log, TEXT("scene-mesh sent: %s"), *CapturedObjectId);
+                }
+            }));
+    }
 }
 
 void USceneSyncSubsystem::SendSceneState(const FString& TargetId)
