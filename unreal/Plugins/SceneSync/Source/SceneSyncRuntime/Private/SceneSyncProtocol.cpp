@@ -3,35 +3,35 @@
 #include "Serialization/JsonWriter.h"
 
 // Wire (Three.js): Y-up, right-hand, meters
-// UE:             Z-up, left-hand, centimeters
+// UE:             Z-up, centimeters
 //
-// PosFromWire([x,y,z]) = FVector( x*100,  -z*100,  y*100 )
-// PosToWire(V)         = [V.X/100, V.Z/100, -V.Y/100]
-// RotFromWire([x,y,z,w]) = FQuat(-x, z, -y, w).Normalized
-// RotToWire(Q)           = [-Q.X, -Q.Z, Q.Y, Q.W]
+// PosFromWire([x,y,z]) = FVector( -x*100,  -z*100,  y*100 )
+// PosToWire(V)         = [-V.X/100, V.Z/100, -V.Y/100]
+// RotFromWire([x,y,z,w]) = FQuat(x, z, -y, w).Normalized
+// RotToWire(Q)           = [Q.X, -Q.Z, Q.Y, Q.W]
 // ScaleFromWire([x,y,z]) = FVector(x, z, y)
 // ScaleToWire(V)         = [V.X, V.Z, V.Y]
 
 FVector FSceneSyncProtocol::PosFromWire(const TArray<double>& W)
 {
     if (W.Num() < 3) return FVector::ZeroVector;
-    return FVector(W[0] * 100.0, -W[2] * 100.0, W[1] * 100.0);
+    return FVector(-W[0] * 100.0, -W[2] * 100.0, W[1] * 100.0);
 }
 
 TArray<double> FSceneSyncProtocol::PosToWire(const FVector& V)
 {
-    return { V.X / 100.0, V.Z / 100.0, -V.Y / 100.0 };
+    return { -V.X / 100.0, V.Z / 100.0, -V.Y / 100.0 };
 }
 
 FQuat FSceneSyncProtocol::RotFromWire(const TArray<double>& W)
 {
     if (W.Num() < 4) return FQuat::Identity;
-    return FQuat(-W[0], W[2], -W[1], W[3]).GetNormalized();
+    return FQuat(W[0], W[2], -W[1], W[3]).GetNormalized();
 }
 
 TArray<double> FSceneSyncProtocol::RotToWire(const FQuat& Q)
 {
-    return { -Q.X, -Q.Z, Q.Y, Q.W };
+    return { Q.X, -Q.Z, Q.Y, Q.W };
 }
 
 FVector FSceneSyncProtocol::ScaleFromWire(const TArray<double>& W)
