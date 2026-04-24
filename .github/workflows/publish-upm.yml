@@ -20,4 +20,7 @@ jobs:
           UPM_TOKEN: ${{ secrets.UPM_TOKEN }}
         run: |
           echo "//upm.afjk.jp/:_authToken=${UPM_TOKEN}" > ~/.npmrc
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          npm version "$VERSION" --no-git-tag-version
           npm publish --registry https://upm.afjk.jp
