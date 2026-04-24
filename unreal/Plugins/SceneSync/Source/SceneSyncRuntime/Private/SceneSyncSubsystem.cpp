@@ -15,6 +15,12 @@
 #include "glTFRuntimeAsset.h"
 #endif
 
+// UE 5.4+ built-in glTF exporter (GLTFExporter plugin, ships with UE)
+#if WITH_EDITOR
+#include "Exporters/GLTFExporter.h"
+#include "UserData/GLTFMaterialUserData.h"
+#endif
+
 DEFINE_LOG_CATEGORY_STATIC(LogSceneSyncSubsystem, Log, All);
 
 // Actor tag prefix used for object ID tracking
@@ -419,15 +425,40 @@ void USceneSyncSubsystem::SendSceneAdd(AActor* Actor)
     FQuat Rot = Actor->GetActorQuat();
     FVector Scale = Actor->GetActorScale3D();
 
-    // Build a basic primitive asset descriptor
-    TSharedPtr<FJsonObject> Asset = MakeShareable(new FJsonObject);
-    Asset->SetStringField(TEXT("type"), TEXT("primitive"));
-    Asset->SetStringField(TEXT("primitive"), TEXT("box"));
-    Asset->SetStringField(TEXT("color"), TEXT("#888888"));
+    TArray<uint8> GlbData;
+    bool bHasMesh = ExportActorAsGlb(Actor, GlbData);
 
-    FString AddJson = FSceneSyncProtocol::MakeSceneAdd(ObjectId, Name, Pos, Rot, Scale, TEXT(""), Asset);
-    Client->Broadcast(AddJson);
-    UE_LOG(LogSceneSyncSubsystem, Log, TEXT("scene-add sent: %s"), *ObjectId);
+    if (bHasMesh && GlbData.Num() > 0)
+    {
+        FString MeshPath = FSceneSyncBlobClient::GenerateRandomPath();
+        MeshPaths.Add(ObjectId, MeshPath);
+
+        // Upload glB then broadcast scene-add with meshPath
+        BlobClient.UploadGlb(GlbData, MeshPath, FOnBlobUploaded::CreateLambda(
+            [this, ObjectId, Name, Pos, Rot, Scale, MeshPath](bool bSuccess, const FString& Path)
+            {
+                if (!bSuccess)
+                {
+                    UE_LOG(LogSceneSyncSubsystem, Warning, TEXT("glB upload failed for %s"), *ObjectId);
+                }
+                FString AddJson = FSceneSyncProtocol::MakeSceneAdd(ObjectId, Name, Pos, Rot, Scale,
+                    bSuccess ? MeshPath : TEXT(""), nullptr);
+                Client->Broadcast(AddJson);
+                UE_LOG(LogSceneSyncSubsystem, Log, TEXT("scene-add sent (mesh=%s): %s"), bSuccess ? TEXT("yes") : TEXT("no"), *ObjectId);
+            }));
+    }
+    else
+    {
+        // No mesh or export unavailable — send with a generic box asset
+        TSharedPtr<FJsonObject> Asset = MakeShareable(new FJsonObject);
+        Asset->SetStringField(TEXT("type"), TEXT("primitive"));
+        Asset->SetStringField(TEXT("primitive"), TEXT("box"));
+        Asset->SetStringField(TEXT("color"), TEXT("#888888"));
+
+        FString AddJson = FSceneSyncProtocol::MakeSceneAdd(ObjectId, Name, Pos, Rot, Scale, TEXT(""), Asset);
+        Client->Broadcast(AddJson);
+        UE_LOG(LogSceneSyncSubsystem, Log, TEXT("scene-add sent (no mesh): %s"), *ObjectId);
+    }
 }
 
 void USceneSyncSubsystem::SendSceneRemove(const FString& ObjectId)
@@ -660,4 +691,35 @@ AActor* USceneSyncSubsystem::FindActorByObjectId(const FString& ObjectId) const
     const TWeakObjectPtr<AActor>* Found = ManagedActors.Find(ObjectId);
     if (Found && Found->IsValid()) return Found->Get();
     return nullptr;
+}
+
+bool USceneSyncSubsystem::ExportActorAsGlb(AActor* Actor, TArray<uint8>& OutData)
+{
+#if WITH_EDITOR
+    if (!IsValid(Actor)) return false;
+
+    // Temporarily zero-out transform so exported glB contains shape only
+    FTransform OriginalTransform = Actor->GetActorTransform();
+    Actor->SetActorTransform(FTransform::Identity, false, nullptr, ETeleportType::TeleportPhysics);
+
+    bool bSuccess = false;
+
+    // UGLTFExporter is available in UE 5.4+ via the GLTFExporter plugin
+    UGLTFExporter* Exporter = NewObject<UGLTFExporter>();
+    if (Exporter)
+    {
+        FGLTFExportMessages Messages;
+        TArray<UObject*> Objects = { Actor };
+        bSuccess = Exporter->ExportToGLB(GetWorld(), Objects, OutData, Messages);
+        if (!bSuccess)
+        {
+            UE_LOG(LogSceneSyncSubsystem, Warning, TEXT("UGLTFExporter::ExportToGLB failed for %s"), *Actor->GetName());
+        }
+    }
+
+    Actor->SetActorTransform(OriginalTransform, false, nullptr, ETeleportType::TeleportPhysics);
+    return bSuccess && OutData.Num() > 0;
+#else
+    return false;
+#endif
 }

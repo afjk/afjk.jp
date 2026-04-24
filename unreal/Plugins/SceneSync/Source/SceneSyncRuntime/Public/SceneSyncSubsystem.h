@@ -75,6 +75,9 @@ private:
     void OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
                           FString ObjectId, FString Name,
                           FVector Pos, FQuat Rot, FVector Scale);
+
+    // Export actor mesh as glB bytes (UE 5.4+ GLTFExporter, no-op if unavailable)
+    bool ExportActorAsGlb(AActor* Actor, TArray<uint8>& OutData);
     FString GetOrAssignObjectId(AActor* Actor);
     AActor* FindActorByObjectId(const FString& ObjectId) const;
     FString GetObjectIdFromActor(const AActor* Actor) const;
