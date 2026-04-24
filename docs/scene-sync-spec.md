@@ -540,3 +540,46 @@ Last-Writer-Wins を採用。同一オブジェクトの同時編集は後着が
 - `scene-add` の Undo -> `scene-remove`
 - `scene-remove` の Undo -> `scene-add`（元データを保持）
 - `scene-delta` の Undo -> 変更前の Transform で `scene-delta`
+
+---
+
+## scene-env（環境光の切り替え）
+
+HDRI ベースの環境光（IBL）をプリセットから切り替える。
+
+### メッセージ形式
+
+```json
+{
+  "kind": "scene-env",
+  "envId": "outdoor_night"
+}
+```
+
+### envId 選択肢
+
+| envId          | 用途           | ファイル                                |
+|----------------|---------------|-----------------------------------------|
+| studio         | スタジオ / 展示 | `/assets/hdri/studio.hdr`              |
+| outdoor_day    | 屋外 昼        | `/assets/hdri/outdoor_day.hdr`         |
+| outdoor_sunset | 屋外 夕方      | `/assets/hdri/outdoor_sunset.hdr`      |
+| outdoor_night  | 屋外 夜        | `/assets/hdri/outdoor_night.hdr`       |
+| indoor_warm    | 室内 暖色      | `/assets/hdri/indoor_warm.hdr`         |
+
+### 動作
+
+- broadcast すると全クライアントが環境光を切り替える
+- `scene-state` にも `envId` を含め、後から参加したクライアントにも反映される
+- ブラウザ UI の `#env-select` セレクタからも切り替え可能
+
+### HDRI ファイル
+
+Poly Haven（CC0 ライセンス）から取得。ファイル配置: `html/assets/hdri/{envId}.hdr`
+
+### curl での確認
+
+```bash
+curl -s -X POST "http://localhost:8787/api/room/ai-test/broadcast?name=Claude" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"scene-env","envId":"outdoor_night"}'
+```
