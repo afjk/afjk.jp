@@ -200,6 +200,31 @@ describe('presence REST broadcast API', () => {
       await Promise.all([closeClient(ws1), closeClient(ws2)]);
     }
   });
+
+  it('broadcasts scene-env to change environment', async () => {
+    const ws = await connectClient('env-test-room');
+    try {
+      const messagePromise = waitForMessage(ws, message => message.type === 'handoff');
+      const response = await fetch(`${baseUrl}/api/room/env-test-room/broadcast?name=Claude`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'scene-env', envId: 'outdoor_night' }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(message.type, 'handoff');
+      assert.equal(message.payload.kind, 'scene-env');
+      assert.equal(message.payload.envId, 'outdoor_night');
+    } finally {
+      await closeClient(ws);
+    }
+  });
 });
 
 describe('presence REST scene API', () => {

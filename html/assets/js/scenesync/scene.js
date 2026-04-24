@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -22,14 +23,43 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// ライト
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+
+// ライト（IBL 補助として残す）
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
 dirLight.position.set(5, 10, 7);
 scene.add(dirLight);
 
-// グリッド
-scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x333333));
+// グリッド（HDRI 背景でも視認できるよう明るめに）
+scene.add(new THREE.GridHelper(20, 20, 0x888888, 0x666666));
+
+// ── IBL 環境光 ───────────────────────────────────────────
+
+let currentEnvId = 'studio';
+const envSelect = document.getElementById('env-select');
+
+function loadEnvironment(envId) {
+  const url = '/assets/hdri/' + envId + '.hdr';
+  new RGBELoader().load(url, (texture) => {
+    const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+    scene.environment = envMap;
+    scene.background = envMap;
+    texture.dispose();
+    currentEnvId = envId;
+    updateEnvSelector();
+  });
+}
+
+function updateEnvSelector() {
+  if (envSelect) envSelect.value = currentEnvId;
+}
+
+envSelect?.addEventListener('change', (e) => {
+  const envId = e.target.value;
+  loadEnvironment(envId);
+  broadcast({ kind: 'scene-env', envId });
+});
 
 // glB ローダー
 const gltfLoader = new GLTFLoader();
@@ -1176,7 +1206,7 @@ async function respondToSceneRequest(from) {
     ws.send(JSON.stringify({
       type: 'handoff',
       targetId: from.id,
-      payload: { kind: 'scene-state', objects },
+      payload: { kind: 'scene-state', envId: currentEnvId, objects },
     }));
   }
 }
@@ -1191,6 +1221,9 @@ function handleHandoff(data) {
     case 'scene-state': {
       sceneReceived = true;
       clearTimeout(sceneRequestTimer);
+      if (payload.envId) {
+        loadEnvironment(payload.envId);
+      }
       const objects = payload.objects || {};
       for (const [objectId, info] of Object.entries(objects)) {
         addOrUpdateObject(objectId, info);
@@ -1279,6 +1312,12 @@ function handleHandoff(data) {
       locks.delete(payload.objectId);
       removeLockOverlay(payload.objectId);
       updatePeersList();
+      break;
+    }
+    case 'scene-env': {
+      if (payload.envId) {
+        loadEnvironment(payload.envId);
+      }
       break;
     }
     default:
@@ -1589,3 +1628,4 @@ nicknameChip?.addEventListener('click', editNickname);
 updateNicknameLabel();
 renderRoomSection();
 connectPresence();
+loadEnvironment('studio');

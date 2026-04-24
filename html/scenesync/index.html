@@ -36,6 +36,16 @@
     .chip.danger:hover { background: rgba(255,60,60,0.7); }
     .chip.primary { background: rgba(68,136,255,0.55); }
     .chip.primary:hover { background: rgba(68,136,255,0.8); }
+    select.chip {
+      appearance: auto;
+      cursor: pointer;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font: 13px/1.4 monospace;
+    }
 
     #status {
       position: fixed;
@@ -248,6 +258,15 @@
         <span id="nickname-label">—</span>
         <span class="chip-edit">✏️</span>
       </button>
+    </div>
+    <div class="row">
+      <select id="env-select" class="chip" title="環境光">
+        <option value="studio">Studio</option>
+        <option value="outdoor_day">屋外 昼</option>
+        <option value="outdoor_sunset">屋外 夕方</option>
+        <option value="outdoor_night">屋外 夜</option>
+        <option value="indoor_warm">室内 暖色</option>
+      </select>
     </div>
     <div class="row" id="room-section"></div>
   </div>
