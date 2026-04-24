@@ -713,6 +713,10 @@ void USceneSyncSubsystem::OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
     NewActor->SetRootComponent(Root);
     Root->RegisterComponent();
 
+    // glTF forward (-Z) maps to UE +Y after coordinate conversion, but UE forward is +X.
+    // Correct by rotating all mesh components -90° around Z relative to the root.
+    static const FQuat GltfCoordFix = FQuat(FVector::ZAxisVector, FMath::DegreesToRadians(-90.f));
+
     FglTFRuntimeStaticMeshConfig MeshConfig;
     TArray<FglTFRuntimeNode> Nodes = GltfAsset->GetNodes();
     for (auto& Node : Nodes)
@@ -723,6 +727,7 @@ void USceneSyncSubsystem::OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
             UStaticMeshComponent* Comp = NewObject<UStaticMeshComponent>(NewActor);
             Comp->SetStaticMesh(Mesh);
             Comp->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+            Comp->SetRelativeRotation(GltfCoordFix);
             Comp->RegisterComponent();
         }
     }
