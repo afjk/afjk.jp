@@ -36,7 +36,7 @@ scene.add(new THREE.GridHelper(20, 20, 0x888888, 0x666666));
 
 // ── IBL 環境光 ───────────────────────────────────────────
 
-let currentEnvId = 'studio';
+let currentEnvId = 'outdoor_day';
 const envSelect = document.getElementById('env-select');
 
 function loadEnvironment(envId) {
@@ -1628,4 +1628,4 @@ nicknameChip?.addEventListener('click', editNickname);
 updateNicknameLabel();
 renderRoomSection();
 connectPresence();
-loadEnvironment('studio');
+loadEnvironment('outdoor_day');
