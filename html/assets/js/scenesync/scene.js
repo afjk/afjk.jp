@@ -473,8 +473,9 @@ function selectManagedObject(obj) {
 }
 
 function selectObjectAt(clientX, clientY) {
-  pointer.x = (clientX / innerWidth) * 2 - 1;
-  pointer.y = -(clientY / innerHeight) * 2 + 1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
   const targets = Array.from(managedObjects.values());
@@ -560,8 +561,9 @@ renderer.domElement.addEventListener('touchend', (e) => {
     const tapY = touch.clientY;
     singleTapTimer = setTimeout(() => {
       if (!touchMoved && transformCtrl.object) {
-        pointer.x = (tapX / innerWidth) * 2 - 1;
-        pointer.y = -(tapY / innerHeight) * 2 + 1;
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.x = ((tapX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((tapY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
         const targets = Array.from(managedObjects.values());
         const hits = raycaster.intersectObjects(targets, true);
@@ -711,11 +713,16 @@ window.addEventListener('keydown', (e) => {
 
 // ── リサイズ ─────────────────────────────────────────────
 
-window.addEventListener('resize', () => {
+function onResize() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-});
+}
+
+window.addEventListener('resize', onResize);
+// iOS Safari はキーボード閉鎖時に window.resize が発火しないため
+// visualViewport.resize でも監視して canvas サイズを確実に復元する
+window.visualViewport?.addEventListener('resize', onResize);
 
 // ── レンダリングループ ────────────────────────────────────
 
