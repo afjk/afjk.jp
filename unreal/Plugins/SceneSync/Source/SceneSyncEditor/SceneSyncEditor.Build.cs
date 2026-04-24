@@ -12,11 +12,16 @@ public class SceneSyncEditor : ModuleRules
             "CoreUObject",
             "Engine",
             "UnrealEd",
+            "EditorSubsystem",
             "Slate",
             "SlateCore",
             "LevelEditor",
             "ToolMenus",
             "WorkspaceMenuStructure",
+            "Json",
+            "JsonUtilities",
+            "HTTP",
+            "WebSockets",
             "SceneSyncRuntime",
         });
     }

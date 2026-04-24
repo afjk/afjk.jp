@@ -18,6 +18,15 @@ public class SceneSyncRuntime : ModuleRules
             "WebSockets",
         });
 
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.AddRange(new string[]
+            {
+                "UnrealEd",
+                "GLTFExporter",
+            });
+        }
+
         // Optional glTFRuntime integration for runtime glB import
         string glTFRuntimePath = Path.Combine(PluginDirectory, "..", "glTFRuntime");
         if (Directory.Exists(glTFRuntimePath))

@@ -7,7 +7,9 @@
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "TimerManager.h"
+#include "Containers/Ticker.h"
 #include "HAL/PlatformTime.h"
 
 #if WITH_GLTFRUNTIME
@@ -15,11 +17,6 @@
 #include "glTFRuntimeAsset.h"
 #endif
 
-// UE 5.4+ built-in glTF exporter (GLTFExporter plugin, ships with UE)
-#if WITH_EDITOR
-#include "Exporters/GLTFExporter.h"
-#include "UserData/GLTFMaterialUserData.h"
-#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogSceneSyncSubsystem, Log, All);
 
@@ -236,7 +233,9 @@ void USceneSyncSubsystem::HandleSceneAdd(const TSharedPtr<FJsonObject>& Payload)
     {
         NewActor->Tags.AddUnique(TagSceneSync);
         NewActor->Tags.AddUnique(FName(*(TagPrefixId + ObjectId)));
+#if WITH_EDITOR
         NewActor->SetActorLabel(Name);
+#endif
         ApplyTransformToActor(NewActor, Pos, Rot, Scale);
         ManagedActors.Add(ObjectId, NewActor);
         KnownObjectIds.Add(ObjectId);
@@ -326,7 +325,11 @@ void USceneSyncSubsystem::HandleSceneMesh(const TSharedPtr<FJsonObject>& Payload
     FVector Pos = Existing->GetActorLocation();
     FQuat Rot = Existing->GetActorQuat();
     FVector Scale = Existing->GetActorScale3D();
+#if WITH_EDITOR
     FString Name = Existing->GetActorLabel();
+#else
+    FString Name = Existing->GetName();
+#endif
 
     // Replace the existing actor (or placeholder) with the new glB mesh
     DownloadAndCreateObject(ObjectId, Name, MeshPath, Pos, Rot, Scale);
@@ -451,7 +454,11 @@ void USceneSyncSubsystem::DetectHierarchyChanges()
 void USceneSyncSubsystem::SendSceneAdd(AActor* Actor)
 {
     FString ObjectId = GetOrAssignObjectId(Actor);
+#if WITH_EDITOR
     FString Name = Actor->GetActorLabel();
+#else
+    FString Name = Actor->GetName();
+#endif
     FVector Pos = Actor->GetActorLocation();
     FQuat Rot = Actor->GetActorQuat();
     FVector Scale = Actor->GetActorScale3D();
@@ -548,7 +555,11 @@ void USceneSyncSubsystem::SendSceneState(const FString& TargetId)
         if (!IsValid(Actor)) continue;
 
         TSharedPtr<FJsonObject> Entry = MakeShareable(new FJsonObject);
+#if WITH_EDITOR
         Entry->SetStringField(TEXT("name"), Actor->GetActorLabel());
+#else
+        Entry->SetStringField(TEXT("name"), Actor->GetName());
+#endif
 
         auto SetDoubleArr = [&](const FString& Key, const TArray<double>& Arr)
         {
@@ -646,7 +657,9 @@ void USceneSyncSubsystem::DownloadAndCreateObject(const FString& ObjectId, const
     {
         Placeholder->Tags.AddUnique(TagSceneSync);
         Placeholder->Tags.AddUnique(FName(*(TagPrefixId + ObjectId)));
+#if WITH_EDITOR
         Placeholder->SetActorLabel(Name + TEXT(" (loading)"));
+#endif
         ApplyTransformToActor(Placeholder, Pos, Rot, Scale);
         ManagedActors.Add(ObjectId, Placeholder);
         KnownObjectIds.Add(ObjectId);
@@ -701,8 +714,7 @@ void USceneSyncSubsystem::OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
     Root->RegisterComponent();
 
     FglTFRuntimeStaticMeshConfig MeshConfig;
-    TArray<FglTFRuntimeNode> Nodes;
-    GltfAsset->GetNodes(Nodes);
+    TArray<FglTFRuntimeNode> Nodes = GltfAsset->GetNodes();
     for (auto& Node : Nodes)
     {
         UStaticMesh* Mesh = GltfAsset->LoadStaticMesh(Node.Index, MeshConfig);
@@ -717,7 +729,9 @@ void USceneSyncSubsystem::OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
 
     NewActor->Tags.AddUnique(TagSceneSync);
     NewActor->Tags.AddUnique(FName(*(TagPrefixId + ObjectId)));
+#if WITH_EDITOR
     NewActor->SetActorLabel(Name);
+#endif
     ApplyTransformToActor(NewActor, Pos, Rot, Scale);
     ManagedActors.Add(ObjectId, NewActor);
     UE_LOG(LogSceneSyncSubsystem, Log, TEXT("glB imported: %s"), *ObjectId);
@@ -767,31 +781,6 @@ AActor* USceneSyncSubsystem::FindActorByObjectId(const FString& ObjectId) const
 
 bool USceneSyncSubsystem::ExportActorAsGlb(AActor* Actor, TArray<uint8>& OutData)
 {
-#if WITH_EDITOR
-    if (!IsValid(Actor)) return false;
-
-    // Temporarily zero-out transform so exported glB contains shape only
-    FTransform OriginalTransform = Actor->GetActorTransform();
-    Actor->SetActorTransform(FTransform::Identity, false, nullptr, ETeleportType::TeleportPhysics);
-
-    bool bSuccess = false;
-
-    // UGLTFExporter is available in UE 5.4+ via the GLTFExporter plugin
-    UGLTFExporter* Exporter = NewObject<UGLTFExporter>();
-    if (Exporter)
-    {
-        FGLTFExportMessages Messages;
-        TArray<UObject*> Objects = { Actor };
-        bSuccess = Exporter->ExportToGLB(GetWorld(), Objects, OutData, Messages);
-        if (!bSuccess)
-        {
-            UE_LOG(LogSceneSyncSubsystem, Warning, TEXT("UGLTFExporter::ExportToGLB failed for %s"), *Actor->GetName());
-        }
-    }
-
-    Actor->SetActorTransform(OriginalTransform, false, nullptr, ETeleportType::TeleportPhysics);
-    return bSuccess && OutData.Num() > 0;
-#else
+    // GLTFExporter API varies by UE version; glB export is not yet supported.
     return false;
-#endif
 }

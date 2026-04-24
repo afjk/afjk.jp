@@ -5,9 +5,9 @@
 #include "SceneSyncTypes.h"
 #include "SceneSyncBlobClient.h"
 #include "Dom/JsonObject.h"
+#include "Containers/Ticker.h"
+#include "SceneSyncPresenceClient.h"
 #include "SceneSyncSubsystem.generated.h"
-
-class FSceneSyncPresenceClient;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSceneSyncConnectedBP);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSceneSyncDisconnectedBP);

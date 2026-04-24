@@ -26,6 +26,11 @@
       "Name": "glTFRuntime",
       "Enabled": true,
       "Optional": true
+    },
+    {
+      "Name": "GLTFExporter",
+      "Enabled": true,
+      "Optional": true
     }
   ]
 }

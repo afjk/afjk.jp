@@ -1,7 +1,6 @@
 #include "SceneSyncEditorModule.h"
-#include "SceneSyncSubsystem.h"
+#include "SceneSyncEditorSubsystem.h"
 #include "SceneSyncTypes.h"
-#include "SceneSyncBlobClient.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SButton.h"
@@ -15,8 +14,8 @@
 #include "WorkspaceMenuStructureModule.h"
 #include "LevelEditor.h"
 #include "Editor.h"
+#include "Selection.h"
 #include "ToolMenus.h"
-#include "Engine/GameInstance.h"
 #include "Modules/ModuleManager.h"
 #include "Framework/Application/SlateApplication.h"
 
@@ -43,7 +42,7 @@ private:
     EVisibility GetDisconnectedVisibility() const;
     FText GetStatusText() const;
 
-    USceneSyncSubsystem* GetSubsystem() const;
+    USceneSyncEditorSubsystem* GetSubsystem() const;
 
     TSharedPtr<SEditableTextBox> PresenceUrlBox;
     TSharedPtr<SEditableTextBox> RoomBox;
@@ -150,10 +149,10 @@ void SSceneSyncPanel::Construct(const FArguments& InArgs)
 
 FReply SSceneSyncPanel::OnConnectClicked()
 {
-    USceneSyncSubsystem* SS = GetSubsystem();
+    USceneSyncEditorSubsystem* SS = GetSubsystem();
     if (!SS) return FReply::Handled();
 
-    FString Url = PresenceUrlBox->GetText().ToString();
+    FString Url  = PresenceUrlBox->GetText().ToString();
     FString Room = RoomBox->GetText().ToString();
     FString Nick = NicknameBox->GetText().ToString();
     SS->Connect(Url, Room, Nick);
@@ -162,7 +161,7 @@ FReply SSceneSyncPanel::OnConnectClicked()
 
 FReply SSceneSyncPanel::OnDisconnectClicked()
 {
-    if (USceneSyncSubsystem* SS = GetSubsystem())
+    if (USceneSyncEditorSubsystem* SS = GetSubsystem())
     {
         SS->Disconnect();
     }
@@ -171,16 +170,12 @@ FReply SSceneSyncPanel::OnDisconnectClicked()
 
 FReply SSceneSyncPanel::OnSyncMeshesClicked()
 {
-    if (USceneSyncSubsystem* SS = GetSubsystem())
-    {
-        SS->SyncAllMeshes();
-    }
     return FReply::Handled();
 }
 
 FText SSceneSyncPanel::GetStatusText() const
 {
-    USceneSyncSubsystem* SS = GetSubsystem();
+    USceneSyncEditorSubsystem* SS = GetSubsystem();
     if (!SS || !SS->IsConnected())
     {
         return FText::FromString(TEXT("Status: Disconnected"));
@@ -194,22 +189,10 @@ FText SSceneSyncPanel::GetStatusText() const
     return FText::FromString(Text);
 }
 
-USceneSyncSubsystem* SSceneSyncPanel::GetSubsystem() const
+USceneSyncEditorSubsystem* SSceneSyncPanel::GetSubsystem() const
 {
-    if (!GEngine) return nullptr;
-    // Try to get the first available game instance (PIE or game)
-    for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-    {
-        UWorld* World = Ctx.World();
-        if (!World) continue;
-        UGameInstance* GI = World->GetGameInstance();
-        if (!GI) continue;
-        if (USceneSyncSubsystem* SS = GI->GetSubsystem<USceneSyncSubsystem>())
-        {
-            return SS;
-        }
-    }
-    return nullptr;
+    if (!GEditor) return nullptr;
+    return GEditor->GetEditorSubsystem<USceneSyncEditorSubsystem>();
 }
 
 // ============================================================
@@ -286,37 +269,4 @@ void FSceneSyncEditorModule::RegisterMenuEntry()
 
 void FSceneSyncEditorModule::OnEditorSelectionChanged(UObject* /*NewSelection*/)
 {
-    if (!GEditor) return;
-
-    // Find the subsystem from the current PIE world
-    USceneSyncSubsystem* SS = nullptr;
-    for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-    {
-        UWorld* World = Ctx.World();
-        if (!World) continue;
-        UGameInstance* GI = World->GetGameInstance();
-        if (!GI) continue;
-        SS = GI->GetSubsystem<USceneSyncSubsystem>();
-        if (SS) break;
-    }
-    if (!SS || !SS->IsConnected()) return;
-
-    // Collect selected actors
-    TArray<AActor*> Selected;
-    for (FSelectionIterator It(*GEditor->GetSelectedActors()); It; ++It)
-    {
-        if (AActor* A = Cast<AActor>(*It))
-        {
-            Selected.Add(A);
-        }
-    }
-
-    if (Selected.Num() == 1)
-    {
-        SS->SelectObject(Selected[0]);
-    }
-    else
-    {
-        SS->DeselectObject();
-    }
 }

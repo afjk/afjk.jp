@@ -4,6 +4,7 @@
 #include "SceneSyncTypes.h"
 #include "IWebSocket.h"
 #include "Dom/JsonObject.h"
+#include "TimerManager.h"
 
 DECLARE_MULTICAST_DELEGATE(FOnSceneSyncConnected);
 DECLARE_MULTICAST_DELEGATE(FOnSceneSyncDisconnected);

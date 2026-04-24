@@ -5,6 +5,7 @@
 #include "TimerManager.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "GenericPlatform/GenericPlatformHttp.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSceneSyncPresence, Log, All);
 
