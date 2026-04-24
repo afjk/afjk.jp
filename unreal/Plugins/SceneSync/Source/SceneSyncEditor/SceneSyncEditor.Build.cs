@@ -15,6 +15,9 @@ public class SceneSyncEditor : ModuleRules
             "Slate",
             "SlateCore",
             "EditorStyle",
+            "LevelEditor",
+            "ToolMenus",
+            "WorkspaceMenuStructure",
             "SceneSyncRuntime",
         });
     }
