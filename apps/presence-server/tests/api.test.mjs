@@ -139,6 +139,52 @@ describe('presence REST broadcast API', () => {
     }
   });
 
+  it('accepts nickname query parameter for broadcast', async () => {
+    const ws = await connectClient('test-room');
+    try {
+      const messagePromise = waitForMessage(ws, message => message.type === 'handoff');
+      const response = await fetch(`${baseUrl}/api/room/test-room/broadcast?nickname=TestBot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'scene-add', objectId: 'obj-nickname' }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(message.from.nickname, 'TestBot');
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('prefers name query parameter over nickname for broadcast', async () => {
+    const ws = await connectClient('test-room');
+    try {
+      const messagePromise = waitForMessage(ws, message => message.type === 'handoff');
+      const response = await fetch(`${baseUrl}/api/room/test-room/broadcast?name=PrimaryName&nickname=SecondaryName`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'scene-add', objectId: 'obj-priority' }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(message.from.nickname, 'PrimaryName');
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
   it('returns 400 when body is empty', async () => {
     const response = await fetch(`${baseUrl}/api/room/test-room/broadcast`, {
       method: 'POST',
@@ -286,6 +332,56 @@ describe('presence REST scene API', () => {
           },
         },
       });
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('accepts nickname query parameter for scene', async () => {
+    const ws = await connectClient('scene-room');
+    try {
+      const requestPromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-request');
+
+      const responsePromise = fetch(`${baseUrl}/api/room/scene-room/scene?nickname=TestBot`);
+      const requestMessage = await requestPromise;
+
+      assert.equal(requestMessage.from.nickname, 'TestBot');
+
+      ws.send(JSON.stringify({
+        type: 'handoff',
+        targetId: requestMessage.from.id,
+        payload: { kind: 'scene-state', objects: {} },
+      }));
+
+      const response = await responsePromise;
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { objects: {} });
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('prefers name query parameter over nickname for scene', async () => {
+    const ws = await connectClient('scene-room');
+    try {
+      const requestPromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-request');
+
+      const responsePromise = fetch(`${baseUrl}/api/room/scene-room/scene?name=PrimaryName&nickname=SecondaryName`);
+      const requestMessage = await requestPromise;
+
+      assert.equal(requestMessage.from.nickname, 'PrimaryName');
+
+      ws.send(JSON.stringify({
+        type: 'handoff',
+        targetId: requestMessage.from.id,
+        payload: { kind: 'scene-state', objects: {} },
+      }));
+
+      const response = await responsePromise;
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { objects: {} });
     } finally {
       await closeClient(ws);
     }

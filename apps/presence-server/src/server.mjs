@@ -735,7 +735,8 @@ function createPresenceServer() {
       const roomId = sanitizeRoom(roomApiMatch[1]);
       const action = roomApiMatch[2];
       const url = getRequestUrl(req);
-      const sender = createApiSender(url.searchParams.get('name'));
+      const name = url.searchParams.get('name') || url.searchParams.get('nickname') || 'AI';
+      const sender = createApiSender(name);
 
       if (!roomId) {
         sendJson(res, 404, { error: 'not found' });
