@@ -1,0 +1,24 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Scene Sync",
+  "Description": "Cross-engine 3D scene collaborative editing via afjk.jp/scenesync",
+  "Category": "Collaboration",
+  "CreatedBy": "afjk",
+  "DocsURL": "https://github.com/afjk/afjk.jp/blob/main/docs/scene-sync-spec.md",
+  "EnabledByDefault": true,
+  "CanContainContent": false,
+  "Modules": [
+    {
+      "Name": "SceneSyncRuntime",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "SceneSyncEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ]
+}
