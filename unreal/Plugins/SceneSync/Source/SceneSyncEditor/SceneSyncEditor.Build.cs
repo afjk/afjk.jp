@@ -1,4 +1,5 @@
 using UnrealBuildTool;
+using System.IO;
 
 public class SceneSyncEditor : ModuleRules
 {
@@ -24,5 +25,11 @@ public class SceneSyncEditor : ModuleRules
             "WebSockets",
             "SceneSyncRuntime",
         });
+
+        string glTFRuntimePath = Path.Combine(PluginDirectory, "..", "glTFRuntime");
+        if (Directory.Exists(glTFRuntimePath))
+        {
+            PublicDependencyModuleNames.Add("glTFRuntime");
+        }
     }
 }

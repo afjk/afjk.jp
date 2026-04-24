@@ -149,7 +149,9 @@ void SSceneSyncPanel::Construct(const FArguments& InArgs)
 
 FReply SSceneSyncPanel::OnConnectClicked()
 {
+    UE_LOG(LogSceneSyncEditor, Log, TEXT("Connect clicked. GEditor=%s"), GEditor ? TEXT("valid") : TEXT("null"));
     USceneSyncEditorSubsystem* SS = GetSubsystem();
+    UE_LOG(LogSceneSyncEditor, Log, TEXT("GetSubsystem() = %s"), SS ? TEXT("valid") : TEXT("null"));
     if (!SS) return FReply::Handled();
 
     FString Url  = PresenceUrlBox->GetText().ToString();

@@ -34,8 +34,14 @@ private:
     void HandleSceneAdd(const TSharedPtr<FJsonObject>& Payload);
     void HandleSceneDelta(const TSharedPtr<FJsonObject>& Payload);
     void HandleSceneRemove(const TSharedPtr<FJsonObject>& Payload);
+    void HandleSceneMesh(const TSharedPtr<FJsonObject>& Payload);
     void HandleSceneRequest(const FString& FromId);
     void SendSceneState(const FString& TargetId);
+
+    void DownloadAndCreateObject(const FString& ObjectId, const FString& Name, const FString& MeshPath,
+                                  const FVector& Pos, const FQuat& Rot, const FVector& Scale);
+    void OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
+                          FString ObjectId, FString Name, FVector Pos, FQuat Rot, FVector Scale);
 
     AActor* SpawnPrimitive(const FString& ObjectId, const FString& PrimitiveType, const FString& Color);
     void ApplyTransformToActor(AActor* Actor, const FVector& Pos, const FQuat& Rot, const FVector& Scale);

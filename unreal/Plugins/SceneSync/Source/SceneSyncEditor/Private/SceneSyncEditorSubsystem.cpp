@@ -8,6 +8,11 @@
 #include "EngineUtils.h"
 #include "Editor.h"
 
+#if WITH_GLTFRUNTIME
+#include "glTFRuntimeParser.h"
+#include "glTFRuntimeAsset.h"
+#endif
+
 DEFINE_LOG_CATEGORY_STATIC(LogSceneSyncEditorSS, Log, All);
 
 static const FName TagSceneSyncEd = TEXT("SceneSync");
@@ -102,10 +107,11 @@ void USceneSyncEditorSubsystem::OnHandoffReceived(TSharedPtr<FJsonObject> Payloa
     FString Kind = FSceneSyncProtocol::ExtractKind(Payload);
     FString FromId = FSceneSyncProtocol::ExtractFromId(Payload);
 
-    if (Kind == TEXT("scene-state"))       HandleSceneState(Payload);
-    else if (Kind == TEXT("scene-add"))    HandleSceneAdd(Payload);
-    else if (Kind == TEXT("scene-delta"))  HandleSceneDelta(Payload);
-    else if (Kind == TEXT("scene-remove")) HandleSceneRemove(Payload);
+    if (Kind == TEXT("scene-state"))        HandleSceneState(Payload);
+    else if (Kind == TEXT("scene-add"))     HandleSceneAdd(Payload);
+    else if (Kind == TEXT("scene-delta"))   HandleSceneDelta(Payload);
+    else if (Kind == TEXT("scene-remove"))  HandleSceneRemove(Payload);
+    else if (Kind == TEXT("scene-mesh"))    HandleSceneMesh(Payload);
     else if (Kind == TEXT("scene-request")) HandleSceneRequest(FromId);
 }
 
@@ -145,9 +151,19 @@ void USceneSyncEditorSubsystem::HandleSceneAdd(const TSharedPtr<FJsonObject>& Pa
         return;
     }
 
+    FString MeshPath;
+    Payload->TryGetStringField(TEXT("meshPath"), MeshPath);
+    if (!MeshPath.IsEmpty()) MeshPaths.Add(ObjectId, MeshPath);
+
     FString Name;
     Payload->TryGetStringField(TEXT("name"), Name);
     if (Name.IsEmpty()) Name = ObjectId;
+
+    if (!MeshPath.IsEmpty())
+    {
+        DownloadAndCreateObject(ObjectId, Name, MeshPath, Pos, Rot, Scale);
+        return;
+    }
 
     const TSharedPtr<FJsonObject>* AssetObj;
     AActor* NewActor = nullptr;
@@ -209,6 +225,113 @@ void USceneSyncEditorSubsystem::HandleSceneRemove(const TSharedPtr<FJsonObject>&
     KnownObjectIds.Remove(ObjectId);
     MeshPaths.Remove(ObjectId);
     UE_LOG(LogSceneSyncEditorSS, Log, TEXT("scene-remove: %s"), *ObjectId);
+}
+
+void USceneSyncEditorSubsystem::HandleSceneMesh(const TSharedPtr<FJsonObject>& Payload)
+{
+    FString ObjectId = FSceneSyncProtocol::ExtractObjectId(Payload);
+    FString MeshPath;
+    Payload->TryGetStringField(TEXT("meshPath"), MeshPath);
+    if (ObjectId.IsEmpty() || MeshPath.IsEmpty()) return;
+
+    MeshPaths.Add(ObjectId, MeshPath);
+
+    AActor* Existing = FindActorByObjectId(ObjectId);
+    if (!Existing) return;
+
+    FVector Pos   = Existing->GetActorLocation();
+    FQuat   Rot   = Existing->GetActorQuat();
+    FVector Scale = Existing->GetActorScale3D();
+    FString Name  = Existing->GetActorLabel();
+
+    DownloadAndCreateObject(ObjectId, Name, MeshPath, Pos, Rot, Scale);
+}
+
+void USceneSyncEditorSubsystem::DownloadAndCreateObject(const FString& ObjectId, const FString& Name,
+    const FString& MeshPath, const FVector& Pos, const FQuat& Rot, const FVector& Scale)
+{
+    // Placeholder cube while downloading
+    AActor* Placeholder = SpawnPrimitive(ObjectId, TEXT("box"), TEXT("#888888"));
+    if (Placeholder)
+    {
+        Placeholder->Tags.AddUnique(TagSceneSyncEd);
+        Placeholder->Tags.AddUnique(FName(*(TagPrefixIdEd + ObjectId)));
+        Placeholder->SetActorLabel(Name + TEXT(" (loading)"));
+        ApplyTransformToActor(Placeholder, Pos, Rot, Scale);
+        ManagedActors.Add(ObjectId, Placeholder);
+        KnownObjectIds.Add(ObjectId);
+    }
+
+    TWeakObjectPtr<USceneSyncEditorSubsystem> WeakThis(this);
+    BlobClient.DownloadGlb(MeshPath, FOnBlobDownloaded::CreateLambda(
+        [WeakThis, ObjectId, Name, Pos, Rot, Scale](bool bSuccess, TArray<uint8> Data)
+        {
+            if (USceneSyncEditorSubsystem* Self = WeakThis.Get())
+            {
+                Self->OnGlbDownloaded(bSuccess, MoveTemp(Data), ObjectId, Name, Pos, Rot, Scale);
+            }
+        }));
+}
+
+void USceneSyncEditorSubsystem::OnGlbDownloaded(bool bSuccess, TArray<uint8> Data,
+    FString ObjectId, FString Name, FVector Pos, FQuat Rot, FVector Scale)
+{
+    if (!bSuccess || Data.Num() == 0)
+    {
+        UE_LOG(LogSceneSyncEditorSS, Warning, TEXT("glB download failed for %s, keeping placeholder"), *ObjectId);
+        return;
+    }
+
+#if WITH_GLTFRUNTIME
+    UWorld* World = GetEditorWorld();
+    if (!World) return;
+
+    FglTFRuntimeConfig Config;
+    UglTFRuntimeAsset* GltfAsset = NewObject<UglTFRuntimeAsset>();
+    if (!GltfAsset->LoadFromData(Data.GetData(), Data.Num(), Config))
+    {
+        UE_LOG(LogSceneSyncEditorSS, Warning, TEXT("glTFRuntime: LoadFromData failed for %s"), *ObjectId);
+        return;
+    }
+
+    // Remove placeholder
+    if (AActor* Old = FindActorByObjectId(ObjectId))
+    {
+        Old->Destroy();
+    }
+
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    AActor* NewActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Params);
+    if (!NewActor) return;
+
+    USceneComponent* Root = NewObject<USceneComponent>(NewActor, TEXT("Root"));
+    NewActor->SetRootComponent(Root);
+    Root->RegisterComponent();
+
+    FglTFRuntimeStaticMeshConfig MeshConfig;
+    TArray<FglTFRuntimeNode> Nodes = GltfAsset->GetNodes();
+    for (auto& Node : Nodes)
+    {
+        UStaticMesh* Mesh = GltfAsset->LoadStaticMesh(Node.Index, MeshConfig);
+        if (Mesh)
+        {
+            UStaticMeshComponent* Comp = NewObject<UStaticMeshComponent>(NewActor);
+            Comp->SetStaticMesh(Mesh);
+            Comp->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+            Comp->RegisterComponent();
+        }
+    }
+
+    NewActor->Tags.AddUnique(TagSceneSyncEd);
+    NewActor->Tags.AddUnique(FName(*(TagPrefixIdEd + ObjectId)));
+    NewActor->SetActorLabel(Name);
+    ApplyTransformToActor(NewActor, Pos, Rot, Scale);
+    ManagedActors.Add(ObjectId, NewActor);
+    UE_LOG(LogSceneSyncEditorSS, Log, TEXT("glB imported: %s"), *ObjectId);
+#else
+    UE_LOG(LogSceneSyncEditorSS, Log, TEXT("glTFRuntime not available; keeping placeholder for %s"), *ObjectId);
+#endif
 }
 
 void USceneSyncEditorSubsystem::HandleSceneRequest(const FString& FromId)
