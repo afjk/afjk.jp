@@ -248,6 +248,34 @@
       margin-left: auto;
       flex-shrink: 0;
     }
+
+    /* WebXR ボタン用余白確保 */
+    #add-btn.xr-available {
+      bottom: 80px;
+    }
+    .xr-button-container {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 8px;
+      z-index: 10;
+    }
+    .xr-button-container button {
+      background: rgba(0,0,0,0.55) !important;
+      border: 1px solid rgba(255,255,255,0.3) !important;
+      color: #fff !important;
+      font: 13px/1.4 monospace !important;
+      padding: 8px 16px !important;
+      border-radius: 6px !important;
+      cursor: pointer !important;
+      opacity: 1 !important;
+      outline: none !important;
+    }
+    .xr-button-container button:hover {
+      background: rgba(68,136,255,0.7) !important;
+    }
   </style>
 </head>
 <body>
@@ -288,6 +316,7 @@
     <button id="btn-delete" class="tb-btn btn-danger" title="削除">🗑</button>
     <button id="btn-deselect" class="tb-btn" title="選択解除">✕</button>
   </div>
+  <div id="xr-button-container" class="xr-button-container"></div>
   <script type="importmap">
   {
     "imports": {
