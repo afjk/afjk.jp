@@ -713,9 +713,9 @@ renderer.xr.addEventListener('sessionstart', async () => {
   xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
 
   // 起動時の頭の高さを強制的に XR_INITIAL_HEAD_HEIGHT に設定
-  // reference space を Y方向に +XR_INITIAL_HEAD_HEIGHT 持ち上げる
-  // = カメラから見るとシーンが下方向に XR_INITIAL_HEAD_HEIGHT 下がる
-  applyFloorOffset(-XR_INITIAL_HEAD_HEIGHT);
+  // 床を Y方向に -XR_INITIAL_HEAD_HEIGHT 下げる
+  // = カメラから見ると床が下方向に XR_INITIAL_HEAD_HEIGHT 下がる
+  applyFloorOffset(XR_INITIAL_HEAD_HEIGHT);
 
   // hit-test source を作成（AR/MRのみ）
   if (xrState.mode === 'immersive-ar') {
