@@ -138,18 +138,31 @@ function relabelXrButton(btn, enterLabel, exitLabel) {
 // ── XR コントローラー ──────────────────────────────────────
 const xrState = {
   active: false,
-  mode: null,            // 'immersive-vr' | 'immersive-ar' | null
-  grab: {
+  mode: null,
+  // 各コントローラーごとの掴み状態（インデックス 0/1）
+  grabbers: [
+    { active: false, object: null,
+      grabOffsetLocal: new THREE.Vector3(),
+      initialObjectQuat: new THREE.Quaternion(),
+      initialControllerYaw: 0 },
+    { active: false, object: null,
+      grabOffsetLocal: new THREE.Vector3(),
+      initialObjectQuat: new THREE.Quaternion(),
+      initialControllerYaw: 0 },
+  ],
+  // 両手掴み状態
+  twoHand: {
     active: false,
-    controller: null,
     object: null,
-    lastSent: 0,
-    // 掴み開始時の状態を保持して Y軸回転のみ追従させる
-    initialObjectQuat: new THREE.Quaternion(),  // 掴み開始時のオブジェクト初期姿勢
-    initialControllerYaw: 0,                    // 掴み開始時のコントローラーY軸回転
-    grabOffsetLocal: new THREE.Vector3(),       // コントローラーローカル空間での位置オフセット
-    yawOnly: true,                              // true: Y軸回転のみ, false: 6DoF自由回転
+    initialDistance: 1,
+    initialDirYaw: 0,
+    initialObjectScale: new THREE.Vector3(1, 1, 1),
+    initialObjectQuat: new THREE.Quaternion(),
+    initialOffsetFromMidpoint: new THREE.Vector3(),
   },
+  twoHandedFreeRotation: false,  // true: 6DoF, false: Y軸ロック
+  lastSent: 0,
+  lockOwnedByMe: new Set(),      // lock 発行済み objectId
   controllers: [],
 };
 
@@ -157,6 +170,36 @@ const xrState = {
 function extractYaw(quat) {
   const x = quat.x, y = quat.y, z = quat.z, w = quat.w;
   return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + x * x));
+}
+
+const SCALE_MIN_RATIO = 0.05;
+const SCALE_MAX_RATIO = 50;
+
+// コントローラーのワールド位置を取得
+function getControllerWorldPos(ctrl, out) {
+  out.setFromMatrixPosition(ctrl.matrixWorld);
+  return out;
+}
+
+// オブジェクトに lock を送信（重複防止）
+function ensureLock(objectId) {
+  if (xrState.lockOwnedByMe.has(objectId)) return;
+  xrState.lockOwnedByMe.add(objectId);
+  broadcast({ kind: 'scene-lock', objectId });
+}
+
+function ensureUnlock(objectId) {
+  if (!xrState.lockOwnedByMe.has(objectId)) return;
+  xrState.lockOwnedByMe.delete(objectId);
+  broadcast({ kind: 'scene-unlock', objectId });
+}
+
+// 自分以外がそのオブジェクトをロックしているか
+function isLockedByOthers(objectId) {
+  if (!locks.has(objectId)) return false;
+  const lockInfo = locks.get(objectId);
+  const ownerId = lockInfo?.id || lockInfo;
+  return ownerId && ownerId !== presenceState.id;
 }
 
 // ── XR モード切り替え（VR ⇄ MR） ─────────────────────────
@@ -238,6 +281,9 @@ const xrTmpMatrix = new THREE.Matrix4();
 const xrRaycaster = new THREE.Raycaster();
 
 function onXrSelectStart(ctrl) {
+  const idx = ctrl.userData.xrIndex;
+  const grabber = xrState.grabbers[idx];
+
   // コントローラーから前方へレイキャスト
   xrTmpMatrix.identity().extractRotation(ctrl.matrixWorld);
   xrRaycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
@@ -252,53 +298,127 @@ function onXrSelectStart(ctrl) {
   if (!obj.userData?.objectId) return;
   if (obj.userData._isLockOverlay) return;
 
-  // 他人のロックを尊重
-  if (locks.has(obj.userData.objectId)) {
-    const lockInfo = locks.get(obj.userData.objectId);
-    const ownerId = lockInfo?.id || lockInfo;
-    if (ownerId && ownerId !== presenceState.id) return;
+  // 他人にロックされている場合は不可
+  if (isLockedByOthers(obj.userData.objectId)) return;
+
+  // すでに反対の手が同じオブジェクトを掴んでいるかチェック
+  const otherIdx = idx === 0 ? 1 : 0;
+  const otherGrabber = xrState.grabbers[otherIdx];
+
+  if (otherGrabber.active && otherGrabber.object === obj) {
+    // ── 両手モード昇格 ──
+    grabber.active = true;
+    grabber.object = obj;
+    startTwoHandMode(obj);
+    return;
   }
 
-  // scene-lock を発火
-  broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
+  // ── 片手モード（新規掴み） ──
+  ensureLock(obj.userData.objectId);
 
-  // 掴み開始時のオブジェクト姿勢を保存（Y軸回転以外を維持するため）
-  xrState.grab.initialObjectQuat.copy(obj.quaternion);
+  // 掴み開始時のオブジェクト姿勢を保存
+  grabber.initialObjectQuat.copy(obj.quaternion);
 
-  // 掴み開始時のコントローラーY軸回転（ヨー）を保存
+  // 掴み開始時のコントローラーY軸回転を保存
   const ctrlWorldQuat = new THREE.Quaternion();
   ctrl.getWorldQuaternion(ctrlWorldQuat);
-  xrState.grab.initialControllerYaw = extractYaw(ctrlWorldQuat);
+  grabber.initialControllerYaw = extractYaw(ctrlWorldQuat);
 
-  // コントローラーローカル空間でのオブジェクト位置オフセットを記録
-  // （ctrl.attach は使わず、毎フレーム手動で位置を計算する方式）
+  // コントローラーローカル空間での位置オフセット
   const objWorldPos = new THREE.Vector3();
   obj.getWorldPosition(objWorldPos);
-  xrState.grab.grabOffsetLocal.copy(objWorldPos);
-  ctrl.worldToLocal(xrState.grab.grabOffsetLocal);
+  grabber.grabOffsetLocal.copy(objWorldPos);
+  ctrl.worldToLocal(grabber.grabOffsetLocal);
 
-  xrState.grab.active = true;
-  xrState.grab.controller = ctrl;
-  xrState.grab.object = obj;
-  xrState.grab.lastSent = 0;
+  grabber.active = true;
+  grabber.object = obj;
 }
 
 function onXrSelectEnd(ctrl) {
-  if (!xrState.grab.active) return;
-  if (xrState.grab.controller !== ctrl) return;
+  const idx = ctrl.userData.xrIndex;
+  const grabber = xrState.grabbers[idx];
+  if (!grabber.active) return;
 
-  const obj = xrState.grab.object;
+  const obj = grabber.object;
+  const otherIdx = idx === 0 ? 1 : 0;
+  const otherGrabber = xrState.grabbers[otherIdx];
 
-  // ctrl.attach していないので scene.attach は不要
-  // （位置・回転は updateXrGrab で既に適用済み）
+  // 両手モード中の場合は片手モードへ降格
+  if (xrState.twoHand.active && xrState.twoHand.object === obj) {
+    endTwoHandMode();
+    grabber.active = false;
+    grabber.object = null;
 
-  // 最終 delta を送信して unlock
-  broadcastXrDelta(obj);
-  broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
+    // 残った手で片手モードを継続するため、その手の初期姿勢を再キャプチャ
+    if (otherGrabber.active && otherGrabber.object === obj) {
+      reCaptureSingleHandGrab(otherGrabber, xrState.controllers[otherIdx], obj);
+    }
+    return;
+  }
 
-  xrState.grab.active = false;
-  xrState.grab.controller = null;
-  xrState.grab.object = null;
+  // 通常の片手リリース
+  grabber.active = false;
+  grabber.object = null;
+
+  // 反対の手も掴んでいなければ unlock
+  const stillHeld = otherGrabber.active && otherGrabber.object === obj;
+  if (!stillHeld) {
+    if (obj.userData?.objectId) {
+      // 最終姿勢を送信してから unlock
+      broadcastObjectDelta(obj);
+      ensureUnlock(obj.userData.objectId);
+    }
+  }
+}
+
+// 片手モード継続のため、現在の状態を再キャプチャ
+function reCaptureSingleHandGrab(grabber, ctrl, obj) {
+  grabber.initialObjectQuat.copy(obj.quaternion);
+
+  const ctrlWorldQuat = new THREE.Quaternion();
+  ctrl.getWorldQuaternion(ctrlWorldQuat);
+  grabber.initialControllerYaw = extractYaw(ctrlWorldQuat);
+
+  const objWorldPos = new THREE.Vector3();
+  obj.getWorldPosition(objWorldPos);
+  grabber.grabOffsetLocal.copy(objWorldPos);
+  ctrl.worldToLocal(grabber.grabOffsetLocal);
+}
+
+// ── 両手モード開始 ─────────────────────────────────────
+function startTwoHandMode(obj) {
+  const ctrl0 = xrState.controllers[0];
+  const ctrl1 = xrState.controllers[1];
+
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  getControllerWorldPos(ctrl0, p0);
+  getControllerWorldPos(ctrl1, p1);
+
+  const distance = p0.distanceTo(p1);
+  if (distance < 0.0001) return;  // ほぼ同位置なら昇格しない
+
+  const midpoint = new THREE.Vector3().addVectors(p0, p1).multiplyScalar(0.5);
+  const dir = new THREE.Vector3().subVectors(p1, p0).normalize();
+  // dir のY軸方向角度（XZ平面への投影）
+  const dirYaw = Math.atan2(dir.x, dir.z);
+
+  const objWorldPos = new THREE.Vector3();
+  obj.getWorldPosition(objWorldPos);
+
+  xrState.twoHand.active = true;
+  xrState.twoHand.object = obj;
+  xrState.twoHand.initialDistance = distance;
+  xrState.twoHand.initialDirYaw = dirYaw;
+  xrState.twoHand.initialObjectScale.copy(obj.scale);
+  xrState.twoHand.initialObjectQuat.copy(obj.quaternion);
+  xrState.twoHand.initialOffsetFromMidpoint.subVectors(objWorldPos, midpoint);
+}
+
+// ── 両手モード終了 ─────────────────────────────────────
+function endTwoHandMode() {
+  xrState.twoHand.active = false;
+  xrState.twoHand.object = null;
 }
 
 // グリップ長押しでVR/MR切り替え（連打防止のためデバウンス）
@@ -340,7 +460,7 @@ function onXrSqueezeStart(ctrl) {
   }, 600);
 }
 
-function broadcastXrDelta(obj) {
+function broadcastObjectDelta(obj) {
   if (!obj?.userData?.objectId) return;
   const wp = new THREE.Vector3();
   const wq = new THREE.Quaternion();
@@ -361,46 +481,115 @@ function broadcastXrDelta(obj) {
   });
 }
 
-const _grabTmpVec = new THREE.Vector3();
-const _grabTmpQuat = new THREE.Quaternion();
-const _grabTmpEuler = new THREE.Euler();
+const _xrTmpVec0 = new THREE.Vector3();
+const _xrTmpVec1 = new THREE.Vector3();
+const _xrTmpVec2 = new THREE.Vector3();
+const _xrTmpQuat0 = new THREE.Quaternion();
+const _xrTmpQuat1 = new THREE.Quaternion();
+const _xrTmpEuler = new THREE.Euler();
 
 function updateXrGrab() {
-  if (!xrState.grab.active) return;
-
-  const ctrl = xrState.grab.controller;
-  const obj = xrState.grab.object;
-  if (!ctrl || !obj) return;
-
-  // 1. 位置: コントローラーローカル空間に保存したオフセットを
-  //         現在のコントローラー姿勢でワールドに変換
-  _grabTmpVec.copy(xrState.grab.grabOffsetLocal);
-  ctrl.localToWorld(_grabTmpVec);
-  obj.position.copy(_grabTmpVec);
-
-  // 2. 回転: yawOnly モードなら Y軸回転のみ追従、
-  //         そうでなければコントローラー姿勢を完全コピー
-  if (xrState.grab.yawOnly) {
-    // コントローラーの現在のヨーと、掴み開始時のヨーの差分を計算
-    const ctrlWorldQuat = _grabTmpQuat;
-    ctrl.getWorldQuaternion(ctrlWorldQuat);
-    const currentYaw = extractYaw(ctrlWorldQuat);
-    const deltaYaw = currentYaw - xrState.grab.initialControllerYaw;
-
-    // 初期オブジェクト姿勢に Y軸回転 deltaYaw を加える
-    _grabTmpEuler.set(0, deltaYaw, 0, 'YXZ');
-    const yawQuat = new THREE.Quaternion().setFromEuler(_grabTmpEuler);
-    obj.quaternion.copy(yawQuat).multiply(xrState.grab.initialObjectQuat);
+  // 両手モード優先
+  if (xrState.twoHand.active && xrState.twoHand.object) {
+    updateTwoHandGrab();
   } else {
-    // 6DoF モード: コントローラー姿勢を完全コピー
-    ctrl.getWorldQuaternion(obj.quaternion);
+    // 片手モード: 各コントローラーごとに独立処理
+    for (let i = 0; i < xrState.grabbers.length; i++) {
+      const grabber = xrState.grabbers[i];
+      if (!grabber.active || !grabber.object) continue;
+      updateSingleHandGrab(grabber, xrState.controllers[i]);
+    }
   }
 
   // 50ms 間隔で delta を broadcast
   const now = performance.now();
-  if (now - xrState.grab.lastSent < 50) return;
-  xrState.grab.lastSent = now;
-  broadcastXrDelta(obj);
+  if (now - xrState.lastSent < 50) return;
+  xrState.lastSent = now;
+
+  // 動いているオブジェクト全てに対して delta 送信（重複は同じobjectIdなのでまとめる）
+  const sentIds = new Set();
+  if (xrState.twoHand.active && xrState.twoHand.object) {
+    const id = xrState.twoHand.object.userData?.objectId;
+    if (id && !sentIds.has(id)) {
+      broadcastObjectDelta(xrState.twoHand.object);
+      sentIds.add(id);
+    }
+  } else {
+    for (const grabber of xrState.grabbers) {
+      if (!grabber.active || !grabber.object) continue;
+      const id = grabber.object.userData?.objectId;
+      if (id && !sentIds.has(id)) {
+        broadcastObjectDelta(grabber.object);
+        sentIds.add(id);
+      }
+    }
+  }
+}
+
+// ── 片手モードの位置・回転更新 ─────────────────────────
+function updateSingleHandGrab(grabber, ctrl) {
+  const obj = grabber.object;
+
+  // 位置: コントローラーローカルオフセットをワールド変換
+  _xrTmpVec0.copy(grabber.grabOffsetLocal);
+  ctrl.localToWorld(_xrTmpVec0);
+  obj.position.copy(_xrTmpVec0);
+
+  // 回転: コントローラーのヨー差分のみ適用、初期姿勢を維持
+  ctrl.getWorldQuaternion(_xrTmpQuat0);
+  const currentYaw = extractYaw(_xrTmpQuat0);
+  const deltaYaw = currentYaw - grabber.initialControllerYaw;
+  _xrTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+  _xrTmpQuat1.setFromEuler(_xrTmpEuler);
+  obj.quaternion.copy(_xrTmpQuat1).multiply(grabber.initialObjectQuat);
+}
+
+// ── 両手モードの位置・回転・スケール更新 ──────────────
+function updateTwoHandGrab() {
+  const obj = xrState.twoHand.object;
+  const ctrl0 = xrState.controllers[0];
+  const ctrl1 = xrState.controllers[1];
+
+  const p0 = _xrTmpVec0;
+  const p1 = _xrTmpVec1;
+  getControllerWorldPos(ctrl0, p0);
+  getControllerWorldPos(ctrl1, p1);
+
+  const currentDistance = p0.distanceTo(p1);
+  if (currentDistance < 0.0001) return;
+
+  // ── スケール ──
+  let ratio = currentDistance / xrState.twoHand.initialDistance;
+  // 上限・下限クランプ
+  ratio = Math.max(SCALE_MIN_RATIO, Math.min(SCALE_MAX_RATIO, ratio));
+  obj.scale.copy(xrState.twoHand.initialObjectScale).multiplyScalar(ratio);
+
+  // ── 回転 ──
+  const dir = _xrTmpVec2.subVectors(p1, p0).normalize();
+  const currentDirYaw = Math.atan2(dir.x, dir.z);
+  const deltaYaw = currentDirYaw - xrState.twoHand.initialDirYaw;
+
+  if (xrState.twoHandedFreeRotation) {
+    // 6DoF: 両手間ベクトルでオブジェクトの+Z軸を合わせるクォータニオンを計算
+    _xrTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+    _xrTmpQuat1.setFromEuler(_xrTmpEuler);
+    obj.quaternion.copy(_xrTmpQuat1).multiply(xrState.twoHand.initialObjectQuat);
+  } else {
+    // Y軸ロック
+    _xrTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+    _xrTmpQuat1.setFromEuler(_xrTmpEuler);
+    obj.quaternion.copy(_xrTmpQuat1).multiply(xrState.twoHand.initialObjectQuat);
+  }
+
+  // ── 位置 ──
+  // 両手の中点を基準に、初期オフセットを Y軸回転 deltaYaw だけ回したものを加える
+  const midpoint = _xrTmpVec0.addVectors(p0, p1).multiplyScalar(0.5);
+  const offset = _xrTmpVec2.copy(xrState.twoHand.initialOffsetFromMidpoint);
+  // オフセットも Y軸回転で回す（中点周りで一緒に回るように）
+  offset.applyQuaternion(_xrTmpQuat1);
+  // スケール変化に応じてオフセットも伸縮
+  offset.multiplyScalar(ratio);
+  obj.position.copy(midpoint).add(offset);
 }
 
 // ── XR セッション開始/終了 ─────────────────────────────
@@ -454,18 +643,24 @@ renderer.xr.addEventListener('sessionend', () => {
 
   xrState.active = false;
 
-  // 掴み中だった場合は強制リリース
-  if (xrState.grab.active && xrState.grab.object) {
-    const obj = xrState.grab.object;
-    // ctrl.attach していないので scene.attach は不要
-    broadcastXrDelta(obj);
+  // 掴み中だった場合は全てのコントローラー・両手状態をリリース
+  endTwoHandMode();
+  for (let i = 0; i < xrState.grabbers.length; i++) {
+    const grabber = xrState.grabbers[i];
+    if (!grabber.active || !grabber.object) continue;
+    const obj = grabber.object;
+    grabber.active = false;
+    grabber.object = null;
     if (obj.userData?.objectId) {
-      broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
+      broadcastObjectDelta(obj);
+      ensureUnlock(obj.userData.objectId);
     }
-    xrState.grab.active = false;
-    xrState.grab.controller = null;
-    xrState.grab.object = null;
   }
+  // 念のため lockOwnedByMe を全クリア
+  for (const id of xrState.lockOwnedByMe) {
+    broadcast({ kind: 'scene-unlock', objectId: id });
+  }
+  xrState.lockOwnedByMe.clear();
 
   // UI 復元
   const helper = transformCtrl.getHelper();
