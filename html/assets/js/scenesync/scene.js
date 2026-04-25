@@ -79,7 +79,7 @@ const BLOB_BASE = location.hostname === 'localhost'
 
 // ── WebXR ボタンセットアップ ────────────────────────────────
 const xrButtonContainer = document.getElementById('xr-button-container');
-const addBtn = document.getElementById('add-btn');
+const xrAddBtn = document.getElementById('add-btn');
 
 if ('xr' in navigator && xrButtonContainer) {
   navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
@@ -92,7 +92,7 @@ if ('xr' in navigator && xrButtonContainer) {
     btn.style.right = 'auto';
     btn.style.bottom = 'auto';
     xrButtonContainer.appendChild(btn);
-    addBtn?.classList.add('xr-available');
+    xrAddBtn?.classList.add('xr-available');
   }).catch(() => {});
 
   navigator.xr.isSessionSupported('immersive-ar').then((ok) => {
@@ -107,7 +107,7 @@ if ('xr' in navigator && xrButtonContainer) {
     btn.style.right = 'auto';
     btn.style.bottom = 'auto';
     xrButtonContainer.appendChild(btn);
-    addBtn?.classList.add('xr-available');
+    xrAddBtn?.classList.add('xr-available');
   }).catch(() => {});
 }
 
