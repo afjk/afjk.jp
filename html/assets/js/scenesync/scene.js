@@ -667,7 +667,7 @@ function applyFloorOffset(floorY) {
 // ── XR セッション開始/終了 ─────────────────────────────
 let xrSavedBackground = null;
 
-renderer.xr.addEventListener('sessionstart', () => {
+renderer.xr.addEventListener('sessionstart', async () => {
   xrState.active = true;
   const session = renderer.xr.getSession();
   // セッションモード判定（mode プロパティが無い実装もあるので blendMode で AR を推定）
