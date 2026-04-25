@@ -120,9 +120,20 @@ const xrState = {
     controller: null,
     object: null,
     lastSent: 0,
+    // 掴み開始時の状態を保持して Y軸回転のみ追従させる
+    initialObjectQuat: new THREE.Quaternion(),  // 掴み開始時のオブジェクト初期姿勢
+    initialControllerYaw: 0,                    // 掴み開始時のコントローラーY軸回転
+    grabOffsetLocal: new THREE.Vector3(),       // コントローラーローカル空間での位置オフセット
+    yawOnly: true,                              // true: Y軸回転のみ, false: 6DoF自由回転
   },
   controllers: [],
 };
+
+// クォータニオンから Y軸回転（ヨー）成分のみを抽出する
+function extractYaw(quat) {
+  const x = quat.x, y = quat.y, z = quat.z, w = quat.w;
+  return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + x * x));
+}
 
 const controllerModelFactory = new XRControllerModelFactory();
 
@@ -181,11 +192,23 @@ function onXrSelectStart(ctrl) {
     if (ownerId && ownerId !== presenceState.id) return;
   }
 
-  // 既存プロトコルと同じ scene-lock を発火
+  // scene-lock を発火
   broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
 
-  // コントローラーの子に付け替えて掴み
-  ctrl.attach(obj);
+  // 掴み開始時のオブジェクト姿勢を保存（Y軸回転以外を維持するため）
+  xrState.grab.initialObjectQuat.copy(obj.quaternion);
+
+  // 掴み開始時のコントローラーY軸回転（ヨー）を保存
+  const ctrlWorldQuat = new THREE.Quaternion();
+  ctrl.getWorldQuaternion(ctrlWorldQuat);
+  xrState.grab.initialControllerYaw = extractYaw(ctrlWorldQuat);
+
+  // コントローラーローカル空間でのオブジェクト位置オフセットを記録
+  // （ctrl.attach は使わず、毎フレーム手動で位置を計算する方式）
+  const objWorldPos = new THREE.Vector3();
+  obj.getWorldPosition(objWorldPos);
+  xrState.grab.grabOffsetLocal.copy(objWorldPos);
+  ctrl.worldToLocal(xrState.grab.grabOffsetLocal);
 
   xrState.grab.active = true;
   xrState.grab.controller = ctrl;
@@ -199,8 +222,8 @@ function onXrSelectEnd(ctrl) {
 
   const obj = xrState.grab.object;
 
-  // ワールド空間へ戻す（姿勢は維持）
-  scene.attach(obj);
+  // ctrl.attach していないので scene.attach は不要
+  // （位置・回転は updateXrGrab で既に適用済み）
 
   // 最終 delta を送信して unlock
   broadcastXrDelta(obj);
@@ -232,12 +255,46 @@ function broadcastXrDelta(obj) {
   });
 }
 
+const _grabTmpVec = new THREE.Vector3();
+const _grabTmpQuat = new THREE.Quaternion();
+const _grabTmpEuler = new THREE.Euler();
+
 function updateXrGrab() {
   if (!xrState.grab.active) return;
+
+  const ctrl = xrState.grab.controller;
+  const obj = xrState.grab.object;
+  if (!ctrl || !obj) return;
+
+  // 1. 位置: コントローラーローカル空間に保存したオフセットを
+  //         現在のコントローラー姿勢でワールドに変換
+  _grabTmpVec.copy(xrState.grab.grabOffsetLocal);
+  ctrl.localToWorld(_grabTmpVec);
+  obj.position.copy(_grabTmpVec);
+
+  // 2. 回転: yawOnly モードなら Y軸回転のみ追従、
+  //         そうでなければコントローラー姿勢を完全コピー
+  if (xrState.grab.yawOnly) {
+    // コントローラーの現在のヨーと、掴み開始時のヨーの差分を計算
+    const ctrlWorldQuat = _grabTmpQuat;
+    ctrl.getWorldQuaternion(ctrlWorldQuat);
+    const currentYaw = extractYaw(ctrlWorldQuat);
+    const deltaYaw = currentYaw - xrState.grab.initialControllerYaw;
+
+    // 初期オブジェクト姿勢に Y軸回転 deltaYaw を加える
+    _grabTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+    const yawQuat = new THREE.Quaternion().setFromEuler(_grabTmpEuler);
+    obj.quaternion.copy(yawQuat).multiply(xrState.grab.initialObjectQuat);
+  } else {
+    // 6DoF モード: コントローラー姿勢を完全コピー
+    ctrl.getWorldQuaternion(obj.quaternion);
+  }
+
+  // 50ms 間隔で delta を broadcast
   const now = performance.now();
   if (now - xrState.grab.lastSent < 50) return;
   xrState.grab.lastSent = now;
-  broadcastXrDelta(xrState.grab.object);
+  broadcastXrDelta(obj);
 }
 
 // ── XR セッション開始/終了 ─────────────────────────────
@@ -276,7 +333,7 @@ renderer.xr.addEventListener('sessionend', () => {
   // 掴み中だった場合は強制リリース
   if (xrState.grab.active && xrState.grab.object) {
     const obj = xrState.grab.object;
-    scene.attach(obj);
+    // ctrl.attach していないので scene.attach は不要
     broadcastXrDelta(obj);
     if (obj.userData?.objectId) {
       broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
