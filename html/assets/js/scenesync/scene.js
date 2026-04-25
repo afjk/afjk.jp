@@ -81,11 +81,16 @@ const BLOB_BASE = location.hostname === 'localhost'
 const xrButtonContainer = document.getElementById('xr-button-container');
 const xrAddBtn = document.getElementById('add-btn');
 
+// XR セッションへ入るためのモード状態
+let xrCurrentMode = null;       // 'immersive-vr' | 'immersive-ar' | null
+let xrPendingMode = null;       // 切り替え予約
+
 if ('xr' in navigator && xrButtonContainer) {
   navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
     if (!ok) return;
     const btn = VRButton.createButton(renderer);
-    // VRButton は body へ自動 append するので、コンテナへ移動
+    // ラベルを日本語化
+    relabelXrButton(btn, 'VRで入る', 'VRを終了');
     btn.style.position = 'static';
     btn.style.transform = 'none';
     btn.style.left = 'auto';
@@ -101,6 +106,8 @@ if ('xr' in navigator && xrButtonContainer) {
       optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'],
       domOverlay: { root: document.body },
     });
+    // ラベルを日本語化
+    relabelXrButton(btn, 'MRで入る', 'MRを終了');
     btn.style.position = 'static';
     btn.style.transform = 'none';
     btn.style.left = 'auto';
@@ -109,6 +116,23 @@ if ('xr' in navigator && xrButtonContainer) {
     xrButtonContainer.appendChild(btn);
     xrAddBtn?.classList.add('xr-available');
   }).catch(() => {});
+}
+
+// VRButton / ARButton のテキストを書き換える
+function relabelXrButton(btn, enterLabel, exitLabel) {
+  const apply = () => {
+    const t = btn.textContent || '';
+    if (t.startsWith('ENTER') || t.includes('AR') || t.includes('VR')) {
+      if (t.toUpperCase().includes('EXIT') || t.toUpperCase().includes('STOP')) {
+        btn.textContent = exitLabel;
+      } else if (t.toUpperCase().includes('ENTER')) {
+        btn.textContent = enterLabel;
+      }
+    }
+  };
+  apply();
+  const observer = new MutationObserver(apply);
+  observer.observe(btn, { childList: true, characterData: true, subtree: true });
 }
 
 // ── XR コントローラー ──────────────────────────────────────
@@ -135,6 +159,48 @@ function extractYaw(quat) {
   return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + x * x));
 }
 
+// ── XR モード切り替え（VR ⇄ MR） ─────────────────────────
+async function switchXrMode(targetMode) {
+  // targetMode: 'immersive-vr' | 'immersive-ar'
+  if (!('xr' in navigator)) return;
+
+  const supported = await navigator.xr.isSessionSupported(targetMode).catch(() => false);
+  if (!supported) {
+    showToast(targetMode === 'immersive-ar' ? 'MRはこの端末で対応していません' : 'VRはこの端末で対応していません');
+    return;
+  }
+
+  const currentSession = renderer.xr.getSession();
+  if (currentSession) {
+    // 現セッションを終了 → sessionend ハンドラ後に新セッション開始
+    xrPendingMode = targetMode;
+    try {
+      await currentSession.end();
+    } catch (e) {
+      console.warn('[XR] failed to end current session:', e);
+      xrPendingMode = null;
+    }
+  } else {
+    // セッション中でない場合は直接開始
+    requestXrSession(targetMode);
+  }
+}
+
+async function requestXrSession(mode) {
+  const sessionInit = mode === 'immersive-ar'
+    ? { optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'], domOverlay: { root: document.body } }
+    : { optionalFeatures: ['local-floor', 'bounded-floor'] };
+
+  try {
+    const session = await navigator.xr.requestSession(mode, sessionInit);
+    await renderer.xr.setSession(session);
+    xrCurrentMode = mode;
+  } catch (e) {
+    console.error('[XR] requestSession failed:', e);
+    showToast('XRセッション開始に失敗しました');
+  }
+}
+
 const controllerModelFactory = new XRControllerModelFactory();
 
 for (let i = 0; i < 2; i++) {
@@ -142,6 +208,7 @@ for (let i = 0; i < 2; i++) {
   ctrl.userData.xrIndex = i;
   ctrl.addEventListener('selectstart', () => onXrSelectStart(ctrl));
   ctrl.addEventListener('selectend',   () => onXrSelectEnd(ctrl));
+  ctrl.addEventListener('squeezestart', () => onXrSqueezeStart(ctrl));
   scene.add(ctrl);
 
   // レイ表示
@@ -234,6 +301,45 @@ function onXrSelectEnd(ctrl) {
   xrState.grab.object = null;
 }
 
+// グリップ長押しでVR/MR切り替え（連打防止のためデバウンス）
+let xrSqueezeStartTime = 0;
+let xrModeToggleCooldown = 0;
+
+function onXrSqueezeStart(ctrl) {
+  const now = performance.now();
+  if (now - xrModeToggleCooldown < 1500) return;  // 1.5秒のクールダウン
+  xrSqueezeStartTime = now;
+
+  // 0.6秒長押しを検出
+  setTimeout(() => {
+    // squeezestart から 0.6 秒経過した時点で
+    // まだ squeeze が押されているかチェック
+    const session = renderer.xr.getSession();
+    if (!session) return;
+
+    let stillPressed = false;
+    for (const inputSource of session.inputSources) {
+      if (inputSource.targetRayMode !== 'tracked-pointer') continue;
+      const gp = inputSource.gamepad;
+      if (!gp) continue;
+      // gamepad.buttons[1] が squeeze（グリップ）の標準マッピング
+      if (gp.buttons[1]?.pressed) {
+        stillPressed = true;
+        break;
+      }
+    }
+
+    if (!stillPressed) return;
+    if (performance.now() - xrSqueezeStartTime < 600) return;
+
+    // モード切り替え実行
+    xrModeToggleCooldown = performance.now();
+    const next = xrCurrentMode === 'immersive-ar' ? 'immersive-vr' : 'immersive-ar';
+    showToast(next === 'immersive-ar' ? 'MRに切り替えます…' : 'VRに切り替えます…');
+    switchXrMode(next);
+  }, 600);
+}
+
 function broadcastXrDelta(obj) {
   if (!obj?.userData?.objectId) return;
   const wp = new THREE.Vector3();
@@ -306,6 +412,7 @@ renderer.xr.addEventListener('sessionstart', () => {
   // セッションモード判定（mode プロパティが無い実装もあるので blendMode で AR を推定）
   const blendMode = session.environmentBlendMode || 'opaque';
   xrState.mode = (blendMode === 'opaque') ? 'immersive-vr' : 'immersive-ar';
+  xrCurrentMode = xrState.mode;
 
   // TransformControls を退避
   if (transformCtrl.object) {
@@ -325,9 +432,26 @@ renderer.xr.addEventListener('sessionstart', () => {
     xrSavedBackground = scene.background;
     scene.background = null;
   }
+
+  // dom-overlay 用トグルボタンの表示制御
+  const xrToggleBtn = document.getElementById('xr-toggle-btn');
+  if (xrToggleBtn) {
+    if (xrState.mode === 'immersive-ar') {
+      xrToggleBtn.style.display = 'inline-flex';
+      xrToggleBtn.textContent = '🔄 VRに切替';
+      xrToggleBtn.onclick = () => switchXrMode('immersive-vr');
+    } else {
+      // VR セッション中は dom-overlay が効かないので非表示
+      xrToggleBtn.style.display = 'none';
+    }
+  }
 });
 
 renderer.xr.addEventListener('sessionend', () => {
+  // トグルボタンを隠す
+  const xrToggleBtn = document.getElementById('xr-toggle-btn');
+  if (xrToggleBtn) xrToggleBtn.style.display = 'none';
+
   xrState.active = false;
 
   // 掴み中だった場合は強制リリース
@@ -359,6 +483,15 @@ renderer.xr.addEventListener('sessionend', () => {
   }
 
   xrState.mode = null;
+  xrCurrentMode = null;
+
+  // 保留中のモード切り替えがあれば即座に新セッション開始
+  if (xrPendingMode) {
+    const next = xrPendingMode;
+    xrPendingMode = null;
+    // 一瞬待ってから次のセッションを開始（Three.js 側の片付けを待つ）
+    setTimeout(() => requestXrSession(next), 100);
+  }
 });
 
 // ── コントロール ─────────────────────────────────────────
