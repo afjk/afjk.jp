@@ -81,11 +81,16 @@ const BLOB_BASE = location.hostname === 'localhost'
 const xrButtonContainer = document.getElementById('xr-button-container');
 const xrAddBtn = document.getElementById('add-btn');
 
+// XR セッションへ入るためのモード状態
+let xrCurrentMode = null;       // 'immersive-vr' | 'immersive-ar' | null
+let xrPendingMode = null;       // 切り替え予約
+
 if ('xr' in navigator && xrButtonContainer) {
   navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
     if (!ok) return;
     const btn = VRButton.createButton(renderer);
-    // VRButton は body へ自動 append するので、コンテナへ移動
+    // ラベルを日本語化
+    relabelXrButton(btn, 'VRで入る', 'VRを終了');
     btn.style.position = 'static';
     btn.style.transform = 'none';
     btn.style.left = 'auto';
@@ -101,6 +106,8 @@ if ('xr' in navigator && xrButtonContainer) {
       optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'],
       domOverlay: { root: document.body },
     });
+    // ラベルを日本語化
+    relabelXrButton(btn, 'MRで入る', 'MRを終了');
     btn.style.position = 'static';
     btn.style.transform = 'none';
     btn.style.left = 'auto';
@@ -111,18 +118,145 @@ if ('xr' in navigator && xrButtonContainer) {
   }).catch(() => {});
 }
 
+// VRButton / ARButton のテキストを書き換える
+function relabelXrButton(btn, enterLabel, exitLabel) {
+  const apply = () => {
+    const t = btn.textContent || '';
+    if (t.startsWith('ENTER') || t.includes('AR') || t.includes('VR')) {
+      if (t.toUpperCase().includes('EXIT') || t.toUpperCase().includes('STOP')) {
+        btn.textContent = exitLabel;
+      } else if (t.toUpperCase().includes('ENTER')) {
+        btn.textContent = enterLabel;
+      }
+    }
+  };
+  apply();
+  const observer = new MutationObserver(apply);
+  observer.observe(btn, { childList: true, characterData: true, subtree: true });
+}
+
 // ── XR コントローラー ──────────────────────────────────────
 const xrState = {
   active: false,
-  mode: null,            // 'immersive-vr' | 'immersive-ar' | null
-  grab: {
+  mode: null,
+  // 各コントローラーごとの掴み状態（インデックス 0/1）
+  grabbers: [
+    { active: false, object: null,
+      grabOffsetLocal: new THREE.Vector3(),
+      initialObjectQuat: new THREE.Quaternion(),
+      initialControllerYaw: 0 },
+    { active: false, object: null,
+      grabOffsetLocal: new THREE.Vector3(),
+      initialObjectQuat: new THREE.Quaternion(),
+      initialControllerYaw: 0 },
+  ],
+  // 両手掴み状態
+  twoHand: {
     active: false,
-    controller: null,
     object: null,
-    lastSent: 0,
+    initialDistance: 1,
+    initialDirYaw: 0,
+    initialObjectScale: new THREE.Vector3(1, 1, 1),
+    initialObjectQuat: new THREE.Quaternion(),
+    initialOffsetFromMidpoint: new THREE.Vector3(),
+  },
+  twoHandedFreeRotation: false,  // true: 6DoF, false: Y軸ロック
+  lastSent: 0,
+  lockOwnedByMe: new Set(),      // lock 発行済み objectId
+  // AR床補正
+  floor: {
+    referenceSpace: null,        // 元の reference space
+    offsetSpace: null,           // オフセット適用後の reference space
+    estimatedFloorY: null,       // 推定床Y（カメラ空間内、負の値）
+    hitTestSource: null,         // XRHitTestSource
+    viewerSpace: null,           // viewer reference space
+    reticle: null,               // レチクル mesh
+    lastHitPose: null,           // 直近のヒット位置・姿勢
+    stableHitCount: 0,           // 連続ヒット回数（床高さ確定用）
+    floorConfirmed: false,       // 床高さが安定確定したか
   },
   controllers: [],
 };
+
+// クォータニオンから Y軸回転（ヨー）成分のみを抽出する
+function extractYaw(quat) {
+  const x = quat.x, y = quat.y, z = quat.z, w = quat.w;
+  return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + x * x));
+}
+
+const SCALE_MIN_RATIO = 0.05;
+const SCALE_MAX_RATIO = 50;
+const ASSUMED_HEAD_HEIGHT = 1.6;
+const FLOOR_DETECT_THRESHOLD = 0.5;
+
+// コントローラーのワールド位置を取得
+function getControllerWorldPos(ctrl, out) {
+  out.setFromMatrixPosition(ctrl.matrixWorld);
+  return out;
+}
+
+// オブジェクトに lock を送信（重複防止）
+function ensureLock(objectId) {
+  if (xrState.lockOwnedByMe.has(objectId)) return;
+  xrState.lockOwnedByMe.add(objectId);
+  broadcast({ kind: 'scene-lock', objectId });
+}
+
+function ensureUnlock(objectId) {
+  if (!xrState.lockOwnedByMe.has(objectId)) return;
+  xrState.lockOwnedByMe.delete(objectId);
+  broadcast({ kind: 'scene-unlock', objectId });
+}
+
+// 自分以外がそのオブジェクトをロックしているか
+function isLockedByOthers(objectId) {
+  if (!locks.has(objectId)) return false;
+  const lockInfo = locks.get(objectId);
+  const ownerId = lockInfo?.id || lockInfo;
+  return ownerId && ownerId !== presenceState.id;
+}
+
+// ── XR モード切り替え（VR ⇄ MR） ─────────────────────────
+async function switchXrMode(targetMode) {
+  // targetMode: 'immersive-vr' | 'immersive-ar'
+  if (!('xr' in navigator)) return;
+
+  const supported = await navigator.xr.isSessionSupported(targetMode).catch(() => false);
+  if (!supported) {
+    showToast(targetMode === 'immersive-ar' ? 'MRはこの端末で対応していません' : 'VRはこの端末で対応していません');
+    return;
+  }
+
+  const currentSession = renderer.xr.getSession();
+  if (currentSession) {
+    // 現セッションを終了 → sessionend ハンドラ後に新セッション開始
+    xrPendingMode = targetMode;
+    try {
+      await currentSession.end();
+    } catch (e) {
+      console.warn('[XR] failed to end current session:', e);
+      xrPendingMode = null;
+    }
+  } else {
+    // セッション中でない場合は直接開始
+    requestXrSession(targetMode);
+  }
+}
+
+async function requestXrSession(mode) {
+  const sessionInit = mode === 'immersive-ar'
+    ? { optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'], domOverlay: { root: document.body } }
+    : { optionalFeatures: ['local-floor', 'bounded-floor'] };
+
+  try {
+    const session = await navigator.xr.requestSession(mode, sessionInit);
+    await renderer.xr.setSession(session);
+    xrCurrentMode = mode;
+  } catch (e) {
+    console.error('[XR] requestSession failed:', e);
+    showToast('XRセッション開始に失敗しました');
+  }
+}
 
 const controllerModelFactory = new XRControllerModelFactory();
 
@@ -131,6 +265,7 @@ for (let i = 0; i < 2; i++) {
   ctrl.userData.xrIndex = i;
   ctrl.addEventListener('selectstart', () => onXrSelectStart(ctrl));
   ctrl.addEventListener('selectend',   () => onXrSelectEnd(ctrl));
+  ctrl.addEventListener('squeezestart', () => onXrSqueezeStart(ctrl));
   scene.add(ctrl);
 
   // レイ表示
@@ -156,10 +291,34 @@ for (let i = 0; i < 2; i++) {
   xrState.controllers.push(ctrl);
 }
 
+// ── AR hit-test レチクル ─────────────────────────────────
+function createReticle() {
+  const geo = new THREE.RingGeometry(0.10, 0.15, 32);
+  geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x88ccff,
+    transparent: true,
+    opacity: 0.8,
+    side: THREE.DoubleSide,
+  });
+  const reticle = new THREE.Mesh(geo, mat);
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  reticle.raycast = () => {};
+  reticle.userData._isReticle = true;
+  return reticle;
+}
+
+xrState.floor.reticle = createReticle();
+scene.add(xrState.floor.reticle);
+
 const xrTmpMatrix = new THREE.Matrix4();
 const xrRaycaster = new THREE.Raycaster();
 
 function onXrSelectStart(ctrl) {
+  const idx = ctrl.userData.xrIndex;
+  const grabber = xrState.grabbers[idx];
+
   // コントローラーから前方へレイキャスト
   xrTmpMatrix.identity().extractRotation(ctrl.matrixWorld);
   xrRaycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
@@ -174,44 +333,169 @@ function onXrSelectStart(ctrl) {
   if (!obj.userData?.objectId) return;
   if (obj.userData._isLockOverlay) return;
 
-  // 他人のロックを尊重
-  if (locks.has(obj.userData.objectId)) {
-    const lockInfo = locks.get(obj.userData.objectId);
-    const ownerId = lockInfo?.id || lockInfo;
-    if (ownerId && ownerId !== presenceState.id) return;
+  // 他人にロックされている場合は不可
+  if (isLockedByOthers(obj.userData.objectId)) return;
+
+  // すでに反対の手が同じオブジェクトを掴んでいるかチェック
+  const otherIdx = idx === 0 ? 1 : 0;
+  const otherGrabber = xrState.grabbers[otherIdx];
+
+  if (otherGrabber.active && otherGrabber.object === obj) {
+    // ── 両手モード昇格 ──
+    grabber.active = true;
+    grabber.object = obj;
+    startTwoHandMode(obj);
+    return;
   }
 
-  // 既存プロトコルと同じ scene-lock を発火
-  broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
+  // ── 片手モード（新規掴み） ──
+  ensureLock(obj.userData.objectId);
 
-  // コントローラーの子に付け替えて掴み
-  ctrl.attach(obj);
+  // 掴み開始時のオブジェクト姿勢を保存
+  grabber.initialObjectQuat.copy(obj.quaternion);
 
-  xrState.grab.active = true;
-  xrState.grab.controller = ctrl;
-  xrState.grab.object = obj;
-  xrState.grab.lastSent = 0;
+  // 掴み開始時のコントローラーY軸回転を保存
+  const ctrlWorldQuat = new THREE.Quaternion();
+  ctrl.getWorldQuaternion(ctrlWorldQuat);
+  grabber.initialControllerYaw = extractYaw(ctrlWorldQuat);
+
+  // コントローラーローカル空間での位置オフセット
+  const objWorldPos = new THREE.Vector3();
+  obj.getWorldPosition(objWorldPos);
+  grabber.grabOffsetLocal.copy(objWorldPos);
+  ctrl.worldToLocal(grabber.grabOffsetLocal);
+
+  grabber.active = true;
+  grabber.object = obj;
 }
 
 function onXrSelectEnd(ctrl) {
-  if (!xrState.grab.active) return;
-  if (xrState.grab.controller !== ctrl) return;
+  const idx = ctrl.userData.xrIndex;
+  const grabber = xrState.grabbers[idx];
+  if (!grabber.active) return;
 
-  const obj = xrState.grab.object;
+  const obj = grabber.object;
+  const otherIdx = idx === 0 ? 1 : 0;
+  const otherGrabber = xrState.grabbers[otherIdx];
 
-  // ワールド空間へ戻す（姿勢は維持）
-  scene.attach(obj);
+  // 両手モード中の場合は片手モードへ降格
+  if (xrState.twoHand.active && xrState.twoHand.object === obj) {
+    endTwoHandMode();
+    grabber.active = false;
+    grabber.object = null;
 
-  // 最終 delta を送信して unlock
-  broadcastXrDelta(obj);
-  broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
+    // 残った手で片手モードを継続するため、その手の初期姿勢を再キャプチャ
+    if (otherGrabber.active && otherGrabber.object === obj) {
+      reCaptureSingleHandGrab(otherGrabber, xrState.controllers[otherIdx], obj);
+    }
+    return;
+  }
 
-  xrState.grab.active = false;
-  xrState.grab.controller = null;
-  xrState.grab.object = null;
+  // 通常の片手リリース
+  grabber.active = false;
+  grabber.object = null;
+
+  // 反対の手も掴んでいなければ unlock
+  const stillHeld = otherGrabber.active && otherGrabber.object === obj;
+  if (!stillHeld) {
+    if (obj.userData?.objectId) {
+      // 最終姿勢を送信してから unlock
+      broadcastObjectDelta(obj);
+      ensureUnlock(obj.userData.objectId);
+    }
+  }
 }
 
-function broadcastXrDelta(obj) {
+// 片手モード継続のため、現在の状態を再キャプチャ
+function reCaptureSingleHandGrab(grabber, ctrl, obj) {
+  grabber.initialObjectQuat.copy(obj.quaternion);
+
+  const ctrlWorldQuat = new THREE.Quaternion();
+  ctrl.getWorldQuaternion(ctrlWorldQuat);
+  grabber.initialControllerYaw = extractYaw(ctrlWorldQuat);
+
+  const objWorldPos = new THREE.Vector3();
+  obj.getWorldPosition(objWorldPos);
+  grabber.grabOffsetLocal.copy(objWorldPos);
+  ctrl.worldToLocal(grabber.grabOffsetLocal);
+}
+
+// ── 両手モード開始 ─────────────────────────────────────
+function startTwoHandMode(obj) {
+  const ctrl0 = xrState.controllers[0];
+  const ctrl1 = xrState.controllers[1];
+
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  getControllerWorldPos(ctrl0, p0);
+  getControllerWorldPos(ctrl1, p1);
+
+  const distance = p0.distanceTo(p1);
+  if (distance < 0.0001) return;  // ほぼ同位置なら昇格しない
+
+  const midpoint = new THREE.Vector3().addVectors(p0, p1).multiplyScalar(0.5);
+  const dir = new THREE.Vector3().subVectors(p1, p0).normalize();
+  // dir のY軸方向角度（XZ平面への投影）
+  const dirYaw = Math.atan2(dir.x, dir.z);
+
+  const objWorldPos = new THREE.Vector3();
+  obj.getWorldPosition(objWorldPos);
+
+  xrState.twoHand.active = true;
+  xrState.twoHand.object = obj;
+  xrState.twoHand.initialDistance = distance;
+  xrState.twoHand.initialDirYaw = dirYaw;
+  xrState.twoHand.initialObjectScale.copy(obj.scale);
+  xrState.twoHand.initialObjectQuat.copy(obj.quaternion);
+  xrState.twoHand.initialOffsetFromMidpoint.subVectors(objWorldPos, midpoint);
+}
+
+// ── 両手モード終了 ─────────────────────────────────────
+function endTwoHandMode() {
+  xrState.twoHand.active = false;
+  xrState.twoHand.object = null;
+}
+
+// グリップ長押しでVR/MR切り替え（連打防止のためデバウンス）
+let xrSqueezeStartTime = 0;
+let xrModeToggleCooldown = 0;
+
+function onXrSqueezeStart(ctrl) {
+  const now = performance.now();
+  if (now - xrModeToggleCooldown < 1500) return;  // 1.5秒のクールダウン
+  xrSqueezeStartTime = now;
+
+  // 0.6秒長押しを検出
+  setTimeout(() => {
+    // squeezestart から 0.6 秒経過した時点で
+    // まだ squeeze が押されているかチェック
+    const session = renderer.xr.getSession();
+    if (!session) return;
+
+    let stillPressed = false;
+    for (const inputSource of session.inputSources) {
+      if (inputSource.targetRayMode !== 'tracked-pointer') continue;
+      const gp = inputSource.gamepad;
+      if (!gp) continue;
+      // gamepad.buttons[1] が squeeze（グリップ）の標準マッピング
+      if (gp.buttons[1]?.pressed) {
+        stillPressed = true;
+        break;
+      }
+    }
+
+    if (!stillPressed) return;
+    if (performance.now() - xrSqueezeStartTime < 600) return;
+
+    // モード切り替え実行
+    xrModeToggleCooldown = performance.now();
+    const next = xrCurrentMode === 'immersive-ar' ? 'immersive-vr' : 'immersive-ar';
+    showToast(next === 'immersive-ar' ? 'MRに切り替えます…' : 'VRに切り替えます…');
+    switchXrMode(next);
+  }, 600);
+}
+
+function broadcastObjectDelta(obj) {
   if (!obj?.userData?.objectId) return;
   const wp = new THREE.Vector3();
   const wq = new THREE.Quaternion();
@@ -232,12 +516,152 @@ function broadcastXrDelta(obj) {
   });
 }
 
+const _xrTmpVec0 = new THREE.Vector3();
+const _xrTmpVec1 = new THREE.Vector3();
+const _xrTmpVec2 = new THREE.Vector3();
+const _xrTmpQuat0 = new THREE.Quaternion();
+const _xrTmpQuat1 = new THREE.Quaternion();
+const _xrTmpEuler = new THREE.Euler();
+
 function updateXrGrab() {
-  if (!xrState.grab.active) return;
+  // 両手モード優先
+  if (xrState.twoHand.active && xrState.twoHand.object) {
+    updateTwoHandGrab();
+  } else {
+    // 片手モード: 各コントローラーごとに独立処理
+    for (let i = 0; i < xrState.grabbers.length; i++) {
+      const grabber = xrState.grabbers[i];
+      if (!grabber.active || !grabber.object) continue;
+      updateSingleHandGrab(grabber, xrState.controllers[i]);
+    }
+  }
+
+  // 50ms 間隔で delta を broadcast
   const now = performance.now();
-  if (now - xrState.grab.lastSent < 50) return;
-  xrState.grab.lastSent = now;
-  broadcastXrDelta(xrState.grab.object);
+  if (now - xrState.lastSent < 50) return;
+  xrState.lastSent = now;
+
+  // 動いているオブジェクト全てに対して delta 送信（重複は同じobjectIdなのでまとめる）
+  const sentIds = new Set();
+  if (xrState.twoHand.active && xrState.twoHand.object) {
+    const id = xrState.twoHand.object.userData?.objectId;
+    if (id && !sentIds.has(id)) {
+      broadcastObjectDelta(xrState.twoHand.object);
+      sentIds.add(id);
+    }
+  } else {
+    for (const grabber of xrState.grabbers) {
+      if (!grabber.active || !grabber.object) continue;
+      const id = grabber.object.userData?.objectId;
+      if (id && !sentIds.has(id)) {
+        broadcastObjectDelta(grabber.object);
+        sentIds.add(id);
+      }
+    }
+  }
+}
+
+// ── 片手モードの位置・回転更新 ─────────────────────────
+function updateSingleHandGrab(grabber, ctrl) {
+  const obj = grabber.object;
+
+  // 位置: コントローラーローカルオフセットをワールド変換
+  _xrTmpVec0.copy(grabber.grabOffsetLocal);
+  ctrl.localToWorld(_xrTmpVec0);
+  obj.position.copy(_xrTmpVec0);
+
+  // 回転: コントローラーのヨー差分のみ適用、初期姿勢を維持
+  ctrl.getWorldQuaternion(_xrTmpQuat0);
+  const currentYaw = extractYaw(_xrTmpQuat0);
+  const deltaYaw = currentYaw - grabber.initialControllerYaw;
+  _xrTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+  _xrTmpQuat1.setFromEuler(_xrTmpEuler);
+  obj.quaternion.copy(_xrTmpQuat1).multiply(grabber.initialObjectQuat);
+}
+
+// ── 両手モードの位置・回転・スケール更新 ──────────────
+function updateTwoHandGrab() {
+  const obj = xrState.twoHand.object;
+  const ctrl0 = xrState.controllers[0];
+  const ctrl1 = xrState.controllers[1];
+
+  const p0 = _xrTmpVec0;
+  const p1 = _xrTmpVec1;
+  getControllerWorldPos(ctrl0, p0);
+  getControllerWorldPos(ctrl1, p1);
+
+  const currentDistance = p0.distanceTo(p1);
+  if (currentDistance < 0.0001) return;
+
+  // ── スケール ──
+  let ratio = currentDistance / xrState.twoHand.initialDistance;
+  // 上限・下限クランプ
+  ratio = Math.max(SCALE_MIN_RATIO, Math.min(SCALE_MAX_RATIO, ratio));
+  obj.scale.copy(xrState.twoHand.initialObjectScale).multiplyScalar(ratio);
+
+  // ── 回転 ──
+  const dir = _xrTmpVec2.subVectors(p1, p0).normalize();
+  const currentDirYaw = Math.atan2(dir.x, dir.z);
+  const deltaYaw = currentDirYaw - xrState.twoHand.initialDirYaw;
+
+  if (xrState.twoHandedFreeRotation) {
+    // 6DoF: 両手間ベクトルでオブジェクトの+Z軸を合わせるクォータニオンを計算
+    _xrTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+    _xrTmpQuat1.setFromEuler(_xrTmpEuler);
+    obj.quaternion.copy(_xrTmpQuat1).multiply(xrState.twoHand.initialObjectQuat);
+  } else {
+    // Y軸ロック
+    _xrTmpEuler.set(0, deltaYaw, 0, 'YXZ');
+    _xrTmpQuat1.setFromEuler(_xrTmpEuler);
+    obj.quaternion.copy(_xrTmpQuat1).multiply(xrState.twoHand.initialObjectQuat);
+  }
+
+  // ── 位置 ──
+  // 両手の中点を基準に、初期オフセットを Y軸回転 deltaYaw だけ回したものを加える
+  const midpoint = _xrTmpVec0.addVectors(p0, p1).multiplyScalar(0.5);
+  const offset = _xrTmpVec2.copy(xrState.twoHand.initialOffsetFromMidpoint);
+  // オフセットも Y軸回転で回す（中点周りで一緒に回るように）
+  offset.applyQuaternion(_xrTmpQuat1);
+  // スケール変化に応じてオフセットも伸縮
+  offset.multiplyScalar(ratio);
+  obj.position.copy(midpoint).add(offset);
+}
+
+// ── XR 床補正関数 ─────────────────────────────────────
+function applyInitialFloorOffset() {
+  if (!xrState.active) return;
+  if (xrState.floor.floorConfirmed) return;
+
+  const camY = camera.position.y;
+
+  // すでに local-floor で床基準になっている場合はスキップ
+  if (camY > FLOOR_DETECT_THRESHOLD) {
+    console.log('[XR] reference space appears to be floor-based already (camY=' + camY.toFixed(2) + ')');
+    return;
+  }
+
+  // 仮の床高さとして -ASSUMED_HEAD_HEIGHT を適用
+  applyFloorOffset(-ASSUMED_HEAD_HEIGHT);
+  console.log('[XR] applied fallback floor offset:', -ASSUMED_HEAD_HEIGHT);
+
+  // VR では hit-test が無いので即確定
+  if (xrState.mode === 'immersive-vr') {
+    xrState.floor.floorConfirmed = true;
+  }
+}
+
+function applyFloorOffset(floorY) {
+  const baseSpace = xrState.floor.referenceSpace;
+  if (!baseSpace) return;
+
+  const offsetTransform = new XRRigidTransform(
+    { x: 0, y: -floorY, z: 0, w: 1 },
+    { x: 0, y: 0, z: 0, w: 1 }
+  );
+  const offsetSpace = baseSpace.getOffsetReferenceSpace(offsetTransform);
+  renderer.xr.setReferenceSpace(offsetSpace);
+  xrState.floor.offsetSpace = offsetSpace;
+  xrState.floor.estimatedFloorY = floorY;
 }
 
 // ── XR セッション開始/終了 ─────────────────────────────
@@ -249,6 +673,7 @@ renderer.xr.addEventListener('sessionstart', () => {
   // セッションモード判定（mode プロパティが無い実装もあるので blendMode で AR を推定）
   const blendMode = session.environmentBlendMode || 'opaque';
   xrState.mode = (blendMode === 'opaque') ? 'immersive-vr' : 'immersive-ar';
+  xrCurrentMode = xrState.mode;
 
   // TransformControls を退避
   if (transformCtrl.object) {
@@ -268,23 +693,77 @@ renderer.xr.addEventListener('sessionstart', () => {
     xrSavedBackground = scene.background;
     scene.background = null;
   }
+
+  // dom-overlay 用トグルボタンの表示制御
+  const xrToggleBtn = document.getElementById('xr-toggle-btn');
+  if (xrToggleBtn) {
+    if (xrState.mode === 'immersive-ar') {
+      xrToggleBtn.style.display = 'inline-flex';
+      xrToggleBtn.textContent = '🔄 VRに切替';
+      xrToggleBtn.onclick = () => switchXrMode('immersive-vr');
+    } else {
+      // VR セッション中は dom-overlay が効かないので非表示
+      xrToggleBtn.style.display = 'none';
+    }
+  }
+
+  // ── 床補正と hit-test 初期化 ──
+  xrState.floor.estimatedFloorY = null;
+  xrState.floor.stableHitCount = 0;
+  xrState.floor.floorConfirmed = false;
+  xrState.floor.lastHitPose = null;
+  xrState.floor.hitTestSource = null;
+  xrState.floor.viewerSpace = null;
+
+  // 元の reference space を保存
+  xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
+
+  // 第1段階: 即時に身長分オフセット（フォールバック）
+  setTimeout(() => applyInitialFloorOffset(), 100);
+
+  // hit-test source を作成（AR/MRのみ）
+  if (xrState.mode === 'immersive-ar') {
+    try {
+      xrState.floor.viewerSpace = await session.requestReferenceSpace('viewer');
+      xrState.floor.hitTestSource = await session.requestHitTestSource({
+        space: xrState.floor.viewerSpace,
+      });
+    } catch (e) {
+      console.warn('[XR] hit-test not available:', e);
+    }
+  }
+
+  // AR でのタップ配置: dom-overlay 経由
+  if (xrState.mode === 'immersive-ar') {
+    session.addEventListener('select', onXrSelectPlace);
+  }
 });
 
 renderer.xr.addEventListener('sessionend', () => {
+  // トグルボタンを隠す
+  const xrToggleBtn = document.getElementById('xr-toggle-btn');
+  if (xrToggleBtn) xrToggleBtn.style.display = 'none';
+
   xrState.active = false;
 
-  // 掴み中だった場合は強制リリース
-  if (xrState.grab.active && xrState.grab.object) {
-    const obj = xrState.grab.object;
-    scene.attach(obj);
-    broadcastXrDelta(obj);
+  // 掴み中だった場合は全てのコントローラー・両手状態をリリース
+  endTwoHandMode();
+  for (let i = 0; i < xrState.grabbers.length; i++) {
+    const grabber = xrState.grabbers[i];
+    if (!grabber.active || !grabber.object) continue;
+    const obj = grabber.object;
+    grabber.active = false;
+    grabber.object = null;
     if (obj.userData?.objectId) {
-      broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
+      broadcastObjectDelta(obj);
+      ensureUnlock(obj.userData.objectId);
     }
-    xrState.grab.active = false;
-    xrState.grab.controller = null;
-    xrState.grab.object = null;
   }
+  // 念のため lockOwnedByMe を全クリア
+  for (const id of xrState.lockOwnedByMe) {
+    broadcast({ kind: 'scene-unlock', objectId: id });
+  }
+  xrState.lockOwnedByMe.clear();
 
   // UI 復元
   const helper = transformCtrl.getHelper();
@@ -302,6 +781,33 @@ renderer.xr.addEventListener('sessionend', () => {
   }
 
   xrState.mode = null;
+  xrCurrentMode = null;
+
+  // 保留中のモード切り替えがあれば即座に新セッション開始
+  if (xrPendingMode) {
+    const next = xrPendingMode;
+    xrPendingMode = null;
+    // 一瞬待ってから次のセッションを開始（Three.js 側の片付けを待つ）
+    setTimeout(() => requestXrSession(next), 100);
+  }
+
+  // 床補正 / hit-test のクリーンアップ
+  xrState.floor.reticle.visible = false;
+  const session = renderer.xr.getSession();
+  if (session) {
+    session.removeEventListener('select', onXrSelectPlace);
+  }
+  if (xrState.floor.hitTestSource) {
+    try { xrState.floor.hitTestSource.cancel(); } catch {}
+    xrState.floor.hitTestSource = null;
+  }
+  xrState.floor.viewerSpace = null;
+  xrState.floor.referenceSpace = null;
+  xrState.floor.offsetSpace = null;
+  xrState.floor.estimatedFloorY = null;
+  xrState.floor.lastHitPose = null;
+  xrState.floor.stableHitCount = 0;
+  xrState.floor.floorConfirmed = false;
 });
 
 // ── コントロール ─────────────────────────────────────────
@@ -962,6 +1468,110 @@ window.addEventListener('resize', onResize);
 // visualViewport.resize でも監視して canvas サイズを確実に復元する
 window.visualViewport?.addEventListener('resize', onResize);
 
+// ── AR hit-test 更新関数 ─────────────────────────────────
+function updateXrHitTest() {
+  const session = renderer.xr.getSession();
+  if (!session) return;
+  const frame = renderer.xr.getFrame();
+  if (!frame) return;
+  if (!xrState.floor.hitTestSource) return;
+
+  const referenceSpace = renderer.xr.getReferenceSpace();
+  const results = frame.getHitTestResults(xrState.floor.hitTestSource);
+
+  if (results.length === 0) {
+    xrState.floor.reticle.visible = false;
+    return;
+  }
+
+  const pose = results[0].getPose(referenceSpace);
+  if (!pose) {
+    xrState.floor.reticle.visible = false;
+    return;
+  }
+
+  // レチクルを更新
+  xrState.floor.reticle.visible = true;
+  xrState.floor.reticle.matrix.fromArray(pose.transform.matrix);
+
+  // ── 第2段階: 床高さ確定処理 ──
+  if (!xrState.floor.floorConfirmed) {
+    const hitY = pose.transform.position.y;
+    const camY = camera.position.y;
+    const distance = camY - hitY;
+
+    // ヒット点が下方向かつ妥当な距離にあるか
+    if (distance > 0.3 && distance < 3.0) {
+      // 直近の推定値と近ければ stableHitCount を増やす
+      if (xrState.floor.estimatedFloorY !== null
+          && Math.abs((-distance) - xrState.floor.estimatedFloorY) < 0.05) {
+        xrState.floor.stableHitCount++;
+      } else {
+        xrState.floor.stableHitCount = 1;
+      }
+
+      // 暫定的に1回目から適用、連続3フレームで確定
+      if (xrState.floor.stableHitCount >= 3) {
+        applyFloorOffset(-distance);
+        xrState.floor.floorConfirmed = true;
+        showToast('床位置を認識しました');
+        console.log('[XR] floor confirmed at offset:', -distance);
+      } else {
+        applyFloorOffset(-distance);
+      }
+    }
+  }
+
+  // ヒット pose を保存（タップ配置用）
+  xrState.floor.lastHitPose = pose.transform.matrix;
+}
+
+// ── 配置ハンドラ ──────────────────────────────────────────
+function onXrSelectPlace(event) {
+  // 掴み中ならスキップ
+  for (const grabber of xrState.grabbers) {
+    if (grabber.active) return;
+  }
+  if (xrState.twoHand.active) return;
+
+  if (!xrState.floor.reticle.visible) return;
+  if (!xrState.floor.lastHitPose) return;
+
+  placePrimitiveAtReticle();
+}
+
+function placePrimitiveAtReticle() {
+  const matrix = new THREE.Matrix4().fromArray(xrState.floor.lastHitPose);
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(position, quaternion, scale);
+
+  // 新規 objectId 生成
+  const objectId = 'obj-' + Math.random().toString(36).slice(2, 10);
+
+  // 既存の scene-add ブロードキャスト
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: 'Cube',
+    position: position.toArray(),
+    rotation: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
+    scale: [0.3, 0.3, 0.3],
+    asset: {
+      type: 'primitive',
+      primitive: 'box',
+      color: '#88ccff',
+    },
+  };
+
+  if (typeof addOrUpdateObject === 'function') {
+    addOrUpdateObject(objectId, payload);
+  }
+  broadcast(payload);
+  showToast('配置しました');
+}
+
 // ── レンダリングループ ────────────────────────────────────
 
 renderer.setAnimationLoop(() => {
@@ -983,6 +1593,11 @@ renderer.setAnimationLoop(() => {
 
   if (xrState.active) {
     updateXrGrab();
+  }
+
+  // AR hit-test 更新
+  if (xrState.active && xrState.mode === 'immersive-ar') {
+    updateXrHitTest();
   }
 
   renderer.render(scene, camera);
