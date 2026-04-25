@@ -186,8 +186,6 @@ function extractYaw(quat) {
 
 const SCALE_MIN_RATIO = 0.05;
 const SCALE_MAX_RATIO = 50;
-const ASSUMED_HEAD_HEIGHT = 1.6;
-const FLOOR_DETECT_THRESHOLD = 0.5;
 
 // コントローラーのワールド位置を取得
 function getControllerWorldPos(ctrl, out) {
@@ -628,27 +626,6 @@ function updateTwoHandGrab() {
 }
 
 // ── XR 床補正関数 ─────────────────────────────────────
-function applyInitialFloorOffset() {
-  if (!xrState.active) return;
-  if (xrState.floor.floorConfirmed) return;
-
-  const camY = camera.position.y;
-
-  // すでに local-floor で床基準になっている場合はスキップ
-  if (camY > FLOOR_DETECT_THRESHOLD) {
-    console.log('[XR] reference space appears to be floor-based already (camY=' + camY.toFixed(2) + ')');
-    return;
-  }
-
-  // 仮の床高さとして -ASSUMED_HEAD_HEIGHT を適用
-  applyFloorOffset(-ASSUMED_HEAD_HEIGHT);
-  console.log('[XR] applied fallback floor offset:', -ASSUMED_HEAD_HEIGHT);
-
-  // VR では hit-test が無いので即確定
-  if (xrState.mode === 'immersive-vr') {
-    xrState.floor.floorConfirmed = true;
-  }
-}
 
 function applyFloorOffset(floorY) {
   const baseSpace = xrState.floor.referenceSpace;
@@ -718,9 +695,6 @@ renderer.xr.addEventListener('sessionstart', async () => {
   // 元の reference space を保存
   xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
 
-  // 第1段階: 即時に身長分オフセット（フォールバック）
-  setTimeout(() => applyInitialFloorOffset(), 100);
-
   // hit-test source を作成（AR/MRのみ）
   if (xrState.mode === 'immersive-ar') {
     try {
@@ -731,11 +705,6 @@ renderer.xr.addEventListener('sessionstart', async () => {
     } catch (e) {
       console.warn('[XR] hit-test not available:', e);
     }
-  }
-
-  // AR でのタップ配置: dom-overlay 経由
-  if (xrState.mode === 'immersive-ar') {
-    session.addEventListener('select', onXrSelectPlace);
   }
 });
 
@@ -793,10 +762,6 @@ renderer.xr.addEventListener('sessionend', () => {
 
   // 床補正 / hit-test のクリーンアップ
   xrState.floor.reticle.visible = false;
-  const session = renderer.xr.getSession();
-  if (session) {
-    session.removeEventListener('select', onXrSelectPlace);
-  }
   if (xrState.floor.hitTestSource) {
     try { xrState.floor.hitTestSource.cancel(); } catch {}
     xrState.floor.hitTestSource = null;
@@ -1493,84 +1458,8 @@ function updateXrHitTest() {
   // レチクルを更新
   xrState.floor.reticle.visible = true;
   xrState.floor.reticle.matrix.fromArray(pose.transform.matrix);
-
-  // ── 第2段階: 床高さ確定処理 ──
-  if (!xrState.floor.floorConfirmed) {
-    const hitY = pose.transform.position.y;
-    const camY = camera.position.y;
-    const distance = camY - hitY;
-
-    // ヒット点が下方向かつ妥当な距離にあるか
-    if (distance > 0.3 && distance < 3.0) {
-      // 直近の推定値と近ければ stableHitCount を増やす
-      if (xrState.floor.estimatedFloorY !== null
-          && Math.abs((-distance) - xrState.floor.estimatedFloorY) < 0.05) {
-        xrState.floor.stableHitCount++;
-      } else {
-        xrState.floor.stableHitCount = 1;
-      }
-
-      // 暫定的に1回目から適用、連続3フレームで確定
-      if (xrState.floor.stableHitCount >= 3) {
-        applyFloorOffset(-distance);
-        xrState.floor.floorConfirmed = true;
-        showToast('床位置を認識しました');
-        console.log('[XR] floor confirmed at offset:', -distance);
-      } else {
-        applyFloorOffset(-distance);
-      }
-    }
-  }
-
-  // ヒット pose を保存（タップ配置用）
-  xrState.floor.lastHitPose = pose.transform.matrix;
 }
 
-// ── 配置ハンドラ ──────────────────────────────────────────
-function onXrSelectPlace(event) {
-  // 掴み中ならスキップ
-  for (const grabber of xrState.grabbers) {
-    if (grabber.active) return;
-  }
-  if (xrState.twoHand.active) return;
-
-  if (!xrState.floor.reticle.visible) return;
-  if (!xrState.floor.lastHitPose) return;
-
-  placePrimitiveAtReticle();
-}
-
-function placePrimitiveAtReticle() {
-  const matrix = new THREE.Matrix4().fromArray(xrState.floor.lastHitPose);
-  const position = new THREE.Vector3();
-  const quaternion = new THREE.Quaternion();
-  const scale = new THREE.Vector3();
-  matrix.decompose(position, quaternion, scale);
-
-  // 新規 objectId 生成
-  const objectId = 'obj-' + Math.random().toString(36).slice(2, 10);
-
-  // 既存の scene-add ブロードキャスト
-  const payload = {
-    kind: 'scene-add',
-    objectId,
-    name: 'Cube',
-    position: position.toArray(),
-    rotation: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
-    scale: [0.3, 0.3, 0.3],
-    asset: {
-      type: 'primitive',
-      primitive: 'box',
-      color: '#88ccff',
-    },
-  };
-
-  if (typeof addOrUpdateObject === 'function') {
-    addOrUpdateObject(objectId, payload);
-  }
-  broadcast(payload);
-  showToast('配置しました');
-}
 
 // ── レンダリングループ ────────────────────────────────────
 

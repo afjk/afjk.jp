@@ -14,6 +14,10 @@ config/name="SceneSyncGodot"
 run/main_scene="res://node_3d.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 
+[dotnet]
+
+project/assembly_name="SceneSyncGodot"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/scene_sync/plugin.cfg")
