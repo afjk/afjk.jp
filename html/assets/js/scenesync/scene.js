@@ -216,7 +216,6 @@ function isLockedByOthers(objectId) {
 
 // ── XR モード切り替え（VR ⇄ MR） ─────────────────────────
 async function switchXrMode(targetMode) {
-  // targetMode: 'immersive-vr' | 'immersive-ar'
   if (!('xr' in navigator)) return;
 
   const supported = await navigator.xr.isSessionSupported(targetMode).catch(() => false);
@@ -234,10 +233,15 @@ async function switchXrMode(targetMode) {
     } catch (e) {
       console.warn('[XR] failed to end current session:', e);
       xrPendingMode = null;
+      showToast('セッション終了に失敗しました');
     }
   } else {
     // セッション中でない場合は直接開始
-    requestXrSession(targetMode);
+    try {
+      await requestXrSession(targetMode);
+    } catch (e) {
+      handleXrRestartFailure(targetMode, e);
+    }
   }
 }
 
@@ -246,13 +250,25 @@ async function requestXrSession(mode) {
     ? { optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'], domOverlay: { root: document.body } }
     : { optionalFeatures: ['local-floor', 'bounded-floor'] };
 
-  try {
-    const session = await navigator.xr.requestSession(mode, sessionInit);
-    await renderer.xr.setSession(session);
-    xrCurrentMode = mode;
-  } catch (e) {
-    console.error('[XR] requestSession failed:', e);
-    showToast('XRセッション開始に失敗しました');
+  const session = await navigator.xr.requestSession(mode, sessionInit);
+  await renderer.xr.setSession(session);
+  xrCurrentMode = mode;
+}
+
+// XR セッション再開に失敗した場合の通知
+function handleXrRestartFailure(intendedMode, error) {
+  const errName = error?.name || 'Unknown';
+  const modeLabel = intendedMode === 'immersive-ar' ? 'MR' : 'VR';
+
+  console.warn('[XR] restart failed:', errName, error);
+
+  if (errName === 'NotAllowedError' || errName === 'SecurityError') {
+    // ユーザージェスチャ要件違反の可能性が高い
+    showToast(`${modeLabel}に入るには画面の「${modeLabel}で入る」ボタンを押してください`);
+  } else if (errName === 'InvalidStateError') {
+    showToast(`${modeLabel}セッションが開始できません。ページを再読み込みしてください`);
+  } else {
+    showToast(`${modeLabel}切替失敗: ${errName}`);
   }
 }
 
@@ -756,8 +772,11 @@ renderer.xr.addEventListener('sessionend', () => {
   if (xrPendingMode) {
     const next = xrPendingMode;
     xrPendingMode = null;
-    // 一瞬待ってから次のセッションを開始（Three.js 側の片付けを待つ）
-    setTimeout(() => requestXrSession(next), 100);
+    // setTimeout を挟まず即座に呼ぶ（ユーザージェスチャチェーンを保つ）
+    requestXrSession(next).catch((e) => {
+      console.error('[XR] auto-restart failed:', e);
+      handleXrRestartFailure(next, e);
+    });
   }
 
   // 床補正 / hit-test のクリーンアップ
