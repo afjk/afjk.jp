@@ -186,6 +186,7 @@ function extractYaw(quat) {
 
 const SCALE_MIN_RATIO = 0.05;
 const SCALE_MAX_RATIO = 50;
+const XR_INITIAL_HEAD_HEIGHT = 1.3;
 
 // コントローラーのワールド位置を取得
 function getControllerWorldPos(ctrl, out) {
@@ -710,6 +711,11 @@ renderer.xr.addEventListener('sessionstart', async () => {
 
   // 元の reference space を保存
   xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
+
+  // 起動時の頭の高さを強制的に XR_INITIAL_HEAD_HEIGHT に設定
+  // reference space を Y方向に +XR_INITIAL_HEAD_HEIGHT 持ち上げる
+  // = カメラから見るとシーンが下方向に XR_INITIAL_HEAD_HEIGHT 下がる
+  applyFloorOffset(-XR_INITIAL_HEAD_HEIGHT);
 
   // hit-test source を作成（AR/MRのみ）
   if (xrState.mode === 'immersive-ar') {
