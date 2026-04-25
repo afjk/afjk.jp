@@ -7,6 +7,9 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -22,6 +25,13 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
+
+renderer.xr.enabled = true;
+try {
+  renderer.xr.setReferenceSpaceType('local-floor');
+} catch (e) {
+  console.warn('[XR] setReferenceSpaceType failed:', e);
+}
 
 const pmremGenerator = new THREE.PMREMGenerator(renderer);
 
@@ -66,6 +76,233 @@ const gltfLoader = new GLTFLoader();
 const BLOB_BASE = location.hostname === 'localhost'
   ? 'http://localhost:8787/blob'
   : 'https://afjk.jp/presence/blob';
+
+// ── WebXR ボタンセットアップ ────────────────────────────────
+const xrButtonContainer = document.getElementById('xr-button-container');
+const addBtn = document.getElementById('add-btn');
+
+if ('xr' in navigator && xrButtonContainer) {
+  navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
+    if (!ok) return;
+    const btn = VRButton.createButton(renderer);
+    // VRButton は body へ自動 append するので、コンテナへ移動
+    btn.style.position = 'static';
+    btn.style.transform = 'none';
+    btn.style.left = 'auto';
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+    xrButtonContainer.appendChild(btn);
+    addBtn?.classList.add('xr-available');
+  }).catch(() => {});
+
+  navigator.xr.isSessionSupported('immersive-ar').then((ok) => {
+    if (!ok) return;
+    const btn = ARButton.createButton(renderer, {
+      optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'],
+      domOverlay: { root: document.body },
+    });
+    btn.style.position = 'static';
+    btn.style.transform = 'none';
+    btn.style.left = 'auto';
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+    xrButtonContainer.appendChild(btn);
+    addBtn?.classList.add('xr-available');
+  }).catch(() => {});
+}
+
+// ── XR コントローラー ──────────────────────────────────────
+const xrState = {
+  active: false,
+  mode: null,            // 'immersive-vr' | 'immersive-ar' | null
+  grab: {
+    active: false,
+    controller: null,
+    object: null,
+    lastSent: 0,
+  },
+  controllers: [],
+};
+
+const controllerModelFactory = new XRControllerModelFactory();
+
+for (let i = 0; i < 2; i++) {
+  const ctrl = renderer.xr.getController(i);
+  ctrl.userData.xrIndex = i;
+  ctrl.addEventListener('selectstart', () => onXrSelectStart(ctrl));
+  ctrl.addEventListener('selectend',   () => onXrSelectEnd(ctrl));
+  scene.add(ctrl);
+
+  // レイ表示
+  const rayGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -5),
+  ]);
+  const rayMat = new THREE.LineBasicMaterial({
+    color: 0x88ccff,
+    transparent: true,
+    opacity: 0.7,
+  });
+  const ray = new THREE.Line(rayGeo, rayMat);
+  ray.name = 'xr-ray';
+  ray.raycast = () => {};
+  ctrl.add(ray);
+
+  // コントローラーモデル（grip）
+  const grip = renderer.xr.getControllerGrip(i);
+  grip.add(controllerModelFactory.createControllerModel(grip));
+  scene.add(grip);
+
+  xrState.controllers.push(ctrl);
+}
+
+const xrTmpMatrix = new THREE.Matrix4();
+const xrRaycaster = new THREE.Raycaster();
+
+function onXrSelectStart(ctrl) {
+  // コントローラーから前方へレイキャスト
+  xrTmpMatrix.identity().extractRotation(ctrl.matrixWorld);
+  xrRaycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
+  xrRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(xrTmpMatrix);
+
+  const targets = Array.from(managedObjects.values());
+  const hits = xrRaycaster.intersectObjects(targets, true);
+  if (hits.length === 0) return;
+
+  let obj = hits[0].object;
+  while (obj.parent && !obj.userData.objectId) obj = obj.parent;
+  if (!obj.userData?.objectId) return;
+  if (obj.userData._isLockOverlay) return;
+
+  // 他人のロックを尊重
+  if (locks.has(obj.userData.objectId)) {
+    const lockInfo = locks.get(obj.userData.objectId);
+    const ownerId = lockInfo?.id || lockInfo;
+    if (ownerId && ownerId !== presenceState.id) return;
+  }
+
+  // 既存プロトコルと同じ scene-lock を発火
+  broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
+
+  // コントローラーの子に付け替えて掴み
+  ctrl.attach(obj);
+
+  xrState.grab.active = true;
+  xrState.grab.controller = ctrl;
+  xrState.grab.object = obj;
+  xrState.grab.lastSent = 0;
+}
+
+function onXrSelectEnd(ctrl) {
+  if (!xrState.grab.active) return;
+  if (xrState.grab.controller !== ctrl) return;
+
+  const obj = xrState.grab.object;
+
+  // ワールド空間へ戻す（姿勢は維持）
+  scene.attach(obj);
+
+  // 最終 delta を送信して unlock
+  broadcastXrDelta(obj);
+  broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
+
+  xrState.grab.active = false;
+  xrState.grab.controller = null;
+  xrState.grab.object = null;
+}
+
+function broadcastXrDelta(obj) {
+  if (!obj?.userData?.objectId) return;
+  const wp = new THREE.Vector3();
+  const wq = new THREE.Quaternion();
+  const ws = new THREE.Vector3();
+  obj.getWorldPosition(wp);
+  obj.getWorldQuaternion(wq);
+  obj.getWorldScale(ws);
+
+  const pos = wp.toArray();
+  if (!isFinite(pos[0]) || !isFinite(pos[1]) || !isFinite(pos[2])) return;
+
+  broadcast({
+    kind: 'scene-delta',
+    objectId: obj.userData.objectId,
+    position: pos,
+    rotation: [wq.x, wq.y, wq.z, wq.w],
+    scale: ws.toArray(),
+  });
+}
+
+function updateXrGrab() {
+  if (!xrState.grab.active) return;
+  const now = performance.now();
+  if (now - xrState.grab.lastSent < 50) return;
+  xrState.grab.lastSent = now;
+  broadcastXrDelta(xrState.grab.object);
+}
+
+// ── XR セッション開始/終了 ─────────────────────────────
+let xrSavedBackground = null;
+
+renderer.xr.addEventListener('sessionstart', () => {
+  xrState.active = true;
+  const session = renderer.xr.getSession();
+  // セッションモード判定（mode プロパティが無い実装もあるので blendMode で AR を推定）
+  const blendMode = session.environmentBlendMode || 'opaque';
+  xrState.mode = (blendMode === 'opaque') ? 'immersive-vr' : 'immersive-ar';
+
+  // TransformControls を退避
+  if (transformCtrl.object) {
+    const oid = transformCtrl.object.userData?.objectId;
+    if (oid) broadcast({ kind: 'scene-unlock', objectId: oid });
+    transformCtrl.detach();
+  }
+  const helper = transformCtrl.getHelper();
+  if (helper) helper.visible = false;
+  hideToolbar();
+
+  // OrbitControls を無効化
+  orbit.enabled = false;
+
+  // AR の場合は背景を透過
+  if (xrState.mode === 'immersive-ar') {
+    xrSavedBackground = scene.background;
+    scene.background = null;
+  }
+});
+
+renderer.xr.addEventListener('sessionend', () => {
+  xrState.active = false;
+
+  // 掴み中だった場合は強制リリース
+  if (xrState.grab.active && xrState.grab.object) {
+    const obj = xrState.grab.object;
+    scene.attach(obj);
+    broadcastXrDelta(obj);
+    if (obj.userData?.objectId) {
+      broadcast({ kind: 'scene-unlock', objectId: obj.userData.objectId });
+    }
+    xrState.grab.active = false;
+    xrState.grab.controller = null;
+    xrState.grab.object = null;
+  }
+
+  // UI 復元
+  const helper = transformCtrl.getHelper();
+  if (helper) helper.visible = true;
+  orbit.enabled = true;
+
+  // 背景復元
+  if (xrState.mode === 'immersive-ar') {
+    if (xrSavedBackground !== null) {
+      scene.background = xrSavedBackground;
+      xrSavedBackground = null;
+    } else if (currentEnvId) {
+      loadEnvironment(currentEnvId);
+    }
+  }
+
+  xrState.mode = null;
+});
 
 // ── コントロール ─────────────────────────────────────────
 
@@ -714,6 +951,7 @@ window.addEventListener('keydown', (e) => {
 // ── リサイズ ─────────────────────────────────────────────
 
 function onResize() {
+  if (xrState.active) return;
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
@@ -726,9 +964,10 @@ window.visualViewport?.addEventListener('resize', onResize);
 
 // ── レンダリングループ ────────────────────────────────────
 
-function animate() {
-  requestAnimationFrame(animate);
-  orbit.update();
+renderer.setAnimationLoop(() => {
+  if (!xrState.active) {
+    orbit.update();
+  }
 
   for (const [objectId, entry] of lockOverlays) {
     if (entry.target && entry.group) {
@@ -742,9 +981,12 @@ function animate() {
     }
   }
 
+  if (xrState.active) {
+    updateXrGrab();
+  }
+
   renderer.render(scene, camera);
-}
-animate();
+});
 
 // ── Presence 接続 ────────────────────────────────────────
 
