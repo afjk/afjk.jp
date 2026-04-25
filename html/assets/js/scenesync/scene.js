@@ -163,6 +163,18 @@ const xrState = {
   twoHandedFreeRotation: false,  // true: 6DoF, false: Y軸ロック
   lastSent: 0,
   lockOwnedByMe: new Set(),      // lock 発行済み objectId
+  // AR床補正
+  floor: {
+    referenceSpace: null,        // 元の reference space
+    offsetSpace: null,           // オフセット適用後の reference space
+    estimatedFloorY: null,       // 推定床Y（カメラ空間内、負の値）
+    hitTestSource: null,         // XRHitTestSource
+    viewerSpace: null,           // viewer reference space
+    reticle: null,               // レチクル mesh
+    lastHitPose: null,           // 直近のヒット位置・姿勢
+    stableHitCount: 0,           // 連続ヒット回数（床高さ確定用）
+    floorConfirmed: false,       // 床高さが安定確定したか
+  },
   controllers: [],
 };
 
@@ -174,6 +186,8 @@ function extractYaw(quat) {
 
 const SCALE_MIN_RATIO = 0.05;
 const SCALE_MAX_RATIO = 50;
+const ASSUMED_HEAD_HEIGHT = 1.6;
+const FLOOR_DETECT_THRESHOLD = 0.5;
 
 // コントローラーのワールド位置を取得
 function getControllerWorldPos(ctrl, out) {
@@ -276,6 +290,27 @@ for (let i = 0; i < 2; i++) {
 
   xrState.controllers.push(ctrl);
 }
+
+// ── AR hit-test レチクル ─────────────────────────────────
+function createReticle() {
+  const geo = new THREE.RingGeometry(0.10, 0.15, 32);
+  geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x88ccff,
+    transparent: true,
+    opacity: 0.8,
+    side: THREE.DoubleSide,
+  });
+  const reticle = new THREE.Mesh(geo, mat);
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  reticle.raycast = () => {};
+  reticle.userData._isReticle = true;
+  return reticle;
+}
+
+xrState.floor.reticle = createReticle();
+scene.add(xrState.floor.reticle);
 
 const xrTmpMatrix = new THREE.Matrix4();
 const xrRaycaster = new THREE.Raycaster();
@@ -592,6 +627,43 @@ function updateTwoHandGrab() {
   obj.position.copy(midpoint).add(offset);
 }
 
+// ── XR 床補正関数 ─────────────────────────────────────
+function applyInitialFloorOffset() {
+  if (!xrState.active) return;
+  if (xrState.floor.floorConfirmed) return;
+
+  const camY = camera.position.y;
+
+  // すでに local-floor で床基準になっている場合はスキップ
+  if (camY > FLOOR_DETECT_THRESHOLD) {
+    console.log('[XR] reference space appears to be floor-based already (camY=' + camY.toFixed(2) + ')');
+    return;
+  }
+
+  // 仮の床高さとして -ASSUMED_HEAD_HEIGHT を適用
+  applyFloorOffset(-ASSUMED_HEAD_HEIGHT);
+  console.log('[XR] applied fallback floor offset:', -ASSUMED_HEAD_HEIGHT);
+
+  // VR では hit-test が無いので即確定
+  if (xrState.mode === 'immersive-vr') {
+    xrState.floor.floorConfirmed = true;
+  }
+}
+
+function applyFloorOffset(floorY) {
+  const baseSpace = xrState.floor.referenceSpace;
+  if (!baseSpace) return;
+
+  const offsetTransform = new XRRigidTransform(
+    { x: 0, y: -floorY, z: 0, w: 1 },
+    { x: 0, y: 0, z: 0, w: 1 }
+  );
+  const offsetSpace = baseSpace.getOffsetReferenceSpace(offsetTransform);
+  renderer.xr.setReferenceSpace(offsetSpace);
+  xrState.floor.offsetSpace = offsetSpace;
+  xrState.floor.estimatedFloorY = floorY;
+}
+
 // ── XR セッション開始/終了 ─────────────────────────────
 let xrSavedBackground = null;
 
@@ -633,6 +705,37 @@ renderer.xr.addEventListener('sessionstart', () => {
       // VR セッション中は dom-overlay が効かないので非表示
       xrToggleBtn.style.display = 'none';
     }
+  }
+
+  // ── 床補正と hit-test 初期化 ──
+  xrState.floor.estimatedFloorY = null;
+  xrState.floor.stableHitCount = 0;
+  xrState.floor.floorConfirmed = false;
+  xrState.floor.lastHitPose = null;
+  xrState.floor.hitTestSource = null;
+  xrState.floor.viewerSpace = null;
+
+  // 元の reference space を保存
+  xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
+
+  // 第1段階: 即時に身長分オフセット（フォールバック）
+  setTimeout(() => applyInitialFloorOffset(), 100);
+
+  // hit-test source を作成（AR/MRのみ）
+  if (xrState.mode === 'immersive-ar') {
+    try {
+      xrState.floor.viewerSpace = await session.requestReferenceSpace('viewer');
+      xrState.floor.hitTestSource = await session.requestHitTestSource({
+        space: xrState.floor.viewerSpace,
+      });
+    } catch (e) {
+      console.warn('[XR] hit-test not available:', e);
+    }
+  }
+
+  // AR でのタップ配置: dom-overlay 経由
+  if (xrState.mode === 'immersive-ar') {
+    session.addEventListener('select', onXrSelectPlace);
   }
 });
 
@@ -687,6 +790,24 @@ renderer.xr.addEventListener('sessionend', () => {
     // 一瞬待ってから次のセッションを開始（Three.js 側の片付けを待つ）
     setTimeout(() => requestXrSession(next), 100);
   }
+
+  // 床補正 / hit-test のクリーンアップ
+  xrState.floor.reticle.visible = false;
+  const session = renderer.xr.getSession();
+  if (session) {
+    session.removeEventListener('select', onXrSelectPlace);
+  }
+  if (xrState.floor.hitTestSource) {
+    try { xrState.floor.hitTestSource.cancel(); } catch {}
+    xrState.floor.hitTestSource = null;
+  }
+  xrState.floor.viewerSpace = null;
+  xrState.floor.referenceSpace = null;
+  xrState.floor.offsetSpace = null;
+  xrState.floor.estimatedFloorY = null;
+  xrState.floor.lastHitPose = null;
+  xrState.floor.stableHitCount = 0;
+  xrState.floor.floorConfirmed = false;
 });
 
 // ── コントロール ─────────────────────────────────────────
@@ -1347,6 +1468,110 @@ window.addEventListener('resize', onResize);
 // visualViewport.resize でも監視して canvas サイズを確実に復元する
 window.visualViewport?.addEventListener('resize', onResize);
 
+// ── AR hit-test 更新関数 ─────────────────────────────────
+function updateXrHitTest() {
+  const session = renderer.xr.getSession();
+  if (!session) return;
+  const frame = renderer.xr.getFrame();
+  if (!frame) return;
+  if (!xrState.floor.hitTestSource) return;
+
+  const referenceSpace = renderer.xr.getReferenceSpace();
+  const results = frame.getHitTestResults(xrState.floor.hitTestSource);
+
+  if (results.length === 0) {
+    xrState.floor.reticle.visible = false;
+    return;
+  }
+
+  const pose = results[0].getPose(referenceSpace);
+  if (!pose) {
+    xrState.floor.reticle.visible = false;
+    return;
+  }
+
+  // レチクルを更新
+  xrState.floor.reticle.visible = true;
+  xrState.floor.reticle.matrix.fromArray(pose.transform.matrix);
+
+  // ── 第2段階: 床高さ確定処理 ──
+  if (!xrState.floor.floorConfirmed) {
+    const hitY = pose.transform.position.y;
+    const camY = camera.position.y;
+    const distance = camY - hitY;
+
+    // ヒット点が下方向かつ妥当な距離にあるか
+    if (distance > 0.3 && distance < 3.0) {
+      // 直近の推定値と近ければ stableHitCount を増やす
+      if (xrState.floor.estimatedFloorY !== null
+          && Math.abs((-distance) - xrState.floor.estimatedFloorY) < 0.05) {
+        xrState.floor.stableHitCount++;
+      } else {
+        xrState.floor.stableHitCount = 1;
+      }
+
+      // 暫定的に1回目から適用、連続3フレームで確定
+      if (xrState.floor.stableHitCount >= 3) {
+        applyFloorOffset(-distance);
+        xrState.floor.floorConfirmed = true;
+        showToast('床位置を認識しました');
+        console.log('[XR] floor confirmed at offset:', -distance);
+      } else {
+        applyFloorOffset(-distance);
+      }
+    }
+  }
+
+  // ヒット pose を保存（タップ配置用）
+  xrState.floor.lastHitPose = pose.transform.matrix;
+}
+
+// ── 配置ハンドラ ──────────────────────────────────────────
+function onXrSelectPlace(event) {
+  // 掴み中ならスキップ
+  for (const grabber of xrState.grabbers) {
+    if (grabber.active) return;
+  }
+  if (xrState.twoHand.active) return;
+
+  if (!xrState.floor.reticle.visible) return;
+  if (!xrState.floor.lastHitPose) return;
+
+  placePrimitiveAtReticle();
+}
+
+function placePrimitiveAtReticle() {
+  const matrix = new THREE.Matrix4().fromArray(xrState.floor.lastHitPose);
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(position, quaternion, scale);
+
+  // 新規 objectId 生成
+  const objectId = 'obj-' + Math.random().toString(36).slice(2, 10);
+
+  // 既存の scene-add ブロードキャスト
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: 'Cube',
+    position: position.toArray(),
+    rotation: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
+    scale: [0.3, 0.3, 0.3],
+    asset: {
+      type: 'primitive',
+      primitive: 'box',
+      color: '#88ccff',
+    },
+  };
+
+  if (typeof addOrUpdateObject === 'function') {
+    addOrUpdateObject(objectId, payload);
+  }
+  broadcast(payload);
+  showToast('配置しました');
+}
+
 // ── レンダリングループ ────────────────────────────────────
 
 renderer.setAnimationLoop(() => {
@@ -1368,6 +1593,11 @@ renderer.setAnimationLoop(() => {
 
   if (xrState.active) {
     updateXrGrab();
+  }
+
+  // AR hit-test 更新
+  if (xrState.active && xrState.mode === 'immersive-ar') {
+    updateXrHitTest();
   }
 
   renderer.render(scene, camera);
