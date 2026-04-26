@@ -47,6 +47,10 @@ const BLOB_BASE = location.hostname === 'localhost'
   : 'https://afjk.jp/presence/blob';
 
 // ── XR コントローラー ──────────────────────────────────────
+// XR セッションへ入るためのモード状態
+let xrCurrentMode = null;       // 'immersive-vr' | 'immersive-ar' | null
+let xrPendingMode = null;       // 切り替え予約
+
 const xrState = createXrState();
 
 const SCALE_MIN_RATIO = 0.05;
