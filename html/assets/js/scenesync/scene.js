@@ -16,6 +16,7 @@ import { broadcastObjectDelta } from './objects/object-delta.js';
 import { createXrState } from './xr/xr-state.js';
 import { setupXrButtons } from './xr/xr-buttons.js';
 import { createXrFloorManager } from './xr/xr-floor.js';
+import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -770,116 +771,6 @@ managedObjects.set('sample-cube', sampleCube);
 // objectId → lockOwnerId
 const locks = new Map();
 
-// ── アバター管理 ──────────────────────────────────────
-// peerId → { group, head, left, right, label, targetHead, targetLeft, targetRight, lastSeen, mode, nickname, ... }
-const remoteAvatars = new Map();
-const AVATAR_PALETTE = [0xff6b6b, 0xfeca57, 0x48dbfb, 0x1dd1a1, 0x5f27cd, 0xff9ff3, 0x54a0ff, 0xee5253];
-
-function colorFromPeerId(peerId) {
-  let h = 0;
-  for (let i = 0; i < peerId.length; i++) {
-    h = (h * 31 + peerId.charCodeAt(i)) >>> 0;
-  }
-  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
-}
-
-function makeNicknameSprite(text) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256; canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  ctx.font = 'bold 32px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#fff';
-  ctx.fillText(text || '', canvas.width / 2, canvas.height / 2);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.needsUpdate = true;
-  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(0.4, 0.1, 1);
-  sprite.renderOrder = 999;
-  return sprite;
-}
-
-function ensureRemoteAvatar(peerId, nickname) {
-  let av = remoteAvatars.get(peerId);
-  if (av) {
-    if (nickname && av.nickname !== nickname) {
-      av.nickname = nickname;
-      av.head.remove(av.label);
-      av.label.material.map.dispose();
-      av.label.material.dispose();
-      av.label = makeNicknameSprite(nickname);
-      av.label.position.set(0, 0.22, 0);
-      av.head.add(av.label);
-    }
-    return av;
-  }
-
-  const color = colorFromPeerId(peerId);
-  const headMat = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
-  const handMat = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 14), headMat);
-  const left = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 10), handMat);
-  const right = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 10), handMat);
-  left.visible = false;
-  right.visible = false;
-
-  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-  const eyeGeom = new THREE.SphereGeometry(0.018, 10, 8);
-  const eyeL = new THREE.Mesh(eyeGeom, eyeMat);
-  const eyeR = new THREE.Mesh(eyeGeom, eyeMat);
-  eyeL.position.set(-0.035, 0.02, -0.105);
-  eyeR.position.set( 0.035, 0.02, -0.105);
-  head.add(eyeL, eyeR);
-
-  const label = makeNicknameSprite(nickname || peerId.slice(0, 6));
-  label.position.set(0, 0.22, 0);
-  head.add(label);
-
-  const group = new THREE.Group();
-  group.name = `avatar:${peerId}`;
-  group.add(head, left, right);
-  scene.add(group);
-
-  av = {
-    group, head, left, right, label,
-    targetHead: { p: new THREE.Vector3(), q: new THREE.Quaternion(), set: false },
-    targetLeft: { p: new THREE.Vector3(), q: new THREE.Quaternion(), set: false },
-    targetRight: { p: new THREE.Vector3(), q: new THREE.Quaternion(), set: false },
-    leftActive: false,
-    rightActive: false,
-    lastSeen: performance.now(),
-    mode: 'vr',
-    nickname: nickname || peerId.slice(0, 6),
-  };
-  remoteAvatars.set(peerId, av);
-  return av;
-}
-
-function disposeRemoteAvatar(peerId) {
-  const av = remoteAvatars.get(peerId);
-  if (!av) return;
-  scene.remove(av.group);
-  av.group.traverse((o) => {
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) {
-      if (o.material.map) o.material.map.dispose();
-      o.material.dispose();
-    }
-  });
-  remoteAvatars.delete(peerId);
-}
-
-function disposeAllRemoteAvatars() {
-  for (const peerId of Array.from(remoteAvatars.keys())) {
-    disposeRemoteAvatar(peerId);
-  }
-}
-
 // objectId → wireframe mesh
 const lockOverlays = new Map();
 
@@ -1539,7 +1430,7 @@ renderer.setAnimationLoop((time, frame) => {
   }
 
   sendAvatarPose(time);
-  updateRemoteAvatars(time);
+  remoteAvatarManager.updateRemoteAvatars(time);
 
   renderer.render(scene, camera);
 });
@@ -1630,6 +1521,12 @@ const presenceState = {
   nickname: loadInitialNickname(),
   peers: [],
 };
+
+const remoteAvatarManager = createRemoteAvatarManager({
+  scene,
+  localPeerId: () => presenceState.id,
+  avatarTimeoutMs: AVATAR_TIMEOUT_MS,
+});
 
 let activeRoomCode = sanitizeRoomCode(new URLSearchParams(location.search).get('room'));
 let sceneReceived = false;
@@ -1870,8 +1767,8 @@ function connectPresence() {
           }
         }
         // 切断したピアのアバターを削除
-        for (const peerId of remoteAvatars.keys()) {
-          if (!peerIds.has(peerId)) disposeRemoteAvatar(peerId);
+        for (const peerId of Array.from(remoteAvatarManager.remoteAvatars.keys())) {
+          if (!peerIds.has(peerId)) remoteAvatarManager.disposeRemoteAvatar(peerId);
         }
         updatePeersList();
         // 初回 peers 受信時にシーンリクエスト
@@ -1892,7 +1789,7 @@ function connectPresence() {
     if (presenceState.ws !== ws) return;
     presenceState.ws = null;
     updateStatus(false);
-    disposeAllRemoteAvatars();
+    remoteAvatarManager.disposeAllRemoteAvatars();
     updatePeersList();
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
@@ -2023,66 +1920,6 @@ async function respondToSceneRequest(from) {
 
 // ── Handoff 受信（Scene Sync 用） ────────────────────────
 
-function handleSceneAvatar(payload, from) {
-  if (!payload || !payload.peerId) return;
-  if (payload.peerId === presenceState.id) return;
-  if (!payload.head || !Array.isArray(payload.head.p) || !Array.isArray(payload.head.q)) return;
-
-  const av = ensureRemoteAvatar(payload.peerId, payload.nickname);
-  av.lastSeen = performance.now();
-  av.mode = payload.mode || 'vr';
-
-  av.targetHead.p.set(payload.head.p[0], payload.head.p[1], payload.head.p[2]);
-  av.targetHead.q.set(payload.head.q[0], payload.head.q[1], payload.head.q[2], payload.head.q[3]);
-  av.targetHead.set = true;
-
-  const applyHand = (target, src) => {
-    if (src && src.active && Array.isArray(src.p) && Array.isArray(src.q)) {
-      target.p.set(src.p[0], src.p[1], src.p[2]);
-      target.q.set(src.q[0], src.q[1], src.q[2], src.q[3]);
-      target.set = true;
-      return true;
-    }
-    return false;
-  };
-
-  av.leftActive = applyHand(av.targetLeft, payload.left);
-  av.rightActive = applyHand(av.targetRight, payload.right);
-
-  if (av.mode === 'desktop') {
-    av.leftActive = false;
-    av.rightActive = false;
-  }
-}
-
-function updateRemoteAvatars(nowMs) {
-  const lerpAlpha = 0.25;
-
-  for (const [peerId, av] of remoteAvatars) {
-    if (performance.now() - av.lastSeen > AVATAR_TIMEOUT_MS) {
-      disposeRemoteAvatar(peerId);
-      continue;
-    }
-
-    if (av.targetHead.set) {
-      av.head.position.lerp(av.targetHead.p, lerpAlpha);
-      av.head.quaternion.slerp(av.targetHead.q, lerpAlpha);
-    }
-
-    av.left.visible = av.leftActive;
-    if (av.leftActive && av.targetLeft.set) {
-      av.left.position.lerp(av.targetLeft.p, lerpAlpha);
-      av.left.quaternion.slerp(av.targetLeft.q, lerpAlpha);
-    }
-
-    av.right.visible = av.rightActive;
-    if (av.rightActive && av.targetRight.set) {
-      av.right.position.lerp(av.targetRight.p, lerpAlpha);
-      av.right.quaternion.slerp(av.targetRight.q, lerpAlpha);
-    }
-  }
-}
-
 function handleHandoff(data) {
   const payload = data.payload;
   if (!payload || !payload.kind) return;
@@ -2197,7 +2034,7 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-avatar': {
-      handleSceneAvatar(payload, data.from);
+      remoteAvatarManager.handleAvatarMessage(payload);
       break;
     }
     default:
