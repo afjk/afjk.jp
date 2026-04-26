@@ -601,7 +601,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
   xrState.active = true;
   const session = renderer.xr.getSession();
   // requestXrSession 経由で開始した場合は xrCurrentMode が設定済み
-  // それ以外（VRButton/ARButton 直接クリック）は blendMode で推定
+  // それ以外（XR ボタン直接クリック）は blendMode で推定
   if (xrCurrentMode) {
     xrState.mode = xrCurrentMode;
   } else {
@@ -623,7 +623,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
   // OrbitControls を無効化
   orbit.enabled = false;
 
-  // AR の場合は背景を透過
+  // MR の場合は背景を透過
   if (xrState.mode === 'immersive-ar') {
     xrSavedBackground = scene.background;
     scene.background = null;
@@ -1358,7 +1358,7 @@ window.addEventListener('resize', onResize);
 // visualViewport.resize でも監視して canvas サイズを確実に復元する
 window.visualViewport?.addEventListener('resize', onResize);
 
-// ── AR hit-test 毎フレーム更新 ─────────────────────────
+// ── MR hit-test 毎フレーム更新 ─────────────────────────
 function updateXrHitTest(frame) {
   const reticle = xrState.floor.reticle;
   if (!reticle) {

@@ -117,7 +117,7 @@ export function createXrFloorManager(ctx) {
 
   function startFloorCalibration() {
     if (xrState.mode !== 'immersive-ar') {
-      showToast('床合わせはARモードでのみ使用できます');
+      showToast('床合わせはMRモードでのみ使用できます');
       return;
     }
     xrState.floor.calibrating = true;
