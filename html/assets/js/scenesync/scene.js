@@ -721,10 +721,15 @@ let xrSavedBackground = null;
 renderer.xr.addEventListener('sessionstart', async () => {
   xrState.active = true;
   const session = renderer.xr.getSession();
-  // セッションモード判定（mode プロパティが無い実装もあるので blendMode で AR を推定）
-  const blendMode = session.environmentBlendMode || 'opaque';
-  xrState.mode = (blendMode === 'opaque') ? 'immersive-vr' : 'immersive-ar';
-  xrCurrentMode = xrState.mode;
+  // requestXrSession 経由で開始した場合は xrCurrentMode が設定済み
+  // それ以外（VRButton/ARButton 直接クリック）は blendMode で推定
+  if (xrCurrentMode) {
+    xrState.mode = xrCurrentMode;
+  } else {
+    const blendMode = session.environmentBlendMode || 'opaque';
+    xrState.mode = (blendMode === 'opaque') ? 'immersive-vr' : 'immersive-ar';
+    xrCurrentMode = xrState.mode;
+  }
 
   // TransformControls を退避
   if (transformCtrl.object) {
@@ -796,6 +801,12 @@ renderer.xr.addEventListener('sessionstart', async () => {
 
   // 床合わせボタンの表示更新
   updateXrCalibrationButton();
+
+  console.log('[XR] session started:', {
+    mode: xrState.mode,
+    calibrating: xrState.floor.calibrating,
+    hitTestSource: !!xrState.floor.hitTestSource,
+  });
 });
 
 renderer.xr.addEventListener('sessionend', () => {
@@ -1528,49 +1539,59 @@ window.addEventListener('resize', onResize);
 // visualViewport.resize でも監視して canvas サイズを確実に復元する
 window.visualViewport?.addEventListener('resize', onResize);
 
-// ── AR hit-test 更新関数 ─────────────────────────────────
-function updateXrHitTest() {
-  // 床合わせモード中以外はレチクルを隠す
+// ── AR hit-test 毎フレーム更新 ─────────────────────────
+function updateXrHitTest(frame) {
+  const reticle = xrState.floor.reticle;
+  if (!reticle) return;
+
+  // 床合わせモード中でなければレチクルを隠す
   if (!xrState.floor.calibrating) {
-    if (xrState.floor.reticle.visible) {
-      xrState.floor.reticle.visible = false;
-    }
+    reticle.visible = false;
+    xrState.floor.lastHitY = null;
     return;
   }
 
-  const session = renderer.xr.getSession();
-  if (!session) return;
-  const frame = renderer.xr.getFrame();
-  if (!frame) return;
-  if (!xrState.floor.hitTestSource) return;
-
-  const referenceSpace = renderer.xr.getReferenceSpace();
-  const results = frame.getHitTestResults(xrState.floor.hitTestSource);
-
-  if (results.length === 0) {
-    xrState.floor.reticle.visible = false;
+  if (!xrState.floor.hitTestSource || !frame) {
+    reticle.visible = false;
     return;
   }
 
-  const pose = results[0].getPose(referenceSpace);
+  const refSpace = renderer.xr.getReferenceSpace();
+  if (!refSpace) {
+    reticle.visible = false;
+    return;
+  }
+
+  const hitTestResults = frame.getHitTestResults(xrState.floor.hitTestSource);
+  if (hitTestResults.length === 0) {
+    reticle.visible = false;
+    return;
+  }
+
+  const pose = hitTestResults[0].getPose(refSpace);
   if (!pose) {
-    xrState.floor.reticle.visible = false;
+    reticle.visible = false;
     return;
   }
 
-  // レチクルの位置をhit-test結果に追従
-  xrState.floor.reticle.visible = true;
-  xrState.floor.reticle.matrix.fromArray(pose.transform.matrix);
+  // レチクル位置・姿勢を更新
+  reticle.matrix.fromArray(pose.transform.matrix);
+  reticle.visible = true;
 
-  // 直近のヒットpose を保存（トリガー時に使用）
-  xrState.floor.lastHitPose = pose.transform.matrix;
+  // ヒットY座標を保存（confirmFloorCalibration で使用）
+  xrState.floor.lastHitPose = pose;
   xrState.floor.lastHitY = pose.transform.position.y;
+
+  // デバッグ: 頻度を抑えてログ出力
+  if (Math.random() < 0.02) {
+    console.log('[XR] hit:', xrState.floor.lastHitY);
+  }
 }
 
 
 // ── レンダリングループ ────────────────────────────────────
 
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((time, frame) => {
   if (!xrState.active) {
     orbit.update();
   }
@@ -1589,11 +1610,7 @@ renderer.setAnimationLoop(() => {
 
   if (xrState.active) {
     updateXrGrab();
-  }
-
-  // AR hit-test 更新
-  if (xrState.active && xrState.mode === 'immersive-ar') {
-    updateXrHitTest();
+    updateXrHitTest(frame);
   }
 
   renderer.render(scene, camera);
