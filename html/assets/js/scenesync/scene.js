@@ -4,11 +4,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
+import { DragDropManager } from './components/drag-drop-manager.js';
+import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { extractYaw } from './utils/math.js';
@@ -28,6 +29,10 @@ const {
   pmremGenerator,
 } = threeApp;
 const dom = getSceneSyncDom();
+const glbLoader = new GLBFileLoader({
+  dracoPath: '/draco/',
+  maxDimension: 10,
+});
 
 const environmentManager = createEnvironmentManager({
   scene,
@@ -41,9 +46,6 @@ setupXrButtons({
   renderer,
   dom,
 });
-
-// glB ローダー
-const gltfLoader = new GLTFLoader();
 const BLOB_BASE = location.hostname === 'localhost'
   ? 'http://localhost:8787/blob'
   : 'https://afjk.jp/presence/blob';
@@ -1971,7 +1973,6 @@ function handleHandoff(data) {
     }
     case 'scene-mesh': {
       const obj = managedObjects.get(payload.objectId);
-      const url = BLOB_BASE + '/' + payload.meshPath;
       const loadingName = obj?.userData?.name || payload.meshPath;
       const loadingInfo = obj ? {
         position: obj.position.toArray(),
@@ -1979,12 +1980,16 @@ function handleHandoff(data) {
         scale: obj.scale.toArray(),
       } : null;
       addLoadingOverlay(payload.objectId, loadingName, loadingInfo);
-      gltfLoader.load(url, (gltf) => {
+      const url = BLOB_BASE + '/' + payload.meshPath;
+      const initialPosition = payload.position
+        ? new THREE.Vector3().fromArray(payload.position)
+        : undefined;
+
+      glbLoader.loadFromUrl(url, initialPosition, scene, (model) => {
         removeLoadingOverlay(payload.objectId);
-        const model = new THREE.Group();
         model.userData.objectId = payload.objectId;
+        model.userData.name = obj?.userData?.name || payload.name || payload.meshPath;
         model.userData.meshPath = payload.meshPath;
-        attachImportedGlb(model, gltf);
 
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
@@ -1993,10 +1998,11 @@ function handleHandoff(data) {
           model.scale.copy(obj.scale);
           if (transformCtrl.object === obj) transformCtrl.detach();
           scene.remove(obj);
+        } else {
+          applyTransform(model, payload);
         }
-        scene.add(model);
         managedObjects.set(payload.objectId, model);
-      }, undefined, (err) => {
+      }).catch((err) => {
         removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
         console.warn('Failed to load mesh:', err);
@@ -2083,18 +2089,27 @@ function addOrUpdateObject(objectId, info) {
 function loadMeshObject(objectId, info, meshPath, existing) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const url = BLOB_BASE + '/' + meshPath;
-  gltfLoader.load(url, (gltf) => {
-    removeLoadingOverlay(objectId);
+  const initialPosition = info.position
+    ? new THREE.Vector3().fromArray(info.position)
+    : undefined;
 
-    const model = new THREE.Group();
+  glbLoader.loadFromUrl(url, initialPosition, scene, (model) => {
+    removeLoadingOverlay(objectId);
     model.userData.objectId = objectId;
     model.userData.name = info.name;
     model.userData.meshPath = meshPath;
     if (info.asset) model.userData.asset = structuredClone(info.asset);
-    attachImportedGlb(model, gltf);
+
+    if (existing) {
+      model.position.copy(existing.position);
+      model.quaternion.copy(existing.quaternion);
+      model.scale.copy(existing.scale);
+      if (transformCtrl.object === existing) transformCtrl.detach();
+      scene.remove(existing);
+    }
 
     replaceManagedObject(objectId, model, info);
-  }, undefined, (err) => {
+  }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load mesh for', objectId, ':', err);
     if (!existing) {
@@ -2181,13 +2196,6 @@ function applyTransform(obj, info) {
   if (info.scale) obj.scale.fromArray(info.scale);
 }
 
-function attachImportedGlb(wrapper, gltf) {
-  // glB 経路だけ handedness 補正と wire の Z 反転が重なり、
-  // 見た目が Y 軸 180° ずれるため、読み込み基底に補正を入れる。
-  gltf.scene.rotateY(Math.PI);
-  wrapper.add(gltf.scene);
-}
-
 // ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
 
 function broadcast(payload) {
@@ -2200,106 +2208,8 @@ function broadcast(payload) {
 
 export { scene, camera, renderer, managedObjects, broadcast, presenceState };
 
-// ── ファイル追加 UI ──────────────────────────────────────
-
-const addBtn = document.getElementById('add-btn');
-const fileInput = document.getElementById('file-input');
-const dropOverlay = document.getElementById('drop-overlay');
-
-addBtn.addEventListener('click', () => fileInput.click());
-
-fileInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (file) handleAddMeshFile(file);
-  fileInput.value = '';
-});
-
-let dragCounter = 0;
-
-document.addEventListener('dragenter', (e) => {
-  e.preventDefault();
-  dragCounter++;
-  dropOverlay.classList.add('active');
-});
-
-document.addEventListener('dragleave', (e) => {
-  e.preventDefault();
-  dragCounter--;
-  if (dragCounter <= 0) {
-    dragCounter = 0;
-    dropOverlay.classList.remove('active');
-  }
-});
-
-document.addEventListener('dragover', (e) => {
-  e.preventDefault();
-});
-
-document.addEventListener('drop', (e) => {
-  e.preventDefault();
-  dragCounter = 0;
-  dropOverlay.classList.remove('active');
-  const file = e.dataTransfer.files[0];
-  if (file && (file.name.endsWith('.glb') || file.name.endsWith('.gltf'))) {
-    handleAddMeshFile(file);
-  }
-});
-
-function generateObjectId() {
-  return 'web-' + Math.random().toString(36).slice(2, 10);
-}
-
 function generateRandomPath() {
   return Math.random().toString(36).slice(2, 10);
-}
-
-async function handleAddMeshFile(file) {
-  const objectId = generateObjectId();
-
-  // カメラ前方 5m を配置予定位置として先にローディング表示
-  const placeDir = new THREE.Vector3();
-  camera.getWorldDirection(placeDir);
-  const placePos = new THREE.Vector3()
-    .copy(camera.position)
-    .addScaledVector(placeDir, 5);
-  placePos.y = 0;
-  addLoadingOverlay(objectId, file.name, { position: placePos.toArray() });
-
-  const arrayBuffer = await file.arrayBuffer();
-
-  const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
-  const blobUrl = URL.createObjectURL(blob);
-
-  gltfLoader.load(blobUrl, async (gltf) => {
-    removeLoadingOverlay(objectId);
-    const model = new THREE.Group();
-    model.userData.objectId = objectId;
-    model.userData.name = file.name;
-    attachImportedGlb(model, gltf);
-
-    // center offset は行わない（glB の原点をそのまま使用）
-    // Unity 側との座標整合性を保つため
-
-    model.position.copy(placePos);
-
-    scene.add(model);
-    managedObjects.set(objectId, model);
-    selectManagedObject(model);
-
-    URL.revokeObjectURL(blobUrl);
-
-    // 元ファイルをそのままアップロード（受信側で中心合わせを行う）
-    uploadAndBroadcast(
-      objectId,
-      file.name,
-      model,
-      arrayBuffer
-    );
-  }, undefined, (err) => {
-    removeLoadingOverlay(objectId);
-    console.error('Failed to load glB:', err);
-    URL.revokeObjectURL(blobUrl);
-  });
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
@@ -2339,8 +2249,35 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
   });
 }
 
-// ── 3面ビュー撮影 ────────────────────────────────────────
+const dragDropManager = new DragDropManager({
+  container: document,
+  camera,
+  renderer,
+  scene,
+  fileInput: dom.fileInput,
+  addBtn: dom.addBtn,
+  dropOverlay: dom.dropOverlay,
+  showToast,
+  glbLoader,
+  onLoadStart: async ({ objectId, file, position }) => {
+    addLoadingOverlay(objectId, file.name, { position: position?.toArray?.() });
+  },
+  onLoadEnd: async ({ objectId }) => {
+    removeLoadingOverlay(objectId);
+  },
+  onLoaded: async (model, file) => {
+    managedObjects.set(model.userData.objectId, model);
+    selectManagedObject(model);
 
+    const arrayBuffer = await file.arrayBuffer();
+    await uploadAndBroadcast(
+      model.userData.objectId,
+      file.name,
+      model,
+      arrayBuffer
+    );
+  },
+});
 
 // ── 起動 ─────────────────────────────────────────────────
 
