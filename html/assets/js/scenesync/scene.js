@@ -6,14 +6,15 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { VRButton } from 'three/addons/webxr/VRButton.js';
-import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { extractYaw } from './utils/math.js';
+import { broadcastObjectDelta } from './objects/object-delta.js';
+import { createXrState } from './xr/xr-state.js';
+import { setupXrButtons } from './xr/xr-buttons.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -34,115 +35,19 @@ const environmentManager = createEnvironmentManager({
   showToast,
 });
 
+setupXrButtons({
+  renderer,
+  dom,
+});
+
 // glB ローダー
 const gltfLoader = new GLTFLoader();
 const BLOB_BASE = location.hostname === 'localhost'
   ? 'http://localhost:8787/blob'
   : 'https://afjk.jp/presence/blob';
 
-// ── WebXR ボタンセットアップ ────────────────────────────────
-const xrButtonContainer = dom.xrButtonContainer;
-const xrAddBtn = dom.addBtn;
-
-// XR セッションへ入るためのモード状態
-let xrCurrentMode = null;       // 'immersive-vr' | 'immersive-ar' | null
-let xrPendingMode = null;       // 切り替え予約
-
-if ('xr' in navigator && xrButtonContainer) {
-  navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
-    if (!ok) return;
-    const btn = VRButton.createButton(renderer);
-    // ラベルを日本語化
-    relabelXrButton(btn, 'VRで入る', 'VRを終了');
-    btn.style.position = 'static';
-    btn.style.transform = 'none';
-    btn.style.left = 'auto';
-    btn.style.right = 'auto';
-    btn.style.bottom = 'auto';
-    xrButtonContainer.appendChild(btn);
-    xrAddBtn?.classList.add('xr-available');
-  }).catch(() => {});
-
-  navigator.xr.isSessionSupported('immersive-ar').then((ok) => {
-    if (!ok) return;
-    const btn = ARButton.createButton(renderer, {
-      optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'],
-      domOverlay: { root: document.body },
-    });
-    // ラベルを日本語化
-    relabelXrButton(btn, 'MRで入る', 'MRを終了');
-    btn.style.position = 'static';
-    btn.style.transform = 'none';
-    btn.style.left = 'auto';
-    btn.style.right = 'auto';
-    btn.style.bottom = 'auto';
-    xrButtonContainer.appendChild(btn);
-    xrAddBtn?.classList.add('xr-available');
-  }).catch(() => {});
-}
-
-// VRButton / ARButton のテキストを書き換える
-function relabelXrButton(btn, enterLabel, exitLabel) {
-  const apply = () => {
-    const t = btn.textContent || '';
-    if (t.startsWith('ENTER') || t.includes('AR') || t.includes('VR')) {
-      if (t.toUpperCase().includes('EXIT') || t.toUpperCase().includes('STOP')) {
-        btn.textContent = exitLabel;
-      } else if (t.toUpperCase().includes('ENTER')) {
-        btn.textContent = enterLabel;
-      }
-    }
-  };
-  apply();
-  const observer = new MutationObserver(apply);
-  observer.observe(btn, { childList: true, characterData: true, subtree: true });
-}
-
 // ── XR コントローラー ──────────────────────────────────────
-const xrState = {
-  active: false,
-  mode: null,
-  // 各コントローラーごとの掴み状態（インデックス 0/1）
-  grabbers: [
-    { active: false, object: null,
-      grabOffsetLocal: new THREE.Vector3(),
-      initialObjectQuat: new THREE.Quaternion(),
-      initialControllerYaw: 0 },
-    { active: false, object: null,
-      grabOffsetLocal: new THREE.Vector3(),
-      initialObjectQuat: new THREE.Quaternion(),
-      initialControllerYaw: 0 },
-  ],
-  // 両手掴み状態
-  twoHand: {
-    active: false,
-    object: null,
-    initialDistance: 1,
-    initialDirYaw: 0,
-    initialObjectScale: new THREE.Vector3(1, 1, 1),
-    initialObjectQuat: new THREE.Quaternion(),
-    initialOffsetFromMidpoint: new THREE.Vector3(),
-  },
-  twoHandedFreeRotation: false,  // true: 6DoF, false: Y軸ロック
-  lastSent: 0,
-  lockOwnedByMe: new Set(),      // lock 発行済み objectId
-  // AR床補正
-  floor: {
-    referenceSpace: null,           // 元の reference space
-    offsetSpace: null,              // オフセット適用後の reference space
-    estimatedFloorY: null,          // 推定床Y（カメラ空間内、負の値）
-    hitTestSource: null,            // viewer XRHitTestSource（フォールバック）
-    viewerSpace: null,              // viewer reference space
-    controllerHitTestSources: new Map(), // コントローラー別 XRHitTestSource
-    reticle: null,                  // レチクル mesh
-    lastHitPose: null,              // 直近のヒット位置・姿勢
-    lastHitY: null,                 // 直近のヒット位置Y座標
-    stableHitCount: 0,              // 連続ヒット回数（床高さ確定用）
-    floorConfirmed: false,          // 床高さが安定確定したか
-    calibrating: false,             // 床合わせモード中か
-  },
-  controllers: [],
-};
+const xrState = createXrState();
 
 const SCALE_MIN_RATIO = 0.05;
 const SCALE_MAX_RATIO = 50;
@@ -392,7 +297,7 @@ function onXrSelectEnd(ctrl) {
   if (!stillHeld) {
     if (obj.userData?.objectId) {
       // 最終姿勢を送信してから unlock
-      broadcastObjectDelta(obj);
+      broadcastObjectDelta(obj, broadcast);
       ensureUnlock(obj.userData.objectId);
     }
   }
@@ -578,27 +483,6 @@ function sendAvatarPose(nowMs) {
   }
 }
 
-function broadcastObjectDelta(obj) {
-  if (!obj?.userData?.objectId) return;
-  const wp = new THREE.Vector3();
-  const wq = new THREE.Quaternion();
-  const ws = new THREE.Vector3();
-  obj.getWorldPosition(wp);
-  obj.getWorldQuaternion(wq);
-  obj.getWorldScale(ws);
-
-  const pos = wp.toArray();
-  if (!isFinite(pos[0]) || !isFinite(pos[1]) || !isFinite(pos[2])) return;
-
-  broadcast({
-    kind: 'scene-delta',
-    objectId: obj.userData.objectId,
-    position: pos,
-    rotation: [wq.x, wq.y, wq.z, wq.w],
-    scale: ws.toArray(),
-  });
-}
-
 const _xrTmpVec0 = new THREE.Vector3();
 const _xrTmpVec1 = new THREE.Vector3();
 const _xrTmpVec2 = new THREE.Vector3();
@@ -629,7 +513,7 @@ function updateXrGrab() {
   if (xrState.twoHand.active && xrState.twoHand.object) {
     const id = xrState.twoHand.object.userData?.objectId;
     if (id && !sentIds.has(id)) {
-      broadcastObjectDelta(xrState.twoHand.object);
+      broadcastObjectDelta(xrState.twoHand.object, broadcast);
       sentIds.add(id);
     }
   } else {
@@ -637,7 +521,7 @@ function updateXrGrab() {
       if (!grabber.active || !grabber.object) continue;
       const id = grabber.object.userData?.objectId;
       if (id && !sentIds.has(id)) {
-        broadcastObjectDelta(grabber.object);
+        broadcastObjectDelta(grabber.object, broadcast);
         sentIds.add(id);
       }
     }
@@ -906,7 +790,7 @@ renderer.xr.addEventListener('sessionend', () => {
     grabber.active = false;
     grabber.object = null;
     if (obj.userData?.objectId) {
-      broadcastObjectDelta(obj);
+      broadcastObjectDelta(obj, broadcast);
       ensureUnlock(obj.userData.objectId);
     }
   }
