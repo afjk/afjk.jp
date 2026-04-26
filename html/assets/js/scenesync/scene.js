@@ -172,8 +172,10 @@ const xrState = {
     viewerSpace: null,           // viewer reference space
     reticle: null,               // レチクル mesh
     lastHitPose: null,           // 直近のヒット位置・姿勢
+    lastHitY: null,              // 直近のヒット位置Y座標
     stableHitCount: 0,           // 連続ヒット回数（床高さ確定用）
     floorConfirmed: false,       // 床高さが安定確定したか
+    calibrating: false,          // 床合わせモード中か
   },
   controllers: [],
 };
@@ -331,6 +333,12 @@ const xrTmpMatrix = new THREE.Matrix4();
 const xrRaycaster = new THREE.Raycaster();
 
 function onXrSelectStart(ctrl) {
+  // 床合わせモード中ならトリガーで床確定
+  if (xrState.floor.calibrating) {
+    confirmFloorCalibration();
+    return;
+  }
+
   const idx = ctrl.userData.xrIndex;
   const grabber = xrState.grabbers[idx];
 
@@ -658,6 +666,55 @@ function applyFloorOffset(floorY) {
   xrState.floor.estimatedFloorY = floorY;
 }
 
+// 床合わせモード中にトリガーが押された時の処理
+function confirmFloorCalibration() {
+  if (!xrState.floor.calibrating) return false;
+  if (xrState.floor.lastHitY === null) {
+    showToast('床を指してください');
+    return false;
+  }
+
+  const hitY = xrState.floor.lastHitY;
+  const currentOffset = xrState.floor.estimatedFloorY || 0;
+  const newOffset = currentOffset - hitY;
+  applyFloorOffset(newOffset);
+
+  console.log('[XR] floor calibration:', { currentOffset, hitY, newOffset });
+
+  xrState.floor.calibrating = false;
+  xrState.floor.floorConfirmed = true;
+  xrState.floor.reticle.visible = false;
+  showToast('床位置を設定しました');
+
+  updateXrCalibrationButton();
+  return true;
+}
+
+// 床合わせモードを再開
+function startFloorCalibration() {
+  if (xrState.mode !== 'immersive-ar') {
+    showToast('床合わせはMRモードでのみ使用できます');
+    return;
+  }
+  xrState.floor.calibrating = true;
+  xrState.floor.floorConfirmed = false;
+  showToast('床を指してトリガーを押してください');
+  updateXrCalibrationButton();
+}
+
+function updateXrCalibrationButton() {
+  const btn = document.getElementById('xr-calibrate-btn');
+  if (!btn) return;
+
+  // MRセッション中かつ床合わせモードでない時のみ表示
+  if (xrState.active && xrState.mode === 'immersive-ar' && !xrState.floor.calibrating) {
+    btn.style.display = 'inline-flex';
+    btn.onclick = startFloorCalibration;
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
 // ── XR セッション開始/終了 ─────────────────────────────
 let xrSavedBackground = null;
 
@@ -712,10 +769,18 @@ renderer.xr.addEventListener('sessionstart', async () => {
   // 元の reference space を保存
   xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
 
-  // 起動時の頭の高さを強制的に XR_INITIAL_HEAD_HEIGHT に設定
-  // 床を Y方向に -XR_INITIAL_HEAD_HEIGHT 下げる
-  // = カメラから見ると床が下方向に XR_INITIAL_HEAD_HEIGHT 下がる
+  // 起動時は仮の頭の高さで初期化
   applyFloorOffset(XR_INITIAL_HEAD_HEIGHT);
+
+  // MR/AR の場合は床合わせモードを自動開始
+  if (xrState.mode === 'immersive-ar') {
+    xrState.floor.calibrating = true;
+    xrState.floor.floorConfirmed = false;
+    showToast('床を指してトリガーを押してください');
+  } else {
+    // VR では床合わせ不要
+    xrState.floor.calibrating = false;
+  }
 
   // hit-test source を作成（AR/MRのみ）
   if (xrState.mode === 'immersive-ar') {
@@ -728,12 +793,17 @@ renderer.xr.addEventListener('sessionstart', async () => {
       console.warn('[XR] hit-test not available:', e);
     }
   }
+
+  // 床合わせボタンの表示更新
+  updateXrCalibrationButton();
 });
 
 renderer.xr.addEventListener('sessionend', () => {
-  // トグルボタンを隠す
+  // トグルボタンと床合わせボタンを隠す
   const xrToggleBtn = document.getElementById('xr-toggle-btn');
   if (xrToggleBtn) xrToggleBtn.style.display = 'none';
+  const xrCalibrateBtn = document.getElementById('xr-calibrate-btn');
+  if (xrCalibrateBtn) xrCalibrateBtn.style.display = 'none';
 
   xrState.active = false;
 
@@ -1460,6 +1530,14 @@ window.visualViewport?.addEventListener('resize', onResize);
 
 // ── AR hit-test 更新関数 ─────────────────────────────────
 function updateXrHitTest() {
+  // 床合わせモード中以外はレチクルを隠す
+  if (!xrState.floor.calibrating) {
+    if (xrState.floor.reticle.visible) {
+      xrState.floor.reticle.visible = false;
+    }
+    return;
+  }
+
   const session = renderer.xr.getSession();
   if (!session) return;
   const frame = renderer.xr.getFrame();
@@ -1480,9 +1558,13 @@ function updateXrHitTest() {
     return;
   }
 
-  // レチクルを更新
+  // レチクルの位置をhit-test結果に追従
   xrState.floor.reticle.visible = true;
   xrState.floor.reticle.matrix.fromArray(pose.transform.matrix);
+
+  // 直近のヒットpose を保存（トリガー時に使用）
+  xrState.floor.lastHitPose = pose.transform.matrix;
+  xrState.floor.lastHitY = pose.transform.position.y;
 }
 
 
