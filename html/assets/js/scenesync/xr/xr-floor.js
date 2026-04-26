@@ -1,5 +1,35 @@
 import * as THREE from 'three';
 
+function createReticleLabel() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, 512, 128);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('床を指してトリガーを引く', 256, 64);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.6, 0.15, 1);
+  sprite.position.set(0, 0.3, 0);
+  sprite.renderOrder = 9999;
+  sprite.raycast = () => {};
+  return sprite;
+}
+
 function createReticle() {
   const geo = new THREE.RingGeometry(0.10, 0.15, 32);
   geo.rotateX(-Math.PI / 2);
@@ -14,6 +44,11 @@ function createReticle() {
   reticle.visible = false;
   reticle.raycast = () => {};
   reticle.userData._isReticle = true;
+
+  // 説明ラベルを子として追加
+  const label = createReticleLabel();
+  reticle.add(label);
+
   return reticle;
 }
 
