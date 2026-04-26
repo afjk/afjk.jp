@@ -38,9 +38,10 @@ function createReticle() {
     transparent: true,
     opacity: 0.8,
     side: THREE.DoubleSide,
+    depthTest: false,
   });
   const reticle = new THREE.Mesh(geo, mat);
-  reticle.matrixAutoUpdate = false;
+  reticle.renderOrder = 9998;
   reticle.visible = false;
   reticle.raycast = () => {};
   reticle.userData._isReticle = true;

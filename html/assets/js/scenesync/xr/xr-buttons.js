@@ -32,7 +32,8 @@ export function setupXrButtons(ctx) {
     if (!ok) return;
 
     const btn = ARButton.createButton(renderer, {
-      optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'],
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['local-floor', 'dom-overlay'],
       domOverlay: { root: document.body },
     });
     relabelXrButton(btn, 'MRで入る', 'MRを終了');

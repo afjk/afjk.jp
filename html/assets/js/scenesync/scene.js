@@ -141,7 +141,11 @@ async function switchXrMode(targetMode) {
 
 async function requestXrSession(mode) {
   const sessionInit = mode === 'immersive-ar'
-    ? { optionalFeatures: ['local-floor', 'hit-test', 'dom-overlay'], domOverlay: { root: document.body } }
+    ? {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['local-floor', 'dom-overlay'],
+        domOverlay: { root: document.body },
+      }
     : { optionalFeatures: ['local-floor', 'bounded-floor'] };
 
   const session = await navigator.xr.requestSession(mode, sessionInit);
@@ -1357,7 +1361,10 @@ window.visualViewport?.addEventListener('resize', onResize);
 // ── AR hit-test 毎フレーム更新 ─────────────────────────
 function updateXrHitTest(frame) {
   const reticle = xrState.floor.reticle;
-  if (!reticle) return;
+  if (!reticle) {
+    if (Math.random() < 0.01) console.log('[XR-debug] no reticle');
+    return;
+  }
 
   // 床合わせモード中でなければレチクルを隠す
   if (!xrState.floor.calibrating) {
@@ -1367,23 +1374,29 @@ function updateXrHitTest(frame) {
   }
 
   if (!frame) {
+    if (Math.random() < 0.01) console.log('[XR-debug] no frame');
     reticle.visible = false;
     return;
   }
 
   if (!xrState.floor.hitTestSource) {
+    if (Math.random() < 0.01) console.log('[XR-debug] no hitTestSource');
     reticle.visible = false;
     return;
   }
 
   const refSpace = xrState.floor.offsetSpace || xrState.floor.referenceSpace;
   if (!refSpace) {
+    if (Math.random() < 0.01) console.log('[XR-debug] no refSpace');
     reticle.visible = false;
     return;
   }
 
   // HMD（視線）の hit-test のみを使用
   const results = frame.getHitTestResults(xrState.floor.hitTestSource);
+  if (Math.random() < 0.02) {
+    console.log('[XR-debug] hit results:', results.length);
+  }
   if (results.length === 0) {
     reticle.visible = false;
     xrState.floor.lastHitY = null;
@@ -1398,14 +1411,11 @@ function updateXrHitTest(frame) {
 
   reticle.visible = true;
   reticle.matrix.fromArray(pose.transform.matrix);
-  reticle.matrixWorldNeedsUpdate = true;
+  reticle.matrix.decompose(reticle.position, reticle.quaternion, reticle.scale);
+  reticle.matrixAutoUpdate = true;
+  reticle.updateMatrixWorld(true);
   xrState.floor.lastHitY = pose.transform.position.y;
   xrState.floor.lastHitPose = pose;
-
-  // デバッグ: 頻度を抑えてログ出力
-  if (Math.random() < 0.02) {
-    console.log('[XR] hit:', xrState.floor.lastHitY);
-  }
 }
 
 
