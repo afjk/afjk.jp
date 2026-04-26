@@ -19,6 +19,7 @@ export class DragDropManager {
       onLoaded,
       onLoadStart,
       onLoadEnd,
+      getRaycastTargets,
       dracoPath,
       maxDimension,
       glbLoader,
@@ -39,7 +40,9 @@ export class DragDropManager {
     this.onLoaded = onLoaded;
     this.onLoadStart = onLoadStart;
     this.onLoadEnd = onLoadEnd;
-    this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene);
+    this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene, {
+      getRaycastTargets,
+    });
     this.glbLoader = glbLoader || new GLBFileLoader({ dracoPath, maxDimension });
     this.dragCounter = 0;
     this._isDisposed = false;
@@ -61,6 +64,10 @@ export class DragDropManager {
     this.container?.addEventListener('dragleave', this._boundDragLeave);
     this.container?.addEventListener('dragover', this._boundDragOver);
     this.container?.addEventListener('drop', this._boundDrop);
+  }
+
+  _isFileDrag(event) {
+    return Array.from(event.dataTransfer?.types || []).includes('Files');
   }
 
   _setOverlay(active) {
@@ -142,12 +149,16 @@ export class DragDropManager {
   }
 
   _onDragEnter(event) {
+    if (!this._isFileDrag(event)) return;
+
     event.preventDefault();
     this.dragCounter += 1;
     this._setOverlay(true);
   }
 
   _onDragLeave(event) {
+    if (!this._isFileDrag(event)) return;
+
     event.preventDefault();
     this.dragCounter -= 1;
     if (this.dragCounter <= 0) {
@@ -157,10 +168,17 @@ export class DragDropManager {
   }
 
   _onDragOver(event) {
+    if (!this._isFileDrag(event)) return;
+
     event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
   }
 
   _onDrop(event) {
+    if (!this._isFileDrag(event)) return;
+
     event.preventDefault();
     this.dragCounter = 0;
     this._setOverlay(false);

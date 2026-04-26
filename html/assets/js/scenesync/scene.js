@@ -2259,6 +2259,8 @@ const dragDropManager = new DragDropManager({
   dropOverlay: dom.dropOverlay,
   showToast,
   glbLoader,
+  getRaycastTargets: () => Array.from(managedObjects.values())
+    .filter(obj => obj.userData?.dropRaycastTarget && obj.visible !== false),
   onLoadStart: async ({ objectId, file, position }) => {
     addLoadingOverlay(objectId, file.name, { position: position?.toArray?.() });
   },

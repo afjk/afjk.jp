@@ -83,6 +83,7 @@ export class GLBFileLoader {
 
     wrapper.userData = {
       ...wrapper.userData,
+      dropRaycastTarget: true,
       scenesync: {
         ...wrapper.userData?.scenesync,
         glbMetadata: metadata,
