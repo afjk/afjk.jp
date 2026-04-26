@@ -6,69 +6,31 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { createThreeApp } from './core/three-app.js';
+import { createEnvironmentManager } from './core/environment.js';
+import { getSceneSyncDom } from './ui/dom.js';
+import { showToast } from './ui/toast.js';
+import { extractYaw } from './utils/math.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x222222);
+const threeApp = createThreeApp();
+const {
+  scene,
+  camera,
+  renderer,
+  pmremGenerator,
+} = threeApp;
+const dom = getSceneSyncDom();
 
-const camera = new THREE.PerspectiveCamera(
-  60, innerWidth / innerHeight, 0.1, 1000
-);
-camera.position.set(5, 5, 5);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(devicePixelRatio);
-renderer.setSize(innerWidth, innerHeight);
-document.body.appendChild(renderer.domElement);
-
-renderer.xr.enabled = true;
-try {
-  renderer.xr.setReferenceSpaceType('local-floor');
-} catch (e) {
-  console.warn('[XR] setReferenceSpaceType failed:', e);
-}
-
-const pmremGenerator = new THREE.PMREMGenerator(renderer);
-
-// ライト（IBL 補助として残す）
-scene.add(new THREE.AmbientLight(0xffffff, 0.3));
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
-dirLight.position.set(5, 10, 7);
-scene.add(dirLight);
-
-// グリッド（HDRI 背景でも視認できるよう明るめに）
-scene.add(new THREE.GridHelper(20, 20, 0x888888, 0x666666));
-
-// ── IBL 環境光 ───────────────────────────────────────────
-
-let currentEnvId = 'outdoor_day';
-const envSelect = document.getElementById('env-select');
-
-function loadEnvironment(envId) {
-  const url = '/assets/hdri/' + envId + '.hdr';
-  new RGBELoader().load(url, (texture) => {
-    const envMap = pmremGenerator.fromEquirectangular(texture).texture;
-    scene.environment = envMap;
-    scene.background = envMap;
-    texture.dispose();
-    currentEnvId = envId;
-    updateEnvSelector();
-  });
-}
-
-function updateEnvSelector() {
-  if (envSelect) envSelect.value = currentEnvId;
-}
-
-envSelect?.addEventListener('change', (e) => {
-  const envId = e.target.value;
-  loadEnvironment(envId);
-  broadcast({ kind: 'scene-env', envId });
+const environmentManager = createEnvironmentManager({
+  scene,
+  pmremGenerator,
+  broadcast,
+  dom,
 });
 
 // glB ローダー
@@ -78,8 +40,8 @@ const BLOB_BASE = location.hostname === 'localhost'
   : 'https://afjk.jp/presence/blob';
 
 // ── WebXR ボタンセットアップ ────────────────────────────────
-const xrButtonContainer = document.getElementById('xr-button-container');
-const xrAddBtn = document.getElementById('add-btn');
+const xrButtonContainer = dom.xrButtonContainer;
+const xrAddBtn = dom.addBtn;
 
 // XR セッションへ入るためのモード状態
 let xrCurrentMode = null;       // 'immersive-vr' | 'immersive-ar' | null
@@ -180,12 +142,6 @@ const xrState = {
   },
   controllers: [],
 };
-
-// クォータニオンから Y軸回転（ヨー）成分のみを抽出する
-function extractYaw(quat) {
-  const x = quat.x, y = quat.y, z = quat.z, w = quat.w;
-  return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + x * x));
-}
 
 const SCALE_MIN_RATIO = 0.05;
 const SCALE_MAX_RATIO = 50;
@@ -806,7 +762,7 @@ function startFloorCalibration() {
 }
 
 function updateXrCalibrationButton() {
-  const btn = document.getElementById('xr-calibrate-btn');
+  const btn = dom.xrCalibrateBtn;
   if (!btn) return;
 
   // MRセッション中かつ床合わせモードでない時のみ表示
@@ -854,7 +810,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
   }
 
   // dom-overlay 用トグルボタンの表示制御
-  const xrToggleBtn = document.getElementById('xr-toggle-btn');
+  const xrToggleBtn = dom.xrToggleBtn;
   if (xrToggleBtn) {
     if (xrState.mode === 'immersive-ar') {
       xrToggleBtn.style.display = 'inline-flex';
@@ -933,9 +889,9 @@ renderer.xr.addEventListener('sessionstart', async () => {
 
 renderer.xr.addEventListener('sessionend', () => {
   // トグルボタンと床合わせボタンを隠す
-  const xrToggleBtn = document.getElementById('xr-toggle-btn');
+  const xrToggleBtn = dom.xrToggleBtn;
   if (xrToggleBtn) xrToggleBtn.style.display = 'none';
-  const xrCalibrateBtn = document.getElementById('xr-calibrate-btn');
+  const xrCalibrateBtn = dom.xrCalibrateBtn;
   if (xrCalibrateBtn) xrCalibrateBtn.style.display = 'none';
 
   xrState.active = false;
@@ -969,8 +925,8 @@ renderer.xr.addEventListener('sessionend', () => {
     if (xrSavedBackground !== null) {
       scene.background = xrSavedBackground;
       xrSavedBackground = null;
-    } else if (currentEnvId) {
-      loadEnvironment(currentEnvId);
+    } else if (environmentManager.getCurrentEnvId()) {
+      environmentManager.loadEnvironment(environmentManager.getCurrentEnvId());
     }
   }
 
@@ -1185,18 +1141,6 @@ function disposeAllRemoteAvatars() {
 
 // objectId → wireframe mesh
 const lockOverlays = new Map();
-
-// ── トースト通知 ────────────────────────────────────────
-
-let toastTimer = null;
-function showToast(msg) {
-  const el = document.getElementById('toast');
-  if (!el) return;
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
-}
 
 // ── ロック表示 ──────────────────────────────────────────
 
@@ -2331,7 +2275,7 @@ async function respondToSceneRequest(from) {
     ws.send(JSON.stringify({
       type: 'handoff',
       targetId: from.id,
-      payload: { kind: 'scene-state', envId: currentEnvId, objects },
+      payload: { kind: 'scene-state', envId: environmentManager.getCurrentEnvId(), objects },
     }));
   }
 }
@@ -2407,7 +2351,7 @@ function handleHandoff(data) {
       sceneReceived = true;
       clearTimeout(sceneRequestTimer);
       if (payload.envId) {
-        loadEnvironment(payload.envId);
+        environmentManager.loadEnvironment(payload.envId);
       }
       const objects = payload.objects || {};
       for (const [objectId, info] of Object.entries(objects)) {
@@ -2501,7 +2445,7 @@ function handleHandoff(data) {
     }
     case 'scene-env': {
       if (payload.envId) {
-        loadEnvironment(payload.envId);
+        environmentManager.loadEnvironment(payload.envId);
       }
       break;
     }
@@ -2820,4 +2764,4 @@ nicknameChip?.addEventListener('click', editNickname);
 updateNicknameLabel();
 renderRoomSection();
 connectPresence();
-loadEnvironment('outdoor_day');
+environmentManager.loadEnvironment('outdoor_day');
