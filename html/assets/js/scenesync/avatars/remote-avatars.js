@@ -19,8 +19,6 @@ export function createRemoteAvatarManager(ctx) {
   } = ctx;
 
   const remoteAvatars = new Map();
-  const _tmpVec = new THREE.Vector3();
-  const _tmpQuat = new THREE.Quaternion();
 
   function colorFromPeerId(peerId) {
     let h = 0;
@@ -165,6 +163,11 @@ export function createRemoteAvatarManager(ctx) {
     return true;
   }
 
+  function setHandTargetPose(target, pose) {
+    if (!pose || !pose.active) return false;
+    return setTargetPose(target, pose);
+  }
+
   function handleAvatarMessage(payload) {
     if (!payload || !payload.peerId) return;
 
@@ -180,8 +183,8 @@ export function createRemoteAvatarManager(ctx) {
     av.mode = payload.mode || av.mode;
 
     setTargetPose(av.targetHead, payload.head);
-    av.leftActive = setTargetPose(av.targetLeft, payload.left);
-    av.rightActive = setTargetPose(av.targetRight, payload.right);
+    av.leftActive = setHandTargetPose(av.targetLeft, payload.left);
+    av.rightActive = setHandTargetPose(av.targetRight, payload.right);
 
     if (av.mode === 'desktop') {
       av.leftActive = false;
