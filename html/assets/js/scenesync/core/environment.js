@@ -4,53 +4,122 @@ export function createEnvironmentManager(ctx) {
   const {
     scene,
     pmremGenerator,
-    broadcast,
     dom,
+    showToast,
   } = ctx;
 
-  let currentEnvId = 'outdoor_day';
+  let desiredEnvId = 'outdoor_day';
+  let appliedEnvId = null;
+  let loadSeq = 0;
+  let currentEnvMap = null;
+
   const envSelect = dom?.envSelect || document.getElementById('env-select');
+  const loader = new RGBELoader();
 
   function updateEnvSelector() {
     if (envSelect) {
-      envSelect.value = currentEnvId;
+      envSelect.value = desiredEnvId;
     }
   }
 
-  function loadEnvironment(envId, options = {}) {
-    const { broadcastChange = false } = options;
+  function disposeCurrentEnvMap() {
+    if (!currentEnvMap) return;
+
+    if (scene.environment === currentEnvMap) {
+      scene.environment = null;
+    }
+
+    if (scene.background === currentEnvMap) {
+      scene.background = null;
+    }
+
+    currentEnvMap.dispose();
+    currentEnvMap = null;
+  }
+
+  function loadEnvironmentAsset(envId) {
+    const seq = ++loadSeq;
     const url = '/assets/hdri/' + envId + '.hdr';
 
-    new RGBELoader().load(url, (texture) => {
-      const envMap = pmremGenerator.fromEquirectangular(texture).texture;
-      scene.environment = envMap;
-      scene.background = envMap;
-      texture.dispose();
+    loader.load(
+      url,
+      (texture) => {
+        if (seq !== loadSeq || envId !== desiredEnvId) {
+          texture.dispose();
+          return;
+        }
 
-      currentEnvId = envId;
-      updateEnvSelector();
+        const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+        texture.dispose();
 
-      if (broadcastChange) {
-        broadcast?.({
-          kind: 'scene-env',
-          envId,
-        });
+        if (seq !== loadSeq || envId !== desiredEnvId) {
+          envMap.dispose();
+          return;
+        }
+
+        disposeCurrentEnvMap();
+
+        currentEnvMap = envMap;
+        scene.environment = envMap;
+        scene.background = envMap;
+        appliedEnvId = envId;
+      },
+      undefined,
+      (error) => {
+        if (seq !== loadSeq || envId !== desiredEnvId) {
+          return;
+        }
+
+        console.warn('[environment] failed to load HDRI:', envId, error);
+        showToast?.('環境の読み込みに失敗しました: ' + envId);
       }
-    });
+    );
+  }
+
+  function requestEnvironment(envId, options = {}) {
+    if (!envId) return;
+
+    const {
+      source = 'local',
+      broadcastChange = source === 'local',
+    } = options;
+
+    desiredEnvId = envId;
+    updateEnvSelector();
+
+    if (broadcastChange) {
+      ctx.broadcast?.({
+        kind: 'scene-env',
+        envId,
+      });
+    }
+
+    loadEnvironmentAsset(envId);
   }
 
   envSelect?.addEventListener('change', (e) => {
-    const envId = e.target.value;
-    loadEnvironment(envId, { broadcastChange: true });
+    requestEnvironment(e.target.value, {
+      source: 'local',
+      broadcastChange: true,
+    });
   });
 
+  function loadEnvironment(envId, options = {}) {
+    requestEnvironment(envId, options);
+  }
+
+  function dispose() {
+    loadSeq += 1;
+    disposeCurrentEnvMap();
+  }
+
   return {
+    requestEnvironment,
     loadEnvironment,
     updateEnvSelector,
-    getCurrentEnvId: () => currentEnvId,
-    setCurrentEnvId: (envId) => {
-      currentEnvId = envId;
-      updateEnvSelector();
-    },
+    getCurrentEnvId: () => desiredEnvId,
+    getDesiredEnvId: () => desiredEnvId,
+    getAppliedEnvId: () => appliedEnvId,
+    dispose,
   };
 }

@@ -31,6 +31,7 @@ const environmentManager = createEnvironmentManager({
   pmremGenerator,
   broadcast,
   dom,
+  showToast,
 });
 
 // glB ローダー
@@ -926,7 +927,10 @@ renderer.xr.addEventListener('sessionend', () => {
       scene.background = xrSavedBackground;
       xrSavedBackground = null;
     } else if (environmentManager.getCurrentEnvId()) {
-      environmentManager.loadEnvironment(environmentManager.getCurrentEnvId());
+      environmentManager.loadEnvironment(environmentManager.getCurrentEnvId(), {
+        source: 'remote',
+        broadcastChange: false,
+      });
     }
   }
 
@@ -2351,7 +2355,10 @@ function handleHandoff(data) {
       sceneReceived = true;
       clearTimeout(sceneRequestTimer);
       if (payload.envId) {
-        environmentManager.loadEnvironment(payload.envId);
+        environmentManager.loadEnvironment(payload.envId, {
+          source: 'handoff',
+          broadcastChange: false,
+        });
       }
       const objects = payload.objects || {};
       for (const [objectId, info] of Object.entries(objects)) {
@@ -2445,7 +2452,10 @@ function handleHandoff(data) {
     }
     case 'scene-env': {
       if (payload.envId) {
-        environmentManager.loadEnvironment(payload.envId);
+        environmentManager.loadEnvironment(payload.envId, {
+          source: 'remote',
+          broadcastChange: false,
+        });
       }
       break;
     }
@@ -2764,4 +2774,7 @@ nicknameChip?.addEventListener('click', editNickname);
 updateNicknameLabel();
 renderRoomSection();
 connectPresence();
-environmentManager.loadEnvironment('outdoor_day');
+environmentManager.loadEnvironment('outdoor_day', {
+  source: 'init',
+  broadcastChange: false,
+});
