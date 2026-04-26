@@ -165,17 +165,18 @@ const xrState = {
   lockOwnedByMe: new Set(),      // lock 発行済み objectId
   // AR床補正
   floor: {
-    referenceSpace: null,        // 元の reference space
-    offsetSpace: null,           // オフセット適用後の reference space
-    estimatedFloorY: null,       // 推定床Y（カメラ空間内、負の値）
-    hitTestSource: null,         // XRHitTestSource
-    viewerSpace: null,           // viewer reference space
-    reticle: null,               // レチクル mesh
-    lastHitPose: null,           // 直近のヒット位置・姿勢
-    lastHitY: null,              // 直近のヒット位置Y座標
-    stableHitCount: 0,           // 連続ヒット回数（床高さ確定用）
-    floorConfirmed: false,       // 床高さが安定確定したか
-    calibrating: false,          // 床合わせモード中か
+    referenceSpace: null,           // 元の reference space
+    offsetSpace: null,              // オフセット適用後の reference space
+    estimatedFloorY: null,          // 推定床Y（カメラ空間内、負の値）
+    hitTestSource: null,            // viewer XRHitTestSource（フォールバック）
+    viewerSpace: null,              // viewer reference space
+    controllerHitTestSources: new Map(), // コントローラー別 XRHitTestSource
+    reticle: null,                  // レチクル mesh
+    lastHitPose: null,              // 直近のヒット位置・姿勢
+    lastHitY: null,                 // 直近のヒット位置Y座標
+    stableHitCount: 0,              // 連続ヒット回数（床高さ確定用）
+    floorConfirmed: false,          // 床高さが安定確定したか
+    calibrating: false,             // 床合わせモード中か
   },
   controllers: [],
 };
@@ -789,14 +790,33 @@ renderer.xr.addEventListener('sessionstart', async () => {
 
   // hit-test source を作成（AR/MRのみ）
   if (xrState.mode === 'immersive-ar') {
+    // viewer（頭方向）フォールバック用
     try {
       xrState.floor.viewerSpace = await session.requestReferenceSpace('viewer');
       xrState.floor.hitTestSource = await session.requestHitTestSource({
         space: xrState.floor.viewerSpace,
       });
     } catch (e) {
-      console.warn('[XR] hit-test not available:', e);
+      console.warn('[XR] viewer hit-test not available:', e);
     }
+
+    // コントローラーが追加されたらその targetRaySpace でも hit-test を作成
+    xrState.floor.controllerHitTestSources.clear();
+    session.addEventListener('inputsourceschange', ({ added, removed }) => {
+      for (const source of removed) {
+        const src = xrState.floor.controllerHitTestSources.get(source);
+        if (src) { try { src.cancel(); } catch {} xrState.floor.controllerHitTestSources.delete(source); }
+      }
+      for (const source of added) {
+        if (!source.targetRaySpace) continue;
+        session.requestHitTestSource({ space: source.targetRaySpace })
+          .then(src => {
+            xrState.floor.controllerHitTestSources.set(source, src);
+            console.log('[XR] controller hit-test source created:', source.handedness);
+          })
+          .catch(() => {});
+      }
+    });
   }
 
   // 床合わせボタンの表示更新
@@ -872,6 +892,11 @@ renderer.xr.addEventListener('sessionend', () => {
     try { xrState.floor.hitTestSource.cancel(); } catch {}
     xrState.floor.hitTestSource = null;
   }
+  for (const src of xrState.floor.controllerHitTestSources.values()) {
+    try { src.cancel(); } catch {}
+  }
+  xrState.floor.controllerHitTestSources.clear();
+  xrState.floor.calibrating = false;
   xrState.floor.viewerSpace = null;
   xrState.floor.referenceSpace = null;
   xrState.floor.offsetSpace = null;
@@ -1551,7 +1576,7 @@ function updateXrHitTest(frame) {
     return;
   }
 
-  if (!xrState.floor.hitTestSource || !frame) {
+  if (!frame) {
     reticle.visible = false;
     return;
   }
@@ -1562,25 +1587,34 @@ function updateXrHitTest(frame) {
     return;
   }
 
-  const hitTestResults = frame.getHitTestResults(xrState.floor.hitTestSource);
-  if (hitTestResults.length === 0) {
-    reticle.visible = false;
-    return;
+  // コントローラーの targetRaySpace によるヒットテストを優先
+  let hitPose = null;
+  for (const [, src] of xrState.floor.controllerHitTestSources) {
+    const results = frame.getHitTestResults(src);
+    if (results.length > 0) {
+      const p = results[0].getPose(refSpace);
+      if (p) { hitPose = p; break; }
+    }
   }
 
-  const pose = hitTestResults[0].getPose(refSpace);
-  if (!pose) {
+  // コントローラー hit test がなければ viewer（頭方向）フォールバック
+  if (!hitPose && xrState.floor.hitTestSource) {
+    const results = frame.getHitTestResults(xrState.floor.hitTestSource);
+    if (results.length > 0) hitPose = results[0].getPose(refSpace) || null;
+  }
+
+  if (!hitPose) {
     reticle.visible = false;
     return;
   }
 
   // レチクル位置・姿勢を更新
-  reticle.matrix.fromArray(pose.transform.matrix);
+  reticle.matrix.fromArray(hitPose.transform.matrix);
   reticle.visible = true;
 
   // ヒットY座標を保存（confirmFloorCalibration で使用）
-  xrState.floor.lastHitPose = pose;
-  xrState.floor.lastHitY = pose.transform.position.y;
+  xrState.floor.lastHitPose = hitPose;
+  xrState.floor.lastHitY = hitPose.transform.position.y;
 
   // デバッグ: 頻度を抑えてログ出力
   if (Math.random() < 0.02) {
