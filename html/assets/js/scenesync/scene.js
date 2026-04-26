@@ -15,6 +15,7 @@ import { extractYaw } from './utils/math.js';
 import { broadcastObjectDelta } from './objects/object-delta.js';
 import { createXrState } from './xr/xr-state.js';
 import { setupXrButtons } from './xr/xr-buttons.js';
+import { createXrFloorManager } from './xr/xr-floor.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -56,6 +57,15 @@ const xrState = createXrState();
 const SCALE_MIN_RATIO = 0.05;
 const SCALE_MAX_RATIO = 50;
 const XR_INITIAL_HEAD_HEIGHT = 1.3;
+
+const xrFloor = createXrFloorManager({
+  scene,
+  renderer,
+  xrState,
+  dom,
+  showToast,
+  initialHeadHeight: XR_INITIAL_HEAD_HEIGHT,
+});
 
 // ── アバター位置同期定数 ──
 const AVATAR_SEND_INTERVAL_MS = 100;
@@ -186,34 +196,13 @@ for (let i = 0; i < 2; i++) {
   xrState.controllers.push(ctrl);
 }
 
-// ── AR hit-test レチクル ─────────────────────────────────
-function createReticle() {
-  const geo = new THREE.RingGeometry(0.10, 0.15, 32);
-  geo.rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshBasicMaterial({
-    color: 0x88ccff,
-    transparent: true,
-    opacity: 0.8,
-    side: THREE.DoubleSide,
-  });
-  const reticle = new THREE.Mesh(geo, mat);
-  reticle.matrixAutoUpdate = false;
-  reticle.visible = false;
-  reticle.raycast = () => {};
-  reticle.userData._isReticle = true;
-  return reticle;
-}
-
-xrState.floor.reticle = createReticle();
-scene.add(xrState.floor.reticle);
-
 const xrTmpMatrix = new THREE.Matrix4();
 const xrRaycaster = new THREE.Raycaster();
 
 function onXrSelectStart(ctrl) {
   // 床合わせモード中ならトリガーで床確定
   if (xrState.floor.calibrating) {
-    confirmFloorCalibration();
+    xrFloor.confirmFloorCalibration();
     return;
   }
 
@@ -598,71 +587,6 @@ function updateTwoHandGrab() {
   obj.position.copy(midpoint).add(offset);
 }
 
-// ── XR 床補正関数 ─────────────────────────────────────
-
-function applyFloorOffset(floorY) {
-  const baseSpace = xrState.floor.referenceSpace;
-  if (!baseSpace) return;
-
-  const offsetTransform = new XRRigidTransform(
-    { x: 0, y: -floorY, z: 0, w: 1 },
-    { x: 0, y: 0, z: 0, w: 1 }
-  );
-  const offsetSpace = baseSpace.getOffsetReferenceSpace(offsetTransform);
-  renderer.xr.setReferenceSpace(offsetSpace);
-  xrState.floor.offsetSpace = offsetSpace;
-  xrState.floor.estimatedFloorY = floorY;
-}
-
-// 床合わせモード中にトリガーが押された時の処理
-function confirmFloorCalibration() {
-  if (!xrState.floor.calibrating) return false;
-  if (xrState.floor.lastHitY === null) {
-    showToast('床を指してください');
-    return false;
-  }
-
-  const hitY = xrState.floor.lastHitY;
-  const currentOffset = xrState.floor.estimatedFloorY || 0;
-  const newOffset = currentOffset - hitY;
-  applyFloorOffset(newOffset);
-
-  console.log('[XR] floor calibration:', { currentOffset, hitY, newOffset });
-
-  xrState.floor.calibrating = false;
-  xrState.floor.floorConfirmed = true;
-  xrState.floor.reticle.visible = false;
-  showToast('床位置を設定しました');
-
-  updateXrCalibrationButton();
-  return true;
-}
-
-// 床合わせモードを再開
-function startFloorCalibration() {
-  if (xrState.mode !== 'immersive-ar') {
-    showToast('床合わせはMRモードでのみ使用できます');
-    return;
-  }
-  xrState.floor.calibrating = true;
-  xrState.floor.floorConfirmed = false;
-  showToast('床を指してトリガーを押してください');
-  updateXrCalibrationButton();
-}
-
-function updateXrCalibrationButton() {
-  const btn = dom.xrCalibrateBtn;
-  if (!btn) return;
-
-  // MRセッション中かつ床合わせモードでない時のみ表示
-  if (xrState.active && xrState.mode === 'immersive-ar' && !xrState.floor.calibrating) {
-    btn.style.display = 'inline-flex';
-    btn.onclick = startFloorCalibration;
-  } else {
-    btn.style.display = 'none';
-  }
-}
-
 // ── XR セッション開始/終了 ─────────────────────────────
 let xrSavedBackground = null;
 
@@ -711,63 +635,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
     }
   }
 
-  // ── 床補正と hit-test 初期化 ──
-  xrState.floor.estimatedFloorY = null;
-  xrState.floor.stableHitCount = 0;
-  xrState.floor.floorConfirmed = false;
-  xrState.floor.lastHitPose = null;
-  xrState.floor.hitTestSource = null;
-  xrState.floor.viewerSpace = null;
-
-  // 元の reference space を保存
-  xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
-
-  // 起動時は仮の頭の高さで初期化
-  applyFloorOffset(XR_INITIAL_HEAD_HEIGHT);
-
-  // MR/AR の場合は床合わせモードを自動開始
-  if (xrState.mode === 'immersive-ar') {
-    xrState.floor.calibrating = true;
-    xrState.floor.floorConfirmed = false;
-    showToast('床を指してトリガーを押してください');
-  } else {
-    // VR では床合わせ不要
-    xrState.floor.calibrating = false;
-  }
-
-  // hit-test source を作成（AR/MRのみ）
-  if (xrState.mode === 'immersive-ar') {
-    // viewer（頭方向）フォールバック用
-    try {
-      xrState.floor.viewerSpace = await session.requestReferenceSpace('viewer');
-      xrState.floor.hitTestSource = await session.requestHitTestSource({
-        space: xrState.floor.viewerSpace,
-      });
-    } catch (e) {
-      console.warn('[XR] viewer hit-test not available:', e);
-    }
-
-    // コントローラーが追加されたらその targetRaySpace でも hit-test を作成
-    xrState.floor.controllerHitTestSources.clear();
-    session.addEventListener('inputsourceschange', ({ added, removed }) => {
-      for (const source of removed) {
-        const src = xrState.floor.controllerHitTestSources.get(source);
-        if (src) { try { src.cancel(); } catch {} xrState.floor.controllerHitTestSources.delete(source); }
-      }
-      for (const source of added) {
-        if (!source.targetRaySpace) continue;
-        session.requestHitTestSource({ space: source.targetRaySpace })
-          .then(src => {
-            xrState.floor.controllerHitTestSources.set(source, src);
-            console.log('[XR] controller hit-test source created:', source.handedness);
-          })
-          .catch(() => {});
-      }
-    });
-  }
-
-  // 床合わせボタンの表示更新
-  updateXrCalibrationButton();
+  await xrFloor.handleSessionStart(session, xrState.mode);
 
   console.log('[XR] session started:', {
     mode: xrState.mode,
@@ -780,8 +648,6 @@ renderer.xr.addEventListener('sessionend', () => {
   // トグルボタンと床合わせボタンを隠す
   const xrToggleBtn = dom.xrToggleBtn;
   if (xrToggleBtn) xrToggleBtn.style.display = 'none';
-  const xrCalibrateBtn = dom.xrCalibrateBtn;
-  if (xrCalibrateBtn) xrCalibrateBtn.style.display = 'none';
 
   xrState.active = false;
 
@@ -836,24 +702,7 @@ renderer.xr.addEventListener('sessionend', () => {
     });
   }
 
-  // 床補正 / hit-test のクリーンアップ
-  xrState.floor.reticle.visible = false;
-  if (xrState.floor.hitTestSource) {
-    try { xrState.floor.hitTestSource.cancel(); } catch {}
-    xrState.floor.hitTestSource = null;
-  }
-  for (const src of xrState.floor.controllerHitTestSources.values()) {
-    try { src.cancel(); } catch {}
-  }
-  xrState.floor.controllerHitTestSources.clear();
-  xrState.floor.calibrating = false;
-  xrState.floor.viewerSpace = null;
-  xrState.floor.referenceSpace = null;
-  xrState.floor.offsetSpace = null;
-  xrState.floor.estimatedFloorY = null;
-  xrState.floor.lastHitPose = null;
-  xrState.floor.stableHitCount = 0;
-  xrState.floor.floorConfirmed = false;
+  xrFloor.handleSessionEnd();
 });
 
 // ── コントロール ─────────────────────────────────────────

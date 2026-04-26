@@ -1,0 +1,203 @@
+import * as THREE from 'three';
+
+function createReticle() {
+  const geo = new THREE.RingGeometry(0.10, 0.15, 32);
+  geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x88ccff,
+    transparent: true,
+    opacity: 0.8,
+    side: THREE.DoubleSide,
+  });
+  const reticle = new THREE.Mesh(geo, mat);
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  reticle.raycast = () => {};
+  reticle.userData._isReticle = true;
+  return reticle;
+}
+
+export function createXrFloorManager(ctx) {
+  const {
+    scene,
+    renderer,
+    xrState,
+    dom,
+    showToast,
+    initialHeadHeight,
+  } = ctx;
+
+  let inputSourcesChangeHandler = null;
+  let inputSourcesSession = null;
+
+  xrState.floor.reticle = createReticle();
+  scene.add(xrState.floor.reticle);
+
+  function applyFloorOffset(floorY) {
+    const baseSpace = xrState.floor.referenceSpace;
+    if (!baseSpace) return;
+
+    const offsetTransform = new XRRigidTransform(
+      { x: 0, y: -floorY, z: 0, w: 1 },
+      { x: 0, y: 0, z: 0, w: 1 }
+    );
+    const offsetSpace = baseSpace.getOffsetReferenceSpace(offsetTransform);
+    renderer.xr.setReferenceSpace(offsetSpace);
+    xrState.floor.offsetSpace = offsetSpace;
+    xrState.floor.estimatedFloorY = floorY;
+  }
+
+  function updateCalibrationButton() {
+    const btn = dom.xrCalibrateBtn;
+    if (!btn) return;
+
+    if (xrState.active && xrState.mode === 'immersive-ar' && !xrState.floor.calibrating) {
+      btn.style.display = 'inline-flex';
+      btn.onclick = startFloorCalibration;
+    } else {
+      btn.style.display = 'none';
+    }
+  }
+
+  function confirmFloorCalibration() {
+    if (!xrState.floor.calibrating) return false;
+    if (xrState.floor.lastHitY === null) {
+      showToast('床を指してください');
+      return false;
+    }
+
+    const hitY = xrState.floor.lastHitY;
+    const currentOffset = xrState.floor.estimatedFloorY || 0;
+    const newOffset = currentOffset - hitY;
+    applyFloorOffset(newOffset);
+
+    console.log('[XR] floor calibration:', { currentOffset, hitY, newOffset });
+
+    xrState.floor.calibrating = false;
+    xrState.floor.floorConfirmed = true;
+    xrState.floor.reticle.visible = false;
+    showToast('床位置を設定しました');
+
+    updateCalibrationButton();
+    return true;
+  }
+
+  function startFloorCalibration() {
+    if (xrState.mode !== 'immersive-ar') {
+      showToast('床合わせはMRモードでのみ使用できます');
+      return;
+    }
+    xrState.floor.calibrating = true;
+    xrState.floor.floorConfirmed = false;
+    showToast('床を指してトリガーを押してください');
+    updateCalibrationButton();
+  }
+
+  async function handleSessionStart(session, mode) {
+    xrState.floor.estimatedFloorY = null;
+    xrState.floor.stableHitCount = 0;
+    xrState.floor.floorConfirmed = false;
+    xrState.floor.lastHitPose = null;
+    xrState.floor.hitTestSource = null;
+    xrState.floor.viewerSpace = null;
+
+    xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
+    applyFloorOffset(initialHeadHeight);
+
+    if (mode === 'immersive-ar') {
+      xrState.floor.calibrating = true;
+      xrState.floor.floorConfirmed = false;
+      showToast('床を指してトリガーを押してください');
+    } else {
+      xrState.floor.calibrating = false;
+    }
+
+    if (mode === 'immersive-ar') {
+      try {
+        xrState.floor.viewerSpace = await session.requestReferenceSpace('viewer');
+        xrState.floor.hitTestSource = await session.requestHitTestSource({
+          space: xrState.floor.viewerSpace,
+        });
+      } catch (e) {
+        console.warn('[XR] viewer hit-test not available:', e);
+      }
+
+      xrState.floor.controllerHitTestSources.clear();
+      inputSourcesChangeHandler = ({ added, removed }) => {
+        for (const source of removed) {
+          const src = xrState.floor.controllerHitTestSources.get(source);
+          if (src) {
+            try { src.cancel(); } catch {}
+            xrState.floor.controllerHitTestSources.delete(source);
+          }
+        }
+        for (const source of added) {
+          if (!source.targetRaySpace) continue;
+          session.requestHitTestSource({ space: source.targetRaySpace })
+            .then(src => {
+              xrState.floor.controllerHitTestSources.set(source, src);
+              console.log('[XR] controller hit-test source created:', source.handedness);
+            })
+            .catch(() => {});
+        }
+      };
+      inputSourcesSession = session;
+      session.addEventListener('inputsourceschange', inputSourcesChangeHandler);
+    }
+
+    updateCalibrationButton();
+  }
+
+  function handleSessionEnd() {
+    const btn = dom.xrCalibrateBtn;
+    if (btn) btn.style.display = 'none';
+
+    if (inputSourcesSession && inputSourcesChangeHandler) {
+      try {
+        inputSourcesSession.removeEventListener('inputsourceschange', inputSourcesChangeHandler);
+      } catch {}
+    }
+    inputSourcesSession = null;
+    inputSourcesChangeHandler = null;
+
+    xrState.floor.reticle.visible = false;
+    if (xrState.floor.hitTestSource) {
+      try { xrState.floor.hitTestSource.cancel(); } catch {}
+      xrState.floor.hitTestSource = null;
+    }
+    for (const src of xrState.floor.controllerHitTestSources.values()) {
+      try { src.cancel(); } catch {}
+    }
+    xrState.floor.controllerHitTestSources.clear();
+    xrState.floor.calibrating = false;
+    xrState.floor.viewerSpace = null;
+    xrState.floor.referenceSpace = null;
+    xrState.floor.offsetSpace = null;
+    xrState.floor.estimatedFloorY = null;
+    xrState.floor.lastHitPose = null;
+    xrState.floor.stableHitCount = 0;
+    xrState.floor.floorConfirmed = false;
+  }
+
+  function dispose() {
+    handleSessionEnd();
+
+    const reticle = xrState.floor.reticle;
+    if (reticle) {
+      scene.remove(reticle);
+      if (reticle.geometry) reticle.geometry.dispose();
+      if (reticle.material) reticle.material.dispose();
+      xrState.floor.reticle = null;
+    }
+  }
+
+  return {
+    applyFloorOffset,
+    confirmFloorCalibration,
+    startFloorCalibration,
+    updateCalibrationButton,
+    handleSessionStart,
+    handleSessionEnd,
+    dispose,
+  };
+}
