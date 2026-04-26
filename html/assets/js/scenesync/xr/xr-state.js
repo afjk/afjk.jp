@@ -38,7 +38,6 @@ export function createXrState() {
       estimatedFloorY: null,
       hitTestSource: null,
       viewerSpace: null,
-      controllerHitTestSources: new Map(),
       reticle: null,
       lastHitPose: null,
       lastHitY: null,

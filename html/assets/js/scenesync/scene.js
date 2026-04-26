@@ -1371,34 +1371,36 @@ function updateXrHitTest(frame) {
     return;
   }
 
-  const refSpace = renderer.xr.getReferenceSpace();
+  if (!xrState.floor.hitTestSource) {
+    reticle.visible = false;
+    return;
+  }
+
+  const refSpace = xrState.floor.offsetSpace || xrState.floor.referenceSpace;
   if (!refSpace) {
     reticle.visible = false;
     return;
   }
 
-  // コントローラーの targetRaySpace によるヒットテストを優先
-  let hitPose = null;
-  for (const [, src] of xrState.floor.controllerHitTestSources) {
-    const results = frame.getHitTestResults(src);
-    if (results.length > 0) {
-      const p = results[0].getPose(refSpace);
-      if (p) { hitPose = p; break; }
-    }
+  // HMD（視線）の hit-test のみを使用
+  const results = frame.getHitTestResults(xrState.floor.hitTestSource);
+  if (results.length === 0) {
+    reticle.visible = false;
+    xrState.floor.lastHitY = null;
+    return;
   }
 
-  if (!hitPose) {
+  const pose = results[0].getPose(refSpace);
+  if (!pose) {
     reticle.visible = false;
     return;
   }
 
-  // レチクル位置・姿勢を更新
-  reticle.matrix.fromArray(hitPose.transform.matrix);
   reticle.visible = true;
-
-  // ヒットY座標を保存（confirmFloorCalibration で使用）
-  xrState.floor.lastHitPose = hitPose;
-  xrState.floor.lastHitY = hitPose.transform.position.y;
+  reticle.matrix.fromArray(pose.transform.matrix);
+  reticle.matrixWorldNeedsUpdate = true;
+  xrState.floor.lastHitY = pose.transform.position.y;
+  xrState.floor.lastHitPose = pose;
 
   // デバッグ: 頻度を抑えてログ出力
   if (Math.random() < 0.02) {

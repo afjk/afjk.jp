@@ -13,7 +13,7 @@ function createReticleLabel() {
   ctx.font = 'bold 36px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('床を指してトリガーを引く', 256, 64);
+  ctx.fillText('床を見てトリガーを引く', 256, 64);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.needsUpdate = true;
@@ -62,9 +62,6 @@ export function createXrFloorManager(ctx) {
     initialHeadHeight,
   } = ctx;
 
-  let inputSourcesChangeHandler = null;
-  let inputSourcesSession = null;
-
   xrState.floor.reticle = createReticle();
   scene.add(xrState.floor.reticle);
 
@@ -97,7 +94,7 @@ export function createXrFloorManager(ctx) {
   function confirmFloorCalibration() {
     if (!xrState.floor.calibrating) return false;
     if (xrState.floor.lastHitY === null) {
-      showToast('床を指してください');
+      showToast('床を見てください');
       return false;
     }
 
@@ -119,12 +116,12 @@ export function createXrFloorManager(ctx) {
 
   function startFloorCalibration() {
     if (xrState.mode !== 'immersive-ar') {
-      showToast('床合わせはMRモードでのみ使用できます');
+      showToast('床合わせはARモードでのみ使用できます');
       return;
     }
     xrState.floor.calibrating = true;
     xrState.floor.floorConfirmed = false;
-    showToast('床を指してトリガーを押してください');
+    showToast('床を見てトリガーを引いてください');
     updateCalibrationButton();
   }
 
@@ -142,7 +139,7 @@ export function createXrFloorManager(ctx) {
     if (mode === 'immersive-ar') {
       xrState.floor.calibrating = true;
       xrState.floor.floorConfirmed = false;
-      showToast('床を指してトリガーを押してください');
+      showToast('床を見てトリガーを引いてください');
     } else {
       xrState.floor.calibrating = false;
     }
@@ -156,28 +153,6 @@ export function createXrFloorManager(ctx) {
       } catch (e) {
         console.warn('[XR] viewer hit-test not available:', e);
       }
-
-      xrState.floor.controllerHitTestSources.clear();
-      inputSourcesChangeHandler = ({ added, removed }) => {
-        for (const source of removed) {
-          const src = xrState.floor.controllerHitTestSources.get(source);
-          if (src) {
-            try { src.cancel(); } catch {}
-            xrState.floor.controllerHitTestSources.delete(source);
-          }
-        }
-        for (const source of added) {
-          if (!source.targetRaySpace) continue;
-          session.requestHitTestSource({ space: source.targetRaySpace })
-            .then(src => {
-              xrState.floor.controllerHitTestSources.set(source, src);
-              console.log('[XR] controller hit-test source created:', source.handedness);
-            })
-            .catch(() => {});
-        }
-      };
-      inputSourcesSession = session;
-      session.addEventListener('inputsourceschange', inputSourcesChangeHandler);
     }
 
     updateCalibrationButton();
@@ -187,23 +162,11 @@ export function createXrFloorManager(ctx) {
     const btn = dom.xrCalibrateBtn;
     if (btn) btn.style.display = 'none';
 
-    if (inputSourcesSession && inputSourcesChangeHandler) {
-      try {
-        inputSourcesSession.removeEventListener('inputsourceschange', inputSourcesChangeHandler);
-      } catch {}
-    }
-    inputSourcesSession = null;
-    inputSourcesChangeHandler = null;
-
     xrState.floor.reticle.visible = false;
     if (xrState.floor.hitTestSource) {
       try { xrState.floor.hitTestSource.cancel(); } catch {}
       xrState.floor.hitTestSource = null;
     }
-    for (const src of xrState.floor.controllerHitTestSources.values()) {
-      try { src.cancel(); } catch {}
-    }
-    xrState.floor.controllerHitTestSources.clear();
     xrState.floor.calibrating = false;
     xrState.floor.viewerSpace = null;
     xrState.floor.referenceSpace = null;
