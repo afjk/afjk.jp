@@ -1597,12 +1597,6 @@ function updateXrHitTest(frame) {
     }
   }
 
-  // コントローラー hit test がなければ viewer（頭方向）フォールバック
-  if (!hitPose && xrState.floor.hitTestSource) {
-    const results = frame.getHitTestResults(xrState.floor.hitTestSource);
-    if (results.length > 0) hitPose = results[0].getPose(refSpace) || null;
-  }
-
   if (!hitPose) {
     reticle.visible = false;
     return;
