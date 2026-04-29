@@ -205,6 +205,13 @@
     .tb-btn.btn-danger:hover {
       background: rgba(255,60,60,0.7);
     }
+    .tb-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .tb-btn:disabled:hover {
+      background: rgba(255,255,255,0.15);
+    }
     #peers-panel {
       position: fixed;
       top: 48px;
@@ -309,6 +316,8 @@
   <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
   <div id="toast"></div>
   <div id="mobile-toolbar" style="display:none;">
+    <button id="btn-undo" class="tb-btn" title="取り消す (Ctrl+Z)">↶</button>
+    <button id="btn-redo" class="tb-btn" title="やり直す (Ctrl+Y)">↷</button>
     <button id="btn-move" class="tb-btn active" title="移動">☩</button>
     <button id="btn-rotate" class="tb-btn" title="回転">↻</button>
     <button id="btn-scale" class="tb-btn" title="スケール">⤡</button>

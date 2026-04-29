@@ -1,8 +1,9 @@
 export class HistoryManager {
-  constructor() {
+  constructor(maxHistorySize = 100) {
     this.undoStack = [];
     this.redoStack = [];
-    this.maxHistorySize = 100;
+    this.maxHistorySize = maxHistorySize;
+    this.onChange = null;
   }
 
   push(entry) {
@@ -13,6 +14,8 @@ export class HistoryManager {
     if (this.undoStack.length > this.maxHistorySize) {
       this.undoStack.shift();
     }
+
+    this._notifyChange();
   }
 
   canUndo() {
@@ -27,6 +30,7 @@ export class HistoryManager {
     if (!this.canUndo()) return null;
     const entry = this.undoStack.pop();
     this.redoStack.push(entry);
+    this._notifyChange();
     return entry.backward;
   }
 
@@ -34,12 +38,25 @@ export class HistoryManager {
     if (!this.canRedo()) return null;
     const entry = this.redoStack.pop();
     this.undoStack.push(entry);
+    this._notifyChange();
     return entry.forward;
   }
 
   clear() {
     this.undoStack = [];
     this.redoStack = [];
+    this._notifyChange();
+  }
+
+  _notifyChange() {
+    if (typeof this.onChange === 'function') {
+      this.onChange({
+        canUndo: this.canUndo(),
+        canRedo: this.canRedo(),
+        undoSize: this.undoStack.length,
+        redoSize: this.redoStack.length,
+      });
+    }
   }
 
   getHistory(count = 10) {
