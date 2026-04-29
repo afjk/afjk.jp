@@ -1677,6 +1677,7 @@ presenceState.historyManager.onChange = () => {
 
 // 初期状態を反映
 updateHistoryButtonState();
+updateLinkButtonState();
 
 const remoteAvatarManager = createRemoteAvatarManager({
   scene,
@@ -2260,9 +2261,7 @@ function handleHandoff(data) {
     }
     case 'ai-link-revoked': {
       if (presenceState.linkManager.linkId === payload.linkId) {
-        presenceState.linkManager.linkToken = null;
-        presenceState.linkManager.linkId = null;
-        presenceState.linkManager.expiresAt = null;
+        presenceState.linkManager.clearLocal();
         updateLinkButtonState();
         showToast('AIリンクが解除されました');
       }
