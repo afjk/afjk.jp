@@ -2174,6 +2174,12 @@ function handleHandoff(data) {
       remoteAvatarManager.handleAvatarMessage(payload);
       break;
     }
+    case 'scene-batch': {
+      payload.actions?.forEach(action => {
+        handleHandoff({ ...data, payload: action });
+      });
+      break;
+    }
     default:
       break;
   }
