@@ -2434,6 +2434,9 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     model.userData.meshPath = meshPath;
   } catch (err) {
     console.warn('POST failed:', err);
+    removeLoadingOverlay(objectId);
+    showToast('GLB アップロード失敗: ' + err.message);
+    return;
   }
 
   // 履歴に追加
@@ -2461,6 +2464,9 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     scale: model.scale.toArray(),
     meshPath: actualMeshPath,
   });
+
+  // ローディングオーバーレイを解除
+  removeLoadingOverlay(objectId);
 }
 
 const dragDropManager = new DragDropManager({
