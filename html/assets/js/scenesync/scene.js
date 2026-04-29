@@ -1677,7 +1677,6 @@ presenceState.historyManager.onChange = () => {
 
 // 初期状態を反映
 updateHistoryButtonState();
-updateLinkButtonState();
 
 const remoteAvatarManager = createRemoteAvatarManager({
   scene,
@@ -2694,6 +2693,9 @@ btnRevokeLink?.addEventListener('click', revokeLink);
 presenceState.linkManager.onStatusChange = () => {
   updateLinkButtonState();
 };
+
+// 初期状態を反映（DOM 参照と関数定義が揃った後で呼ぶ）
+updateLinkButtonState();
 
 // ── 起動 ─────────────────────────────────────────────────
 
