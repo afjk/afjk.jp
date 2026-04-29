@@ -1407,14 +1407,6 @@ btnRedo?.addEventListener('click', () => {
   }
 });
 
-// 履歴状態が変わったときにボタンを更新
-presenceState.historyManager.onChange = () => {
-  updateHistoryButtonState();
-};
-
-// 初期状態を反映
-updateHistoryButtonState();
-
 // ── キーボードショートカット ──────────────────────────────
 
 window.addEventListener('keydown', (e) => {
@@ -1661,6 +1653,14 @@ const presenceState = {
   peers: [],
   historyManager: createHistoryManager(),
 };
+
+// 履歴状態が変わったときにボタンを更新
+presenceState.historyManager.onChange = () => {
+  updateHistoryButtonState();
+};
+
+// 初期状態を反映
+updateHistoryButtonState();
 
 const remoteAvatarManager = createRemoteAvatarManager({
   scene,
