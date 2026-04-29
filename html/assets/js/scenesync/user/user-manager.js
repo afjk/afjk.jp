@@ -1,5 +1,4 @@
 const STORAGE_KEY = 'scenesync.userId';
-const NICKNAME_STORAGE_KEY = 'scenesync.nickname';
 
 function generateUserId() {
   const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -13,7 +12,6 @@ function generateUserId() {
 export class UserManager {
   constructor() {
     this.userId = this.loadOrCreateUserId();
-    this.nickname = this.loadNickname() || 'Anonymous';
   }
 
   loadOrCreateUserId() {
@@ -25,21 +23,8 @@ export class UserManager {
     return userId;
   }
 
-  loadNickname() {
-    return localStorage.getItem(NICKNAME_STORAGE_KEY);
-  }
-
-  setNickname(nickname) {
-    this.nickname = nickname;
-    localStorage.setItem(NICKNAME_STORAGE_KEY, nickname);
-  }
-
   getUserId() {
     return this.userId;
-  }
-
-  getNickname() {
-    return this.nickname;
   }
 }
 

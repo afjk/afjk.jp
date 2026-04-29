@@ -49,20 +49,23 @@ export class HistoryManager {
     }));
   }
 
-  static createAddEntry(objectId, asset, position, rotation, scale, name = '') {
+  static createAddEntry(objectId, asset, position, rotation, scale, name = '', meshPath = null) {
+    const forward = {
+      kind: 'scene-add',
+      objectId,
+      name,
+      position,
+      rotation,
+      scale,
+      asset,
+    };
+    if (meshPath) forward.meshPath = meshPath;
+
     return {
       id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: Date.now(),
       summary: `Added ${name || objectId}`,
-      forward: {
-        kind: 'scene-add',
-        objectId,
-        name,
-        position,
-        rotation,
-        scale,
-        asset,
-      },
+      forward,
       backward: {
         kind: 'scene-remove',
         objectId,
@@ -129,25 +132,7 @@ export class HistoryManager {
     };
   }
 
-  static createBatchEntry(actions, summary = 'Batch operation') {
-    const reverseActions = [...actions].reverse().map(action => {
-      if (action.kind === 'scene-add') {
-        return { kind: 'scene-remove', objectId: action.objectId };
-      } else if (action.kind === 'scene-remove') {
-        return {
-          kind: 'scene-add',
-          objectId: action.objectId,
-          name: action.name,
-          position: action.position,
-          rotation: action.rotation,
-          scale: action.scale,
-          asset: action.asset,
-        };
-      } else {
-        return action;
-      }
-    });
-
+  static createBatchEntry(forwardActions, backwardActions, summary = 'Batch operation') {
     return {
       id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: Date.now(),
@@ -155,12 +140,12 @@ export class HistoryManager {
       forward: {
         kind: 'scene-batch',
         batchId: `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        actions,
+        actions: forwardActions,
       },
       backward: {
         kind: 'scene-batch',
         batchId: `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        actions: reverseActions,
+        actions: [...backwardActions].reverse(),
       },
     };
   }

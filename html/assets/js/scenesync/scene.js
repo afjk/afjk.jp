@@ -18,7 +18,7 @@ import { createXrState } from './xr/xr-state.js';
 import { setupXrButtons } from './xr/xr-buttons.js';
 import { createXrFloorManager } from './xr/xr-floor.js';
 import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
-import { createHistoryManager } from './history/history-manager.js';
+import { createHistoryManager, HistoryManager } from './history/history-manager.js';
 import { createUserManager } from './user/user-manager.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
@@ -38,17 +38,9 @@ const glbLoader = new GLBFileLoader({
 
 const onBeforeBroadcast = (operation, meta) => {
   if (operation.kind === 'scene-env' && meta.beforeEnvId) {
-    const historyEntry = {
-      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      timestamp: Date.now(),
-      summary: `Environment changed to ${operation.envId}`,
-      forward: operation,
-      backward: {
-        kind: 'scene-env',
-        envId: meta.beforeEnvId,
-      },
-    };
-    presenceState.historyManager.push(historyEntry);
+    presenceState.historyManager.push(
+      HistoryManager.createEnvEntry(meta.beforeEnvId, operation.envId)
+    );
   }
 };
 
@@ -780,25 +772,16 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
         if (!arraysEqual(dragStartState.beforePos, afterPos) ||
             !arraysEqual(dragStartState.beforeRot, afterRot) ||
             !arraysEqual(dragStartState.beforeScl, afterScl)) {
-          const historyEntry = {
-            id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            timestamp: Date.now(),
-            summary: `Modified ${dragStartState.name}`,
-            forward: {
-              kind: 'scene-delta',
-              objectId: dragStartState.objectId,
-              position: afterPos,
-              rotation: afterRot,
-              scale: afterScl,
-            },
-            backward: {
-              kind: 'scene-delta',
-              objectId: dragStartState.objectId,
-              position: dragStartState.beforePos,
-              rotation: dragStartState.beforeRot,
-              scale: dragStartState.beforeScl,
-            },
-          };
+          const historyEntry = HistoryManager.createDeltaEntry(
+            dragStartState.objectId,
+            dragStartState.name,
+            dragStartState.beforePos,
+            dragStartState.beforeRot,
+            dragStartState.beforeScl,
+            afterPos,
+            afterRot,
+            afterScl
+          );
           presenceState.historyManager.push(historyEntry);
         }
       }
@@ -1338,25 +1321,9 @@ function deleteSelectedObject() {
     managedObjects.delete(deleteId);
 
     // 履歴に追加
-    const historyEntry = {
-      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      timestamp: Date.now(),
-      summary: `Removed ${name}`,
-      forward: {
-        kind: 'scene-remove',
-        objectId: deleteId,
-      },
-      backward: {
-        kind: 'scene-add',
-        objectId: deleteId,
-        name,
-        position,
-        rotation,
-        scale,
-        asset,
-      },
-    };
-    presenceState.historyManager.push(historyEntry);
+    presenceState.historyManager.push(
+      HistoryManager.createRemoveEntry(deleteId, name, asset, position, rotation, scale)
+    );
 
     broadcast({ kind: 'scene-remove', objectId: deleteId });
   }
@@ -1421,6 +1388,14 @@ btnDelete?.addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   // テキスト入力中は無視
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  // ドラッグ中は Undo/Redo を無効化
+  if (isDragging) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'y')) {
+      e.preventDefault();
+      return;
+    }
+  }
 
   // Undo: Ctrl+Z (Cmd+Z on Mac)
   if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
@@ -1650,7 +1625,7 @@ const presenceState = {
   id: null,
   userId: userManager.getUserId(),
   room: null,
-  nickname: loadInitialNickname() || userManager.getNickname(),
+  nickname: loadInitialNickname(),
   peers: [],
   historyManager: createHistoryManager(),
 };
@@ -2415,15 +2390,7 @@ function generateRandomPath() {
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
   // blob store に POST（1回だけ）
   const meshPath = generateRandomPath();
-  const operation = {
-    kind: 'scene-add',
-    objectId,
-    name,
-    position: model.position.toArray(),
-    rotation: model.quaternion.toArray(),
-    scale: model.scale.toArray(),
-    meshPath: null,
-  };
+  let actualMeshPath = null;
 
   try {
     await fetch(BLOB_BASE + '/' + meshPath, {
@@ -2431,7 +2398,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       headers: { 'Content-Type': 'model/gltf-binary' },
       body: arrayBuffer,
     });
-    operation.meshPath = meshPath;
+    actualMeshPath = meshPath;
     model.userData.meshPath = meshPath;
   } catch (err) {
     console.warn('POST failed:', err);
@@ -2440,21 +2407,28 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
   // 履歴に追加
   const asset = model.userData.asset || {
     type: 'gltf',
-    meshPath: operation.meshPath,
+    meshPath: actualMeshPath,
   };
-  const historyEntry = {
-    id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    timestamp: Date.now(),
-    summary: `Added ${name}`,
-    forward: operation,
-    backward: {
-      kind: 'scene-remove',
-      objectId,
-    },
-  };
+  const historyEntry = HistoryManager.createAddEntry(
+    objectId,
+    asset,
+    model.position.toArray(),
+    model.quaternion.toArray(),
+    model.scale.toArray(),
+    name,
+    actualMeshPath
+  );
   presenceState.historyManager.push(historyEntry);
 
-  broadcast(operation);
+  broadcast({
+    kind: 'scene-add',
+    objectId,
+    name,
+    position: model.position.toArray(),
+    rotation: model.quaternion.toArray(),
+    scale: model.scale.toArray(),
+    meshPath: actualMeshPath,
+  });
 }
 
 const dragDropManager = new DragDropManager({
