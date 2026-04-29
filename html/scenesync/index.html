@@ -181,6 +181,14 @@
       gap: 8px;
       z-index: 50;
     }
+    #history-toolbar {
+      position: fixed;
+      bottom: 24px;
+      left: 12px;
+      display: flex;
+      gap: 8px;
+      z-index: 50;
+    }
     .tb-btn {
       width: 44px;
       height: 44px;
@@ -315,9 +323,11 @@
   <div id="drop-overlay">GLB をドロップして追加</div>
   <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
   <div id="toast"></div>
-  <div id="mobile-toolbar" style="display:none;">
+  <div id="history-toolbar">
     <button id="btn-undo" class="tb-btn" title="取り消す (Ctrl+Z)">↶</button>
     <button id="btn-redo" class="tb-btn" title="やり直す (Ctrl+Y)">↷</button>
+  </div>
+  <div id="mobile-toolbar" style="display:none;">
     <button id="btn-move" class="tb-btn active" title="移動">☩</button>
     <button id="btn-rotate" class="tb-btn" title="回転">↻</button>
     <button id="btn-scale" class="tb-btn" title="スケール">⤡</button>
