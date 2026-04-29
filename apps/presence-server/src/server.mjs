@@ -738,9 +738,11 @@ function createPresenceServer() {
       req.on('end', () => {
         if (res.writableEnded) return;
         const buffer = Buffer.concat(chunks);
+        const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
         const entry = {
           size: buffer.length,
           createdAt: Date.now(),
+          contentType,
           buffer: null,
           file: null,
         };
@@ -797,7 +799,7 @@ function createPresenceServer() {
 
     if (entry.buffer) {
       res.writeHead(200, {
-        'content-type': 'model/gltf-binary',
+        'content-type': entry.contentType || 'application/octet-stream',
         'content-length': entry.size,
         'cache-control': 'no-store',
         ...corsHeaders,
@@ -805,7 +807,7 @@ function createPresenceServer() {
     } else if (entry.file) {
       const stream = createReadStream(entry.file);
       res.writeHead(200, {
-        'content-type': 'model/gltf-binary',
+        'content-type': entry.contentType || 'application/octet-stream',
         'content-length': entry.size,
         'cache-control': 'no-store',
         ...corsHeaders,

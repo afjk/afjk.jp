@@ -113,6 +113,25 @@ async function redeemLink(code) {
   };
 }
 
+describe('blob store', () => {
+  it('preserves uploaded content-type when downloading blobs', async () => {
+    const uploadResponse = await fetch(`${baseUrl}/blob/test-shot.jpg`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/jpeg' },
+      body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+    });
+
+    assert.equal(uploadResponse.status, 201);
+
+    const downloadResponse = await fetch(`${baseUrl}/blob/test-shot.jpg`);
+    const body = new Uint8Array(await downloadResponse.arrayBuffer());
+
+    assert.equal(downloadResponse.status, 200);
+    assert.equal(downloadResponse.headers.get('content-type'), 'image/jpeg');
+    assert.deepEqual(Array.from(body), [0xff, 0xd8, 0xff, 0xd9]);
+  });
+});
+
 describe('presence REST broadcast API', () => {
   it('delivers JSON payload to room websocket clients', async () => {
     const ws = await connectClient('test-room');
