@@ -1332,6 +1332,8 @@ function deleteSelectedObject() {
 // ── モバイルツールバー ──────────────────────────────────
 
 const toolbar = document.getElementById('mobile-toolbar');
+const btnUndo = document.getElementById('btn-undo');
+const btnRedo = document.getElementById('btn-redo');
 const btnMove = document.getElementById('btn-move');
 const btnRotate = document.getElementById('btn-rotate');
 const btnScale = document.getElementById('btn-scale');
@@ -1382,6 +1384,36 @@ btnDeselect?.addEventListener('click', () => {
 btnDelete?.addEventListener('click', () => {
   deleteSelectedObject();
 });
+
+// ── Undo/Redo ボタン ──────────────────────────────────────
+
+function updateHistoryButtonState() {
+  const canUndo = presenceState.historyManager.canUndo();
+  const canRedo = presenceState.historyManager.canRedo();
+
+  if (btnUndo) btnUndo.disabled = !canUndo;
+  if (btnRedo) btnRedo.disabled = !canRedo;
+}
+
+btnUndo?.addEventListener('click', () => {
+  if (presenceState.historyManager.canUndo()) {
+    performUndo();
+  }
+});
+
+btnRedo?.addEventListener('click', () => {
+  if (presenceState.historyManager.canRedo()) {
+    performRedo();
+  }
+});
+
+// 履歴状態が変わったときにボタンを更新
+presenceState.historyManager.onChange = () => {
+  updateHistoryButtonState();
+};
+
+// 初期状態を反映
+updateHistoryButtonState();
 
 // ── キーボードショートカット ──────────────────────────────
 
