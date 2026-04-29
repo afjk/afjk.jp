@@ -122,6 +122,7 @@ AI がペアリングコードを linkToken に交換する。
 {
   "linkToken": "eyJsaW5rSWQ...xxxx.yyyy",
   "linkId": "lnk-xxxx-xxxx",
+  "userId": "usr-xxxx-xxxx",
   "roomId": "abc123",
   "expiresAt": 1735689600000
 }
@@ -167,7 +168,7 @@ Authorization: Bearer <linkToken>
 2. payload.roomId と URL の roomId が一致することを確認
 3. payload.exp が未来であることを確認
 4. 失効リストに含まれていないことを確認
-5. broadcast の `from` に `onBehalfOf: payload.userId` を自動付与
+5. broadcast payload に `onBehalfOf: payload.userId` を自動付与
 
 エラー: 401（token 不正・期限切れ・失効済み）、403（roomId 不一致）
 
@@ -200,6 +201,7 @@ GPT が「ユーザーが今いるか」を判断するために利用。
   "kind": "ai-link-established",
   "linkId": "lnk-xxxx-xxxx",
   "userId": "usr-xxxx-xxxx",
+  "roomId": "abc123",
   "expiresAt": 1735689600000
 }
 ```
@@ -246,6 +248,110 @@ GPT が「ユーザーが今いるか」を判断するために利用。
 ```
 
 `targetPeerId` 未指定時、サーバーが対象 userId の最新接続 peer を補完する。
+
+## curl 運用例
+
+staging での手動確認は以下で行える。
+
+前提:
+
+- Scene Sync ブラウザで `AIにリンク` を押し、6桁コードを表示する
+- ブラウザが参加している room は `redeem` レスポンスの `roomId` を正とする
+- staging URL は `https://staging.afjk.jp/presence/api`
+
+### 1. code を linkToken に交換
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/link/redeem \
+  -H 'Content-Type: application/json' \
+  --data '{"code":"482915"}'
+```
+
+成功すると `linkToken`, `linkId`, `userId`, `roomId`, `expiresAt` が返る。
+この時点でブラウザ側には `ai-link-established` が broadcast され、UI は `AIリンク中` になる。
+
+### 2. AI 代理で scene-add を送る
+
+実装は次の 2 形式を受け付ける:
+
+- 直接 payload を POST
+- `{ "payload": ... }` で包んで POST
+
+直接 POST の例:
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
+  -H "Authorization: Bearer <linkToken>" \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "kind": "scene-add",
+    "objectId": "ai-test-1",
+    "name": "AI Test",
+    "position": [1, 0.5, 0],
+    "rotation": [0, 0, 0, 1],
+    "scale": [1, 1, 1],
+    "asset": {
+      "type": "primitive",
+      "primitive": "box",
+      "color": "#ff8800"
+    }
+  }'
+```
+
+wrapped payload の例:
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
+  -H "Authorization: Bearer <linkToken>" \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "payload": {
+      "kind": "scene-add",
+      "objectId": "ai-test-1",
+      "name": "AI Test",
+      "position": [1, 0.5, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "asset": {
+        "type": "primitive",
+        "primitive": "box",
+        "color": "#ff8800"
+      }
+    }
+  }'
+```
+
+レスポンス例:
+
+```json
+{
+  "ok": true,
+  "room": "abc123",
+  "peers": 2,
+  "userPresent": true
+}
+```
+
+### 3. リンク解除
+
+Bearer 付きの例:
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/link/revoke \
+  -H "Authorization: Bearer <linkToken>" \
+  -H 'Content-Type: application/json' \
+  --data '{"linkId":"lnk-xxxx-xxxx"}'
+```
+
+`linkId` のみでも解除できる:
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/link/revoke \
+  -H 'Content-Type: application/json' \
+  --data '{"linkId":"lnk-xxxx-xxxx"}'
+```
+
+解除時はブラウザ側に `ai-link-revoked` が broadcast される。
 
 ## 履歴管理
 
