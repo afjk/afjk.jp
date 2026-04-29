@@ -10,7 +10,7 @@ info:
     2. Browser displays a 6-digit pairing code.
     3. AI redeems the code with `/api/link/redeem`.
     4. AI uses the returned `linkToken` as `Authorization: Bearer <token>`.
-    5. AI reads the room scene and sends `scene-add`, `scene-delta`, `scene-remove`, or `scene-env`.
+    5. AI reads the room scene and sends `scene-add`, `scene-delta`, `scene-remove`, `scene-env`, or `ai-command`.
 
     Important runtime rules:
     - Treat the `roomId` from `/api/link/redeem` as the source of truth.
@@ -132,6 +132,9 @@ paths:
 
         If bearer auth is present and valid, the server validates the token, checks `roomId`,
         and injects `onBehalfOf` into the delivered payload.
+
+        For `ai-command`, the server routes the command to the selected target peer, waits for
+        `ai-result`, and returns that result in the HTTP response.
       parameters:
         - $ref: '#/components/parameters/RoomId'
         - name: name
@@ -159,25 +162,13 @@ paths:
                       $ref: '#/components/schemas/SceneOperation'
       responses:
         '200':
-          description: Broadcast accepted
+          description: Broadcast accepted or ai-command result returned
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: false
-                required: [ok, room, peers, userPresent]
-                properties:
-                  ok:
-                    type: boolean
-                    const: true
-                  room:
-                    type: string
-                  peers:
-                    type: integer
-                    minimum: 0
-                  userPresent:
-                    type: boolean
-                    description: True if the linked user currently has at least one live peer in the room.
+                oneOf:
+                  - $ref: '#/components/schemas/BroadcastResponse'
+                  - $ref: '#/components/schemas/AiCommandResponse'
         '400':
           description: Invalid JSON body
           content:
@@ -366,6 +357,34 @@ components:
         onBehalfOf:
           type: string
           readOnly: true
+    AiCommandPayload:
+      type: object
+      additionalProperties: true
+      required: [kind, action]
+      properties:
+        kind:
+          type: string
+          const: ai-command
+        requestId:
+          type: string
+        action:
+          type: string
+          enum:
+            - uploadGlbFromUrl
+            - screenshot
+            - getCameraPose
+            - focusObject
+            - undo
+            - redo
+            - getHistory
+        params:
+          type: object
+          additionalProperties: true
+        targetPeerId:
+          type: string
+        onBehalfOf:
+          type: string
+          readOnly: true
     SceneOperation:
       discriminator:
         propertyName: kind
@@ -375,6 +394,54 @@ components:
         - $ref: '#/components/schemas/SceneRemovePayload'
         - $ref: '#/components/schemas/SceneEnvPayload'
         - $ref: '#/components/schemas/SceneBatchPayload'
+        - $ref: '#/components/schemas/AiCommandPayload'
+    BroadcastResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, room, peers, userPresent]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        room:
+          type: string
+        peers:
+          type: integer
+          minimum: 0
+        userPresent:
+          type: boolean
+    AiResultPayload:
+      type: object
+      additionalProperties: true
+      required: [kind, ok]
+      properties:
+        kind:
+          type: string
+          const: ai-result
+        requestId:
+          type: string
+        ok:
+          type: boolean
+        error:
+          type: string
+    AiCommandResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, room, peers, userPresent, targetPeerId, result]
+      properties:
+        ok:
+          type: boolean
+        room:
+          type: string
+        peers:
+          type: integer
+          minimum: 0
+        userPresent:
+          type: boolean
+        targetPeerId:
+          type: string
+        result:
+          $ref: '#/components/schemas/AiResultPayload'
     SceneObject:
       type: object
       additionalProperties: true

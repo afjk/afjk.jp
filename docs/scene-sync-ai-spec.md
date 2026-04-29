@@ -249,6 +249,32 @@ GPT が「ユーザーが今いるか」を判断するために利用。
 
 `targetPeerId` 未指定時、サーバーが対象 userId の最新接続 peer を補完する。
 
+現在の実装では `ai-command` は通常 broadcast と異なり、対象 peer へ handoff された後、
+ブラウザが `ai-result` を返し、その結果が HTTP レスポンスにも含まれる。
+
+### ai-result
+
+ブラウザが `ai-command` の実行結果を返す。
+
+```json
+{
+  "kind": "ai-result",
+  "requestId": "req-xxxx",
+  "ok": true,
+  "...": "action-specific result"
+}
+```
+
+実装済み action:
+
+- `getCameraPose`
+- `focusObject`
+- `undo`
+- `redo`
+- `getHistory`
+- `screenshot`
+- `uploadGlbFromUrl`
+
 ## curl 運用例
 
 staging での手動確認は以下で行える。
@@ -331,6 +357,59 @@ curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
   "userPresent": true
 }
 ```
+
+### 2.5. ai-command を送る
+
+例: `getCameraPose`
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
+  -H "Authorization: Bearer <linkToken>" \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "kind": "ai-command",
+    "requestId": "req-camera-1",
+    "action": "getCameraPose",
+    "params": {}
+  }'
+```
+
+レスポンス例:
+
+```json
+{
+  "ok": true,
+  "room": "abc123",
+  "peers": 1,
+  "userPresent": true,
+  "targetPeerId": "peer-xxxx",
+  "result": {
+    "kind": "ai-result",
+    "requestId": "req-camera-1",
+    "ok": true,
+    "pose": {
+      "position": [5, 5, 5],
+      "quaternion": [0, 0, 0, 1]
+    }
+  }
+}
+```
+
+例: `getHistory`
+
+```bash
+curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
+  -H "Authorization: Bearer <linkToken>" \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "kind": "ai-command",
+    "requestId": "req-history-1",
+    "action": "getHistory",
+    "params": { "count": 5 }
+  }'
+```
+
+`ai-command` のレスポンスは action ごとに `result` の形が変わる。
 
 ### 3. リンク解除
 
