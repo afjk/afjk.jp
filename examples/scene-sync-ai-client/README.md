@@ -72,6 +72,15 @@ Focus an object:
 npm run demo -- focus <roomId> <sessionId> ai-cube-1
 ```
 
+Add a cube, wait, then focus it:
+
+```bash
+npm run demo -- add-and-focus <roomId> <sessionId> demo-cube-1 500
+```
+
+`focusObject` can fail immediately after `scene-add` if the browser has not yet registered
+the new object in `managedObjects`. `add-and-focus` adds a small wait to avoid that race.
+
 Take a screenshot:
 
 ```bash

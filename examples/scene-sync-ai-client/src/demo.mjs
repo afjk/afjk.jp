@@ -3,12 +3,17 @@ import { SceneSyncClient } from './scene-sync-client.mjs';
 const client = new SceneSyncClient();
 const [, , command, ...rest] = process.argv;
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function printUsage() {
   console.log(`Usage:
   npm run demo -- redeem <code>
   npm run demo -- scene <roomId> <sessionId>
   npm run demo -- add-cube <roomId> <sessionId> [objectId]
   npm run demo -- focus <roomId> <sessionId> <objectId>
+  npm run demo -- add-and-focus <roomId> <sessionId> [objectId] [waitMs]
   npm run demo -- screenshot <roomId> <sessionId>
   npm run demo -- revoke <sessionId>
 `);
@@ -48,6 +53,35 @@ async function main() {
       console.log(JSON.stringify(await client.aiCommand(roomId, sessionId, 'focusObject', {
         objectId,
       }), null, 2));
+      return;
+    }
+    case 'add-and-focus': {
+      const [roomId, sessionId, objectId = 'demo-cube-1', waitMsArg = '500'] = rest;
+      const waitMs = Number(waitMsArg);
+      const addResult = await client.broadcast(roomId, sessionId, {
+        kind: 'scene-add',
+        objectId,
+        name: 'Demo Cube',
+        position: [0, 0.5, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        asset: {
+          type: 'primitive',
+          primitive: 'box',
+          color: '#ff8800',
+        },
+      });
+      if (Number.isFinite(waitMs) && waitMs > 0) {
+        await sleep(waitMs);
+      }
+      const focusResult = await client.aiCommand(roomId, sessionId, 'focusObject', {
+        objectId,
+      });
+      console.log(JSON.stringify({
+        addResult,
+        waitMs: Number.isFinite(waitMs) ? waitMs : 0,
+        focusResult,
+      }, null, 2));
       return;
     }
     case 'screenshot': {
