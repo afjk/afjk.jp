@@ -1013,8 +1013,9 @@ function createPresenceServer() {
     return;
   }
 
-  // ── GPT Wrapper Endpoints ───────────────────────────────────────────
-  if (req.method === 'POST' && path === '/api/gpt/link/redeem') {
+  // ── AI Wrapper Endpoints (/api/gpt/* and /api/ai/*) ─────────────────
+  const isAiRedeemPath = path === '/api/gpt/link/redeem' || path === '/api/ai/link/redeem';
+  if (req.method === 'POST' && isAiRedeemPath) {
     const body = await readJsonBody(req).catch(() => null);
     if (!body || typeof body.code !== 'string') {
       sendJson(res, 400, { error: 'code is required' });
@@ -1042,7 +1043,8 @@ function createPresenceServer() {
     return;
   }
 
-  if (req.method === 'POST' && path === '/api/gpt/link/revoke') {
+  const isAiRevokePath = path === '/api/gpt/link/revoke' || path === '/api/ai/link/revoke';
+  if (req.method === 'POST' && isAiRevokePath) {
     const body = await readJsonBody(req).catch(() => null);
     const session = resolveGptSession(body);
     if (!session.ok) {
@@ -1056,10 +1058,10 @@ function createPresenceServer() {
     return;
   }
 
-  const gptRoomApiMatch = path.match(/^\/api\/gpt\/room\/([^/]+)\/(scene|broadcast|ai-command)$/);
-  if (gptRoomApiMatch && req.method === 'POST') {
-    const roomId = sanitizeRoom(gptRoomApiMatch[1]);
-    const action = gptRoomApiMatch[2];
+  const aiRoomApiMatch = path.match(/^\/api\/(?:gpt|ai)\/room\/([^/]+)\/(scene|broadcast|ai-command)$/);
+  if (aiRoomApiMatch && req.method === 'POST') {
+    const roomId = sanitizeRoom(aiRoomApiMatch[1]);
+    const action = aiRoomApiMatch[2];
     if (!roomId) {
       sendJson(res, 404, { error: 'not found' });
       return;
@@ -1084,7 +1086,7 @@ function createPresenceServer() {
         return;
       }
       if (body.payload.kind === 'ai-command') {
-        sendJson(res, 400, { error: 'use /api/gpt/room/{roomId}/ai-command for ai-command' });
+        sendJson(res, 400, { error: 'use the dedicated /ai-command endpoint for ai-command' });
         return;
       }
 

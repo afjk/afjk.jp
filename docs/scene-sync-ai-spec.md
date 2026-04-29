@@ -564,6 +564,25 @@ Phase 1 の方針: ユーザーに Toast で通知するのみ（オブジェク
 - scene 取得は POST に統一し、query string へ token を露出しない
 - 既存 `/api/link/*` `/api/room/*/broadcast` は変更なし
 
+### Phase 4.5: Provider-neutral AI integration
+
+- `/api/ai/*` alias を追加
+  - `POST /api/ai/link/redeem`
+  - `POST /api/ai/link/revoke`
+  - `POST /api/ai/room/{roomId}/scene`
+  - `POST /api/ai/room/{roomId}/broadcast`
+  - `POST /api/ai/room/{roomId}/ai-command`
+- `/api/gpt/*` は互換維持のため残す
+- provider-neutral OpenAPI
+  - `docs/scene-sync-ai-openapi.yaml`
+- provider-neutral short instructions
+  - `docs/scene-sync-ai-instructions-short.md`
+- provider tool examples
+  - `docs/scene-sync-ai-tool-examples.md`
+- 目的:
+  - GPTs 以外の AI クライアントから同じ API を呼べるようにする
+  - provider ごとの差分を tool 定義だけに閉じ込める
+
 ### Phase 5: ai-command 拡充
 
 - uploadGlbFromUrl, screenshot, getCameraPose, focusObject 等の実装
@@ -597,3 +616,6 @@ Phase 1 の方針: ユーザーに Toast で通知するのみ（オブジェク
 
 - [`docs/scene-sync-spec.md`](./scene-sync-spec.md) — Scene Sync 本体仕様
 - [`docs/pipe-spec.md`](./pipe-spec.md) — Pipe（P2P 通信）仕様
+- [`docs/scene-sync-ai-openapi.yaml`](./scene-sync-ai-openapi.yaml) — provider-neutral AI wrapper OpenAPI
+- [`docs/scene-sync-ai-instructions-short.md`](./scene-sync-ai-instructions-short.md) — provider-neutral AI instructions
+- [`docs/scene-sync-ai-tool-examples.md`](./scene-sync-ai-tool-examples.md) — Claude / Codex / Copilot / Grok 向け tool サンプル

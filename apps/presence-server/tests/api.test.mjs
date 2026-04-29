@@ -720,7 +720,7 @@ describe('presence GPT wrapper API', () => {
 
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), {
-      error: 'use /api/gpt/room/{roomId}/ai-command for ai-command'
+      error: 'use the dedicated /ai-command endpoint for ai-command'
     });
   });
 
@@ -876,5 +876,83 @@ describe('presence GPT wrapper API', () => {
 
     assert.equal(gptResponse.status, 401);
     assert.deepEqual(await gptResponse.json(), { error: 'token revoked' });
+  });
+});
+
+describe('presence AI wrapper alias API', () => {
+  it('redeems pairing code through /api/ai and returns sessionId', async () => {
+    const userId = 'usr-ai-redeem';
+    const { code } = await initiateLink('ai-redeem-room', userId);
+
+    const response = await fetch(`${baseUrl}/api/ai/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.roomId, 'ai-redeem-room');
+    assert.match(body.sessionId, /^v1\./);
+  });
+
+  it('routes scene reads and mutations through /api/ai', async () => {
+    const userId = 'usr-ai-alias';
+    const ws = await connectClient('ai-alias-room', 'Linked User', userId);
+    try {
+      const { code } = await initiateLink('ai-alias-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/ai/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const sceneRequest = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-request');
+      const sceneResponsePromise = fetch(`${baseUrl}/api/ai/room/ai-alias-room/scene`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: redeemBody.sessionId }),
+      });
+      const sceneMessage = await sceneRequest;
+      ws.send(JSON.stringify({
+        type: 'handoff',
+        targetId: sceneMessage.from.id,
+        payload: { kind: 'scene-state', objects: { } },
+      }));
+      const sceneResponse = await sceneResponsePromise;
+
+      assert.equal(sceneResponse.status, 200);
+      assert.deepEqual(await sceneResponse.json(), { objects: {} });
+
+      const handoffPromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-add');
+
+      const broadcastResponse = await fetch(`${baseUrl}/api/ai/room/ai-alias-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          payload: {
+            kind: 'scene-add',
+            objectId: 'ai-alias-cube-1',
+          },
+        }),
+      });
+
+      const [broadcastBody, handoff] = await Promise.all([
+        broadcastResponse.json(),
+        handoffPromise,
+      ]);
+
+      assert.equal(broadcastResponse.status, 200);
+      assert.equal(broadcastBody.ok, true);
+      assert.equal(handoff.payload.objectId, 'ai-alias-cube-1');
+      assert.equal(handoff.payload.onBehalfOf, userId);
+    } finally {
+      await closeClient(ws);
+    }
   });
 });

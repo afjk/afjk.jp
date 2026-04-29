@@ -1,18 +1,18 @@
 openapi: 3.1.0
 info:
-  title: Scene Sync GPT Wrapper API
+  title: Scene Sync AI Wrapper API
   version: 0.1.0
   description: |
-    GPT Builder 用の wrapper API。認証は Authorization header ではなく
-    request body の sessionId で行う。
+    Provider-neutral wrapper API for Scene Sync. Any AI client can call these
+    endpoints by passing the opaque `sessionId` in the request body.
 servers:
-  - url: https://afjk.jp/presence/api/gpt
+  - url: https://afjk.jp/presence/api/ai
     description: Production
 paths:
   /link/redeem:
     post:
-      operationId: redeemGptLink
-      summary: Redeem a 6-digit pairing code and create a GPT session
+      operationId: redeemAiLink
+      summary: Redeem a 6-digit pairing code and create an AI session
       requestBody:
         required: true
         content:
@@ -26,15 +26,15 @@ paths:
                   pattern: '^\d{6}$'
       responses:
         '200':
-          description: GPT session created
+          description: AI session created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GptRedeemResponse'
+                $ref: '#/components/schemas/AiRedeemResponse'
   /link/revoke:
     post:
-      operationId: revokeGptLink
-      summary: Revoke a GPT session and underlying AI link
+      operationId: revokeAiLink
+      summary: Revoke an AI session and underlying Scene Sync link
       requestBody:
         required: true
         content:
@@ -54,7 +54,7 @@ paths:
                     type: boolean
   /room/{roomId}/scene:
     post:
-      operationId: getSceneViaGptSession
+      operationId: getSceneViaAiSession
       summary: Get current scene state
       parameters:
         - in: path
@@ -77,7 +77,7 @@ paths:
                 $ref: '#/components/schemas/SceneState'
   /room/{roomId}/broadcast:
     post:
-      operationId: broadcastSceneMutationViaGptSession
+      operationId: broadcastSceneMutationViaAiSession
       summary: Apply a scene mutation
       description: |
         Use this for scene-add, scene-delta, scene-remove, scene-env, and scene-batch.
@@ -131,7 +131,7 @@ paths:
                 $ref: '#/components/schemas/BroadcastResponse'
   /room/{roomId}/ai-command:
     post:
-      operationId: runAiCommandViaGptSession
+      operationId: runAiCommandViaAiSession
       summary: Request a browser-only action from the linked peer
       description: |
         Use this for browser-only actions such as camera queries, focus, undo/redo,
@@ -218,7 +218,7 @@ components:
         sessionId:
           type: string
           description: Opaque session token `v1.<base64url(iv|ciphertext|tag)>`
-    GptRedeemResponse:
+    AiRedeemResponse:
       type: object
       required: [ok, sessionId, roomId, expiresAt]
       properties:
