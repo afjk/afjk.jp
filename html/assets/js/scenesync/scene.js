@@ -2394,11 +2394,14 @@ async function uploadGlbFromUrl(url, params = {}) {
   const blob = await response.blob();
   const fileName = params.name || url.split('/').pop() || 'remote.glb';
   const file = new File([blob], fileName, { type: blob.type || 'model/gltf-binary' });
+  const objectId = params.objectId || `web-${Math.random().toString(36).slice(2, 10)}`;
   const position = Array.isArray(params.position)
     ? new THREE.Vector3().fromArray(params.position)
     : new THREE.Vector3(0, 0, 0);
 
   const model = await glbLoader.loadFromFile(file, position, scene);
+  model.userData.objectId = objectId;
+  model.userData.name = file.name;
   managedObjects.set(model.userData.objectId, model);
   selectManagedObject(model);
 
@@ -2412,7 +2415,7 @@ async function uploadGlbFromUrl(url, params = {}) {
 
   return {
     ok: true,
-    objectId: model.userData.objectId,
+    objectId,
     name: file.name,
     position: model.position.toArray(),
     rotation: model.quaternion.toArray(),
