@@ -543,11 +543,26 @@ Phase 1 の方針: ユーザーに Toast で通知するのみ（オブジェク
 - 受信側で `from.onBehalfOf === myUserId` を履歴条件に追加
 - Web クライアントの AI リンク UI
 
-### Phase 4: GPTs 統合
+### Phase 4: GPTs 統合（進行中）
 
-- OpenAPI 3.x スキーマ作成（getScene, broadcast, link 系）
-- GPT Instructions 作成（座標系、prefer primitive、ロック規則 etc.）
-- 動作テストとサンプル会話
+- OpenAPI 3.x スキーマ作成
+  - 既存 Bearer API: `docs/scene-sync-openapi.yaml`
+  - GPT wrapper API: `docs/scene-sync-gpt-openapi.yaml`
+- GPT Instructions 作成
+  - 詳細版: `docs/scene-sync-gpt-instructions.md`
+  - 短縮版: `docs/scene-sync-gpt-instructions-short.md`
+- GPT 用ラッパー API `/api/gpt/*`
+  - `POST /api/gpt/link/redeem`
+  - `POST /api/gpt/link/revoke`
+  - `POST /api/gpt/room/{roomId}/scene`
+  - `POST /api/gpt/room/{roomId}/broadcast`
+  - `POST /api/gpt/room/{roomId}/ai-command`
+- `sessionId` は `linkToken` を AES-256-GCM で暗号化した opaque token
+  - 形式: `v1.<base64url(iv|ciphertext|tag)>`
+  - TTL: `min(linkToken.exp, now + 24h)`
+  - 復号後は既存 `verifyLinkToken()` を通すため revoke / expiry が連動
+- scene 取得は POST に統一し、query string へ token を露出しない
+- 既存 `/api/link/*` `/api/room/*/broadcast` は変更なし
 
 ### Phase 5: ai-command 拡充
 

@@ -1,0 +1,329 @@
+openapi: 3.1.0
+info:
+  title: Scene Sync GPT Wrapper API
+  version: 0.1.0
+  description: |
+    GPT Builder 用の wrapper API。認証は Authorization header ではなく
+    request body の sessionId で行う。
+servers:
+  - url: https://staging.afjk.jp/presence/api/gpt
+    description: Staging
+  - url: https://afjk.jp/presence/api/gpt
+    description: Production
+paths:
+  /link/redeem:
+    post:
+      operationId: redeemGptLink
+      summary: Redeem a 6-digit pairing code and create a GPT session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  pattern: '^\d{6}$'
+      responses:
+        '200':
+          description: GPT session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GptRedeemResponse'
+  /link/revoke:
+    post:
+      operationId: revokeGptLink
+      summary: Revoke a GPT session and underlying AI link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionOnlyRequest'
+      responses:
+        '200':
+          description: Link revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+  /room/{roomId}/scene:
+    post:
+      operationId: getSceneViaGptSession
+      summary: Get current scene state
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionOnlyRequest'
+      responses:
+        '200':
+          description: Scene snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SceneState'
+  /room/{roomId}/broadcast:
+    post:
+      operationId: broadcastSceneMutationViaGptSession
+      summary: Apply a scene mutation
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, payload]
+              properties:
+                sessionId:
+                  type: string
+                payload:
+                  oneOf:
+                    - $ref: '#/components/schemas/SceneAddPayload'
+                    - $ref: '#/components/schemas/SceneDeltaPayload'
+                    - $ref: '#/components/schemas/SceneRemovePayload'
+                    - $ref: '#/components/schemas/SceneEnvPayload'
+                    - $ref: '#/components/schemas/SceneBatchPayload'
+      responses:
+        '200':
+          description: Broadcast result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BroadcastResponse'
+  /room/{roomId}/ai-command:
+    post:
+      operationId: runAiCommandViaGptSession
+      summary: Request a browser-only action from the linked peer
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, action]
+              properties:
+                sessionId:
+                  type: string
+                requestId:
+                  type: string
+                action:
+                  type: string
+                  enum:
+                    - getCameraPose
+                    - focusObject
+                    - undo
+                    - redo
+                    - getHistory
+                    - screenshot
+                    - uploadGlbFromUrl
+                params:
+                  type: object
+                  additionalProperties: true
+                targetPeerId:
+                  type: string
+      responses:
+        '200':
+          description: AI command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiCommandResponse'
+components:
+  schemas:
+    SessionOnlyRequest:
+      type: object
+      required: [sessionId]
+      properties:
+        sessionId:
+          type: string
+          description: Opaque session token `v1.<base64url(iv|ciphertext|tag)>`
+    GptRedeemResponse:
+      type: object
+      required: [ok, sessionId, roomId, expiresAt]
+      properties:
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+        roomId:
+          type: string
+        expiresAt:
+          type: integer
+    BroadcastResponse:
+      type: object
+      required: [ok, room, peers, userPresent]
+      properties:
+        ok:
+          type: boolean
+        room:
+          type: string
+        peers:
+          type: integer
+        userPresent:
+          type: boolean
+    AiCommandResponse:
+      type: object
+      required: [ok, room, peers, userPresent, targetPeerId, result]
+      properties:
+        ok:
+          type: boolean
+        room:
+          type: string
+        peers:
+          type: integer
+        userPresent:
+          type: boolean
+        targetPeerId:
+          type: string
+        result:
+          $ref: '#/components/schemas/AiResultPayload'
+    AiResultPayload:
+      type: object
+      required: [kind, ok]
+      properties:
+        kind:
+          type: string
+          const: ai-result
+        requestId:
+          type: string
+        ok:
+          type: boolean
+        error:
+          type: string
+      additionalProperties: true
+    SceneState:
+      type: object
+      properties:
+        envId:
+          type: string
+        objects:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: true
+    SceneAddPayload:
+      type: object
+      required: [kind, objectId]
+      properties:
+        kind:
+          type: string
+          const: scene-add
+        objectId:
+          type: string
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vec3'
+        rotation:
+          $ref: '#/components/schemas/Quat'
+        scale:
+          $ref: '#/components/schemas/Vec3'
+        asset:
+          type: object
+          additionalProperties: true
+        meshPath:
+          type: string
+        onBehalfOf:
+          type: string
+    SceneDeltaPayload:
+      type: object
+      required: [kind, objectId]
+      properties:
+        kind:
+          type: string
+          const: scene-delta
+        objectId:
+          type: string
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vec3'
+        rotation:
+          $ref: '#/components/schemas/Quat'
+        scale:
+          $ref: '#/components/schemas/Vec3'
+        asset:
+          type: object
+          additionalProperties: true
+        meshPath:
+          type: string
+        onBehalfOf:
+          type: string
+    SceneRemovePayload:
+      type: object
+      required: [kind, objectId]
+      properties:
+        kind:
+          type: string
+          const: scene-remove
+        objectId:
+          type: string
+        onBehalfOf:
+          type: string
+    SceneEnvPayload:
+      type: object
+      required: [kind, envId]
+      properties:
+        kind:
+          type: string
+          const: scene-env
+        envId:
+          type: string
+        onBehalfOf:
+          type: string
+    SceneBatchPayload:
+      type: object
+      required: [kind, ops]
+      properties:
+        kind:
+          type: string
+          const: scene-batch
+        ops:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/SceneAddPayload'
+              - $ref: '#/components/schemas/SceneDeltaPayload'
+              - $ref: '#/components/schemas/SceneRemovePayload'
+              - $ref: '#/components/schemas/SceneEnvPayload'
+        onBehalfOf:
+          type: string
+    Vec3:
+      type: array
+      minItems: 3
+      maxItems: 3
+      items:
+        type: number
+    Quat:
+      type: array
+      minItems: 4
+      maxItems: 4
+      items:
+        type: number

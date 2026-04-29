@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
+import { encodeSession, decodeSession } from './gpt-session.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
@@ -478,6 +479,143 @@ function findLatestUserPeer(roomId, userId) {
   return peers[0];
 }
 
+function resolveGptSession(body, expectedRoomId = null) {
+  if (!body || typeof body.sessionId !== 'string') {
+    return { ok: false, status: 400, error: 'sessionId is required in request body' };
+  }
+  const decoded = decodeSession(body.sessionId);
+  if (!decoded.ok) {
+    return { ok: false, status: decoded.status, error: decoded.error };
+  }
+  if (expectedRoomId && decoded.payload.roomId !== expectedRoomId) {
+    return { ok: false, status: 403, error: 'roomId mismatch' };
+  }
+  return decoded;
+}
+
+function broadcastAiLinkEstablished(roomId, result) {
+  const peers = getRoomClients(roomId);
+  const message = {
+    type: 'handoff',
+    from: { id: `api-link-${randomUUID()}`, nickname: 'AI', device: 'REST API' },
+    payload: {
+      kind: 'ai-link-established',
+      linkId: result.linkId,
+      userId: result.userId,
+      roomId: result.roomId,
+      expiresAt: result.expiresAt
+    }
+  };
+  peers.forEach(client => safeSend(client.conn, message));
+}
+
+function broadcastAiLinkRevoked(roomId, linkId, reason = 'ai-revoked') {
+  if (!roomId) return;
+  const peers = getRoomClients(roomId);
+  const message = {
+    type: 'handoff',
+    from: { id: `api-revoke-${randomUUID()}`, nickname: 'AI', device: 'REST API' },
+    payload: {
+      kind: 'ai-link-revoked',
+      linkId,
+      reason
+    }
+  };
+  peers.forEach(client => safeSend(client.conn, message));
+}
+
+async function fetchRoomSceneState(roomId, sender = createApiSender('AI')) {
+  const peers = getRoomClients(roomId);
+  if (!peers.length) {
+    return { objects: {} };
+  }
+
+  safeSend(peers[0].conn, {
+    type: 'handoff',
+    from: sender,
+    payload: { kind: 'scene-request' }
+  });
+  return waitForSceneState(sender.id);
+}
+
+function createBroadcastResponse(roomId, peers, userPresent) {
+  return {
+    ok: true,
+    room: roomId,
+    peers: peers.length,
+    userPresent,
+  };
+}
+
+async function runAiCommand({ roomId, onBehalfOfUserId, payload, sender = createApiSender('AI') }) {
+  const peers = getRoomClients(roomId);
+  const userPresent = Boolean(onBehalfOfUserId) && peers.some(client => client.userId === onBehalfOfUserId);
+  const targetClient = payload.targetPeerId
+    ? peers.find(client => client.id === payload.targetPeerId) || null
+    : findLatestUserPeer(roomId, onBehalfOfUserId);
+
+  if (!targetClient) {
+    return {
+      status: 404,
+      body: { error: 'target peer not found', userPresent }
+    };
+  }
+
+  const aiCommandPayload = {
+    ...payload,
+    targetPeerId: targetClient.id,
+  };
+
+  safeSend(targetClient.conn, {
+    type: 'handoff',
+    from: sender,
+    payload: aiCommandPayload,
+  });
+
+  const result = await waitForAiCommandResult(sender.id);
+  return {
+    status: 200,
+    body: {
+      ok: result.ok !== false,
+      room: roomId,
+      peers: peers.length,
+      userPresent,
+      targetPeerId: targetClient.id,
+      result,
+    }
+  };
+}
+
+async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, sender = createApiSender('AI') }) {
+  const peers = getRoomClients(roomId);
+  let nextPayload = payload;
+  if (onBehalfOfUserId) {
+    nextPayload = { ...payload, onBehalfOf: onBehalfOfUserId };
+  }
+
+  if (nextPayload?.kind === 'ai-command') {
+    return runAiCommand({
+      roomId,
+      onBehalfOfUserId,
+      payload: nextPayload,
+      sender,
+    });
+  }
+
+  const message = {
+    type: 'handoff',
+    from: sender,
+    payload: nextPayload
+  };
+  peers.forEach(client => safeSend(client.conn, message));
+
+  const userPresent = Boolean(onBehalfOfUserId) && peers.some(client => client.userId === onBehalfOfUserId);
+  return {
+    status: 200,
+    body: createBroadcastResponse(roomId, peers, userPresent),
+  };
+}
+
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
@@ -821,19 +959,7 @@ function createPresenceServer() {
       return;
     }
 
-    const peers = getRoomClients(result.roomId);
-    const message = {
-      type: 'handoff',
-      from: { id: `api-link-${randomUUID()}`, nickname: 'AI', device: 'REST API' },
-      payload: {
-        kind: 'ai-link-established',
-        linkId: result.linkId,
-        userId: result.userId,
-        roomId: result.roomId,
-        expiresAt: result.expiresAt
-      }
-    };
-    peers.forEach(client => safeSend(client.conn, message));
+    broadcastAiLinkEstablished(result.roomId, result);
 
     sendJson(res, 200, result);
     return;
@@ -880,23 +1006,118 @@ function createPresenceServer() {
 
     revokeLinkToken(linkId);
 
-    // Broadcast ai-link-revoked to room if applicable
-    if (revokeRoomId) {
-      const peers = getRoomClients(revokeRoomId);
-      const message = {
-        type: 'handoff',
-        from: { id: `api-revoke-${randomUUID()}`, nickname: 'AI', device: 'REST API' },
-        payload: {
-          kind: 'ai-link-revoked',
-          linkId,
-          reason: 'ai-revoked'
-        }
-      };
-      peers.forEach(client => safeSend(client.conn, message));
-    }
+    broadcastAiLinkRevoked(revokeRoomId, linkId, 'ai-revoked');
 
     sendJson(res, 200, { ok: true });
     return;
+  }
+
+  // ── GPT Wrapper Endpoints ───────────────────────────────────────────
+  if (req.method === 'POST' && path === '/api/gpt/link/redeem') {
+    const body = await readJsonBody(req).catch(() => null);
+    if (!body || typeof body.code !== 'string') {
+      sendJson(res, 400, { error: 'code is required' });
+      return;
+    }
+
+    const result = redeemPairingCode(body.code);
+    if (!result.ok) {
+      const statusCode = result.error === 'not found' ? 404 : result.error === 'already redeemed' ? 410 : 400;
+      sendJson(res, statusCode, { error: result.error });
+      return;
+    }
+
+    broadcastAiLinkEstablished(result.roomId, result);
+    const session = encodeSession(result.linkToken, {
+      roomId: result.roomId,
+      exp: result.expiresAt,
+    });
+    sendJson(res, 200, {
+      ok: true,
+      sessionId: session.sessionId,
+      roomId: session.roomId,
+      expiresAt: session.expiresAt,
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/gpt/link/revoke') {
+    const body = await readJsonBody(req).catch(() => null);
+    const session = resolveGptSession(body);
+    if (!session.ok) {
+      sendJson(res, session.status, { error: session.error });
+      return;
+    }
+
+    revokeLinkToken(session.payload.linkId);
+    broadcastAiLinkRevoked(session.payload.roomId, session.payload.linkId, 'ai-revoked');
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  const gptRoomApiMatch = path.match(/^\/api\/gpt\/room\/([^/]+)\/(scene|broadcast|ai-command)$/);
+  if (gptRoomApiMatch && req.method === 'POST') {
+    const roomId = sanitizeRoom(gptRoomApiMatch[1]);
+    const action = gptRoomApiMatch[2];
+    if (!roomId) {
+      sendJson(res, 404, { error: 'not found' });
+      return;
+    }
+
+    const body = await readJsonBody(req).catch(() => null);
+    const session = resolveGptSession(body, roomId);
+    if (!session.ok) {
+      sendJson(res, session.status, { error: session.error });
+      return;
+    }
+
+    if (action === 'scene') {
+      const sceneState = await fetchRoomSceneState(roomId, createApiSender('AI'));
+      sendJson(res, 200, sceneState);
+      return;
+    }
+
+    if (action === 'broadcast') {
+      if (!body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
+        sendJson(res, 400, { error: 'payload is required' });
+        return;
+      }
+      if (body.payload.kind === 'ai-command') {
+        sendJson(res, 400, { error: 'use /api/gpt/room/{roomId}/ai-command for ai-command' });
+        return;
+      }
+
+      const result = await runRoomBroadcast({
+        roomId,
+        payload: body.payload,
+        onBehalfOfUserId: session.payload.userId,
+        sender: createApiSender('AI'),
+      });
+      sendJson(res, result.status, result.body);
+      return;
+    }
+
+    if (action === 'ai-command') {
+      if (typeof body.action !== 'string' || !body.action.trim()) {
+        sendJson(res, 400, { error: 'action is required' });
+        return;
+      }
+
+      const result = await runAiCommand({
+        roomId,
+        onBehalfOfUserId: session.payload.userId,
+        payload: {
+          kind: 'ai-command',
+          requestId: body.requestId || `req-${Date.now()}`,
+          action: body.action,
+          params: body.params && typeof body.params === 'object' ? body.params : {},
+          targetPeerId: body.targetPeerId,
+        },
+        sender: createApiSender('AI'),
+      });
+      sendJson(res, result.status, result.body);
+      return;
+    }
   }
 
     const roomApiMatch = path.match(/^\/api\/room\/([^/]+)\/(broadcast|scene)$/);
@@ -941,79 +1162,20 @@ function createPresenceServer() {
             return;
           }
           onBehalfOfUserId = result.payload.userId;
-          // Add onBehalfOf to payload
-          payload = { ...payload, onBehalfOf: onBehalfOfUserId };
         }
 
-        const peers = getRoomClients(roomId);
-        let userPresent = false;
-        if (onBehalfOfUserId) {
-          userPresent = peers.some(client => client.userId === onBehalfOfUserId);
-        }
-
-        if (payload?.kind === 'ai-command') {
-          if (!onBehalfOfUserId) {
-            sendJson(res, 401, { error: 'missing bearer token for ai-command' });
-            return;
-          }
-
-          const targetClient = payload.targetPeerId
-            ? peers.find(client => client.id === payload.targetPeerId) || null
-            : findLatestUserPeer(roomId, onBehalfOfUserId);
-
-          if (!targetClient) {
-            sendJson(res, 404, { error: 'target peer not found', userPresent });
-            return;
-          }
-
-          const aiCommandPayload = {
-            ...payload,
-            targetPeerId: targetClient.id,
-          };
-
-          safeSend(targetClient.conn, {
-            type: 'handoff',
-            from: sender,
-            payload: aiCommandPayload,
-          });
-
-          const result = await waitForAiCommandResult(sender.id);
-          sendJson(res, 200, {
-            ok: result.ok !== false,
-            room: roomId,
-            peers: peers.length,
-            userPresent,
-            targetPeerId: targetClient.id,
-            result,
-          });
-          return;
-        }
-
-        const message = {
-          type: 'handoff',
-          from: sender,
-          payload
-        };
-        peers.forEach(client => safeSend(client.conn, message));
-
-        sendJson(res, 200, { ok: true, room: roomId, peers: peers.length, userPresent });
+        const result = await runRoomBroadcast({
+          roomId,
+          payload,
+          onBehalfOfUserId,
+          sender,
+        });
+        sendJson(res, result.status, result.body);
         return;
       }
 
       if (req.method === 'GET' && action === 'scene') {
-        const peers = getRoomClients(roomId);
-        if (!peers.length) {
-          sendJson(res, 200, { objects: {} });
-          return;
-        }
-
-        const message = {
-          type: 'handoff',
-          from: sender,
-          payload: { kind: 'scene-request' }
-        };
-        safeSend(peers[0].conn, message);
-        const sceneState = await waitForSceneState(sender.id);
+        const sceneState = await fetchRoomSceneState(roomId, sender);
         sendJson(res, 200, sceneState);
         return;
       }

@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import WebSocket from 'ws';
 
 import { createPresenceServer } from '../src/server.mjs';
+import { encodeSession } from '../src/gpt-session.mjs';
 
 const MESSAGE_TIMEOUT_MS = 3000;
 
 let server;
 let baseUrl;
 let wsBaseUrl;
+
+process.env.GPT_SESSION_SECRET ||= 'test-gpt-session-secret';
 
 before(async () => {
   server = createPresenceServer();
@@ -83,6 +86,28 @@ async function closeClient(ws) {
   }
   ws.terminate();
   await waitForEvent(ws, 'close');
+}
+
+async function initiateLink(roomId, userId) {
+  const response = await fetch(`${baseUrl}/api/link/initiate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomId, userId }),
+  });
+  assert.equal(response.status, 200);
+  return response.json();
+}
+
+async function redeemLink(code) {
+  const response = await fetch(`${baseUrl}/api/link/redeem`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  return {
+    response,
+    body: await response.json(),
+  };
 }
 
 describe('presence REST broadcast API', () => {
@@ -592,5 +617,260 @@ describe('presence AI link API', () => {
     } finally {
       await Promise.all([closeClient(olderPeer), closeClient(newerPeer)]);
     }
+  });
+});
+
+describe('presence GPT wrapper API', () => {
+  it('redeems pairing code and returns sessionId', async () => {
+    const userId = 'usr-gpt-redeem';
+    const { code } = await initiateLink('gpt-redeem-room', userId);
+
+    const response = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.roomId, 'gpt-redeem-room');
+    assert.equal(typeof body.sessionId, 'string');
+    assert.match(body.sessionId, /^v1\./);
+    assert.equal(typeof body.expiresAt, 'number');
+    assert.ok(body.expiresAt <= Date.now() + 24 * 60 * 60 * 1000);
+  });
+
+  it('rejects expired session', async () => {
+    const userId = 'usr-gpt-expired';
+    const { code } = await initiateLink('gpt-expired-room', userId);
+    const { response: redeemResponse, body: redeemBody } = await redeemLink(code);
+
+    assert.equal(redeemResponse.status, 200);
+    assert.equal(redeemBody.ok, true);
+
+    const realNow = Date.now;
+    let expiredSession;
+    try {
+      Date.now = () => realNow() - (48 * 60 * 60 * 1000);
+      expiredSession = encodeSession(redeemBody.linkToken, {
+        roomId: redeemBody.roomId,
+        exp: redeemBody.expiresAt,
+      });
+    } finally {
+      Date.now = realNow;
+    }
+
+    const response = await fetch(`${baseUrl}/api/gpt/room/${redeemBody.roomId}/scene`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: expiredSession.sessionId }),
+    });
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: 'session expired' });
+  });
+
+  it('rejects sessionId for different room in path', async () => {
+    const userId = 'usr-gpt-room-mismatch';
+    const { code } = await initiateLink('gpt-room-a', userId);
+
+    const response = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const body = await response.json();
+
+    const mismatchResponse = await fetch(`${baseUrl}/api/gpt/room/gpt-room-b/scene`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: body.sessionId }),
+    });
+
+    assert.equal(mismatchResponse.status, 403);
+    assert.deepEqual(await mismatchResponse.json(), { error: 'roomId mismatch' });
+  });
+
+  it('rejects ai-command via /broadcast endpoint', async () => {
+    const userId = 'usr-gpt-broadcast-ai-command';
+    const { code } = await initiateLink('gpt-broadcast-room', userId);
+    const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const redeemBody = await redeemResponse.json();
+
+    const response = await fetch(`${baseUrl}/api/gpt/room/gpt-broadcast-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: redeemBody.sessionId,
+        payload: {
+          kind: 'ai-command',
+          action: 'getCameraPose',
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      error: 'use /api/gpt/room/{roomId}/ai-command for ai-command'
+    });
+  });
+
+  it('routes broadcast through GPT wrapper to peers', async () => {
+    const userId = 'usr-gpt-broadcast';
+    const ws = await connectClient('gpt-live-room', 'Linked User', userId);
+    try {
+      const { code } = await initiateLink('gpt-live-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-add');
+
+      const response = await fetch(`${baseUrl}/api/gpt/room/gpt-live-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          payload: {
+            kind: 'scene-add',
+            objectId: 'gpt-cube-1',
+            name: 'GPT Cube',
+          },
+        }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.userPresent, true);
+      assert.equal(message.payload.objectId, 'gpt-cube-1');
+      assert.equal(message.payload.onBehalfOf, userId);
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('routes ai-command through GPT wrapper and waits for ai-result', async () => {
+    const userId = 'usr-gpt-command';
+    const olderPeer = await connectClient('gpt-command-room', 'Older Peer', userId);
+    const newerPeer = await connectClient('gpt-command-room', 'Newer Peer', userId);
+    try {
+      const { code } = await initiateLink('gpt-command-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const commandPromise = waitForMessage(newerPeer, message =>
+        message.type === 'handoff' && message.payload?.kind === 'ai-command');
+
+      const responsePromise = fetch(`${baseUrl}/api/gpt/room/gpt-command-room/ai-command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          requestId: 'req-gpt-command',
+          action: 'getCameraPose',
+          params: {},
+        }),
+      });
+
+      const commandMessage = await commandPromise;
+
+      newerPeer.send(JSON.stringify({
+        type: 'handoff',
+        targetId: commandMessage.from.id,
+        payload: {
+          kind: 'ai-result',
+          requestId: commandMessage.payload.requestId,
+          ok: true,
+          pose: {
+            position: [4, 5, 6],
+            quaternion: [0, 0, 0, 1],
+          },
+        },
+      }));
+
+      const response = await responsePromise;
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.userPresent, true);
+      assert.equal(body.targetPeerId, commandMessage.payload.targetPeerId);
+      assert.deepEqual(body.result, {
+        kind: 'ai-result',
+        requestId: 'req-gpt-command',
+        ok: true,
+        pose: {
+          position: [4, 5, 6],
+          quaternion: [0, 0, 0, 1],
+        },
+      });
+    } finally {
+      await Promise.all([closeClient(olderPeer), closeClient(newerPeer)]);
+    }
+  });
+
+  it('revokes via GPT wrapper and invalidates the underlying linkToken', async () => {
+    const userId = 'usr-gpt-revoke';
+    const { code } = await initiateLink('gpt-revoke-room', userId);
+    const { response: redeemResponse, body: redeemBody } = await redeemLink(code);
+
+    assert.equal(redeemResponse.status, 200);
+    assert.equal(redeemBody.ok, true);
+
+    const session = encodeSession(redeemBody.linkToken, {
+      roomId: redeemBody.roomId,
+      exp: redeemBody.expiresAt,
+    });
+
+    const revokeResponse = await fetch(`${baseUrl}/api/gpt/link/revoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.sessionId }),
+    });
+
+    assert.equal(revokeResponse.status, 200);
+    assert.deepEqual(await revokeResponse.json(), { ok: true });
+
+    const bearerResponse = await fetch(`${baseUrl}/api/room/gpt-revoke-room/broadcast`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${redeemBody.linkToken}`,
+      },
+      body: JSON.stringify({
+        kind: 'scene-add',
+        objectId: 'revoked-cube',
+      }),
+    });
+
+    assert.equal(bearerResponse.status, 401);
+    assert.deepEqual(await bearerResponse.json(), { error: 'token revoked' });
+
+    const gptResponse = await fetch(`${baseUrl}/api/gpt/room/gpt-revoke-room/scene`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.sessionId }),
+    });
+
+    assert.equal(gptResponse.status, 401);
+    assert.deepEqual(await gptResponse.json(), { error: 'token revoked' });
   });
 });
