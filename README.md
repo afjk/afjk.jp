@@ -91,6 +91,16 @@ URL 例: `https://afjk.jp/scenesync/?room=abc123`
 
 詳細な技術仕様は [`docs/scene-sync-spec.md`](docs/scene-sync-spec.md) を参照。
 
+AI 連携ドキュメント:
+
+- GPTs 用 OpenAPI: [`docs/scene-sync-gpt-openapi.yaml`](docs/scene-sync-gpt-openapi.yaml)
+- GPTs 用 Instructions: [`docs/scene-sync-gpt-instructions-short.md`](docs/scene-sync-gpt-instructions-short.md)
+- provider-neutral OpenAPI: [`docs/scene-sync-ai-openapi.yaml`](docs/scene-sync-ai-openapi.yaml)
+- provider-neutral Instructions: [`docs/scene-sync-ai-instructions-short.md`](docs/scene-sync-ai-instructions-short.md)
+- Claude / Codex / Copilot / Grok 向け例: [`docs/scene-sync-ai-tool-examples.md`](docs/scene-sync-ai-tool-examples.md)
+- Claude tool 定義: [`docs/scene-sync-tools-claude.json`](docs/scene-sync-tools-claude.json)
+- Codex / OpenAI function 定義: [`docs/scene-sync-tools-codex.json`](docs/scene-sync-tools-codex.json)
+
 ### pipe.afjk.jp — Piping Server
 
 ブラウザ・curl間でファイルやテキストを転送できる HTTP 中継サービス。パスは任意の文字列でOK。

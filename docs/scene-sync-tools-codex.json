@@ -1,0 +1,115 @@
+[
+  {
+    "type": "function",
+    "name": "scene_sync_redeem",
+    "description": "Redeem a 6-digit Scene Sync pairing code and create an AI session.",
+    "parameters": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "6-digit pairing code shown in Scene Sync."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "scene_sync_get_scene",
+    "description": "Read the current Scene Sync scene state for the linked room.",
+    "parameters": {
+      "type": "object",
+      "required": ["roomId", "sessionId"],
+      "properties": {
+        "roomId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "scene_sync_broadcast",
+    "description": "Apply a scene mutation such as scene-add, scene-delta, scene-remove, scene-env, or scene-batch.",
+    "parameters": {
+      "type": "object",
+      "required": ["roomId", "sessionId", "payload"],
+      "properties": {
+        "roomId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "description": "Scene mutation payload. For primitive scene-add, include payload.asset.type, payload.asset.primitive, and payload.asset.color.",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "scene_sync_ai_command",
+    "description": "Run a browser-only Scene Sync command such as getCameraPose, focusObject, screenshot, or uploadGlbFromUrl.",
+    "parameters": {
+      "type": "object",
+      "required": ["roomId", "sessionId", "action"],
+      "properties": {
+        "roomId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "getCameraPose",
+            "focusObject",
+            "undo",
+            "redo",
+            "getHistory",
+            "screenshot",
+            "uploadGlbFromUrl"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "description": "For focusObject send params.objectId. For uploadGlbFromUrl send params.url.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "scene_sync_revoke",
+    "description": "Revoke the current Scene Sync AI session.",
+    "parameters": {
+      "type": "object",
+      "required": ["sessionId"],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+]

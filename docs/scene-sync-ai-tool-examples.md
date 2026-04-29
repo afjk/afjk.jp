@@ -2,6 +2,11 @@
 
 Provider-neutral examples for calling the Scene Sync AI wrapper API at `https://afjk.jp/presence/api/ai`.
 
+Actual tool definition files in this repo:
+
+- Claude tool definitions: [`docs/scene-sync-tools-claude.json`](./scene-sync-tools-claude.json)
+- Codex / OpenAI function definitions: [`docs/scene-sync-tools-codex.json`](./scene-sync-tools-codex.json)
+
 ## Common flow
 
 1. Ask the user for the 6-digit code from `AIにリンク`
@@ -58,6 +63,8 @@ Content-Type: application/json
 ```
 
 ## Codex / tool wrapper style
+
+See [`docs/scene-sync-tools-codex.json`](./scene-sync-tools-codex.json) for a concrete function-definition file.
 
 Suggested tools:
 

@@ -579,6 +579,9 @@ Phase 1 の方針: ユーザーに Toast で通知するのみ（オブジェク
   - `docs/scene-sync-ai-instructions-short.md`
 - provider tool examples
   - `docs/scene-sync-ai-tool-examples.md`
+- concrete tool definition files
+  - `docs/scene-sync-tools-claude.json`
+  - `docs/scene-sync-tools-codex.json`
 - 目的:
   - GPTs 以外の AI クライアントから同じ API を呼べるようにする
   - provider ごとの差分を tool 定義だけに閉じ込める
@@ -619,3 +622,5 @@ Phase 1 の方針: ユーザーに Toast で通知するのみ（オブジェク
 - [`docs/scene-sync-ai-openapi.yaml`](./scene-sync-ai-openapi.yaml) — provider-neutral AI wrapper OpenAPI
 - [`docs/scene-sync-ai-instructions-short.md`](./scene-sync-ai-instructions-short.md) — provider-neutral AI instructions
 - [`docs/scene-sync-ai-tool-examples.md`](./scene-sync-ai-tool-examples.md) — Claude / Codex / Copilot / Grok 向け tool サンプル
+- [`docs/scene-sync-tools-claude.json`](./scene-sync-tools-claude.json) — Claude tool definition file
+- [`docs/scene-sync-tools-codex.json`](./scene-sync-tools-codex.json) — Codex / OpenAI function definition file
