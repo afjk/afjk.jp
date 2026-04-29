@@ -18,6 +18,8 @@ import { createXrState } from './xr/xr-state.js';
 import { setupXrButtons } from './xr/xr-buttons.js';
 import { createXrFloorManager } from './xr/xr-floor.js';
 import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
+import { createHistoryManager, HistoryManager } from './history/history-manager.js';
+import { createUserManager } from './user/user-manager.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -34,10 +36,19 @@ const glbLoader = new GLBFileLoader({
   maxDimension: 10,
 });
 
+const onBeforeBroadcast = (operation, meta) => {
+  if (operation.kind === 'scene-env' && meta.beforeEnvId) {
+    presenceState.historyManager.push(
+      HistoryManager.createEnvEntry(meta.beforeEnvId, operation.envId)
+    );
+  }
+};
+
 const environmentManager = createEnvironmentManager({
   scene,
   pmremGenerator,
   broadcast,
+  onBeforeBroadcast,
   dom,
   showToast,
 });
@@ -724,12 +735,23 @@ scene.add(transformCtrl.getHelper());
 
 let isDragging = false;
 let dragIntervalId = null;
+let dragStartState = null;
 
 transformCtrl.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
   isDragging = e.value;
 
   if (isDragging) {
+    const obj = transformCtrl.object;
+    if (obj && obj.userData.objectId) {
+      dragStartState = {
+        objectId: obj.userData.objectId,
+        name: obj.userData.name || obj.userData.objectId,
+        beforePos: obj.position.toArray(),
+        beforeRot: obj.quaternion.toArray(),
+        beforeScl: obj.scale.toArray(),
+      };
+    }
     dragIntervalId = setInterval(() => {
       sendSelectedDelta();
     }, 50);
@@ -737,8 +759,41 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
     clearInterval(dragIntervalId);
     dragIntervalId = null;
     sendSelectedDelta();
+
+    // ドラッグ終了時に履歴に追加
+    if (dragStartState) {
+      const obj = transformCtrl.object;
+      if (obj && obj.userData.objectId === dragStartState.objectId) {
+        const afterPos = obj.position.toArray();
+        const afterRot = obj.quaternion.toArray();
+        const afterScl = obj.scale.toArray();
+
+        // 値が変更されている場合のみ履歴に追加
+        if (!arraysEqual(dragStartState.beforePos, afterPos) ||
+            !arraysEqual(dragStartState.beforeRot, afterRot) ||
+            !arraysEqual(dragStartState.beforeScl, afterScl)) {
+          const historyEntry = HistoryManager.createDeltaEntry(
+            dragStartState.objectId,
+            dragStartState.name,
+            dragStartState.beforePos,
+            dragStartState.beforeRot,
+            dragStartState.beforeScl,
+            afterPos,
+            afterRot,
+            afterScl
+          );
+          presenceState.historyManager.push(historyEntry);
+        }
+      }
+      dragStartState = null;
+    }
   }
 });
+
+function arraysEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((v, i) => Math.abs(v - b[i]) < 0.0001);
+}
 
 function sendSelectedDelta() {
   const obj = transformCtrl.object;
@@ -1245,6 +1300,13 @@ function deleteSelectedObject() {
     removeLockOverlay(deleteId);
     locks.delete(deleteId);
 
+    // 削除前にオブジェクト情報を保存
+    const name = attached.userData.name || deleteId;
+    const position = attached.position.toArray();
+    const rotation = attached.quaternion.toArray();
+    const scale = attached.scale.toArray();
+    const asset = attached.userData.asset || {};
+
     scene.remove(attached);
     attached.traverse(child => {
       if (child.geometry) child.geometry.dispose();
@@ -1257,6 +1319,12 @@ function deleteSelectedObject() {
       }
     });
     managedObjects.delete(deleteId);
+
+    // 履歴に追加
+    presenceState.historyManager.push(
+      HistoryManager.createRemoveEntry(deleteId, name, asset, position, rotation, scale)
+    );
+
     broadcast({ kind: 'scene-remove', objectId: deleteId });
   }
 }
@@ -1320,6 +1388,28 @@ btnDelete?.addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   // テキスト入力中は無視
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  // ドラッグ中は Undo/Redo を無効化
+  if (isDragging) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'y')) {
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // Undo: Ctrl+Z (Cmd+Z on Mac)
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    performUndo();
+    return;
+  }
+
+  // Redo: Ctrl+Y or Ctrl+Shift+Z (Cmd+Shift+Z on Mac)
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    e.preventDefault();
+    performRedo();
+    return;
+  }
 
   switch (e.key.toLowerCase()) {
     case 'w': transformCtrl.setMode('translate'); break;
@@ -1528,12 +1618,16 @@ function updatePeersList() {
   peersListEl.innerHTML = html;
 }
 
+const userManager = createUserManager();
+
 const presenceState = {
   ws: null,
   id: null,
+  userId: userManager.getUserId(),
   room: null,
   nickname: loadInitialNickname(),
   peers: [],
+  historyManager: createHistoryManager(),
 };
 
 const remoteAvatarManager = createRemoteAvatarManager({
@@ -2055,6 +2149,12 @@ function handleHandoff(data) {
       remoteAvatarManager.handleAvatarMessage(payload);
       break;
     }
+    case 'scene-batch': {
+      payload.actions?.forEach(action => {
+        handleHandoff({ ...data, payload: action });
+      });
+      break;
+    }
     default:
       break;
   }
@@ -2208,6 +2308,69 @@ function applyTransform(obj, info) {
   if (info.scale) obj.scale.fromArray(info.scale);
 }
 
+// ── Undo/Redo 処理 ──────────────────────────────────────
+
+function performUndo() {
+  const historyManager = presenceState.historyManager;
+  if (!historyManager.canUndo()) return;
+
+  const operation = historyManager.undo();
+  if (!operation) return;
+
+  applyOperationToScene(operation);
+  broadcast(operation);
+}
+
+function performRedo() {
+  const historyManager = presenceState.historyManager;
+  if (!historyManager.canRedo()) return;
+
+  const operation = historyManager.redo();
+  if (!operation) return;
+
+  applyOperationToScene(operation);
+  broadcast(operation);
+}
+
+function applyOperationToScene(operation) {
+  switch (operation.kind) {
+    case 'scene-add': {
+      addOrUpdateObject(operation.objectId, operation);
+      break;
+    }
+    case 'scene-remove': {
+      const obj = managedObjects.get(operation.objectId);
+      if (obj) {
+        if (transformCtrl.object === obj) {
+          transformCtrl.detach();
+          hideToolbar();
+        }
+        scene.remove(obj);
+        managedObjects.delete(operation.objectId);
+      }
+      break;
+    }
+    case 'scene-delta': {
+      const obj = managedObjects.get(operation.objectId);
+      if (obj) {
+        applyTransform(obj, operation);
+      }
+      break;
+    }
+    case 'scene-env': {
+      environmentManager.loadEnvironment(operation.envId, {
+        source: 'undo-redo',
+        broadcastChange: false,
+      });
+      break;
+    }
+    case 'scene-batch': {
+      operation.actions?.forEach(action => applyOperationToScene(action));
+      break;
+    }
+  }
+}
+
 // ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
 
 function broadcast(payload) {
@@ -2227,28 +2390,35 @@ function generateRandomPath() {
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
   // blob store に POST（1回だけ）
   const meshPath = generateRandomPath();
+  let actualMeshPath = null;
+
   try {
     await fetch(BLOB_BASE + '/' + meshPath, {
       method: 'POST',
       headers: { 'Content-Type': 'model/gltf-binary' },
       body: arrayBuffer,
     });
+    actualMeshPath = meshPath;
+    model.userData.meshPath = meshPath;
   } catch (err) {
     console.warn('POST failed:', err);
-    broadcast({
-      kind: 'scene-add',
-      objectId,
-      name,
-      position: model.position.toArray(),
-      rotation: model.quaternion.toArray(),
-      scale: model.scale.toArray(),
-      meshPath: null,
-    });
-    return;
   }
 
-  // meshPath をオブジェクトに保存（respondToSceneRequest で再利用）
-  model.userData.meshPath = meshPath;
+  // 履歴に追加
+  const asset = model.userData.asset || {
+    type: 'gltf',
+    meshPath: actualMeshPath,
+  };
+  const historyEntry = HistoryManager.createAddEntry(
+    objectId,
+    asset,
+    model.position.toArray(),
+    model.quaternion.toArray(),
+    model.scale.toArray(),
+    name,
+    actualMeshPath
+  );
+  presenceState.historyManager.push(historyEntry);
 
   broadcast({
     kind: 'scene-add',
@@ -2257,7 +2427,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     position: model.position.toArray(),
     rotation: model.quaternion.toArray(),
     scale: model.scale.toArray(),
-    meshPath,
+    meshPath: actualMeshPath,
   });
 }
 

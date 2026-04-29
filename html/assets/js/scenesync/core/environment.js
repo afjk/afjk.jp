@@ -84,14 +84,25 @@ export function createEnvironmentManager(ctx) {
       broadcastChange = source === 'local',
     } = options;
 
+    const previousEnvId = desiredEnvId;
     desiredEnvId = envId;
     updateEnvSelector();
 
     if (broadcastChange) {
-      ctx.broadcast?.({
+      const operation = {
         kind: 'scene-env',
         envId,
-      });
+      };
+
+      // 履歴に追加
+      if (ctx.onBeforeBroadcast) {
+        ctx.onBeforeBroadcast(operation, {
+          beforeEnvId: previousEnvId,
+          afterEnvId: envId,
+        });
+      }
+
+      ctx.broadcast?.(operation);
     }
 
     loadEnvironmentAsset(envId);
