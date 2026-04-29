@@ -2341,43 +2341,30 @@ function focusCameraOnObject(objectId) {
 
 function captureScreenshotBlob() {
   return new Promise((resolve, reject) => {
-    const sourceCanvas = renderer.domElement;
-    if (!sourceCanvas) {
+    const canvas = renderer.domElement;
+    if (!canvas) {
       reject(new Error('renderer canvas not available'));
       return;
     }
 
-    const width = sourceCanvas.width;
-    const height = sourceCanvas.height;
-    if (!width || !height) {
-      reject(new Error('renderer canvas has invalid size'));
-      return;
-    }
-
-    const screenshotRenderer = new THREE.WebGLRenderer({
-      antialias: true,
-      preserveDrawingBuffer: true,
-    });
-    screenshotRenderer.setPixelRatio(1);
-    screenshotRenderer.setSize(width, height, false);
-    screenshotRenderer.xr.enabled = false;
-    if ('outputColorSpace' in renderer) {
-      screenshotRenderer.outputColorSpace = renderer.outputColorSpace;
-    }
-    screenshotRenderer.toneMapping = renderer.toneMapping;
-    screenshotRenderer.toneMappingExposure = renderer.toneMappingExposure;
-
+    const tcHelper = transformCtrl.getHelper?.();
+    const tcWasVisible = tcHelper ? tcHelper.visible : false;
     try {
-      screenshotRenderer.render(scene, camera);
+      if (tcHelper) {
+        tcHelper.visible = false;
+      }
+      renderer.render(scene, camera);
     } catch (err) {
-      screenshotRenderer.dispose();
+      if (tcHelper) {
+        tcHelper.visible = tcWasVisible;
+      }
       reject(err);
       return;
     }
-
-    const canvas = screenshotRenderer.domElement;
     const finish = (blob) => {
-      screenshotRenderer.dispose();
+      if (tcHelper) {
+        tcHelper.visible = tcWasVisible;
+      }
       if (blob) {
         resolve(blob);
         return;
