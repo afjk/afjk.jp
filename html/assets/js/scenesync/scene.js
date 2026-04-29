@@ -20,6 +20,7 @@ import { createXrFloorManager } from './xr/xr-floor.js';
 import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
 import { createHistoryManager, HistoryManager } from './history/history-manager.js';
 import { createUserManager } from './user/user-manager.js';
+import { createLinkManager } from './link/link-manager.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -1644,6 +1645,20 @@ function updatePeersList() {
 
 const userManager = createUserManager();
 
+function getApiBaseUrl() {
+  const params = new URLSearchParams(location.search);
+  const presenceOverride = params.get('presence');
+  if (presenceOverride) {
+    const url = new URL(presenceOverride, window.location.origin);
+    return url.origin + url.pathname + '/api';
+  }
+  const isLocal = location.hostname === 'localhost'
+                 || location.hostname === '127.0.0.1';
+  return isLocal ? 'http://localhost:8787/api' : 'https://afjk.jp/presence/api';
+}
+
+const linkManager = createLinkManager(getApiBaseUrl());
+
 const presenceState = {
   ws: null,
   id: null,
@@ -1652,6 +1667,7 @@ const presenceState = {
   nickname: loadInitialNickname(),
   peers: [],
   historyManager: createHistoryManager(),
+  linkManager,
 };
 
 // 履歴状態が変わったときにボタンを更新
@@ -1695,6 +1711,7 @@ function editNickname() {
       type: 'hello',
       nickname: cleaned,
       device: navigator.userAgent.slice(0, 60),
+      userId: presenceState.userId,
     }));
   }
 }
@@ -1877,6 +1894,7 @@ function connectPresence() {
       type: 'hello',
       nickname: presenceState.nickname,
       device: navigator.userAgent.slice(0, 60),
+      userId: presenceState.userId,
     }));
   };
 
@@ -2064,6 +2082,11 @@ function handleHandoff(data) {
   const payload = data.payload;
   if (!payload || !payload.kind) return;
 
+  // 操作が自分またはAIが代理している場合、履歴に追加するか判定
+  const isOwn = data.from.id === presenceState.id;
+  const isOnBehalfOf = payload.onBehalfOf === presenceState.userId;
+  const shouldTrackHistory = isOwn || isOnBehalfOf;
+
   switch (payload.kind) {
     case 'scene-state': {
       sceneReceived = true;
@@ -2085,24 +2108,66 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-delta': {
-      if (data.from.id === presenceState.id) break; // 自分の echo は無視
+      if (isOwn) break; // 自分の echo は無視
       const obj = managedObjects.get(payload.objectId);
       if (!obj) break;
+      const beforePos = obj.position.toArray();
+      const beforeRot = obj.quaternion.toArray();
+      const beforeScl = obj.scale.toArray();
       if (payload.position) obj.position.fromArray(payload.position);
       if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
       if (payload.scale) obj.scale.fromArray(payload.scale);
+      if (shouldTrackHistory && isOnBehalfOf) {
+        const afterPos = obj.position.toArray();
+        const afterRot = obj.quaternion.toArray();
+        const afterScl = obj.scale.toArray();
+        const historyEntry = HistoryManager.createDeltaEntry(
+          payload.objectId,
+          obj.userData?.name || payload.objectId,
+          beforePos,
+          beforeRot,
+          beforeScl,
+          afterPos,
+          afterRot,
+          afterScl
+        );
+        presenceState.historyManager.push(historyEntry);
+      }
       break;
     }
     case 'scene-add': {
-      if (data.from.id === presenceState.id) break; // 自分の echo は無視
+      if (isOwn) break; // 自分の echo は無視
       addOrUpdateObject(payload.objectId, payload);
+      if (shouldTrackHistory && isOnBehalfOf) {
+        const historyEntry = HistoryManager.createAddEntry(
+          payload.objectId,
+          payload.asset,
+          payload.position || [0, 0, 0],
+          payload.rotation || [0, 0, 0, 1],
+          payload.scale || [1, 1, 1],
+          payload.name || payload.objectId,
+          payload.meshPath
+        );
+        presenceState.historyManager.push(historyEntry);
+      }
       break;
     }
     case 'scene-remove': {
       const objectId = payload.objectId;
+      const obj = managedObjects.get(objectId);
+      if (shouldTrackHistory && isOnBehalfOf && obj) {
+        const historyEntry = HistoryManager.createRemoveEntry(
+          objectId,
+          obj.userData?.name || objectId,
+          obj.userData?.asset || {},
+          obj.position.toArray(),
+          obj.quaternion.toArray(),
+          obj.scale.toArray()
+        );
+        presenceState.historyManager.push(historyEntry);
+      }
       removeLockOverlay(objectId);
       locks.delete(objectId);
-      const obj = managedObjects.get(objectId);
       if (obj) {
         if (transformCtrl.object === obj) { transformCtrl.detach(); hideToolbar(); }
         scene.remove(obj);
@@ -2171,10 +2236,15 @@ function handleHandoff(data) {
     }
     case 'scene-env': {
       if (payload.envId) {
+        const beforeEnvId = environmentManager.getCurrentEnvId?.() || 'outdoor_day';
         environmentManager.loadEnvironment(payload.envId, {
           source: 'remote',
           broadcastChange: false,
         });
+        if (shouldTrackHistory && isOnBehalfOf) {
+          const historyEntry = HistoryManager.createEnvEntry(beforeEnvId, payload.envId);
+          presenceState.historyManager.push(historyEntry);
+        }
       }
       break;
     }
@@ -2186,6 +2256,16 @@ function handleHandoff(data) {
       payload.actions?.forEach(action => {
         handleHandoff({ ...data, payload: action });
       });
+      break;
+    }
+    case 'ai-link-revoked': {
+      if (presenceState.linkManager.linkId === payload.linkId) {
+        presenceState.linkManager.linkToken = null;
+        presenceState.linkManager.linkId = null;
+        presenceState.linkManager.expiresAt = null;
+        updateLinkButtonState();
+        showToast('AIリンクが解除されました');
+      }
       break;
     }
     default:
@@ -2500,6 +2580,121 @@ const dragDropManager = new DragDropManager({
     );
   },
 });
+
+// ── AI ペアリング UI ───────────────────────────────────────────────────
+
+const linkBtn = document.getElementById('link-btn');
+const pairingDialog = document.getElementById('pairing-dialog');
+const pairingStepCode = document.getElementById('pairing-step-code');
+const pairingStepLinked = document.getElementById('pairing-step-linked');
+const pairingCode = document.getElementById('pairing-code');
+const pairingTimer = document.getElementById('pairing-timer');
+const pairingError = document.getElementById('pairing-error');
+const btnCancelPairing = document.getElementById('btn-cancel-pairing');
+const btnRevokeLink = document.getElementById('btn-revoke-link');
+const linkIcon = document.getElementById('link-icon');
+const linkLabel = document.getElementById('link-label');
+
+let pairingCountdown = null;
+let pairingExpireTime = null;
+
+function formatTime(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function updatePairingTimer() {
+  if (!pairingExpireTime || !pairingTimer) return;
+  const remaining = pairingExpireTime - Date.now();
+  pairingTimer.textContent = formatTime(remaining);
+  if (remaining <= 0) {
+    cancelPairing();
+  }
+}
+
+async function startPairing() {
+  if (!presenceState.room) {
+    showToast('ルームに接続してからリンクしてください');
+    return;
+  }
+
+  try {
+    pairingError.style.display = 'none';
+    pairingError.textContent = '';
+
+    const result = await presenceState.linkManager.initiatePairing(
+      presenceState.room,
+      presenceState.userId
+    );
+
+    pairingCode.textContent = result.code;
+    pairingExpireTime = result.expiresAt;
+
+    pairingStepCode.style.display = 'block';
+    pairingStepLinked.style.display = 'none';
+    pairingDialog.style.display = 'flex';
+
+    if (pairingCountdown) clearInterval(pairingCountdown);
+    pairingCountdown = setInterval(updatePairingTimer, 100);
+    updatePairingTimer();
+  } catch (err) {
+    pairingError.textContent = err.message;
+    pairingError.style.display = 'block';
+  }
+}
+
+function cancelPairing() {
+  if (pairingCountdown) clearInterval(pairingCountdown);
+  pairingCountdown = null;
+  pairingDialog.style.display = 'none';
+}
+
+async function revokeLink() {
+  try {
+    await presenceState.linkManager.revoke();
+    updateLinkButtonState();
+    showToast('AI リンクを解除しました');
+  } catch (err) {
+    showToast('リンク解除に失敗しました: ' + err.message);
+  }
+}
+
+function updateLinkButtonState() {
+  const isLinked = presenceState.linkManager.isLinked();
+  if (isLinked) {
+    linkIcon.textContent = '✓';
+    linkLabel.textContent = 'AIリンク中';
+    linkBtn.classList.add('active');
+  } else {
+    linkIcon.textContent = '🔗';
+    linkLabel.textContent = 'AIにリンク';
+    linkBtn.classList.remove('active');
+  }
+}
+
+linkBtn?.addEventListener('click', () => {
+  if (presenceState.linkManager.isLinked()) {
+    pairingStepCode.style.display = 'none';
+    pairingStepLinked.style.display = 'block';
+    btnCancelPairing.style.display = 'inline-block';
+    btnRevokeLink.style.display = 'inline-block';
+    const expiresAt = new Date(presenceState.linkManager.expiresAt);
+    document.getElementById('pairing-expires-at').textContent =
+      `有効期限: ${expiresAt.toLocaleDateString()} ${expiresAt.toLocaleTimeString()}`;
+    pairingDialog.style.display = 'flex';
+  } else {
+    startPairing();
+  }
+});
+
+btnCancelPairing?.addEventListener('click', cancelPairing);
+btnRevokeLink?.addEventListener('click', revokeLink);
+
+presenceState.linkManager.onStatusChange = () => {
+  updateLinkButtonState();
+};
 
 // ── 起動 ─────────────────────────────────────────────────
 

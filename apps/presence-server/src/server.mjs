@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
+import { createLinkToken, verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken } from './link-token.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
@@ -284,6 +285,7 @@ function makeClient(conn, roomId) {
     id: randomUUID(),
     conn,
     roomId,
+    userId: null,
     nickname: '',
     device: '',
     streaming: false,
@@ -309,13 +311,19 @@ function listPeers(roomId, excludeId) {
   if (!room) return [];
   return Array.from(room.values())
     .filter(p => p.id !== excludeId)
-    .map(p => ({
-      id: p.id,
-      nickname: p.nickname,
-      device: p.device,
-      streaming: p.streaming,
-      lastSeen: p.lastSeen
-    }));
+    .map(p => {
+      const peerInfo = {
+        id: p.id,
+        nickname: p.nickname,
+        device: p.device,
+        streaming: p.streaming,
+        lastSeen: p.lastSeen
+      };
+      if (p.userId) {
+        peerInfo.userId = p.userId;
+      }
+      return peerInfo;
+    });
 }
 
 function broadcastPeers(roomId) {
@@ -730,6 +738,113 @@ function createPresenceServer() {
     return;
   }
 
+  // ── AI Pairing Endpoints ────────────────────────────────────────────
+  // POST /api/link/initiate
+  if (req.method === 'POST' && path === '/api/link/initiate') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'invalid JSON body' });
+      return;
+    }
+
+    const { roomId, userId } = body;
+    if (!roomId || !userId) {
+      sendJson(res, 400, { error: 'missing roomId or userId' });
+      return;
+    }
+
+    const sanitized = sanitizeRoom(roomId);
+    if (!sanitized) {
+      sendJson(res, 400, { error: 'invalid roomId' });
+      return;
+    }
+
+    const { code, expiresAt } = initiatePairingCode(sanitized, userId);
+    sendJson(res, 200, { code, expiresAt });
+    return;
+  }
+
+  // POST /api/link/redeem
+  if (req.method === 'POST' && path === '/api/link/redeem') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'invalid JSON body' });
+      return;
+    }
+
+    const { code } = body;
+    if (!code) {
+      sendJson(res, 400, { error: 'missing code' });
+      return;
+    }
+
+    const result = redeemPairingCode(code);
+    if (!result.ok) {
+      const statusCode = result.error === 'not found' ? 404 : result.error === 'already redeemed' ? 410 : 400;
+      sendJson(res, statusCode, { error: result.error });
+      return;
+    }
+
+    sendJson(res, 200, result);
+    return;
+  }
+
+  // POST /api/link/revoke
+  if (req.method === 'POST' && path === '/api/link/revoke') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'invalid JSON body' });
+      return;
+    }
+
+    let linkId = body?.linkId;
+    let revokeUserId = null;
+    let revokeRoomId = null;
+
+    // If Authorization Bearer token provided, extract linkId from it
+    const authHeader = req.headers['authorization'] || '';
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7);
+      const result = verifyLinkToken(token);
+      if (result.valid) {
+        linkId = result.payload.linkId;
+        revokeUserId = result.payload.userId;
+        revokeRoomId = result.payload.roomId;
+      }
+    }
+
+    if (!linkId) {
+      sendJson(res, 400, { error: 'missing linkId or Authorization header' });
+      return;
+    }
+
+    revokeLinkToken(linkId);
+
+    // Broadcast ai-link-revoked to room if applicable
+    if (revokeRoomId) {
+      const peers = getRoomClients(revokeRoomId);
+      const message = {
+        type: 'handoff',
+        from: { id: `api-revoke-${randomUUID()}`, nickname: 'AI', device: 'REST API' },
+        payload: {
+          kind: 'ai-link-revoked',
+          linkId,
+          reason: 'ai-revoked'
+        }
+      };
+      peers.forEach(client => safeSend(client.conn, message));
+    }
+
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
     const roomApiMatch = path.match(/^\/api\/room\/([^/]+)\/(broadcast|scene)$/);
     if (roomApiMatch) {
       const roomId = sanitizeRoom(roomApiMatch[1]);
@@ -752,6 +867,26 @@ function createPresenceServer() {
           return;
         }
 
+        // Validate linkToken if Authorization Bearer header is present
+        let onBehalfOfUserId = null;
+        const authHeader = req.headers['authorization'] || '';
+        if (authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7);
+          const result = verifyLinkToken(token);
+          if (!result.valid) {
+            sendJson(res, 401, { error: result.error });
+            return;
+          }
+          // Ensure token roomId matches URL roomId
+          if (result.payload.roomId !== roomId) {
+            sendJson(res, 403, { error: 'roomId mismatch' });
+            return;
+          }
+          onBehalfOfUserId = result.payload.userId;
+          // Add onBehalfOf to payload
+          payload = { ...payload, onBehalfOf: onBehalfOfUserId };
+        }
+
         const peers = getRoomClients(roomId);
         const message = {
           type: 'handoff',
@@ -759,7 +894,14 @@ function createPresenceServer() {
           payload
         };
         peers.forEach(client => safeSend(client.conn, message));
-        sendJson(res, 200, { ok: true, room: roomId, peers: peers.length });
+
+        // Calculate userPresent: check if target userId has any connected peer in room
+        let userPresent = false;
+        if (onBehalfOfUserId) {
+          userPresent = peers.some(client => client.userId === onBehalfOfUserId);
+        }
+
+        sendJson(res, 200, { ok: true, room: roomId, peers: peers.length, userPresent });
         return;
       }
 
@@ -820,6 +962,9 @@ function createPresenceServer() {
           client.nickname = sanitizeName(data.nickname);
           client.device = sanitizeDevice(data.device);
           client.streaming = Boolean(data.streaming);
+          if (data.userId) {
+            client.userId = String(data.userId);
+          }
           broadcastPeers(roomId);
           break;
         case 'handoff':
