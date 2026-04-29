@@ -2341,13 +2341,43 @@ function focusCameraOnObject(objectId) {
 
 function captureScreenshotBlob() {
   return new Promise((resolve, reject) => {
-    const canvas = renderer.domElement;
-    if (!canvas) {
+    const sourceCanvas = renderer.domElement;
+    if (!sourceCanvas) {
       reject(new Error('renderer canvas not available'));
       return;
     }
 
+    const width = sourceCanvas.width;
+    const height = sourceCanvas.height;
+    if (!width || !height) {
+      reject(new Error('renderer canvas has invalid size'));
+      return;
+    }
+
+    const screenshotRenderer = new THREE.WebGLRenderer({
+      antialias: true,
+      preserveDrawingBuffer: true,
+    });
+    screenshotRenderer.setPixelRatio(1);
+    screenshotRenderer.setSize(width, height, false);
+    screenshotRenderer.xr.enabled = false;
+    if ('outputColorSpace' in renderer) {
+      screenshotRenderer.outputColorSpace = renderer.outputColorSpace;
+    }
+    screenshotRenderer.toneMapping = renderer.toneMapping;
+    screenshotRenderer.toneMappingExposure = renderer.toneMappingExposure;
+
+    try {
+      screenshotRenderer.render(scene, camera);
+    } catch (err) {
+      screenshotRenderer.dispose();
+      reject(err);
+      return;
+    }
+
+    const canvas = screenshotRenderer.domElement;
     const finish = (blob) => {
+      screenshotRenderer.dispose();
       if (blob) {
         resolve(blob);
         return;
