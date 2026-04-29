@@ -521,4 +521,76 @@ describe('presence AI link API', () => {
       await closeClient(ws);
     }
   });
+
+  it('routes ai-command to the latest linked peer and returns ai-result', async () => {
+    const userId = 'usr-test-command';
+    const olderPeer = await connectClient('command-room', 'Older Peer', userId);
+    const newerPeer = await connectClient('command-room', 'Newer Peer', userId);
+    try {
+      const initiateResponse = await fetch(`${baseUrl}/api/link/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: 'command-room', userId }),
+      });
+      const { code } = await initiateResponse.json();
+      const redeemResponse = await fetch(`${baseUrl}/api/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const commandPromise = waitForMessage(newerPeer, message =>
+        message.type === 'handoff' && message.payload?.kind === 'ai-command');
+
+      const responsePromise = fetch(`${baseUrl}/api/room/command-room/broadcast`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${redeemBody.linkToken}`,
+        },
+        body: JSON.stringify({
+          kind: 'ai-command',
+          requestId: 'req-test-command',
+          action: 'getCameraPose',
+          params: {},
+        }),
+      });
+
+      const commandMessage = await commandPromise;
+
+      newerPeer.send(JSON.stringify({
+        type: 'handoff',
+        targetId: commandMessage.from.id,
+        payload: {
+          kind: 'ai-result',
+          requestId: commandMessage.payload.requestId,
+          ok: true,
+          pose: {
+            position: [1, 2, 3],
+            quaternion: [0, 0, 0, 1],
+          },
+        },
+      }));
+
+      const response = await responsePromise;
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.userPresent, true);
+      assert.equal(body.targetPeerId, commandMessage.payload.targetPeerId);
+      assert.deepEqual(body.result, {
+        kind: 'ai-result',
+        requestId: 'req-test-command',
+        ok: true,
+        pose: {
+          position: [1, 2, 3],
+          quaternion: [0, 0, 0, 1],
+        },
+      });
+    } finally {
+      await Promise.all([closeClient(olderPeer), closeClient(newerPeer)]);
+    }
+  });
 });

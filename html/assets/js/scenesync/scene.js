@@ -60,7 +60,7 @@ setupXrButtons({
 });
 const BLOB_BASE = location.hostname === 'localhost'
   ? 'http://localhost:8787/blob'
-  : 'https://afjk.jp/presence/blob';
+  : `${location.origin}/presence/blob`;
 
 // ── XR コントローラー ──────────────────────────────────────
 // XR セッションへ入るためのモード状態
@@ -2258,6 +2258,10 @@ function handleHandoff(data) {
       });
       break;
     }
+    case 'ai-command': {
+      void handleAiCommand(data.from, payload);
+      break;
+    }
     case 'ai-link-established': {
       if (payload.userId === presenceState.userId) {
         presenceState.linkManager.establishLink({
@@ -2280,6 +2284,196 @@ function handleHandoff(data) {
     }
     default:
       break;
+  }
+}
+
+function sendAiResult(targetId, requestId, result = {}) {
+  const ws = presenceState.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN || !targetId) return;
+  ws.send(JSON.stringify({
+    type: 'handoff',
+    targetId,
+    payload: {
+      kind: 'ai-result',
+      requestId,
+      ...result,
+    },
+  }));
+}
+
+function getCameraPose() {
+  return {
+    position: camera.position.toArray(),
+    quaternion: camera.quaternion.toArray(),
+  };
+}
+
+function focusCameraOnObject(objectId) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) {
+    return { ok: false, error: `object not found: ${objectId}` };
+  }
+
+  const box = new THREE.Box3().setFromObject(obj);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const radius = Math.max(size.x, size.y, size.z, 1);
+  const direction = camera.position.clone().sub(orbit.target);
+  if (direction.lengthSq() < 1e-6) {
+    direction.set(1, 0.6, 1);
+  }
+  direction.normalize();
+
+  orbit.target.copy(center);
+  camera.position.copy(center.clone().add(direction.multiplyScalar(radius * 2.5)));
+  camera.lookAt(center);
+  orbit.update();
+
+  return {
+    ok: true,
+    objectId,
+    target: center.toArray(),
+    camera: getCameraPose(),
+  };
+}
+
+function captureScreenshotBlob() {
+  return new Promise((resolve, reject) => {
+    const canvas = renderer.domElement;
+    if (!canvas) {
+      reject(new Error('renderer canvas not available'));
+      return;
+    }
+
+    const finish = (blob) => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+      reject(new Error('failed to encode screenshot'));
+    };
+
+    if (typeof canvas.toBlob === 'function') {
+      canvas.toBlob(finish, 'image/jpeg', 0.92);
+      return;
+    }
+
+    try {
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const base64 = dataUrl.split(',')[1] || '';
+      const bytes = Uint8Array.from(atob(base64), ch => ch.charCodeAt(0));
+      finish(new Blob([bytes], { type: 'image/jpeg' }));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function uploadBlobToStore(blob, contentType = 'application/octet-stream', extension = '') {
+  const path = `${generateRandomPath()}${extension}`;
+  const res = await fetch(`${BLOB_BASE}/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': contentType },
+    body: blob,
+  });
+  if (!res.ok) {
+    throw new Error(`blob upload failed: ${res.status}`);
+  }
+  return {
+    path,
+    url: `${BLOB_BASE}/${path}`,
+  };
+}
+
+async function uploadGlbFromUrl(url, params = {}) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`failed to fetch glb: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const fileName = params.name || url.split('/').pop() || 'remote.glb';
+  const file = new File([blob], fileName, { type: blob.type || 'model/gltf-binary' });
+  const position = Array.isArray(params.position)
+    ? new THREE.Vector3().fromArray(params.position)
+    : new THREE.Vector3(0, 0, 0);
+
+  const model = await glbLoader.loadFromFile(file, position, scene);
+  managedObjects.set(model.userData.objectId, model);
+  selectManagedObject(model);
+
+  const arrayBuffer = await blob.arrayBuffer();
+  await uploadAndBroadcast(
+    model.userData.objectId,
+    file.name,
+    model,
+    arrayBuffer
+  );
+
+  return {
+    ok: true,
+    objectId: model.userData.objectId,
+    name: file.name,
+    position: model.position.toArray(),
+    rotation: model.quaternion.toArray(),
+    scale: model.scale.toArray(),
+  };
+}
+
+async function handleAiCommand(from, payload) {
+  const requestId = payload.requestId || `req-${Date.now()}`;
+
+  try {
+    let result;
+    switch (payload.action) {
+      case 'getCameraPose':
+        result = { ok: true, pose: getCameraPose() };
+        break;
+      case 'focusObject':
+        result = focusCameraOnObject(payload.params?.objectId);
+        break;
+      case 'undo':
+        if (!presenceState.historyManager.canUndo()) {
+          result = { ok: false, error: 'nothing to undo' };
+          break;
+        }
+        performUndo();
+        result = { ok: true, history: presenceState.historyManager.getHistory(10) };
+        break;
+      case 'redo':
+        if (!presenceState.historyManager.canRedo()) {
+          result = { ok: false, error: 'nothing to redo' };
+          break;
+        }
+        performRedo();
+        result = { ok: true, history: presenceState.historyManager.getHistory(10) };
+        break;
+      case 'getHistory':
+        result = {
+          ok: true,
+          history: presenceState.historyManager.getHistory(payload.params?.count || 10),
+        };
+        break;
+      case 'screenshot': {
+        const blob = await captureScreenshotBlob();
+        const uploaded = await uploadBlobToStore(blob, 'image/jpeg', '.jpg');
+        result = { ok: true, ...uploaded };
+        break;
+      }
+      case 'uploadGlbFromUrl':
+        result = await uploadGlbFromUrl(payload.params?.url, payload.params || {});
+        break;
+      default:
+        result = { ok: false, error: `unsupported ai-command action: ${payload.action}` };
+        break;
+    }
+
+    sendAiResult(from.id, requestId, result);
+  } catch (err) {
+    sendAiResult(from.id, requestId, {
+      ok: false,
+      error: err?.message || String(err),
+    });
   }
 }
 

@@ -13,6 +13,7 @@ const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
+const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
 
 // ── Blob Store ────────────────────────────────────────────────────────────────
 const BLOB_MAX_SIZE = 50 * 1024 * 1024; // 50MB
@@ -436,6 +437,16 @@ function handlePendingSceneState(data) {
   return true;
 }
 
+function handlePendingAiCommandResult(data) {
+  if (!data?.targetId || data?.payload?.kind !== 'ai-result') return false;
+  const pending = pendingAiCommandResults.get(data.targetId);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  pendingAiCommandResults.delete(data.targetId);
+  pending.resolve(data.payload);
+  return true;
+}
+
 function waitForSceneState(requestId, timeoutMs = 5000) {
   return new Promise(resolve => {
     const timer = setTimeout(() => {
@@ -444,6 +455,27 @@ function waitForSceneState(requestId, timeoutMs = 5000) {
     }, timeoutMs);
     pendingSceneRequests.set(requestId, { resolve, timer });
   });
+}
+
+function waitForAiCommandResult(requestId, timeoutMs = 10000) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingAiCommandResults.delete(requestId);
+      resolve({
+        kind: 'ai-result',
+        ok: false,
+        error: 'ai-command timeout',
+      });
+    }, timeoutMs);
+    pendingAiCommandResults.set(requestId, { resolve, timer });
+  });
+}
+
+function findLatestUserPeer(roomId, userId) {
+  const peers = getRoomClients(roomId).filter(client => client.userId === userId);
+  if (!peers.length) return null;
+  peers.sort((a, b) => b.lastSeen - a.lastSeen);
+  return peers[0];
 }
 
 const CORS = {
@@ -914,18 +946,55 @@ function createPresenceServer() {
         }
 
         const peers = getRoomClients(roomId);
+        let userPresent = false;
+        if (onBehalfOfUserId) {
+          userPresent = peers.some(client => client.userId === onBehalfOfUserId);
+        }
+
+        if (payload?.kind === 'ai-command') {
+          if (!onBehalfOfUserId) {
+            sendJson(res, 401, { error: 'missing bearer token for ai-command' });
+            return;
+          }
+
+          const targetClient = payload.targetPeerId
+            ? peers.find(client => client.id === payload.targetPeerId) || null
+            : findLatestUserPeer(roomId, onBehalfOfUserId);
+
+          if (!targetClient) {
+            sendJson(res, 404, { error: 'target peer not found', userPresent });
+            return;
+          }
+
+          const aiCommandPayload = {
+            ...payload,
+            targetPeerId: targetClient.id,
+          };
+
+          safeSend(targetClient.conn, {
+            type: 'handoff',
+            from: sender,
+            payload: aiCommandPayload,
+          });
+
+          const result = await waitForAiCommandResult(sender.id);
+          sendJson(res, 200, {
+            ok: result.ok !== false,
+            room: roomId,
+            peers: peers.length,
+            userPresent,
+            targetPeerId: targetClient.id,
+            result,
+          });
+          return;
+        }
+
         const message = {
           type: 'handoff',
           from: sender,
           payload
         };
         peers.forEach(client => safeSend(client.conn, message));
-
-        // Calculate userPresent: check if target userId has any connected peer in room
-        let userPresent = false;
-        if (onBehalfOfUserId) {
-          userPresent = peers.some(client => client.userId === onBehalfOfUserId);
-        }
 
         sendJson(res, 200, { ok: true, room: roomId, peers: peers.length, userPresent });
         return;
@@ -980,6 +1049,10 @@ function createPresenceServer() {
       }
 
       if (handlePendingSceneState(data)) {
+        return;
+      }
+
+      if (handlePendingAiCommandResult(data)) {
         return;
       }
 
@@ -1050,6 +1123,11 @@ function createPresenceServer() {
       resolve({ objects: {} });
     });
     pendingSceneRequests.clear();
+    pendingAiCommandResults.forEach(({ timer, resolve }) => {
+      clearTimeout(timer);
+      resolve({ kind: 'ai-result', ok: false, error: 'server stopped' });
+    });
+    pendingAiCommandResults.clear();
   });
 
   server.stop = () => {
