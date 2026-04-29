@@ -2258,6 +2258,16 @@ function handleHandoff(data) {
       });
       break;
     }
+    case 'ai-link-revoked': {
+      if (presenceState.linkManager.linkId === payload.linkId) {
+        presenceState.linkManager.linkToken = null;
+        presenceState.linkManager.linkId = null;
+        presenceState.linkManager.expiresAt = null;
+        updateLinkButtonState();
+        showToast('AIリンクが解除されました');
+      }
+      break;
+    }
     default:
       break;
   }

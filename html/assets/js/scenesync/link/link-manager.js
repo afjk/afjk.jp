@@ -1,3 +1,5 @@
+const LINK_STORAGE_KEY = 'scenesync.linkToken';
+
 export class LinkManager {
   constructor(baseUrl = window.location.origin + '/presence/api') {
     this.baseUrl = baseUrl;
@@ -5,6 +7,28 @@ export class LinkManager {
     this.linkId = null;
     this.expiresAt = null;
     this.onStatusChange = null;
+
+    // localStorage から復元
+    try {
+      const saved = JSON.parse(localStorage.getItem(LINK_STORAGE_KEY) || 'null');
+      if (saved && saved.expiresAt > Date.now()) {
+        this.linkToken = saved.linkToken;
+        this.linkId = saved.linkId;
+        this.expiresAt = saved.expiresAt;
+      }
+    } catch {}
+  }
+
+  #saveLinkToStorage() {
+    if (this.linkToken) {
+      localStorage.setItem(LINK_STORAGE_KEY, JSON.stringify({
+        linkToken: this.linkToken,
+        linkId: this.linkId,
+        expiresAt: this.expiresAt
+      }));
+    } else {
+      localStorage.removeItem(LINK_STORAGE_KEY);
+    }
   }
 
   async initiatePairing(roomId, userId) {
@@ -47,6 +71,7 @@ export class LinkManager {
       this.linkToken = data.linkToken;
       this.linkId = data.linkId;
       this.expiresAt = data.expiresAt;
+      this.#saveLinkToStorage();
 
       if (this.onStatusChange) {
         this.onStatusChange({
@@ -80,6 +105,7 @@ export class LinkManager {
       this.linkToken = null;
       this.linkId = null;
       this.expiresAt = null;
+      this.#saveLinkToStorage();
 
       if (this.onStatusChange) {
         this.onStatusChange({
@@ -103,6 +129,7 @@ export class LinkManager {
       this.linkToken = null;
       this.linkId = null;
       this.expiresAt = null;
+      this.#saveLinkToStorage();
       return null;
     }
     return this.linkToken;

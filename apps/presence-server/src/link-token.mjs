@@ -1,6 +1,10 @@
 import { createHmac, randomUUID } from 'node:crypto';
 
 const LINK_TOKEN_SECRET = process.env.LINK_TOKEN_SECRET || 'dev-secret-key-change-in-production';
+
+if (!process.env.LINK_TOKEN_SECRET) {
+  console.warn('[link-token] LINK_TOKEN_SECRET not set; using insecure default. Set this env var in production.');
+}
 const LINK_TOKEN_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
 const PAIRING_CODE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const PAIRING_CODE_LENGTH = 6;
