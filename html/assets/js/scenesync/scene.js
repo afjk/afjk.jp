@@ -2094,6 +2094,7 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-add': {
+      if (data.from.id === presenceState.id) break; // 自分の echo は無視
       addOrUpdateObject(payload.objectId, payload);
       break;
     }
@@ -2420,53 +2421,52 @@ function generateRandomPath() {
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
-  // blob store に POST（1回だけ）
   const meshPath = generateRandomPath();
   let actualMeshPath = null;
 
   try {
-    await fetch(BLOB_BASE + '/' + meshPath, {
-      method: 'POST',
-      headers: { 'Content-Type': 'model/gltf-binary' },
-      body: arrayBuffer,
+    try {
+      await fetch(BLOB_BASE + '/' + meshPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'model/gltf-binary' },
+        body: arrayBuffer,
+      });
+      actualMeshPath = meshPath;
+      model.userData.meshPath = meshPath;
+    } catch (err) {
+      console.warn('POST failed:', err);
+      showToast('GLB アップロード失敗: ' + err.message);
+      return;
+    }
+
+    // 履歴に追加
+    const asset = model.userData.asset || {
+      type: 'gltf',
+      meshPath: actualMeshPath,
+    };
+    const historyEntry = HistoryManager.createAddEntry(
+      objectId,
+      asset,
+      model.position.toArray(),
+      model.quaternion.toArray(),
+      model.scale.toArray(),
+      name,
+      actualMeshPath
+    );
+    presenceState.historyManager.push(historyEntry);
+
+    broadcast({
+      kind: 'scene-add',
+      objectId,
+      name,
+      position: model.position.toArray(),
+      rotation: model.quaternion.toArray(),
+      scale: model.scale.toArray(),
+      meshPath: actualMeshPath,
     });
-    actualMeshPath = meshPath;
-    model.userData.meshPath = meshPath;
-  } catch (err) {
-    console.warn('POST failed:', err);
+  } finally {
     removeLoadingOverlay(objectId);
-    showToast('GLB アップロード失敗: ' + err.message);
-    return;
   }
-
-  // 履歴に追加
-  const asset = model.userData.asset || {
-    type: 'gltf',
-    meshPath: actualMeshPath,
-  };
-  const historyEntry = HistoryManager.createAddEntry(
-    objectId,
-    asset,
-    model.position.toArray(),
-    model.quaternion.toArray(),
-    model.scale.toArray(),
-    name,
-    actualMeshPath
-  );
-  presenceState.historyManager.push(historyEntry);
-
-  broadcast({
-    kind: 'scene-add',
-    objectId,
-    name,
-    position: model.position.toArray(),
-    rotation: model.quaternion.toArray(),
-    scale: model.scale.toArray(),
-    meshPath: actualMeshPath,
-  });
-
-  // ローディングオーバーレイを解除
-  removeLoadingOverlay(objectId);
 }
 
 const dragDropManager = new DragDropManager({
