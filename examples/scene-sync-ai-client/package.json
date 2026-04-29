@@ -1,0 +1,13 @@
+{
+  "name": "scene-sync-ai-client-example",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Minimal provider-neutral Scene Sync AI client example",
+  "scripts": {
+    "demo": "node src/demo.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

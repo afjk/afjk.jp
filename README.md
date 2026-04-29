@@ -100,6 +100,7 @@ AI 連携ドキュメント:
 - Claude / Codex / Copilot / Grok 向け例: [`docs/scene-sync-ai-tool-examples.md`](docs/scene-sync-ai-tool-examples.md)
 - Claude tool 定義: [`docs/scene-sync-tools-claude.json`](docs/scene-sync-tools-claude.json)
 - Codex / OpenAI function 定義: [`docs/scene-sync-tools-codex.json`](docs/scene-sync-tools-codex.json)
+- 最小 API client 実装例: [`examples/scene-sync-ai-client/README.md`](examples/scene-sync-ai-client/README.md)
 
 ### pipe.afjk.jp — Piping Server
 

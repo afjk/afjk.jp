@@ -6,6 +6,7 @@ Actual tool definition files in this repo:
 
 - Claude tool definitions: [`docs/scene-sync-tools-claude.json`](./scene-sync-tools-claude.json)
 - Codex / OpenAI function definitions: [`docs/scene-sync-tools-codex.json`](./scene-sync-tools-codex.json)
+- Minimal API client example: [`examples/scene-sync-ai-client/`](../examples/scene-sync-ai-client/README.md)
 
 ## Common flow
 
