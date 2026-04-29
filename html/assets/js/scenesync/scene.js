@@ -2354,16 +2354,16 @@ function performRedo() {
 function applyOperationToScene(operation) {
   switch (operation.kind) {
     case 'scene-add': {
-      const obj = buildObject(operation);
-      if (obj) {
-        scene.add(obj);
-        managedObjects.set(operation.objectId, obj);
-      }
+      addOrUpdateObject(operation.objectId, operation);
       break;
     }
     case 'scene-remove': {
       const obj = managedObjects.get(operation.objectId);
       if (obj) {
+        if (transformCtrl.object === obj) {
+          transformCtrl.detach();
+          hideToolbar();
+        }
         scene.remove(obj);
         managedObjects.delete(operation.objectId);
       }
