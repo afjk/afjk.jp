@@ -2265,14 +2265,7 @@ function handleHandoff(data) {
           roomId: payload.roomId || presenceState.room,
           expiresAt: payload.expiresAt
         });
-        pairingStepCode.style.display = 'none';
-        pairingStepLinked.style.display = 'block';
-        btnCancelPairing.style.display = 'inline-block';
-        btnRevokeLink.style.display = 'inline-block';
-        const expiresAt = new Date(payload.expiresAt);
-        document.getElementById('pairing-expires-at').textContent =
-          `有効期限: ${expiresAt.toLocaleDateString()} ${expiresAt.toLocaleTimeString()}`;
-        pairingDialog.style.display = 'flex';
+        showPairingDialogLinked(payload.expiresAt);
         showToast('AIリンクが確立しました');
       }
       break;
@@ -2631,6 +2624,27 @@ function updatePairingTimer() {
   }
 }
 
+function showPairingDialogCode() {
+  btnCancelPairing.textContent = '閉じる';
+  btnCancelPairing.style.display = 'inline-block';
+  btnRevokeLink.style.display = 'none';
+  pairingStepCode.style.display = 'block';
+  pairingStepLinked.style.display = 'none';
+  pairingDialog.style.display = 'flex';
+}
+
+function showPairingDialogLinked(expiresAtMs) {
+  btnCancelPairing.textContent = '閉じる';
+  btnCancelPairing.style.display = 'inline-block';
+  btnRevokeLink.style.display = 'inline-block';
+  pairingStepCode.style.display = 'none';
+  pairingStepLinked.style.display = 'block';
+  const expiresAt = new Date(expiresAtMs);
+  document.getElementById('pairing-expires-at').textContent =
+    `有効期限: ${expiresAt.toLocaleDateString()} ${expiresAt.toLocaleTimeString()}`;
+  pairingDialog.style.display = 'flex';
+}
+
 async function startPairing() {
   if (!presenceState.room) {
     showToast('ルームに接続してからリンクしてください');
@@ -2649,12 +2663,9 @@ async function startPairing() {
     pairingCode.textContent = result.code;
     pairingExpireTime = result.expiresAt;
 
-    pairingStepCode.style.display = 'block';
-    pairingStepLinked.style.display = 'none';
-    pairingDialog.style.display = 'flex';
-
     if (pairingCountdown) clearInterval(pairingCountdown);
     pairingCountdown = setInterval(updatePairingTimer, 100);
+    showPairingDialogCode();
     updatePairingTimer();
   } catch (err) {
     pairingError.textContent = err.message;
@@ -2693,14 +2704,7 @@ function updateLinkButtonState() {
 
 linkBtn?.addEventListener('click', () => {
   if (presenceState.linkManager.isLinked()) {
-    pairingStepCode.style.display = 'none';
-    pairingStepLinked.style.display = 'block';
-    btnCancelPairing.style.display = 'inline-block';
-    btnRevokeLink.style.display = 'inline-block';
-    const expiresAt = new Date(presenceState.linkManager.expiresAt);
-    document.getElementById('pairing-expires-at').textContent =
-      `有効期限: ${expiresAt.toLocaleDateString()} ${expiresAt.toLocaleTimeString()}`;
-    pairingDialog.style.display = 'flex';
+    showPairingDialogLinked(presenceState.linkManager.expiresAt);
   } else {
     startPairing();
   }
@@ -2708,6 +2712,16 @@ linkBtn?.addEventListener('click', () => {
 
 btnCancelPairing?.addEventListener('click', cancelPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
+pairingDialog?.addEventListener('click', (event) => {
+  if (event.target === pairingDialog) {
+    cancelPairing();
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && pairingDialog?.style.display === 'flex') {
+    cancelPairing();
+  }
+});
 
 presenceState.linkManager.onStatusChange = () => {
   updateLinkButtonState();
