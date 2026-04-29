@@ -13,6 +13,7 @@ const PAIRING_CODE_LENGTH = 6;
 // In production, use Redis or persistent store
 export const pairingCodes = new Map(); // code -> { roomId, userId, expiresAt }
 export const revokedTokens = new Map(); // linkId -> { revokedAt, reason }
+export const activeLinks = new Map(); // linkId -> { userId, roomId, expiresAt }
 
 function generatePairingCode() {
   let code = '';
@@ -53,6 +54,7 @@ export function createLinkToken(linkId, userId, roomId) {
   return {
     linkToken: `${payloadB64}.${signatureB64}`,
     linkId,
+    userId,
     roomId,
     expiresAt: exp
   };
@@ -128,15 +130,27 @@ export function redeemPairingCode(code) {
 
   const linkId = `lnk-${randomUUID()}`;
   const tokenData = createLinkToken(linkId, entry.userId, entry.roomId);
+  activeLinks.set(linkId, {
+    userId: entry.userId,
+    roomId: entry.roomId,
+    expiresAt: tokenData.expiresAt
+  });
 
   return { ok: true, ...tokenData };
 }
 
 export function revokeLinkToken(linkId) {
+  const link = activeLinks.get(linkId) || null;
   revokedTokens.set(linkId, {
     revokedAt: Date.now(),
     reason: 'user-revoked'
   });
+  activeLinks.delete(linkId);
+  return link;
+}
+
+export function getActiveLink(linkId) {
+  return activeLinks.get(linkId) || null;
 }
 
 // Cleanup expired pairing codes periodically
@@ -151,6 +165,11 @@ setInterval(() => {
   for (const [linkId, revoked] of revokedTokens) {
     if (now > revoked.revokedAt + LINK_TOKEN_TTL_MS) {
       revokedTokens.delete(linkId);
+    }
+  }
+  for (const [linkId, link] of activeLinks) {
+    if (now > link.expiresAt) {
+      activeLinks.delete(linkId);
     }
   }
 }, 60000); // Every minute

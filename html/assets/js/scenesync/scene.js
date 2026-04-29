@@ -2258,6 +2258,25 @@ function handleHandoff(data) {
       });
       break;
     }
+    case 'ai-link-established': {
+      if (payload.userId === presenceState.userId) {
+        presenceState.linkManager.establishLink({
+          linkId: payload.linkId,
+          roomId: payload.roomId || presenceState.room,
+          expiresAt: payload.expiresAt
+        });
+        pairingStepCode.style.display = 'none';
+        pairingStepLinked.style.display = 'block';
+        btnCancelPairing.style.display = 'inline-block';
+        btnRevokeLink.style.display = 'inline-block';
+        const expiresAt = new Date(payload.expiresAt);
+        document.getElementById('pairing-expires-at').textContent =
+          `有効期限: ${expiresAt.toLocaleDateString()} ${expiresAt.toLocaleTimeString()}`;
+        pairingDialog.style.display = 'flex';
+        showToast('AIリンクが確立しました');
+      }
+      break;
+    }
     case 'ai-link-revoked': {
       if (presenceState.linkManager.linkId === payload.linkId) {
         presenceState.linkManager.clearLocal();

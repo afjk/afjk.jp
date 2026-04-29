@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
-import { createLinkToken, verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken } from './link-token.mjs';
+import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
@@ -789,6 +789,20 @@ function createPresenceServer() {
       return;
     }
 
+    const peers = getRoomClients(result.roomId);
+    const message = {
+      type: 'handoff',
+      from: { id: `api-link-${randomUUID()}`, nickname: 'AI', device: 'REST API' },
+      payload: {
+        kind: 'ai-link-established',
+        linkId: result.linkId,
+        userId: result.userId,
+        roomId: result.roomId,
+        expiresAt: result.expiresAt
+      }
+    };
+    peers.forEach(client => safeSend(client.conn, message));
+
     sendJson(res, 200, result);
     return;
   }
@@ -822,6 +836,14 @@ function createPresenceServer() {
     if (!linkId) {
       sendJson(res, 400, { error: 'missing linkId or Authorization header' });
       return;
+    }
+
+    if (!revokeRoomId) {
+      const activeLink = getActiveLink(linkId);
+      if (activeLink) {
+        revokeUserId = activeLink.userId;
+        revokeRoomId = activeLink.roomId;
+      }
     }
 
     revokeLinkToken(linkId);
@@ -865,6 +887,10 @@ function createPresenceServer() {
         } catch {
           sendJson(res, 400, { error: 'invalid JSON body' });
           return;
+        }
+
+        if (payload && typeof payload === 'object' && payload.payload && typeof payload.payload === 'object') {
+          payload = payload.payload;
         }
 
         // Validate linkToken if Authorization Bearer header is present

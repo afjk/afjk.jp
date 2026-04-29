@@ -63,13 +63,14 @@ function waitForMessage(ws, predicate, timeoutMs = MESSAGE_TIMEOUT_MS) {
   });
 }
 
-async function connectClient(roomId, nickname = 'TestUser') {
+async function connectClient(roomId, nickname = 'TestUser', userId = null) {
   const ws = new WebSocket(`${wsBaseUrl}?room=${roomId}`);
   await waitForEvent(ws, 'open');
   ws.send(JSON.stringify({
     type: 'hello',
     nickname,
     device: 'Node Test',
+    userId,
   }));
   return ws;
 }
@@ -134,6 +135,37 @@ describe('presence REST broadcast API', () => {
       ]);
 
       assert.equal(message.from.nickname, 'AI');
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('accepts wrapped payload bodies for broadcast', async () => {
+    const ws = await connectClient('test-room');
+    try {
+      const messagePromise = waitForMessage(ws, message => message.type === 'handoff');
+      const response = await fetch(`${baseUrl}/api/room/test-room/broadcast?name=WrappedAI`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payload: {
+            kind: 'scene-add',
+            objectId: 'obj-wrapped',
+            name: 'Wrapped Test',
+          },
+        }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(message.from.nickname, 'WrappedAI');
+      assert.equal(message.payload.kind, 'scene-add');
+      assert.equal(message.payload.objectId, 'obj-wrapped');
     } finally {
       await closeClient(ws);
     }
@@ -218,6 +250,7 @@ describe('presence REST broadcast API', () => {
       ok: true,
       room: 'nonexistent',
       peers: 0,
+      userPresent: false,
     });
   });
 
@@ -400,6 +433,90 @@ describe('presence REST scene API', () => {
       const response = await responsePromise;
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { objects: {} });
+    } finally {
+      await closeClient(ws);
+    }
+  });
+});
+
+describe('presence AI link API', () => {
+  it('broadcasts ai-link-established when a pairing code is redeemed', async () => {
+    const userId = 'usr-test-link';
+    const ws = await connectClient('link-room', 'Linked User', userId);
+    try {
+      const response = await fetch(`${baseUrl}/api/link/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: 'link-room', userId }),
+      });
+
+      const { code } = await response.json();
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'ai-link-established');
+
+      const redeemResponse = await fetch(`${baseUrl}/api/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+
+      const [redeemBody, message] = await Promise.all([
+        redeemResponse.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(redeemResponse.status, 200);
+      assert.equal(redeemBody.ok, true);
+      assert.equal(redeemBody.userId, userId);
+      assert.equal(message.payload.linkId, redeemBody.linkId);
+      assert.equal(message.payload.userId, userId);
+      assert.equal(message.payload.roomId, 'link-room');
+      assert.equal(message.payload.expiresAt, redeemBody.expiresAt);
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('revokes a remotely established link by linkId and broadcasts ai-link-revoked', async () => {
+    const userId = 'usr-test-revoke';
+    const ws = await connectClient('revoke-room', 'Linked User', userId);
+    try {
+      const initiateResponse = await fetch(`${baseUrl}/api/link/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: 'revoke-room', userId }),
+      });
+      const { code } = await initiateResponse.json();
+
+      const establishedPromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'ai-link-established');
+
+      await fetch(`${baseUrl}/api/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      }).then(res => res.json());
+
+      const established = await establishedPromise;
+
+      const revokedPromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'ai-link-revoked');
+
+      const revokeResponse = await fetch(`${baseUrl}/api/link/revoke`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linkId: established.payload.linkId }),
+      });
+
+      const [revokeBody, revoked] = await Promise.all([
+        revokeResponse.json(),
+        revokedPromise,
+      ]);
+
+      assert.equal(revokeResponse.status, 200);
+      assert.deepEqual(revokeBody, { ok: true });
+      assert.equal(revoked.payload.linkId, established.payload.linkId);
+      assert.equal(revoked.payload.reason, 'ai-revoked');
     } finally {
       await closeClient(ws);
     }

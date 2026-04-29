@@ -18,6 +18,10 @@ export class LinkManager {
     this._loadFromStorage();
   }
 
+  _hasValidLink() {
+    return !!(this.linkId && this.roomId && this.expiresAt && this.expiresAt > Date.now());
+  }
+
   _loadFromStorage() {
     try {
       const token = localStorage.getItem(STORAGE_KEYS.linkToken);
@@ -25,7 +29,7 @@ export class LinkManager {
       const expiresAtStr = localStorage.getItem(STORAGE_KEYS.expiresAt);
       const roomId = localStorage.getItem(STORAGE_KEYS.roomId);
 
-      if (!token || !linkId || !expiresAtStr || !roomId) {
+      if (!linkId || !expiresAtStr || !roomId) {
         return;
       }
 
@@ -35,7 +39,7 @@ export class LinkManager {
         return;
       }
 
-      this.linkToken = token;
+      this.linkToken = token || null;
       this.linkId = linkId;
       this.expiresAt = expiresAt;
       this.roomId = roomId;
@@ -46,8 +50,12 @@ export class LinkManager {
 
   _saveToStorage() {
     try {
-      if (!this.linkToken) return;
-      localStorage.setItem(STORAGE_KEYS.linkToken, this.linkToken);
+      if (!this._hasValidLink()) return;
+      if (this.linkToken) {
+        localStorage.setItem(STORAGE_KEYS.linkToken, this.linkToken);
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.linkToken);
+      }
       localStorage.setItem(STORAGE_KEYS.linkId, this.linkId);
       localStorage.setItem(STORAGE_KEYS.expiresAt, String(this.expiresAt));
       localStorage.setItem(STORAGE_KEYS.roomId, this.roomId);
@@ -70,6 +78,33 @@ export class LinkManager {
     this.expiresAt = null;
     this.roomId = null;
     this._clearStorage();
+  }
+
+  establishLink({ linkToken = null, linkId, expiresAt, roomId }) {
+    if (!linkId || !expiresAt || !roomId) {
+      return false;
+    }
+
+    const expires = Number(expiresAt);
+    if (!Number.isFinite(expires) || expires <= Date.now()) {
+      this.clearLocal();
+      return false;
+    }
+
+    this.linkToken = linkToken;
+    this.linkId = linkId;
+    this.expiresAt = expires;
+    this.roomId = roomId;
+    this._saveToStorage();
+
+    if (this.onStatusChange) {
+      this.onStatusChange({
+        isLinked: true,
+        expiresAt: this.expiresAt
+      });
+    }
+
+    return true;
   }
 
   async initiatePairing(roomId, userId) {
@@ -109,18 +144,7 @@ export class LinkManager {
       }
 
       const data = await res.json();
-      this.linkToken = data.linkToken;
-      this.linkId = data.linkId;
-      this.expiresAt = data.expiresAt;
-      this.roomId = data.roomId;
-      this._saveToStorage();
-
-      if (this.onStatusChange) {
-        this.onStatusChange({
-          isLinked: true,
-          expiresAt: this.expiresAt
-        });
-      }
+      this.establishLink(data);
 
       return data;
     } catch (err) {
@@ -129,14 +153,17 @@ export class LinkManager {
   }
 
   async revoke() {
-    if (!this.linkToken) return { ok: true };
+    if (!this.linkId) return { ok: true };
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+      if (this.linkToken) {
+        headers.Authorization = `Bearer ${this.linkToken}`;
+      }
       const res = await fetch(`${this.baseUrl}/link/revoke`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.linkToken}`
-        },
+        headers,
         body: JSON.stringify({ linkId: this.linkId })
       });
 
@@ -159,7 +186,11 @@ export class LinkManager {
   }
 
   isLinked() {
-    return !!this.linkToken;
+    if (!this._hasValidLink()) {
+      this.clearLocal();
+      return false;
+    }
+    return true;
   }
 
   getLinkToken() {
