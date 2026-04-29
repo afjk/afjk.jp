@@ -81,6 +81,10 @@ paths:
     post:
       operationId: broadcastSceneMutationViaGptSession
       summary: Apply a scene mutation
+      description: |
+        Use this for scene-add, scene-delta, scene-remove, scene-env, and scene-batch.
+        When creating a primitive object such as a box, always include `payload.asset`
+        with `type`, `primitive`, and `color`.
       parameters:
         - in: path
           name: roomId
@@ -98,12 +102,28 @@ paths:
                 sessionId:
                   type: string
                 payload:
+                  description: |
+                    Scene mutation payload. For `scene-add` of a primitive object, do not omit
+                    `asset`. A cube without `asset` may be created without the intended appearance.
                   oneOf:
                     - $ref: '#/components/schemas/SceneAddPayload'
                     - $ref: '#/components/schemas/SceneDeltaPayload'
                     - $ref: '#/components/schemas/SceneRemovePayload'
                     - $ref: '#/components/schemas/SceneEnvPayload'
                     - $ref: '#/components/schemas/SceneBatchPayload'
+              example:
+                sessionId: v1.example
+                payload:
+                  kind: scene-add
+                  objectId: ai-cube-1
+                  name: Orange Cube
+                  position: [0, 0.5, 0]
+                  rotation: [0, 0, 0, 1]
+                  scale: [1, 1, 1]
+                  asset:
+                    type: primitive
+                    primitive: box
+                    color: '#ff8800'
       responses:
         '200':
           description: Broadcast result
@@ -115,6 +135,10 @@ paths:
     post:
       operationId: runAiCommandViaGptSession
       summary: Request a browser-only action from the linked peer
+      description: |
+        Use this for browser-only actions such as camera queries, focus, undo/redo,
+        screenshots, and URL-based GLB import. For `focusObject`, always send
+        `params.objectId`. Do not call `focusObject` without an object id.
       parameters:
         - in: path
           name: roomId
@@ -144,10 +168,42 @@ paths:
                     - screenshot
                     - uploadGlbFromUrl
                 params:
-                  type: object
-                  additionalProperties: true
+                  description: |
+                    Parameters depend on `action`. For `focusObject`, send
+                    `{ "objectId": "<target object id>" }`. For `uploadGlbFromUrl`,
+                    send at least `{ "url": "https://..." }`.
+                  oneOf:
+                    - $ref: '#/components/schemas/GetCameraPoseParams'
+                    - $ref: '#/components/schemas/FocusObjectParams'
+                    - $ref: '#/components/schemas/UndoRedoParams'
+                    - $ref: '#/components/schemas/GetHistoryParams'
+                    - $ref: '#/components/schemas/ScreenshotParams'
+                    - $ref: '#/components/schemas/UploadGlbFromUrlParams'
                 targetPeerId:
                   type: string
+            examples:
+              focusObject:
+                summary: Focus the camera on ai-cube-1
+                value:
+                  sessionId: v1.example
+                  action: focusObject
+                  params:
+                    objectId: ai-cube-1
+              getCameraPose:
+                summary: Read the current camera pose
+                value:
+                  sessionId: v1.example
+                  action: getCameraPose
+                  params: {}
+              uploadGlbFromUrl:
+                summary: Import a GLB from a URL
+                value:
+                  sessionId: v1.example
+                  action: uploadGlbFromUrl
+                  params:
+                    url: https://example.com/model.glb
+                    objectId: web-demo-1
+                    position: [0, 0.5, 0]
       responses:
         '200':
           description: AI command result
@@ -218,6 +274,66 @@ components:
         error:
           type: string
       additionalProperties: true
+    GetCameraPoseParams:
+      type: object
+      description: No parameters.
+      properties: {}
+      additionalProperties: false
+      example: {}
+    FocusObjectParams:
+      type: object
+      required: [objectId]
+      additionalProperties: false
+      properties:
+        objectId:
+          type: string
+          description: Existing scene object id to focus the camera on.
+      example:
+        objectId: ai-cube-1
+    UndoRedoParams:
+      type: object
+      description: No parameters.
+      properties: {}
+      additionalProperties: false
+      example: {}
+    GetHistoryParams:
+      type: object
+      additionalProperties: false
+      properties:
+        count:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Number of recent history entries to return.
+      example:
+        count: 10
+    ScreenshotParams:
+      type: object
+      description: No parameters.
+      properties: {}
+      additionalProperties: false
+      example: {}
+    UploadGlbFromUrlParams:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        objectId:
+          type: string
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vec3'
+        rotation:
+          $ref: '#/components/schemas/Quat'
+        scale:
+          $ref: '#/components/schemas/Vec3'
+      example:
+        url: https://example.com/model.glb
+        objectId: web-demo-1
+        position: [0, 0.5, 0]
     SceneState:
       type: object
       properties:
@@ -230,6 +346,10 @@ components:
             additionalProperties: true
     SceneAddPayload:
       type: object
+      description: |
+        Adds a new object to the scene. If you are creating a primitive object,
+        include `asset` and set `asset.type=primitive`, `asset.primitive`, and `asset.color`.
+        Do not rely on `name` alone to describe the appearance.
       required: [kind, objectId]
       properties:
         kind:
@@ -237,8 +357,10 @@ components:
           const: scene-add
         objectId:
           type: string
+          description: Stable object identifier chosen by the caller.
         name:
           type: string
+          description: Human-readable label. This does not define appearance.
         position:
           $ref: '#/components/schemas/Vec3'
         rotation:
@@ -246,12 +368,27 @@ components:
         scale:
           $ref: '#/components/schemas/Vec3'
         asset:
-          type: object
-          additionalProperties: true
+          description: |
+            Required when adding a primitive object. Example:
+            `{ "type": "primitive", "primitive": "box", "color": "#ff8800" }`
+          oneOf:
+            - $ref: '#/components/schemas/PrimitiveAsset'
+            - $ref: '#/components/schemas/GenericAsset'
         meshPath:
           type: string
         onBehalfOf:
           type: string
+      example:
+        kind: scene-add
+        objectId: ai-cube-1
+        name: Orange Cube
+        position: [0, 0.5, 0]
+        rotation: [0, 0, 0, 1]
+        scale: [1, 1, 1]
+        asset:
+          type: primitive
+          primitive: box
+          color: '#ff8800'
     SceneDeltaPayload:
       type: object
       required: [kind, objectId]
@@ -270,8 +407,9 @@ components:
         scale:
           $ref: '#/components/schemas/Vec3'
         asset:
-          type: object
-          additionalProperties: true
+          oneOf:
+            - $ref: '#/components/schemas/PrimitiveAsset'
+            - $ref: '#/components/schemas/GenericAsset'
         meshPath:
           type: string
         onBehalfOf:
@@ -315,6 +453,42 @@ components:
               - $ref: '#/components/schemas/SceneEnvPayload'
         onBehalfOf:
           type: string
+      example:
+        kind: scene-batch
+        ops:
+          - kind: scene-add
+            objectId: ai-cube-1
+            name: Orange Cube
+            position: [0, 0.5, 0]
+            rotation: [0, 0, 0, 1]
+            scale: [1, 1, 1]
+            asset:
+              type: primitive
+              primitive: box
+              color: '#ff8800'
+    PrimitiveAsset:
+      type: object
+      required: [type, primitive]
+      properties:
+        type:
+          type: string
+          const: primitive
+        primitive:
+          type: string
+          description: Primitive mesh type such as box, sphere, cylinder, or plane.
+          enum: [box, sphere, cylinder, plane]
+        color:
+          type: string
+          description: Hex color for the primitive, for example `#ff8800`.
+      example:
+        type: primitive
+        primitive: box
+        color: '#ff8800'
+    GenericAsset:
+      type: object
+      description: Non-primitive asset payload used by custom meshes or future asset types.
+      properties: {}
+      additionalProperties: true
     Vec3:
       type: array
       minItems: 3

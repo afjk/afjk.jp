@@ -68,6 +68,7 @@ function waitForMessage(ws, predicate, timeoutMs = MESSAGE_TIMEOUT_MS) {
 
 async function connectClient(roomId, nickname = 'TestUser', userId = null) {
   const ws = new WebSocket(`${wsBaseUrl}?room=${roomId}`);
+  const welcomePromise = waitForMessage(ws, message => message.type === 'welcome');
   await waitForEvent(ws, 'open');
   ws.send(JSON.stringify({
     type: 'hello',
@@ -75,6 +76,8 @@ async function connectClient(roomId, nickname = 'TestUser', userId = null) {
     device: 'Node Test',
     userId,
   }));
+  const welcome = await welcomePromise;
+  ws.presenceId = welcome.id;
   return ws;
 }
 
@@ -472,7 +475,7 @@ describe('presence AI link API', () => {
       const response = await fetch(`${baseUrl}/api/link/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId: 'link-room', userId }),
+        body: JSON.stringify({ roomId: 'link-room', userId, peerId: ws.presenceId }),
       });
 
       const { code } = await response.json();
@@ -495,6 +498,7 @@ describe('presence AI link API', () => {
       assert.equal(redeemBody.userId, userId);
       assert.equal(message.payload.linkId, redeemBody.linkId);
       assert.equal(message.payload.userId, userId);
+      assert.equal(message.payload.peerId, ws.presenceId);
       assert.equal(message.payload.roomId, 'link-room');
       assert.equal(message.payload.expiresAt, redeemBody.expiresAt);
     } finally {

@@ -22,6 +22,8 @@ You operate Scene Sync on behalf of one linked human user.
 - 小さく可逆な変更を優先する
 - 既存 object があるなら重複追加より更新を優先する
 - 簡易テストは primitive を優先する
+- primitive を追加するときは `payload.asset` を省略しない
+- `name` は見た目を定義しない。色や形は必ず `asset` で指定する
 - `userPresent` が `false` ならユーザーが room にいないと伝える
 
 ## 操作 API
@@ -47,6 +49,27 @@ You operate Scene Sync on behalf of one linked human user.
   }
 }
 ```
+
+Primitive を作るときの必須項目:
+
+- `asset.type`
+- `asset.primitive`
+- `asset.color`
+
+間違った例:
+
+```json
+{
+  "sessionId": "v1....",
+  "payload": {
+    "kind": "scene-add",
+    "objectId": "ai-cube-1",
+    "name": "Orange Cube"
+  }
+}
+```
+
+これは「オレンジのキューブ」という名前になるだけで、見た目の色や形は保証されない。
 
 Common mutations:
 
@@ -95,6 +118,30 @@ Use `/api/gpt/room/{roomId}/ai-command` instead of `/broadcast`.
   "params": {}
 }
 ```
+
+`focusObject` のときは `params.objectId` を必ず入れる:
+
+```json
+{
+  "sessionId": "v1....",
+  "action": "focusObject",
+  "params": {
+    "objectId": "ai-cube-1"
+  }
+}
+```
+
+間違った例:
+
+```json
+{
+  "sessionId": "v1....",
+  "action": "focusObject",
+  "params": {}
+}
+```
+
+これは `object not found: undefined` の原因になる。
 
 Implemented actions:
 

@@ -502,6 +502,7 @@ function broadcastAiLinkEstablished(roomId, result) {
       kind: 'ai-link-established',
       linkId: result.linkId,
       userId: result.userId,
+      peerId: result.peerId || null,
       roomId: result.roomId,
       expiresAt: result.expiresAt
     }
@@ -919,7 +920,7 @@ function createPresenceServer() {
       return;
     }
 
-    const { roomId, userId } = body;
+    const { roomId, userId, peerId } = body;
     if (!roomId || !userId) {
       sendJson(res, 400, { error: 'missing roomId or userId' });
       return;
@@ -931,7 +932,7 @@ function createPresenceServer() {
       return;
     }
 
-    const { code, expiresAt } = initiatePairingCode(sanitized, userId);
+    const { code, expiresAt } = initiatePairingCode(sanitized, userId, peerId || null);
     sendJson(res, 200, { code, expiresAt });
     return;
   }

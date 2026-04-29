@@ -6,6 +6,8 @@ const STORAGE_KEYS = {
   userId: 'scenesync.linkUserId',
 };
 
+const linkStorage = window.sessionStorage;
+
 export class LinkManager {
   constructor(baseUrl = window.location.origin + '/presence/api') {
     this.baseUrl = baseUrl;
@@ -24,10 +26,10 @@ export class LinkManager {
 
   _loadFromStorage() {
     try {
-      const token = localStorage.getItem(STORAGE_KEYS.linkToken);
-      const linkId = localStorage.getItem(STORAGE_KEYS.linkId);
-      const expiresAtStr = localStorage.getItem(STORAGE_KEYS.expiresAt);
-      const roomId = localStorage.getItem(STORAGE_KEYS.roomId);
+      const token = linkStorage.getItem(STORAGE_KEYS.linkToken);
+      const linkId = linkStorage.getItem(STORAGE_KEYS.linkId);
+      const expiresAtStr = linkStorage.getItem(STORAGE_KEYS.expiresAt);
+      const roomId = linkStorage.getItem(STORAGE_KEYS.roomId);
 
       if (!linkId || !expiresAtStr || !roomId) {
         return;
@@ -44,7 +46,7 @@ export class LinkManager {
       this.expiresAt = expiresAt;
       this.roomId = roomId;
     } catch (e) {
-      console.warn('[LinkManager] failed to restore from localStorage', e);
+      console.warn('[LinkManager] failed to restore from sessionStorage', e);
     }
   }
 
@@ -52,23 +54,23 @@ export class LinkManager {
     try {
       if (!this._hasValidLink()) return;
       if (this.linkToken) {
-        localStorage.setItem(STORAGE_KEYS.linkToken, this.linkToken);
+        linkStorage.setItem(STORAGE_KEYS.linkToken, this.linkToken);
       } else {
-        localStorage.removeItem(STORAGE_KEYS.linkToken);
+        linkStorage.removeItem(STORAGE_KEYS.linkToken);
       }
-      localStorage.setItem(STORAGE_KEYS.linkId, this.linkId);
-      localStorage.setItem(STORAGE_KEYS.expiresAt, String(this.expiresAt));
-      localStorage.setItem(STORAGE_KEYS.roomId, this.roomId);
+      linkStorage.setItem(STORAGE_KEYS.linkId, this.linkId);
+      linkStorage.setItem(STORAGE_KEYS.expiresAt, String(this.expiresAt));
+      linkStorage.setItem(STORAGE_KEYS.roomId, this.roomId);
     } catch (e) {
-      console.warn('[LinkManager] failed to save to localStorage', e);
+      console.warn('[LinkManager] failed to save to sessionStorage', e);
     }
   }
 
   _clearStorage() {
     try {
-      Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+      Object.values(STORAGE_KEYS).forEach(k => linkStorage.removeItem(k));
     } catch (e) {
-      console.warn('[LinkManager] failed to clear localStorage', e);
+      console.warn('[LinkManager] failed to clear sessionStorage', e);
     }
   }
 
@@ -107,12 +109,12 @@ export class LinkManager {
     return true;
   }
 
-  async initiatePairing(roomId, userId) {
+  async initiatePairing(roomId, userId, peerId = null) {
     try {
       const res = await fetch(`${this.baseUrl}/link/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, userId })
+        body: JSON.stringify({ roomId, userId, peerId })
       });
 
       if (!res.ok) {

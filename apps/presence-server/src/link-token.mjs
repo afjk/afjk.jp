@@ -11,9 +11,9 @@ const PAIRING_CODE_LENGTH = 6;
 
 // In-memory storage for pairing codes and revoked tokens
 // In production, use Redis or persistent store
-export const pairingCodes = new Map(); // code -> { roomId, userId, expiresAt }
+export const pairingCodes = new Map(); // code -> { roomId, userId, peerId, expiresAt }
 export const revokedTokens = new Map(); // linkId -> { revokedAt, reason }
-export const activeLinks = new Map(); // linkId -> { userId, roomId, expiresAt }
+export const activeLinks = new Map(); // linkId -> { userId, peerId, roomId, expiresAt }
 
 function generatePairingCode() {
   let code = '';
@@ -92,13 +92,14 @@ export function verifyLinkToken(token) {
   }
 }
 
-export function initiatePairingCode(roomId, userId) {
+export function initiatePairingCode(roomId, userId, peerId = null) {
   const code = generatePairingCode();
   const expiresAt = Date.now() + PAIRING_CODE_TTL_MS;
 
   pairingCodes.set(code, {
     roomId,
     userId,
+    peerId: peerId || null,
     expiresAt,
     redeemed: false
   });
@@ -132,11 +133,12 @@ export function redeemPairingCode(code) {
   const tokenData = createLinkToken(linkId, entry.userId, entry.roomId);
   activeLinks.set(linkId, {
     userId: entry.userId,
+    peerId: entry.peerId || null,
     roomId: entry.roomId,
     expiresAt: tokenData.expiresAt
   });
 
-  return { ok: true, ...tokenData };
+  return { ok: true, ...tokenData, peerId: entry.peerId || null };
 }
 
 export function revokeLinkToken(linkId) {

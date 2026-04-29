@@ -2263,7 +2263,9 @@ function handleHandoff(data) {
       break;
     }
     case 'ai-link-established': {
-      if (payload.userId === presenceState.userId) {
+      const matchesPeer = payload.peerId && payload.peerId === presenceState.id;
+      const matchesLegacyUser = !payload.peerId && payload.userId === presenceState.userId;
+      if (matchesPeer || matchesLegacyUser) {
         presenceState.linkManager.establishLink({
           linkId: payload.linkId,
           roomId: payload.roomId || presenceState.room,
@@ -2854,7 +2856,8 @@ async function startPairing() {
 
     const result = await presenceState.linkManager.initiatePairing(
       presenceState.room,
-      presenceState.userId
+      presenceState.userId,
+      presenceState.id
     );
 
     pairingCode.textContent = result.code;
