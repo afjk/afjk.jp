@@ -1,0 +1,403 @@
+openapi: 3.1.0
+info:
+  title: Scene Sync AI Link API
+  version: 0.1.0
+  description: |
+    Scene Sync room operations for AI agents.
+
+    Basic flow:
+    1. Human opens Scene Sync in a browser and presses "AIにリンク".
+    2. Browser displays a 6-digit pairing code.
+    3. AI redeems the code with `/api/link/redeem`.
+    4. AI uses the returned `linkToken` as `Authorization: Bearer <token>`.
+    5. AI reads the room scene and sends `scene-add`, `scene-delta`, `scene-remove`, or `scene-env`.
+
+    Important runtime rules:
+    - Treat the `roomId` from `/api/link/redeem` as the source of truth.
+    - `POST /api/room/{roomId}/broadcast` accepts either a direct payload body or `{ "payload": ... }`.
+    - The server injects `onBehalfOf` into the broadcast payload when a valid bearer token is present.
+servers:
+  - url: https://staging.afjk.jp/presence/api
+    description: Staging
+  - url: https://afjk.jp/presence/api
+    description: Production
+security:
+  - bearerAuth: []
+paths:
+  /link/redeem:
+    post:
+      summary: Redeem pairing code for a link token
+      description: Exchange a 6-digit pairing code for a long-lived link token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  pattern: '^\d{6}$'
+      responses:
+        '200':
+          description: Link established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedeemLinkResponse'
+        '400':
+          description: Invalid code format or expired code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Code not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Code already redeemed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /link/revoke:
+    post:
+      summary: Revoke an AI link
+      description: |
+        Revoke by bearer token or by `linkId`.
+        Use bearer auth when available. `linkId`-only revoke is supported for browser-side cleanup.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                linkId:
+                  type: string
+      responses:
+        '200':
+          description: Link revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+        '400':
+          description: Missing linkId or authorization
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /room/{roomId}/scene:
+    get:
+      summary: Get current room scene
+      description: Returns the current scene snapshot for the room.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+        - name: name
+          in: query
+          schema:
+            type: string
+          description: Optional sender nickname for server-side scene request handling.
+      responses:
+        '200':
+          description: Scene snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SceneStatePayload'
+  /room/{roomId}/broadcast:
+    post:
+      summary: Broadcast a room operation on behalf of the linked user
+      description: |
+        Send a Scene Sync operation to the room.
+
+        The request body may be either:
+        - the operation itself, such as `{ "kind": "scene-add", ... }`
+        - or `{ "payload": { "kind": "scene-add", ... } }`
+
+        If bearer auth is present and valid, the server validates the token, checks `roomId`,
+        and injects `onBehalfOf` into the delivered payload.
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+        - name: name
+          in: query
+          schema:
+            type: string
+          description: Optional sender display name. Defaults to `AI`.
+        - name: nickname
+          in: query
+          schema:
+            type: string
+          description: Fallback sender display name if `name` is not provided.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/SceneOperation'
+                - type: object
+                  additionalProperties: false
+                  required: [payload]
+                  properties:
+                    payload:
+                      $ref: '#/components/schemas/SceneOperation'
+      responses:
+        '200':
+          description: Broadcast accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok, room, peers, userPresent]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  room:
+                    type: string
+                  peers:
+                    type: integer
+                    minimum: 0
+                  userPresent:
+                    type: boolean
+                    description: True if the linked user currently has at least one live peer in the room.
+        '400':
+          description: Invalid JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid, expired, or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Token room mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-link-token
+  parameters:
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Use the `roomId` returned by `/link/redeem`.
+  schemas:
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+    RedeemLinkResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, linkToken, linkId, userId, roomId, expiresAt]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        linkToken:
+          type: string
+        linkId:
+          type: string
+        userId:
+          type: string
+        roomId:
+          type: string
+        expiresAt:
+          type: integer
+          format: int64
+    PrimitiveAsset:
+      type: object
+      additionalProperties: false
+      required: [type, primitive, color]
+      properties:
+        type:
+          type: string
+          const: primitive
+        primitive:
+          type: string
+          enum: [box, sphere, cylinder, plane]
+        color:
+          type: string
+          description: CSS hex color such as `#ff8800`.
+    MeshAsset:
+      type: object
+      additionalProperties: true
+      required: [type]
+      properties:
+        type:
+          type: string
+          const: mesh
+        url:
+          type: string
+          format: uri
+    Asset:
+      oneOf:
+        - $ref: '#/components/schemas/PrimitiveAsset'
+        - $ref: '#/components/schemas/MeshAsset'
+    Vector3:
+      type: array
+      minItems: 3
+      maxItems: 3
+      items:
+        type: number
+    Quaternion:
+      type: array
+      minItems: 4
+      maxItems: 4
+      items:
+        type: number
+    SceneAddPayload:
+      type: object
+      additionalProperties: true
+      required: [kind, objectId, asset]
+      properties:
+        kind:
+          type: string
+          const: scene-add
+        objectId:
+          type: string
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Quaternion'
+        scale:
+          $ref: '#/components/schemas/Vector3'
+        asset:
+          $ref: '#/components/schemas/Asset'
+        meshPath:
+          type: string
+        onBehalfOf:
+          type: string
+          readOnly: true
+    SceneDeltaPayload:
+      type: object
+      additionalProperties: true
+      required: [kind, objectId]
+      properties:
+        kind:
+          type: string
+          const: scene-delta
+        objectId:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Quaternion'
+        scale:
+          $ref: '#/components/schemas/Vector3'
+        onBehalfOf:
+          type: string
+          readOnly: true
+    SceneRemovePayload:
+      type: object
+      additionalProperties: true
+      required: [kind, objectId]
+      properties:
+        kind:
+          type: string
+          const: scene-remove
+        objectId:
+          type: string
+        onBehalfOf:
+          type: string
+          readOnly: true
+    SceneEnvPayload:
+      type: object
+      additionalProperties: true
+      required: [kind, envId]
+      properties:
+        kind:
+          type: string
+          const: scene-env
+        envId:
+          type: string
+          enum: [outdoor_day, outdoor_sunset, outdoor_night, indoor_warm, studio]
+        onBehalfOf:
+          type: string
+          readOnly: true
+    SceneBatchPayload:
+      type: object
+      additionalProperties: true
+      required: [kind, batchId, actions]
+      properties:
+        kind:
+          type: string
+          const: scene-batch
+        batchId:
+          type: string
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SceneOperation'
+        onBehalfOf:
+          type: string
+          readOnly: true
+    SceneOperation:
+      discriminator:
+        propertyName: kind
+      oneOf:
+        - $ref: '#/components/schemas/SceneAddPayload'
+        - $ref: '#/components/schemas/SceneDeltaPayload'
+        - $ref: '#/components/schemas/SceneRemovePayload'
+        - $ref: '#/components/schemas/SceneEnvPayload'
+        - $ref: '#/components/schemas/SceneBatchPayload'
+    SceneObject:
+      type: object
+      additionalProperties: true
+      properties:
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Quaternion'
+        scale:
+          $ref: '#/components/schemas/Vector3'
+        asset:
+          $ref: '#/components/schemas/Asset'
+        meshPath:
+          type: string
+    SceneStatePayload:
+      type: object
+      additionalProperties: false
+      properties:
+        envId:
+          type: string
+        objects:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SceneObject'
