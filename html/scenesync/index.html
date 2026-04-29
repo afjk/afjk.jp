@@ -36,6 +36,8 @@
     .chip.danger:hover { background: rgba(255,60,60,0.7); }
     .chip.primary { background: rgba(68,136,255,0.55); }
     .chip.primary:hover { background: rgba(68,136,255,0.8); }
+    .chip.active { background: rgba(68,136,255,0.7); }
+    .chip.active:hover { background: rgba(68,136,255,0.9); }
     select.chip {
       appearance: auto;
       cursor: pointer;
@@ -291,6 +293,68 @@
     .xr-button-container button:hover {
       background: rgba(68,136,255,0.7) !important;
     }
+    .pairing-dialog {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 300;
+    }
+    .pairing-content {
+      background: rgba(0, 0, 0, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 320px;
+      color: #fff;
+      font-family: monospace;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    .pairing-content h3 {
+      font-size: 16px;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    .pairing-content p {
+      font-size: 13px;
+      margin: 8px 0;
+      color: #aaa;
+    }
+    .pairing-code {
+      font-size: 32px;
+      font-weight: bold;
+      letter-spacing: 0.1em;
+      text-align: center;
+      margin: 16px 0;
+      font-family: monospace;
+      color: #4488ff;
+    }
+    .pairing-timer {
+      font-size: 12px;
+      text-align: center;
+      color: #ff8800;
+      margin-bottom: 16px;
+    }
+    .pairing-error {
+      background: rgba(255, 60, 60, 0.3);
+      border: 1px solid rgba(255, 60, 60, 0.6);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 12px;
+      color: #ff6666;
+      margin-bottom: 16px;
+    }
+    .pairing-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .pairing-buttons .chip {
+      flex: 1;
+    }
   </style>
 </head>
 <body>
@@ -310,6 +374,31 @@
         <option value="indoor_warm">室内 暖色</option>
         <option value="studio">Studio</option>
       </select>
+    </div>
+    <div class="row">
+      <button id="link-btn" class="chip" type="button" title="AI とリンク">
+        <span id="link-icon">🔗</span>
+        <span id="link-label">AIにリンク</span>
+      </button>
+    </div>
+    <div id="pairing-dialog" class="pairing-dialog" style="display:none;">
+      <div class="pairing-content">
+        <h3>AI ペアリング</h3>
+        <div id="pairing-step-code">
+          <p>次のコードを AI に入力してください:</p>
+          <div id="pairing-code" class="pairing-code">------</div>
+          <div id="pairing-timer">5:00</div>
+        </div>
+        <div id="pairing-step-linked" style="display:none;">
+          <p>✓ AI とリンクしました</p>
+          <p id="pairing-expires-at"></p>
+        </div>
+        <div id="pairing-error" style="display:none;" class="pairing-error"></div>
+        <div class="pairing-buttons">
+          <button id="btn-cancel-pairing" class="chip">キャンセル</button>
+          <button id="btn-revoke-link" class="chip danger" style="display:none;">リンク解除</button>
+        </div>
+      </div>
     </div>
     <div class="row" id="room-section"></div>
   </div>
