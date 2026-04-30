@@ -88,6 +88,18 @@
       gap: 6px;
       flex-wrap: wrap;
     }
+    .meta-link-row {
+      padding-left: 4px;
+    }
+    .meta-link {
+      font: 11px/1.4 monospace;
+      color: rgba(255,255,255,0.45);
+      text-decoration: none;
+    }
+    .meta-link:hover {
+      color: rgba(255,255,255,0.7);
+      text-decoration: underline;
+    }
     .join-group {
       display: flex;
       gap: 6px;
@@ -324,6 +336,11 @@
       color: #aaa;
     }
     .pairing-code {
+      display: block;
+      width: 100%;
+      padding: 0;
+      border: 0;
+      background: transparent;
       font-size: 32px;
       font-weight: bold;
       letter-spacing: 0.1em;
@@ -331,6 +348,7 @@
       margin: 16px 0;
       font-family: monospace;
       color: #4488ff;
+      cursor: pointer;
     }
     .pairing-timer {
       font-size: 12px;
@@ -351,6 +369,17 @@
       display: flex;
       gap: 8px;
       margin-top: 16px;
+    }
+    .pairing-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    .pairing-actions .chip {
+      flex: 1;
+      min-width: 0;
+      justify-content: center;
     }
     .pairing-buttons .chip {
       flex: 1;
@@ -386,7 +415,11 @@
         <h3>AI ペアリング</h3>
         <div id="pairing-step-code">
           <p>次のコードを AI に入力してください:</p>
-          <div id="pairing-code" class="pairing-code">------</div>
+          <button id="pairing-code" class="pairing-code" type="button" title="クリックしてコピー">------</button>
+          <div class="pairing-actions">
+            <button id="btn-copy-pairing-code" class="chip" type="button">コードをコピー</button>
+            <a id="scene-sync-operator-link" class="chip" href="#" target="_blank" rel="noopener noreferrer">Scene Sync Operator</a>
+          </div>
           <div id="pairing-timer">5:00</div>
         </div>
         <div id="pairing-step-linked" style="display:none;">
@@ -401,6 +434,9 @@
       </div>
     </div>
     <div class="row" id="room-section"></div>
+    <div class="row meta-link-row">
+      <a class="meta-link" href="/scenesync/privacy/">プライバシーポリシー</a>
+    </div>
   </div>
 
   <div id="status"><span class="dot off"></span>接続中…</div>

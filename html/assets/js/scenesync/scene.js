@@ -61,6 +61,7 @@ setupXrButtons({
 const BLOB_BASE = location.hostname === 'localhost'
   ? 'http://localhost:8787/blob'
   : `${location.origin}/presence/blob`;
+const SCENE_SYNC_OPERATOR_URL = 'https://chatgpt.com/g/g-69eac2f9af04819193334b81da1b7993-scene-sync-operator';
 
 // ── XR コントローラー ──────────────────────────────────────
 // XR セッションへ入るためのモード状態
@@ -2818,6 +2819,8 @@ const pairingTimer = document.getElementById('pairing-timer');
 const pairingError = document.getElementById('pairing-error');
 const btnCancelPairing = document.getElementById('btn-cancel-pairing');
 const btnRevokeLink = document.getElementById('btn-revoke-link');
+const btnCopyPairingCode = document.getElementById('btn-copy-pairing-code');
+const sceneSyncOperatorLink = document.getElementById('scene-sync-operator-link');
 const linkIcon = document.getElementById('link-icon');
 const linkLabel = document.getElementById('link-label');
 
@@ -2847,6 +2850,35 @@ function showPairingDialogCode() {
   pairingStepCode.style.display = 'block';
   pairingStepLinked.style.display = 'none';
   pairingDialog.style.display = 'flex';
+}
+
+async function copyText(text, successMessage = 'コピーしました') {
+  if (!text) return false;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.setAttribute('readonly', '');
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    }
+    showToast(successMessage);
+    return true;
+  } catch {
+    showToast('コピーに失敗しました');
+    return false;
+  }
+}
+
+function copyPairingCode() {
+  return copyText(pairingCode?.textContent?.trim(), 'AIリンクコードをコピーしました');
 }
 
 function showPairingDialogLinked(expiresAtMs) {
@@ -2893,12 +2925,14 @@ async function startPairing() {
 function cancelPairing() {
   if (pairingCountdown) clearInterval(pairingCountdown);
   pairingCountdown = null;
+  pairingExpireTime = null;
   pairingDialog.style.display = 'none';
 }
 
 async function revokeLink() {
   try {
     await presenceState.linkManager.revoke();
+    cancelPairing();
     updateLinkButtonState();
     showToast('AI リンクを解除しました');
   } catch (err) {
@@ -2929,6 +2963,8 @@ linkBtn?.addEventListener('click', () => {
 
 btnCancelPairing?.addEventListener('click', cancelPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
+btnCopyPairingCode?.addEventListener('click', copyPairingCode);
+pairingCode?.addEventListener('click', copyPairingCode);
 pairingDialog?.addEventListener('click', (event) => {
   if (event.target === pairingDialog) {
     cancelPairing();
@@ -2943,6 +2979,14 @@ document.addEventListener('keydown', (event) => {
 presenceState.linkManager.onStatusChange = () => {
   updateLinkButtonState();
 };
+
+if (sceneSyncOperatorLink) {
+  if (SCENE_SYNC_OPERATOR_URL) {
+    sceneSyncOperatorLink.href = SCENE_SYNC_OPERATOR_URL;
+  } else {
+    sceneSyncOperatorLink.style.display = 'none';
+  }
+}
 
 // 初期状態を反映（DOM 参照と関数定義が揃った後で呼ぶ）
 updateLinkButtonState();
