@@ -40,8 +40,6 @@ class _State:
         self.ws = ws_client.SceneSyncWSClient()
         self.blob_url = ""
         self.status = "未接続"
-        self.my_id = ""
-        self.current_room = ""
         self.peers: list = []
 
         # object_id → {"name": str, "snapshot": list[3 lists], "remote": bool, "mesh_path": str}
@@ -49,7 +47,7 @@ class _State:
         # blender object name → object_id  (for quick lookup)
         self.name_to_id: dict = {}
 
-        self.locks: dict = {}          # object_id → peer_id
+        self.locks: dict = {}
         self.scene_received = False
         self.first_peers_seen = False
 
@@ -180,7 +178,7 @@ def _handle_payload(payload: dict, from_info: dict) -> None:
             _apply_scene_delta(payload)
 
     elif kind == "scene-remove":
-        _apply_scene_remove(payload, from_id)
+        _apply_scene_remove(payload)
 
     elif kind == "scene-mesh":
         if from_id != _state.ws.my_id:
@@ -260,14 +258,13 @@ def _apply_scene_delta(payload: dict) -> None:
     _state.managed[oid]["snapshot"] = _obj_snapshot(obj)
 
 
-def _apply_scene_remove(payload: dict, from_id: str) -> None:
+def _apply_scene_remove(payload: dict) -> None:
     oid = str(payload.get("objectId", ""))
     if oid not in _state.managed:
         return
     info = _state.managed[oid]
-    # Only remove objects that came from the same peer who is removing them,
-    # or remote objects (never delete user's own local work without consent).
-    if not info.get("remote") and from_id == _state.ws.my_id:
+    # Never delete user-created (local) objects based on remote instructions.
+    if not info.get("remote"):
         return
 
     obj = _find_blender_obj(oid)
@@ -459,23 +456,26 @@ def _create_primitive(primitive: str, color_hex: str, name: str) -> bpy.types.Ob
 
 
 def _apply_transform(obj: bpy.types.Object, tf: dict) -> None:
-    from mathutils import Quaternion, Vector
+    from mathutils import Matrix
 
-    loc_wire = tf.get("loc")
-    rot_wire = tf.get("rot")
-    scl_wire = tf.get("scale")
+    loc = tf.get("loc")
+    rot = tf.get("rot")
+    scl = tf.get("scale")
 
-    if loc_wire is not None:
-        obj.location = loc_wire
-    if rot_wire is not None:
-        if isinstance(rot_wire, (list, tuple)):
-            obj.rotation_mode = "QUATERNION"
-            obj.rotation_quaternion = rot_wire
-        else:
-            obj.rotation_mode = "QUATERNION"
-            obj.rotation_quaternion = rot_wire
-    if scl_wire is not None:
-        obj.scale = scl_wire
+    if loc is None and rot is None and scl is None:
+        return
+
+    # Decompose current world transform to fill in missing components.
+    cur_loc, cur_rot, cur_scl = obj.matrix_world.decompose()
+    new_loc = loc if loc is not None else cur_loc
+    new_rot = rot if rot is not None else cur_rot
+    new_scl = scl if scl is not None else cur_scl
+
+    obj.matrix_world = (
+        Matrix.Translation(new_loc)
+        @ new_rot.to_matrix().to_4x4()
+        @ Matrix.Diagonal([new_scl.x, new_scl.y, new_scl.z, 1.0])
+    )
 
 
 # ---------------------------------------------------------------------------
