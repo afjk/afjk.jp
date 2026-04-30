@@ -2997,6 +2997,34 @@ nicknameChip?.addEventListener('click', editNickname);
 updateNicknameLabel();
 renderRoomSection();
 connectPresence();
+
+// Safari / iOS: バックグラウンドから復帰時に即再接続（3秒タイマーを待たない）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (ws && presenceState.ws === ws) {
+    presenceState.ws = null;
+    try { ws.close(); } catch {}
+  }
+  connectPresence();
+});
+
+// Safari BFCache 復元時の再接続
+window.addEventListener('pageshow', (e) => {
+  if (!e.persisted) return;
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (ws && presenceState.ws === ws) {
+    presenceState.ws = null;
+    try { ws.close(); } catch {}
+  }
+  connectPresence();
+});
 environmentManager.loadEnvironment('outdoor_day', {
   source: 'init',
   broadcastChange: false,
