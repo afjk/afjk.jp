@@ -125,8 +125,9 @@ class SceneSyncWSClient:
                 if not chunk:
                     raise ConnectionError("Server closed during handshake")
                 hdr += chunk
-            if b"101" not in hdr.split(b"\r\n")[0]:
-                raise ConnectionError(f"Upgrade failed: {hdr.split(b'\\r\\n')[0]}")
+            status_line = hdr.split(b"\r\n")[0]
+            if b"101" not in status_line:
+                raise ConnectionError(f"Upgrade failed: {status_line}")
 
             self._sock.settimeout(0.05)
 
