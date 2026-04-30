@@ -1,6 +1,7 @@
 """Minimal WebSocket client running in a background thread."""
 
 import base64
+import hashlib
 import json
 import os
 import queue
@@ -125,9 +126,21 @@ class SceneSyncWSClient:
                 if not chunk:
                     raise ConnectionError("Server closed during handshake")
                 hdr += chunk
-            status_line = hdr.split(b"\r\n")[0]
+            lines = hdr.split(b"\r\n")
+            status_line = lines[0]
             if b"101" not in status_line:
                 raise ConnectionError(f"Upgrade failed: {status_line}")
+            headers = {}
+            for line in lines[1:]:
+                if b":" in line:
+                    k, v = line.split(b":", 1)
+                    headers[k.strip().lower()] = v.strip().decode()
+            magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+            expected = base64.b64encode(
+                hashlib.sha1((ws_key + magic).encode()).digest()
+            ).decode()
+            if headers.get("sec-websocket-accept") != expected:
+                raise ConnectionError("Sec-WebSocket-Accept mismatch")
 
             self._sock.settimeout(0.05)
 
