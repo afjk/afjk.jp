@@ -8,7 +8,7 @@ import socket
 import ssl
 import struct
 import threading
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 
 class SceneSyncWSClient:
@@ -35,12 +35,12 @@ class SceneSyncWSClient:
     # Public API (main thread)
     # ------------------------------------------------------------------
 
-    def connect(self, url: str, room: str, nickname: str) -> None:
+    def connect(self, url: str, room: str, nickname: str, device: str = "Blender") -> None:
         self.disconnect()
         self._running = True
         self._thread = threading.Thread(
             target=self._run,
-            args=(url, room, nickname),
+            args=(url, room, nickname, device),
             daemon=True,
         )
         self._thread.start()
@@ -59,6 +59,9 @@ class SceneSyncWSClient:
         self.connected = False
         self.my_id = ""
         self.peers = []
+        # Drain stale messages from the previous session.
+        self._send_q = queue.Queue()
+        self._recv_q = queue.Queue()
 
     def send_json(self, data: dict) -> None:
         """Queue a JSON message to be sent by the background thread."""
@@ -81,13 +84,16 @@ class SceneSyncWSClient:
     # Background thread
     # ------------------------------------------------------------------
 
-    def _run(self, url: str, room: str, nickname: str) -> None:
+    def _run(self, url: str, room: str, nickname: str, device: str) -> None:
         try:
             parsed = urlparse(url)
             host = parsed.hostname
             use_ssl = parsed.scheme in ("wss", "https")
             port = parsed.port or (443 if use_ssl else 80)
-            path = (parsed.path or "/") + (f"?room={room}" if room else "")
+            qs = parse_qsl(parsed.query)
+            if room:
+                qs.append(("room", room))
+            path = (parsed.path or "/") + ("?" + urlencode(qs) if qs else "")
 
             raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             raw.settimeout(15)
@@ -123,13 +129,6 @@ class SceneSyncWSClient:
                 raise ConnectionError(f"Upgrade failed: {hdr.split(b'\\r\\n')[0]}")
 
             self._sock.settimeout(0.05)
-
-            # hello
-            try:
-                import bpy  # noqa: PLC0415
-                device = f"Blender {bpy.app.version_string}"
-            except ImportError:
-                device = "Blender"
 
             self._ws_send(json.dumps({"type": "hello", "nickname": nickname, "device": device}))
             self.connected = True

@@ -49,7 +49,8 @@ def rot_to_wire(quat) -> list:
         converted = _M @ mat @ _MI
         q = converted.to_quaternion()
         return [q.x, q.y, q.z, q.w]
-    # Fallback (identity) when mathutils unavailable
+    # Fallback when mathutils is unavailable: reorder components to wire
+    # [x, y, z, w] only; the Y-up axis conversion is skipped in this path.
     return [quat[1], quat[2], quat[3], quat[0]]
 
 

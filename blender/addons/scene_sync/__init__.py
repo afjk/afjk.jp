@@ -513,10 +513,15 @@ class SCENE_SYNC_OT_connect(Operator):
         room = settings.room.strip()
         nickname = settings.nickname.strip() or "Blender"
 
+        try:
+            device = f"Blender {bpy.app.version_string}"
+        except Exception:
+            device = "Blender"
+
         _state.blob_url = blob_client.presence_url_to_blob_url(url)
         _state.reset_scene()
         _state.status = "接続中…"
-        _state.ws.connect(url, room, nickname)
+        _state.ws.connect(url, room, nickname, device)
         return {"FINISHED"}
 
 
