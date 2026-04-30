@@ -236,7 +236,7 @@ def _apply_scene_add(payload: dict, from_id: str) -> None:
         obj = _create_primitive("box", "#888888", name)
 
     obj[OBJECT_ID_PROP] = oid
-    obj[REMOTE_PROP] = True
+    _mark_remote(obj)
 
     tf = protocol.extract_transform(payload)
     _apply_transform(obj, tf)
@@ -291,7 +291,7 @@ def _apply_scene_mesh(payload: dict) -> None:
         return
 
     new[OBJECT_ID_PROP] = oid
-    new[REMOTE_PROP] = True
+    _mark_remote(new)
 
     if old:
         # Copy transform then remove old
@@ -422,6 +422,13 @@ def _send_object_add(obj: bpy.types.Object, oid: str) -> None:
 # ---------------------------------------------------------------------------
 # Blender scene utilities
 # ---------------------------------------------------------------------------
+
+def _mark_remote(obj: bpy.types.Object) -> None:
+    """Recursively set REMOTE_PROP on obj and all its children."""
+    obj[REMOTE_PROP] = True
+    for child in obj.children:
+        _mark_remote(child)
+
 
 def _find_blender_obj(oid: str) -> bpy.types.Object | None:
     for obj in bpy.data.objects:
