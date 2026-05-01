@@ -93,10 +93,10 @@ All fields except `position` default intelligently if omitted.
 Add a sphere to the scene (same input schema as add_box).
 
 ### scene_sync_add_primitive
-Internal tool for adding any primitive (box, sphere, cylinder, plane).
+Advanced: generic tool for adding any primitive (box, sphere, cylinder, plane). Prefer `scene_sync_add_box` or `scene_sync_add_sphere` for common cases.
 
 ### scene_sync_move_object
-Move an existing object to a new position.
+Move an existing object to a new absolute position.
 
 Input:
 ```json
@@ -143,10 +143,14 @@ API endpoint base URL.
 ### SCENE_SYNC_SESSION_FILE
 Optional. If set, session is persisted to this JSON file.
 
-Example:
+Example (note: use full path, not `~`):
 ```bash
-export SCENE_SYNC_SESSION_FILE=~/.scene-sync-session.json
+export SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json
+# or
+export SCENE_SYNC_SESSION_FILE=/Users/yourname/.config/scene-sync-mcp/session.json
 ```
+
+**Important:** Node.js does not automatically expand `~`. Use `$HOME` or full path instead.
 
 Without this, session is memory-only and cleared on restart.
 

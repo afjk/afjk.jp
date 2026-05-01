@@ -106,9 +106,7 @@ export function primitiveToName(primitive) {
     box: 'AI Box',
     sphere: 'AI Sphere',
     cylinder: 'AI Cylinder',
-    plane: 'AI Plane',
-    cone: 'AI Cone',
-    torus: 'AI Torus'
+    plane: 'AI Plane'
   }
   return names[primitive] || 'AI Object'
 }
