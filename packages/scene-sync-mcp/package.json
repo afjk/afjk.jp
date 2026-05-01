@@ -1,0 +1,23 @@
+{
+  "name": "@afjk/scene-sync-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for afjk.jp Scene Sync",
+  "type": "module",
+  "bin": {
+    "scene-sync-mcp": "./src/server.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node src/server.mjs"
+  }
+}
