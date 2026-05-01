@@ -1,0 +1,60 @@
+name: Publish Scene Sync MCP to npm
+
+on:
+  push:
+    tags:
+      - "scene-sync-mcp-v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish npm package
+    runs-on: ubuntu-latest
+    environment: npm
+
+    defaults:
+      run:
+        working-directory: packages/scene-sync-mcp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: packages/scene-sync-mcp/package-lock.json
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Show versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: |
+          node --check src/server.mjs
+          node --check src/scene-sync-client.mjs
+          node --check src/session-store.mjs
+          node --check src/tool-results.mjs
+          node --check src/validators.mjs
+
+      - name: Run tests if present
+        run: npm test --if-present
+
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        run: npm publish --access public
