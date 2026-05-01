@@ -487,6 +487,7 @@ server.registerTool(
 
       return successResult({
         objectId,
+        primitive,
         color: finalColor
       })
     } catch (e) {

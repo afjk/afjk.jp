@@ -2118,6 +2118,9 @@ function handleHandoff(data) {
       if (payload.position) obj.position.fromArray(payload.position);
       if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
       if (payload.scale) obj.scale.fromArray(payload.scale);
+      if (payload.asset) {
+        applyAssetDelta(obj, payload.asset);
+      }
       if (shouldTrackHistory && isOnBehalfOf) {
         const afterPos = obj.position.toArray();
         const afterRot = obj.quaternion.toArray();
@@ -2648,6 +2651,42 @@ function applyTransform(obj, info) {
   if (info.scale) obj.scale.fromArray(info.scale);
 }
 
+function applyObjectColor(obj, color) {
+  if (!obj || !color) return;
+
+  obj.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map((material) => {
+        const cloned = material.clone();
+        if (cloned.color) cloned.color.set(color);
+        cloned.needsUpdate = true;
+        return cloned;
+      });
+      return;
+    }
+
+    const cloned = child.material.clone();
+    if (cloned.color) cloned.color.set(color);
+    cloned.needsUpdate = true;
+    child.material = cloned;
+  });
+}
+
+function applyAssetDelta(obj, asset) {
+  if (!obj || !asset || typeof asset !== 'object') return;
+
+  obj.userData.asset = {
+    ...(obj.userData.asset || {}),
+    ...structuredClone(asset),
+  };
+
+  if (asset.color) {
+    applyObjectColor(obj, asset.color);
+  }
+}
+
 // ── Undo/Redo 処理 ──────────────────────────────────────
 
 function performUndo() {
@@ -2694,6 +2733,9 @@ function applyOperationToScene(operation) {
       const obj = managedObjects.get(operation.objectId);
       if (obj) {
         applyTransform(obj, operation);
+        if (operation.asset) {
+          applyAssetDelta(obj, operation.asset);
+        }
       }
       break;
     }
