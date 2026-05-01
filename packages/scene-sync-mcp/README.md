@@ -13,30 +13,65 @@ Scene Sync is a real-time 3D scene synchronization system. This MCP server lets 
 
 ## Installation
 
-For local development:
+### Via npm (recommended for Claude Desktop)
 
-```bash
-npm install
-npm run start
-```
+Scene Sync MCP is published to npm as `@afjk/scene-sync-mcp`. You can use it directly with Claude Desktop via `npx`.
 
-To use with Claude Desktop, add to your `claude_desktop_config.json`:
+Add to your `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "scene-sync": {
       "command": "npx",
-      "args": ["-y", "@afjk/scene-sync-mcp"],
+      "args": ["-y", "@afjk/scene-sync-mcp@latest"]
+    }
+  }
+}
+```
+
+Then fully quit and restart Claude Desktop. For Claude Desktop config path, see https://modelcontextprotocol.io/clients/claude/
+
+#### Custom environment variables
+
+To use staging or customize the session file location:
+
+```json
+{
+  "mcpServers": {
+    "scene-sync": {
+      "command": "npx",
+      "args": ["-y", "@afjk/scene-sync-mcp@latest"],
       "env": {
-        "SCENE_SYNC_BASE_URL": "https://afjk.jp/presence/api/ai"
+        "SCENE_SYNC_BASE_URL": "https://afjk.jp/presence/api/ai",
+        "SCENE_SYNC_SESSION_FILE": "/Users/YOUR_NAME/.scene-sync-mcp/session.json"
       }
     }
   }
 }
 ```
 
-(For Claude Desktop config path, see https://modelcontextprotocol.io/clients/claude/)
+### Local development
+
+For development or contributing to the MCP server itself:
+
+```bash
+npm install
+npm run start
+```
+
+To use locally with Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "scene-sync": {
+      "command": "node",
+      "args": ["/path/to/packages/scene-sync-mcp/src/server.mjs"]
+    }
+  }
+}
+```
 
 For Codex CLI:
 
@@ -316,6 +351,44 @@ For testing with Claude Desktop, modify your config to point to the local direct
     }
   }
 }
+```
+
+## Maintainer: Publishing to npm
+
+To release a new version to npm:
+
+### 1. Update the package version
+
+```bash
+cd packages/scene-sync-mcp
+npm version patch --no-git-tag-version
+# or: npm version minor --no-git-tag-version
+```
+
+### 2. Commit the version bump
+
+```bash
+cd ../..
+git add packages/scene-sync-mcp/package.json packages/scene-sync-mcp/package-lock.json
+git commit -m "Release scene-sync-mcp v0.x.x"
+```
+
+### 3. Create and push a release tag
+
+```bash
+git tag scene-sync-mcp-v0.x.x
+git push origin main
+git push origin scene-sync-mcp-v0.x.x
+```
+
+The GitHub Actions workflow `publish-scene-sync-mcp.yml` will automatically:
+- Run syntax checks and tests
+- Publish the package to npm using Trusted Publishing (OIDC)
+
+The package will be available on npm at `@afjk/scene-sync-mcp` and can be used immediately with:
+
+```bash
+npx @afjk/scene-sync-mcp@latest
 ```
 
 ## Manual Test Checklist
