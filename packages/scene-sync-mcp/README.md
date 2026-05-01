@@ -4,7 +4,9 @@ An MCP server for controlling [afjk.jp](https://afjk.jp) Scene Sync from Claude 
 
 Scene Sync is a real-time 3D scene synchronization system. This MCP server lets AI models:
 - Redeem pairing codes to link to a user's Scene Sync room
-- Add and manipulate 3D objects (boxes, spheres, etc.)
+- Add and manipulate 3D objects (boxes, spheres, primitives, and GLB/glTF models from URL)
+- Get and manipulate camera pose
+- Access browser operation history (undo/redo)
 - Focus the camera on objects
 - Take screenshots
 - Manage the link session
@@ -128,6 +130,56 @@ Input:
 
 日本語: `primitive` は必須です。種類が不明な場合は、先に `scene_sync_get_scene` で対象 object の `asset.primitive` を確認してください。
 
+### scene_sync_add_glb_from_url
+Add a GLB/glTF model from a publicly fetchable URL.
+
+Input:
+```json
+{
+  "url": "https://example.com/model.glb",
+  "objectId": "ai-model-1",
+  "name": "Example Model",
+  "position": [0, 0, 0],
+  "rotation": [0, 0, 0, 1],
+  "scale": [1, 1, 1]
+}
+```
+
+Notes:
+- The URL must be accessible from the browser.
+- CORS headers may be required depending on the hosting site.
+- Local file paths are not supported by this tool.
+- For local files, drag & drop them into the Scene Sync browser UI instead.
+
+### scene_sync_get_camera_pose
+Get the current browser camera position and quaternion.
+
+Input: `{}`
+
+Returns camera position and quaternion.
+
+### scene_sync_get_history
+Get recent Scene Sync operation history.
+
+Input:
+```json
+{
+  "count": 10
+}
+```
+
+Returns the last N history entries from the browser.
+
+### scene_sync_undo
+Undo the last operation recorded in the Scene Sync history.
+
+Input: `{}`
+
+### scene_sync_redo
+Redo the last undone operation.
+
+Input: `{}`
+
 ### scene_sync_focus_object
 Focus the browser camera on an object (requires objectId).
 
@@ -171,6 +223,29 @@ If `true`, enables the `scene_sync_raw_broadcast` developer tool. Use only for a
 ```bash
 export SCENE_SYNC_ENABLE_RAW_TOOLS=true
 ```
+
+## Browser AI Command parity
+
+Browser AI commands in `html/assets/js/scenesync/scene.js` should stay in sync with MCP tools.
+
+| Browser AI Command | MCP Tool | Status |
+|---|---|---|
+| `getCameraPose` | `scene_sync_get_camera_pose` | supported |
+| `focusObject` | `scene_sync_focus_object` | supported |
+| `screenshot` | `scene_sync_screenshot` | supported |
+| `uploadGlbFromUrl` | `scene_sync_add_glb_from_url` | supported |
+| `getHistory` | `scene_sync_get_history` | supported |
+| `undo` | `scene_sync_undo` | supported |
+| `redo` | `scene_sync_redo` | supported |
+
+When adding a new browser AI command:
+
+- Add command handling in `handleAiCommand()`
+- Add matching MCP tool in `packages/scene-sync-mcp/src/server.mjs`
+- Add README documentation for the MCP tool
+- Update this parity table
+- Confirm tool responses do not expose `sessionId`
+- Confirm errors are handled by `assertAiCommandOk()`
 
 ## Behavior Policy
 
