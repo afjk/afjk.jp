@@ -50,10 +50,29 @@ function assertAiCommandOk(response) {
     throw new Error(response.result.error)
   }
 
+  if (response?.result?.ok === false) {
+    throw new Error(response.result.error || response.result.message || 'AI command failed')
+  }
+
   if (response?.error) {
     throw new Error(response.error)
   }
 
+  return response
+}
+
+// Helper to run AI commands
+async function runAiCommand(action, params = {}, options = {}) {
+  const session = getSession()
+  const response = await client.aiCommand(
+    session.roomId,
+    session.sessionId,
+    action,
+    params,
+    options
+  )
+
+  assertAiCommandOk(response)
   return response
 }
 
@@ -341,6 +360,70 @@ server.registerTool(
   }
 )
 
+// scene_sync_add_glb_from_url
+server.registerTool(
+  'scene_sync_add_glb_from_url',
+  {
+    title: 'Add a GLB model from URL',
+    description: 'Add a GLB/glTF model to the Scene Sync scene from a publicly fetchable HTTP(S) URL. The URL must be fetchable by the browser and may require CORS headers.',
+    inputSchema: z.object({
+      url: z.string()
+        .url()
+        .refine((value) => /^https?:\/\//i.test(value), {
+          message: 'url must be an HTTP(S) URL'
+        })
+        .describe('Publicly fetchable GLB/glTF URL. Must be accessible from the browser.'),
+      objectId: z.string().optional().describe('Unique object ID. Auto-generated if omitted.'),
+      name: z.string().optional().describe('Display name. If omitted, browser may infer from URL filename.'),
+      position: z.array(z.number()).length(3).optional().describe('[x, y, z] position in meters'),
+      rotation: z.array(z.number()).length(4).optional().describe('[x, y, z, w] quaternion'),
+      scale: z.array(z.number()).length(3).optional().describe('[x, y, z] scale')
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  async ({ url, objectId, name, position, rotation, scale }) => {
+    try {
+      const finalObjectId = objectId || makeObjectId('ai-model')
+      assertObjectId(finalObjectId)
+
+      const params = {
+        url,
+        objectId: finalObjectId,
+        position: normalizeVec3(position, [0, 0, 0]),
+        rotation: normalizeQuat(rotation),
+        scale: normalizeScale(scale)
+      }
+
+      if (name) {
+        params.name = normalizeName(name, 'GLB Model')
+      }
+
+      const response = await runAiCommand(
+        'uploadGlbFromUrl',
+        params,
+        { timeout: 60000 }
+      )
+
+      return jsonResult({
+        ok: true,
+        objectId: finalObjectId,
+        action: 'uploadGlbFromUrl',
+        result: response.result
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e.message)
+      }
+      return errorResult(formatApiError(e))
+    }
+  }
+)
+
 // scene_sync_move_object
 server.registerTool(
   'scene_sync_move_object',
@@ -558,6 +641,152 @@ server.registerTool(
       return jsonResult({
         ok: true,
         ...sanitized
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e.message)
+      }
+      return errorResult(formatApiError(e))
+    }
+  }
+)
+
+// scene_sync_get_camera_pose
+server.registerTool(
+  'scene_sync_get_camera_pose',
+  {
+    title: 'Get camera pose',
+    description: 'Get the current browser camera position and quaternion.',
+    inputSchema: z.object({}),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async () => {
+    try {
+      const response = await runAiCommand(
+        'getCameraPose',
+        {},
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ok: true,
+        action: 'getCameraPose',
+        result: response.result
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e.message)
+      }
+      return errorResult(formatApiError(e))
+    }
+  }
+)
+
+// scene_sync_get_history
+server.registerTool(
+  'scene_sync_get_history',
+  {
+    title: 'Get Scene Sync history',
+    description: 'Get recent Scene Sync operation history from the browser.',
+    inputSchema: z.object({
+      count: z.number().int().min(1).max(50).optional().describe('Number of history entries to return, default 10')
+    }),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async ({ count }) => {
+    try {
+      const response = await runAiCommand(
+        'getHistory',
+        { count: count || 10 },
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ok: true,
+        action: 'getHistory',
+        result: response.result
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e.message)
+      }
+      return errorResult(formatApiError(e))
+    }
+  }
+)
+
+// scene_sync_undo
+server.registerTool(
+  'scene_sync_undo',
+  {
+    title: 'Undo last Scene Sync operation',
+    description: 'Undo the last operation recorded in the browser Scene Sync history.',
+    inputSchema: z.object({}),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false
+    }
+  },
+  async () => {
+    try {
+      const response = await runAiCommand(
+        'undo',
+        {},
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ok: true,
+        action: 'undo',
+        result: response.result
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e.message)
+      }
+      return errorResult(formatApiError(e))
+    }
+  }
+)
+
+// scene_sync_redo
+server.registerTool(
+  'scene_sync_redo',
+  {
+    title: 'Redo Scene Sync operation',
+    description: 'Redo the last undone operation recorded in the browser Scene Sync history.',
+    inputSchema: z.object({}),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false
+    }
+  },
+  async () => {
+    try {
+      const response = await runAiCommand(
+        'redo',
+        {},
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ok: true,
+        action: 'redo',
+        result: response.result
       })
     } catch (e) {
       if (e instanceof ValidationError) {

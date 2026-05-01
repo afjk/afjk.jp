@@ -2423,6 +2423,15 @@ async function uploadGlbFromUrl(url, params = {}) {
     : new THREE.Vector3(0, 0, 0);
 
   const model = await glbLoader.loadFromFile(file, position, scene);
+
+  if (Array.isArray(params.rotation) && params.rotation.length === 4) {
+    model.quaternion.fromArray(params.rotation);
+  }
+
+  if (Array.isArray(params.scale) && params.scale.length === 3) {
+    model.scale.fromArray(params.scale);
+  }
+
   model.userData.objectId = objectId;
   model.userData.name = file.name;
   managedObjects.set(model.userData.objectId, model);
