@@ -38,7 +38,7 @@ export class GLBFileLoader {
   _buildModel(gltf, position) {
     const wrapper = new THREE.Group();
     wrapper.add(gltf.scene);
-    gltf.scene.rotateY(Math.PI);
+    wrapper.rotateY(Math.PI);
 
     wrapper.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(wrapper);
