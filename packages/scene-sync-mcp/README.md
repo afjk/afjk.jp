@@ -113,7 +113,9 @@ Rotate an object using a quaternion [x, y, z, w].
 Scale an object using [x, y, z] scale factors.
 
 ### scene_sync_set_color
-Change the color of an object.
+Change the color of a primitive object.
+
+**Important:** The `primitive` parameter is required. If the primitive type is unknown, call `scene_sync_get_scene` first and inspect the object's `asset.primitive` field.
 
 Input:
 ```json
@@ -123,6 +125,8 @@ Input:
   "primitive": "box"
 }
 ```
+
+日本語: `primitive` は必須です。種類が不明な場合は、先に `scene_sync_get_scene` で対象 object の `asset.primitive` を確認してください。
 
 ### scene_sync_focus_object
 Focus the browser camera on an object (requires objectId).

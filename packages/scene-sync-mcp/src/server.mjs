@@ -7,7 +7,6 @@ import { SessionStore } from './session-store.mjs'
 import {
   ValidationError,
   assertLinked,
-  assertCode,
   assertObjectId,
   normalizeVec3,
   normalizeQuat,
@@ -45,17 +44,48 @@ function formatApiError(error) {
   return error.message
 }
 
-// Helper to sanitize screenshot response
-function sanitizeScreenshotResult(result) {
-  if (!result || typeof result !== 'object') return result
+// Helper to check aiCommand response for errors
+function assertAiCommandOk(response) {
+  if (response?.result?.error) {
+    throw new Error(response.result.error)
+  }
 
-  const copy = { ...result }
+  if (response?.error) {
+    throw new Error(response.error)
+  }
 
-  if (typeof copy.dataUrl === 'string' && copy.dataUrl.length > 1000) {
-    copy.dataUrlPreview = copy.dataUrl.slice(0, 80)
-    copy.dataUrlLength = copy.dataUrl.length
-    copy.hasDataUrl = true
-    delete copy.dataUrl
+  return response
+}
+
+// Helper to sanitize screenshot response (recursively handles nested dataUrl fields)
+function sanitizeScreenshotResult(value) {
+  if (!value || typeof value !== 'object') return value
+
+  if (Array.isArray(value)) {
+    return value.map(sanitizeScreenshotResult)
+  }
+
+  const copy = { ...value }
+
+  for (const key of Object.keys(copy)) {
+    const v = copy[key]
+    const keyLower = key.toLowerCase()
+
+    if (
+      typeof v === 'string' &&
+      (keyLower === 'dataurl' || keyLower.endsWith('dataurl')) &&
+      v.length > 1000
+    ) {
+      copy[`${key}Preview`] = v.slice(0, 80)
+      copy[`${key}Length`] = v.length
+      copy.hasDataUrl = true
+      delete copy[key]
+      continue
+    }
+
+    if (v && typeof v === 'object') {
+      copy[key] = sanitizeScreenshotResult(v)
+    }
   }
 
   return copy
@@ -430,11 +460,11 @@ server.registerTool(
   'scene_sync_set_color',
   {
     title: 'Change object color',
-    description: 'Change the color of a primitive object.',
+    description: 'Change the color of a primitive object. Primitive type is required. If the primitive type is unknown, call scene_sync_get_scene first and inspect the object\'s asset.primitive field.',
     inputSchema: z.object({
       objectId: z.string().describe('Target object ID'),
       color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).describe('#RGB or #RRGGBB color'),
-      primitive: z.enum(['box', 'sphere', 'cylinder', 'plane']).optional().default('box').describe('Primitive type (defaults to box if unknown)')
+      primitive: z.enum(['box', 'sphere', 'cylinder', 'plane']).describe('Existing primitive type (required). If unknown, call scene_sync_get_scene first.')
     })
   },
   async ({ objectId, color, primitive }) => {
@@ -442,14 +472,13 @@ server.registerTool(
       const session = getSession()
       assertObjectId(objectId)
       const finalColor = normalizeColor(color)
-      const prim = primitive || 'box'
 
       const payload = {
         kind: 'scene-delta',
         objectId,
         asset: {
           type: 'primitive',
-          primitive: prim,
+          primitive,
           color: finalColor
         }
       }
@@ -484,14 +513,17 @@ server.registerTool(
       const session = getSession()
       assertObjectId(objectId)
 
-      await client.aiCommand(session.roomId, session.sessionId, 'focusObject', {
+      const response = await client.aiCommand(session.roomId, session.sessionId, 'focusObject', {
         objectId
       })
+
+      assertAiCommandOk(response)
 
       return jsonResult({
         ok: true,
         objectId,
-        action: 'focusObject'
+        action: 'focusObject',
+        result: response.result
       })
     } catch (e) {
       if (e instanceof ValidationError) {
@@ -517,6 +549,8 @@ server.registerTool(
       const response = await client.aiCommand(session.roomId, session.sessionId, 'screenshot', {}, {
         timeout: 10000
       })
+
+      assertAiCommandOk(response)
 
       const sanitized = sanitizeScreenshotResult(response)
 

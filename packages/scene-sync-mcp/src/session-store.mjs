@@ -43,6 +43,7 @@ export class SessionStore {
       await fs.writeFile(this.file, JSON.stringify(this.session), {
         mode: 0o600
       })
+      await fs.chmod(this.file, 0o600)
     } catch (e) {
       console.error(`Failed to save session to ${this.file}:`, e.message)
     }
