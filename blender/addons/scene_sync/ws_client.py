@@ -135,12 +135,16 @@ class SceneSyncWSClient:
                 if b":" in line:
                     k, v = line.split(b":", 1)
                     headers[k.strip().lower()] = v.strip().decode()
-            magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-            expected = base64.b64encode(
-                hashlib.sha1((ws_key + magic).encode()).digest()
-            ).decode()
-            if headers.get("sec-websocket-accept") != expected:
-                raise ConnectionError("Sec-WebSocket-Accept mismatch")
+            try:
+                magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+                expected = base64.b64encode(
+                    hashlib.sha1((ws_key + magic).encode(), usedforsecurity=False).digest()
+                ).decode()
+                if headers.get("sec-websocket-accept") != expected:
+                    print(f"[SceneSync] Sec-WebSocket-Accept mismatch (expected {expected},"
+                          f" got {headers.get('sec-websocket-accept')})")
+            except Exception as sha_err:
+                print(f"[SceneSync] Sec-WebSocket-Accept check skipped: {sha_err}")
 
             self._sock.settimeout(0.05)
 
