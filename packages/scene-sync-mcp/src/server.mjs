@@ -158,6 +158,49 @@ server.tool('scene_sync_get_scene', {
   }
 })
 
+// Helper to add primitive objects
+async function addPrimitiveHandler(primitive, args) {
+  try {
+    const session = getSession()
+
+    const prim = normalizePrimitive(primitive)
+    const objectId = args.objectId || makeObjectId(`ai-${prim}`)
+    const name = normalizeName(args.name, primitiveToName(prim))
+    const position = normalizeVec3(args.position)
+    const rotation = normalizeQuat(args.rotation)
+    const scale = normalizeScale(args.scale)
+    const color = normalizeColor(args.color, process.env.SCENE_SYNC_DEFAULT_COLOR || '#ff8800')
+
+    const payload = {
+      kind: 'scene-add',
+      objectId,
+      name,
+      position,
+      rotation,
+      scale,
+      asset: {
+        type: 'primitive',
+        primitive: prim,
+        color
+      }
+    }
+
+    const response = await client.broadcast(session.roomId, session.sessionId, payload)
+
+    return successResult({
+      room: response.room || session.roomId,
+      objectId,
+      primitive: prim,
+      userPresent: response.userPresent !== false
+    })
+  } catch (e) {
+    if (e instanceof ValidationError) {
+      return errorResult(e.message)
+    }
+    return errorResult(formatApiError(e))
+  }
+}
+
 // scene_sync_add_primitive
 server.tool('scene_sync_add_primitive', {
   description: 'Add a primitive object to the scene. Internal tool; use add_box/add_sphere instead.',
@@ -200,46 +243,7 @@ server.tool('scene_sync_add_primitive', {
     required: ['primitive']
   }
 }, async (request) => {
-  try {
-    const session = getSession()
-    const args = request.params.arguments
-
-    const primitive = normalizePrimitive(args.primitive)
-    const objectId = args.objectId || makeObjectId(`ai-${primitive}`)
-    const name = normalizeName(args.name, primitiveToName(primitive))
-    const position = normalizeVec3(args.position)
-    const rotation = normalizeQuat(args.rotation)
-    const scale = normalizeScale(args.scale)
-    const color = normalizeColor(args.color, process.env.SCENE_SYNC_DEFAULT_COLOR || '#ff8800')
-
-    const payload = {
-      kind: 'scene-add',
-      objectId,
-      name,
-      position,
-      rotation,
-      scale,
-      asset: {
-        type: 'primitive',
-        primitive,
-        color
-      }
-    }
-
-    const response = await client.broadcast(session.roomId, session.sessionId, payload)
-
-    return successResult({
-      room: response.room || session.roomId,
-      objectId,
-      primitive,
-      userPresent: response.userPresent !== false
-    })
-  } catch (e) {
-    if (e instanceof ValidationError) {
-      return errorResult(e.message)
-    }
-    return errorResult(formatApiError(e))
-  }
+  return addPrimitiveHandler(request.params.arguments.primitive, request.params.arguments)
 })
 
 // scene_sync_add_box
@@ -278,11 +282,7 @@ server.tool('scene_sync_add_box', {
     }
   }
 }, async (request) => {
-  const args = request.params.arguments
-  return server.callTool('scene_sync_add_primitive', {
-    ...args,
-    primitive: 'box'
-  })
+  return addPrimitiveHandler('box', request.params.arguments)
 })
 
 // scene_sync_add_sphere
@@ -321,11 +321,7 @@ server.tool('scene_sync_add_sphere', {
     }
   }
 }, async (request) => {
-  const args = request.params.arguments
-  return server.callTool('scene_sync_add_primitive', {
-    ...args,
-    primitive: 'sphere'
-  })
+  return addPrimitiveHandler('sphere', request.params.arguments)
 })
 
 // scene_sync_move_object
