@@ -51,7 +51,7 @@ function assertAiCommandOk(response) {
   }
 
   if (response?.result?.ok === false) {
-    throw new Error('AI command failed')
+    throw new Error(response.result.error || response.result.message || 'AI command failed')
   }
 
   if (response?.error) {
@@ -394,7 +394,7 @@ server.registerTool(
       const params = {
         url,
         objectId: finalObjectId,
-        position: normalizeVec3(position),
+        position: normalizeVec3(position, [0, 0, 0]),
         rotation: normalizeQuat(rotation),
         scale: normalizeScale(scale)
       }
