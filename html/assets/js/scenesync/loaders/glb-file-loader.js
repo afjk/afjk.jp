@@ -37,8 +37,9 @@ export class GLBFileLoader {
 
   _buildModel(gltf, position) {
     const wrapper = new THREE.Group();
+    // Scene Sync treats meshPath GLBs as authored assets.
+    // Do not add client-specific yaw fixes here; object rotation comes from wire transforms.
     wrapper.add(gltf.scene);
-    wrapper.rotateY(Math.PI);
 
     wrapper.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(wrapper);
