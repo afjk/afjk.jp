@@ -126,7 +126,7 @@ class SceneSyncWSClient:
                 if not chunk:
                     raise ConnectionError("Server closed during handshake")
                 hdr += chunk
-            lines = hdr.split(b"\r\n")
+            lines = hdr.split(b"\r\n\r\n")[0].split(b"\r\n")
             status_line = lines[0]
             if b"101" not in status_line:
                 raise ConnectionError(f"Upgrade failed: {status_line}")
@@ -148,7 +148,9 @@ class SceneSyncWSClient:
             self.connected = True
             self._recv_q.put({"_internal": "_connected"})
 
-            buf = b""
+            # Any bytes after \r\n\r\n in the handshake buffer are the start of a WS frame.
+            parts = hdr.split(b"\r\n\r\n", 1)
+            buf = parts[1] if len(parts) > 1 else b""
             while self._running:
                 # flush outgoing queue
                 try:
