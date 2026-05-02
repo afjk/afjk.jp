@@ -816,7 +816,7 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 
 #### デモ
 
-`html/scenesync-loom-demo.html` で scene-graph-* メッセージの送受信を確認できる。  
+[`scenesync-loom-demo.html`](https://afjk.jp/scenesync-loom-demo.html) で scene-graph-* メッセージの送受信を確認できる。  
 ブラウザで複数タブを開き、別々のクライアントとして接続するだけで、メッセージの配信を確認可能。
 
 例：sine wave でオブジェクトを上下に動かす
