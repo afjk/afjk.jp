@@ -732,7 +732,9 @@ afjk.jp 側は Loom グラフを評価せず、ステートレスなメッセー
 
 #### `scene-graph-patch`（グラフの差分更新）
 
-第一実装では `graph` を含む場合、`scene-graph-set` と同等に扱う。
+afjk.jp 側では `scene-graph-patch` も他の scene-graph メッセージと同様に中継するのみ。
+受信側の LoomSceneSync が `graph` を含む `scene-graph-patch` を `scene-graph-set` 相当として扱うか、
+本来の差分パッチとして処理するかは、クライアント側の実装に任せる。
 
 ```json
 {
@@ -767,23 +769,17 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 
 ### クライアント側の実装
 
+afjk.jp 側は scene-graph メッセージを中継するのみで、評価責任はクライアント側にある。
+
 ```javascript
 // メッセージ受信
 function handleSceneGraphMessage(msg) {
-  switch (msg.type) {
-    case 'scene-graph-set':
-      // LoomSceneSync に渡す
-      loomSync.setGraph(msg.scope, msg.graph);
-      break;
-    case 'scene-graph-clear':
-      loomSync.clearGraph(msg.scope);
-      break;
-    case 'scene-graph-patch':
-      loomSync.patchGraph(msg.scope, msg.graph);
-      break;
-    case 'scene-graph-input':
-      // 将来用
-      break;
+  // afjk.jp 側では中継のみを行う。実際の評価は LoomSceneSync に委ねる。
+  if (typeof loomSceneSync?.handleMessage === 'function') {
+    loomSceneSync.handleMessage(msg);
+  } else {
+    // Loom がまだ統合されていない場合
+    console.log('[SceneSync] received Loom graph message', msg);
   }
 }
 

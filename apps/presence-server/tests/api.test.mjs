@@ -825,6 +825,72 @@ describe('scene-graph protocol', () => {
       await closeClient(ws);
     }
   });
+
+  it('does not relay WebSocket scene-graph-set with invalid scope', async () => {
+    const sender = await connectClient('graph-ws-invalid-room', 'Sender');
+    const receiver = await connectClient('graph-ws-invalid-room', 'Receiver');
+    try {
+      // Try to wait for a relayed message from sender (should not arrive)
+      const noRelayPromise = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-set',
+        200  // short timeout
+      );
+
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          type: 'scene-graph-set',
+          scope: { target: 'cube1' },  // invalid scope
+          graph: { nodes: [], edges: [] }
+        }
+      }));
+
+      let relayedToReceiver = false;
+      try {
+        await noRelayPromise;
+        relayedToReceiver = true;
+      } catch (e) {
+        // Expected: timeout because message should not be relayed
+      }
+
+      assert.equal(relayedToReceiver, false, 'Invalid message should not be relayed to receiver');
+    } finally {
+      await Promise.all([closeClient(sender), closeClient(receiver)]);
+    }
+  });
+
+  it('does not relay WebSocket scene-graph-set without graph', async () => {
+    const sender = await connectClient('graph-ws-no-graph-room', 'Sender');
+    const receiver = await connectClient('graph-ws-no-graph-room', 'Receiver');
+    try {
+      // Try to wait for a relayed message (should not arrive)
+      const noRelayPromise = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-set',
+        200  // short timeout
+      );
+
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          type: 'scene-graph-set',
+          scope: 'scene'
+          // missing graph
+        }
+      }));
+
+      let relayedToReceiver = false;
+      try {
+        await noRelayPromise;
+        relayedToReceiver = true;
+      } catch (e) {
+        // Expected: timeout
+      }
+
+      assert.equal(relayedToReceiver, false, 'Invalid message should not be relayed to receiver');
+    } finally {
+      await Promise.all([closeClient(sender), closeClient(receiver)]);
+    }
+  });
 });
 
 describe('presence GPT wrapper API', () => {

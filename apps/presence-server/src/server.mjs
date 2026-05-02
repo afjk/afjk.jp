@@ -133,22 +133,36 @@ function isValidScope(scope) {
 }
 
 function validateSceneGraphMessage(msg) {
-  if (!msg || typeof msg !== 'object') return false;
-  if (typeof msg.type !== 'string') return false;
-  if (!SCENE_GRAPH_MESSAGE_TYPES.has(msg.type)) return false;
+  if (!msg || typeof msg !== 'object') {
+    return { ok: false, error: 'message must be an object' };
+  }
+  if (typeof msg.type !== 'string') {
+    return { ok: false, error: 'type must be a string' };
+  }
+  if (!SCENE_GRAPH_MESSAGE_TYPES.has(msg.type)) {
+    return { ok: false, error: 'unsupported scene-graph message type' };
+  }
 
-  if (!isValidScope(msg.scope)) return false;
+  if (!isValidScope(msg.scope)) {
+    return { ok: false, error: 'invalid scope' };
+  }
 
   if (msg.type === 'scene-graph-set' || msg.type === 'scene-graph-patch') {
-    if (!msg.graph || typeof msg.graph !== 'object') return false;
-    if (!Array.isArray(msg.graph.nodes) || !Array.isArray(msg.graph.edges)) return false;
+    if (!msg.graph || typeof msg.graph !== 'object') {
+      return { ok: false, error: 'graph is required' };
+    }
+    if (!Array.isArray(msg.graph.nodes) || !Array.isArray(msg.graph.edges)) {
+      return { ok: false, error: 'graph.nodes and graph.edges must be arrays' };
+    }
   }
 
   if (msg.type === 'scene-graph-input') {
-    if (typeof msg.ref !== 'string') return false;
+    if (typeof msg.ref !== 'string') {
+      return { ok: false, error: 'ref must be a string' };
+    }
   }
 
-  return true;
+  return { ok: true };
 }
 
 function logSceneGraphMessage(msg) {
@@ -658,10 +672,11 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
   }
 
   if (nextPayload?.type && SCENE_GRAPH_MESSAGE_TYPES.has(nextPayload.type)) {
-    if (!validateSceneGraphMessage(nextPayload)) {
+    const validation = validateSceneGraphMessage(nextPayload);
+    if (!validation.ok) {
       return {
         status: 400,
-        body: { error: 'invalid scene-graph message' }
+        body: { error: 'invalid scene-graph message', details: validation.error }
       };
     }
 
@@ -1327,6 +1342,30 @@ function createPresenceServer() {
           break;
         case 'broadcast':
           if (data.payload) {
+            // Validate scene-graph-* messages
+            if (SCENE_GRAPH_MESSAGE_TYPES.has(data.payload.type)) {
+              const validation = validateSceneGraphMessage(data.payload);
+              if (!validation.ok) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: 'invalid scene-graph message',
+                  details: validation.error
+                });
+                return;
+              }
+
+              const msgSize = JSON.stringify(data.payload).length;
+              if (msgSize > SCENE_GRAPH_MAX_SIZE) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: 'scene-graph message too large'
+                });
+                return;
+              }
+
+              logSceneGraphMessage(data.payload);
+            }
+
             broadcastHandoff(client, data);
           }
           break;
@@ -1334,10 +1373,6 @@ function createPresenceServer() {
           safeSend(conn, { type: 'pong', at: Date.now() });
           break;
         default:
-          // Handle scene-graph-* messages via broadcast type
-          if (data.type === 'broadcast' && data.payload && SCENE_GRAPH_MESSAGE_TYPES.has(data.payload.type)) {
-            broadcastHandoff(client, { payload: data.payload });
-          }
           break;
       }
     };
