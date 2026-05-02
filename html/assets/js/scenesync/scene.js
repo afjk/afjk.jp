@@ -2081,7 +2081,16 @@ async function respondToSceneRequest(from) {
 
 function handleHandoff(data) {
   const payload = data.payload;
-  if (!payload || !payload.kind) return;
+  if (!payload) return;
+
+  // Handle scene-graph-* protocol messages (Loom graph protocol)
+  const sceneGraphTypes = new Set(['scene-graph-set', 'scene-graph-clear', 'scene-graph-patch', 'scene-graph-input']);
+  if (sceneGraphTypes.has(payload.type)) {
+    handleSceneGraphMessage(payload);
+    return;
+  }
+
+  if (!payload.kind) return;
 
   // 操作が自分またはAIが代理している場合、履歴に追加するか判定
   const isOwn = data.from.id === presenceState.id;
@@ -2289,6 +2298,24 @@ function handleHandoff(data) {
       break;
     }
     default:
+      break;
+  }
+}
+
+function handleSceneGraphMessage(msg) {
+  const scopeStr = msg.scope === 'scene' ? 'scene' : JSON.stringify(msg.scope);
+  switch (msg.type) {
+    case 'scene-graph-set':
+      console.log('[SceneSync] Received scene-graph-set scope=' + scopeStr + ' nodes=' + (msg.graph?.nodes?.length || 0) + ' edges=' + (msg.graph?.edges?.length || 0));
+      break;
+    case 'scene-graph-clear':
+      console.log('[SceneSync] Received scene-graph-clear scope=' + scopeStr);
+      break;
+    case 'scene-graph-patch':
+      console.log('[SceneSync] Received scene-graph-patch scope=' + scopeStr + (msg.graph ? ' nodes=' + msg.graph.nodes.length + ' edges=' + msg.graph.edges.length : ''));
+      break;
+    case 'scene-graph-input':
+      console.log('[SceneSync] Received scene-graph-input scope=' + scopeStr + ' ref=' + msg.ref);
       break;
   }
 }

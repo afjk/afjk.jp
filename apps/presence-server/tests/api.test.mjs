@@ -643,6 +643,190 @@ describe('presence AI link API', () => {
   });
 });
 
+describe('scene-graph protocol', () => {
+  it('broadcasts scene-graph-set via REST API', async () => {
+    const ws = await connectClient('graph-test-room');
+    try {
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-set'
+      );
+
+      const graph = {
+        nodes: [
+          { id: 'clock', type: 'serverClock' },
+          { id: 'sine', type: 'sine', params: { freq: 1, amplitude: 50 } }
+        ],
+        edges: [{ from: 'clock.t', to: 'sine.t' }]
+      };
+
+      const response = await fetch(`${baseUrl}/api/room/graph-test-room/broadcast?name=TestGraph`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'scene-graph-set',
+          scope: 'scene',
+          graph
+        }),
+      });
+
+      const [resBody, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(resBody.ok, true);
+      assert.equal(message.type, 'handoff');
+      assert.equal(message.payload.type, 'scene-graph-set');
+      assert.equal(message.payload.scope, 'scene');
+      assert.deepEqual(message.payload.graph, graph);
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('broadcasts scene-graph-clear via REST API', async () => {
+    const ws = await connectClient('graph-clear-room');
+    try {
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-clear'
+      );
+
+      const response = await fetch(`${baseUrl}/api/room/graph-clear-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'scene-graph-clear',
+          scope: 'scene'
+        }),
+      });
+
+      const [resBody, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(resBody.ok, true);
+      assert.equal(message.payload.type, 'scene-graph-clear');
+      assert.equal(message.payload.scope, 'scene');
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('accepts object-scoped scene-graph messages', async () => {
+    const ws = await connectClient('graph-object-room');
+    try {
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-set'
+      );
+
+      const graph = { nodes: [], edges: [] };
+      const response = await fetch(`${baseUrl}/api/room/graph-object-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'scene-graph-set',
+          scope: { object: 'cube1' },
+          graph
+        }),
+      });
+
+      const message = await messagePromise;
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(message.payload.scope, { object: 'cube1' });
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('rejects scene-graph message with invalid scope', async () => {
+    const response = await fetch(`${baseUrl}/api/room/graph-invalid-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'scene-graph-set',
+        scope: { target: 'cube1' },
+        graph: { nodes: [], edges: [] }
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, 'invalid scene-graph message');
+  });
+
+  it('rejects scene-graph-set without graph', async () => {
+    const response = await fetch(`${baseUrl}/api/room/graph-no-graph-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'scene-graph-set',
+        scope: 'scene'
+      }),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it('broadcasts scene-graph-patch via WebSocket', async () => {
+    const sender = await connectClient('graph-patch-room', 'Sender');
+    const receiver = await connectClient('graph-patch-room', 'Receiver');
+    try {
+      const messagePromise = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-patch'
+      );
+
+      const graph = { nodes: [{ id: 'n1', type: 'test' }], edges: [] };
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          type: 'scene-graph-patch',
+          scope: 'scene',
+          graph
+        }
+      }));
+
+      const message = await messagePromise;
+
+      assert.equal(message.payload.type, 'scene-graph-patch');
+      assert.deepEqual(message.payload.graph, graph);
+    } finally {
+      await Promise.all([closeClient(sender), closeClient(receiver)]);
+    }
+  });
+
+  it('broadcasts scene-graph-input for future use', async () => {
+    const ws = await connectClient('graph-input-room');
+    try {
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.type === 'scene-graph-input'
+      );
+
+      const response = await fetch(`${baseUrl}/api/room/graph-input-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'scene-graph-input',
+          scope: 'scene',
+          ref: 'click.event',
+          payload: { x: 100, y: 200 }
+        }),
+      });
+
+      const message = await messagePromise;
+
+      assert.equal(response.status, 200);
+      assert.equal(message.payload.type, 'scene-graph-input');
+      assert.equal(message.payload.ref, 'click.event');
+    } finally {
+      await closeClient(ws);
+    }
+  });
+});
+
 describe('presence GPT wrapper API', () => {
   it('redeems pairing code and returns sessionId', async () => {
     const userId = 'usr-gpt-redeem';

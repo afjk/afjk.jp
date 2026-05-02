@@ -12,6 +12,15 @@ const MAX_MESSAGE_SIZE = 131072; // 128 KB max WebSocket message
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
+// ── Scene Graph Protocol ────────────────────────────────────────────────────
+const SCENE_GRAPH_MESSAGE_TYPES = new Set([
+  'scene-graph-set',
+  'scene-graph-clear',
+  'scene-graph-patch',
+  'scene-graph-input'
+]);
+const SCENE_GRAPH_MAX_SIZE = 64 * 1024; // 64 KB for graph payloads
+
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
@@ -113,6 +122,51 @@ function inferRoomFromReq(req) {
     return `${parts[0]}.${parts[1]}.${parts[2]}.x`;
   }
   return ip || 'global';
+}
+
+function isValidScope(scope) {
+  if (scope === 'scene') return true;
+  if (typeof scope === 'object' && scope !== null && !Array.isArray(scope)) {
+    return typeof scope.object === 'string' && scope.object.length > 0;
+  }
+  return false;
+}
+
+function validateSceneGraphMessage(msg) {
+  if (!msg || typeof msg !== 'object') return false;
+  if (typeof msg.type !== 'string') return false;
+  if (!SCENE_GRAPH_MESSAGE_TYPES.has(msg.type)) return false;
+
+  if (!isValidScope(msg.scope)) return false;
+
+  if (msg.type === 'scene-graph-set' || msg.type === 'scene-graph-patch') {
+    if (!msg.graph || typeof msg.graph !== 'object') return false;
+    if (!Array.isArray(msg.graph.nodes) || !Array.isArray(msg.graph.edges)) return false;
+  }
+
+  if (msg.type === 'scene-graph-input') {
+    if (typeof msg.ref !== 'string') return false;
+  }
+
+  return true;
+}
+
+function logSceneGraphMessage(msg) {
+  const scopeStr = msg.scope === 'scene' ? 'scene' : JSON.stringify(msg.scope);
+  switch (msg.type) {
+    case 'scene-graph-set':
+      log('[SceneSync] scene-graph-set scope=' + scopeStr + ' nodes=' + msg.graph.nodes.length + ' edges=' + msg.graph.edges.length);
+      break;
+    case 'scene-graph-clear':
+      log('[SceneSync] scene-graph-clear scope=' + scopeStr);
+      break;
+    case 'scene-graph-patch':
+      log('[SceneSync] scene-graph-patch scope=' + scopeStr + (msg.graph ? ' nodes=' + msg.graph.nodes.length + ' edges=' + msg.graph.edges.length : ''));
+      break;
+    case 'scene-graph-input':
+      log('[SceneSync] scene-graph-input scope=' + scopeStr + ' ref=' + msg.ref);
+      break;
+  }
 }
 
 function getRequestUrl(req) {
@@ -601,6 +655,38 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
       payload: nextPayload,
       sender,
     });
+  }
+
+  if (nextPayload?.type && SCENE_GRAPH_MESSAGE_TYPES.has(nextPayload.type)) {
+    if (!validateSceneGraphMessage(nextPayload)) {
+      return {
+        status: 400,
+        body: { error: 'invalid scene-graph message' }
+      };
+    }
+
+    const msgSize = JSON.stringify(nextPayload).length;
+    if (msgSize > SCENE_GRAPH_MAX_SIZE) {
+      return {
+        status: 413,
+        body: { error: 'scene-graph message too large' }
+      };
+    }
+
+    logSceneGraphMessage(nextPayload);
+
+    const message = {
+      type: 'handoff',
+      from: sender,
+      payload: nextPayload
+    };
+    peers.forEach(client => safeSend(client.conn, message));
+
+    const userPresent = Boolean(onBehalfOfUserId) && peers.some(client => client.userId === onBehalfOfUserId);
+    return {
+      status: 200,
+      body: createBroadcastResponse(roomId, peers, userPresent),
+    };
   }
 
   const message = {
@@ -1147,7 +1233,8 @@ function createPresenceServer() {
           return;
         }
 
-        if (payload && typeof payload === 'object' && payload.payload && typeof payload.payload === 'object') {
+        // For scene-graph-* messages, don't unwrap payload
+        if (payload && typeof payload === 'object' && payload.payload && typeof payload.payload === 'object' && !SCENE_GRAPH_MESSAGE_TYPES.has(payload.type)) {
           payload = payload.payload;
         }
 
@@ -1247,6 +1334,10 @@ function createPresenceServer() {
           safeSend(conn, { type: 'pong', at: Date.now() });
           break;
         default:
+          // Handle scene-graph-* messages via broadcast type
+          if (data.type === 'broadcast' && data.payload && SCENE_GRAPH_MESSAGE_TYPES.has(data.payload.type)) {
+            broadcastHandoff(client, { payload: data.payload });
+          }
           break;
       }
     };
