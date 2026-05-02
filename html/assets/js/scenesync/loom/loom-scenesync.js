@@ -43,6 +43,10 @@ export class LoomSceneSync {
     // 実行状態
     this._started = false;
 
+    // Export 用 graph definition の保持
+    this._sceneGraphDefinition = null;
+    this._objectGraphDefinitions = new Map();
+
     // ノード型登録（冪等性を保証）
     this._registerNodeTypes();
   }
@@ -297,12 +301,17 @@ export class LoomSceneSync {
     }
 
     this._validateSceneSyncGraphNodeTypes(msg.graph);
+
+    // Export 用に元の graph を保存（deep clone）
+    const graphDefinition = JSON.parse(JSON.stringify(msg.graph));
+
     const injectedGraph = this._injectAdapterId(msg.graph, msg.scope);
 
     if (typeof msg.scope === "string" && msg.scope === "scene") {
       // シーングラフの置き換え
       this._sceneGraph.stop();
       this._sceneGraph = new this.LoomClass(injectedGraph);
+      this._sceneGraphDefinition = graphDefinition;
       if (this._started) {
         this._sceneGraph.start();
       }
@@ -314,6 +323,7 @@ export class LoomSceneSync {
       }
       const engine = new this.LoomClass(injectedGraph);
       this._objectGraphs.set(targetId, engine);
+      this._objectGraphDefinitions.set(targetId, graphDefinition);
       if (this._started) {
         engine.start();
       }
@@ -327,6 +337,7 @@ export class LoomSceneSync {
       // シーングラフをクリア
       this._sceneGraph.stop();
       this._sceneGraph = new this.LoomClass({ nodes: [], edges: [] });
+      this._sceneGraphDefinition = null;
       if (this._started) {
         this._sceneGraph.start();
       }
@@ -337,6 +348,7 @@ export class LoomSceneSync {
         this._objectGraphs.get(targetId).stop();
         this._objectGraphs.delete(targetId);
       }
+      this._objectGraphDefinitions.delete(targetId);
     }
   }
 
@@ -379,7 +391,67 @@ export class LoomSceneSync {
   dispose() {
     this.stop();
     this._objectGraphs.clear();
+    this._objectGraphDefinitions.clear();
+    this._sceneGraphDefinition = null;
     adapterRegistry.delete(this.adapterId);
+  }
+
+  exportState() {
+    const state = {
+      scene: this._sceneGraphDefinition ? JSON.parse(JSON.stringify(this._sceneGraphDefinition)) : null,
+      objects: {}
+    };
+
+    for (const [objectId, definition] of this._objectGraphDefinitions) {
+      if (definition) {
+        state.objects[objectId] = JSON.parse(JSON.stringify(definition));
+      }
+    }
+
+    return state;
+  }
+
+  importState(state) {
+    if (!state || typeof state !== 'object') return;
+
+    if (state.scene) {
+      try {
+        this.handleMessage({
+          type: 'scene-graph-set',
+          scope: 'scene',
+          graph: JSON.parse(JSON.stringify(state.scene)),
+        });
+      } catch (err) {
+        console.warn('[loom] failed to import scene graph:', err);
+      }
+    }
+
+    if (state.objects && typeof state.objects === 'object') {
+      for (const [objectId, graph] of Object.entries(state.objects)) {
+        if (!graph) continue;
+        try {
+          this.handleMessage({
+            type: 'scene-graph-set',
+            scope: { object: objectId },
+            graph: JSON.parse(JSON.stringify(graph)),
+          });
+        } catch (err) {
+          console.warn(`[loom] failed to import object graph for ${objectId}:`, err);
+        }
+      }
+    }
+  }
+
+  clearObjectGraph(objectId) {
+    if (!objectId) return;
+
+    const graph = this._objectGraphs.get(objectId);
+    if (graph) {
+      graph.stop();
+      this._objectGraphs.delete(objectId);
+    }
+
+    this._objectGraphDefinitions.delete(objectId);
   }
 
   sendGraph(scope, graph) {

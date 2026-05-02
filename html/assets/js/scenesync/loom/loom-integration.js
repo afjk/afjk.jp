@@ -51,6 +51,9 @@ export function createSceneSyncLoomIntegration({
 
   return {
     handlePayload,
+    exportState: () => adapter.exportState(),
+    importState: (state) => adapter.importState(state),
+    clearObjectGraph: (objectId) => adapter.clearObjectGraph(objectId),
     dispose,
     adapter,
   };

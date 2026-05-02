@@ -2096,10 +2096,18 @@ async function respondToSceneRequest(from) {
 
   const ws = presenceState.ws;
   if (ws && ws.readyState === WebSocket.OPEN) {
+    const payload = { kind: 'scene-state', envId: environmentManager.getCurrentEnvId(), objects };
+
+    // Loom graph state を含める
+    const loomGraphState = loomIntegration.exportState();
+    if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
+      payload.loomGraphs = loomGraphState;
+    }
+
     ws.send(JSON.stringify({
       type: 'handoff',
       targetId: from.id,
-      payload: { kind: 'scene-state', envId: environmentManager.getCurrentEnvId(), objects },
+      payload,
     }));
   }
 }
@@ -2137,6 +2145,16 @@ function handleHandoff(data) {
       const objects = payload.objects || {};
       for (const [objectId, info] of Object.entries(objects)) {
         addOrUpdateObject(objectId, info);
+      }
+
+      // Loom graph 状態を復元
+      if (payload.loomGraphs) {
+        try {
+          loomIntegration.importState(payload.loomGraphs);
+        } catch (error) {
+          console.warn('[loom] failed to import loomGraphs from scene-state:', error);
+          showToast?.('Loom graph restore failed');
+        }
       }
       break;
     }
@@ -2213,6 +2231,8 @@ function handleHandoff(data) {
         scene.remove(obj);
         managedObjects.delete(objectId);
       }
+      // Loom object graph をクリーンアップ
+      loomIntegration.clearObjectGraph(objectId);
       break;
     }
     case 'scene-mesh': {
@@ -2776,6 +2796,8 @@ function applyOperationToScene(operation) {
         scene.remove(obj);
         managedObjects.delete(operation.objectId);
       }
+      // Loom object graph をクリーンアップ
+      loomIntegration.clearObjectGraph(operation.objectId);
       break;
     }
     case 'scene-delta': {

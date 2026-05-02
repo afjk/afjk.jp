@@ -839,6 +839,60 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 }
 ```
 
+### scene-state への loomGraphs 復元
+
+**途中参加者向けグラフ復元**
+
+`scene-state` には Loom graph 状態を含める場合があります。room に途中参加したクライアントが既存の Loom animation を復元するためです。
+
+#### スキーマ
+
+```json
+{
+  "kind": "scene-state",
+  "objects": {
+    "cube1": {
+      "name": "cube1",
+      "position": [0, 0.5, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "asset": { "type": "primitive", "primitive": "box", "color": "#4488ff" }
+    }
+  },
+  "loomGraphs": {
+    "scene": null,
+    "objects": {
+      "cube1": {
+        "nodes": [
+          { "id": "clock", "type": "serverClock" },
+          { "id": "sine", "type": "sine", "params": { "freq": 0.2, "amplitude": 2, "offset": 0 } },
+          { "id": "pos", "type": "sceneSetPosition", "params": { "y": 0.5, "z": 0 } }
+        ],
+        "edges": [
+          { "from": "clock.t", "to": "sine.t" },
+          { "from": "sine.out", "to": "pos.x" }
+        ]
+      }
+    }
+  }
+}
+```
+
+#### 仕様
+
+- `loomGraphs` は optional フィールド。Loom graph がない場合は省略可能
+- `loomGraphs.scene`: scene scope の Loom graph（null または graph 定義）
+- `loomGraphs.objects`: objectId ごとの object scope Loom graph（オブジェクト）
+- **途中参加者復元**：`scene-state` を受信したクライアントが存在する graph を自動復元する
+  - objects の復元後に graph を import する（target object が存在することを保証）
+  - import 失敗時も viewer は動作継続（warning log と toast）
+- **object 削除時**：object scope の Loom graph も同時に削除される
+  - remote `scene-remove` を受信した時点で object scope graph を stop/cleanup
+  - 途中参加者が `scene-state` を再取得した時点で存在しない object graph は復元されない
+- **サーバー責務なし**：presence-server は `loomGraphs` を保持・管理しない
+  - room 内の既存クライアントが `scene-state` を返すときに自身の graph 状態を含める
+  - サーバーはそのまま中継するのみ
+
 ---
 
 ## 実装ガイドライン
