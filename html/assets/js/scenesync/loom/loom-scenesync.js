@@ -391,6 +391,8 @@ export class LoomSceneSync {
   dispose() {
     this.stop();
     this._objectGraphs.clear();
+    this._objectGraphDefinitions.clear();
+    this._sceneGraphDefinition = null;
     adapterRegistry.delete(this.adapterId);
   }
 
