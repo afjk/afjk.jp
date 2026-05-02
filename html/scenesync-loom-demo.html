@@ -346,7 +346,7 @@
       }
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws?room=${encodeURIComponent(roomId)}`;
+      const wsUrl = `${protocol}//${window.location.host}/presence?room=${encodeURIComponent(roomId)}`;
 
       ws = new WebSocket(wsUrl);
 
