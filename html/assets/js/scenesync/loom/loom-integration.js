@@ -42,7 +42,11 @@ export function createSceneSyncLoomIntegration({
   }
 
   function dispose() {
-    adapter.stop();
+    if (typeof adapter.dispose === 'function') {
+      adapter.dispose();
+    } else {
+      adapter.stop();
+    }
   }
 
   return {

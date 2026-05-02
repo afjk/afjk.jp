@@ -10,6 +10,21 @@ let nextAdapterId = 0;
 // ノード登録済み状態を LoomClass ごとに管理
 const registeredLoomClasses = new WeakSet();
 
+// Phase 1 で許可する SceneSync node type whitelist
+const SCENESYNC_ALLOWED_NODE_TYPES = new Set([
+  'clock',
+  'constant',
+  'sine',
+  'add',
+  'multiply',
+  'serverClock',
+  'sceneSetPosition',
+  'sceneSetRotation',
+  'sceneSetScale',
+  'sceneSetColor',
+  'sceneSetVisible',
+]);
+
 export class LoomSceneSync {
   constructor({ LoomClass, send, getServerTime, resolveTarget }) {
     this.LoomClass = LoomClass;
@@ -142,9 +157,32 @@ export class LoomSceneSync {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
         const obj = adapter.resolveTarget(params.target);
-        const material = Array.isArray(obj?.material) ? obj.material[0] : obj?.material;
-        if (material && material.color && typeof material.color.setRGB === "function") {
-          material.color.setRGB(inputs.r, inputs.g, inputs.b);
+
+        // Helper function to apply color to material (handles arrays and nested materials)
+        const applyColorToMaterial = (material, r, g, b) => {
+          if (Array.isArray(material)) {
+            for (const m of material) {
+              applyColorToMaterial(m, r, g, b);
+            }
+            return;
+          }
+          if (material?.color && typeof material.color.setRGB === "function") {
+            material.color.setRGB(r, g, b);
+          }
+        };
+
+        if (obj) {
+          // Apply color to root object's material
+          applyColorToMaterial(obj.material, inputs.r, inputs.g, inputs.b);
+
+          // For Group objects, traverse children and apply color
+          if (typeof obj.traverse === "function") {
+            obj.traverse((child) => {
+              if (child !== obj) {
+                applyColorToMaterial(child.material, inputs.r, inputs.g, inputs.b);
+              }
+            });
+          }
         }
         return {};
       }
@@ -208,21 +246,43 @@ export class LoomSceneSync {
     throw new LoomError("INVALID_SCOPE", "scope must be 'scene' or { object: targetId }", { scope });
   }
 
-  _injectAdapterId(graph) {
+  _validateSceneSyncGraphNodeTypes(graph) {
+    for (const node of graph.nodes || []) {
+      if (!SCENESYNC_ALLOWED_NODE_TYPES.has(node.type)) {
+        throw new LoomError(
+          'DISALLOWED_NODE_TYPE',
+          `Node type is not allowed in SceneSync graph: ${node.type}`,
+          { nodeId: node.id, type: node.type }
+        );
+      }
+    }
+  }
+
+  _injectAdapterId(graph, scope) {
     if (!graph || typeof graph !== "object" || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
       throw new LoomError("INVALID_GRAPH", "graph must have nodes and edges arrays", { reason: "invalid graph" });
     }
 
+    const sceneSetNodeTypes = new Set([
+      "sceneSetPosition", "sceneSetRotation", "sceneSetScale", "sceneSetColor", "sceneSetVisible"
+    ]);
+    const objectScopeTarget = typeof scope === "object" && scope !== null ? scope.object : null;
+
     // グラフをコピー（元を破壊しない）
     const nodes = graph.nodes.map(node => {
-      const nodeId = node.type;
-      if (!["serverClock", "sceneSetPosition", "sceneSetRotation", "sceneSetScale", "sceneSetColor", "sceneSetVisible"].includes(nodeId)) {
-        return node;
-      }
+      const newNode = { ...node };
+      newNode.params = { ...(node.params || {}) };
 
       // adapterId を注入
-      const newNode = { ...node };
-      newNode.params = { ...(node.params || {}), adapterId: this.adapterId };
+      if (["serverClock", "sceneSetPosition", "sceneSetRotation", "sceneSetScale", "sceneSetColor", "sceneSetVisible"].includes(node.type)) {
+        newNode.params.adapterId = this.adapterId;
+      }
+
+      // object scope の場合、SceneSync sink node の target を自動注入
+      if (objectScopeTarget && sceneSetNodeTypes.has(node.type) && !newNode.params.target) {
+        newNode.params.target = objectScopeTarget;
+      }
+
       return newNode;
     });
 
@@ -236,7 +296,8 @@ export class LoomSceneSync {
       throw new LoomError("INVALID_GRAPH", "graph field is required", { reason: "missing graph" });
     }
 
-    const injectedGraph = this._injectAdapterId(msg.graph);
+    this._validateSceneSyncGraphNodeTypes(msg.graph);
+    const injectedGraph = this._injectAdapterId(msg.graph, msg.scope);
 
     if (typeof msg.scope === "string" && msg.scope === "scene") {
       // シーングラフの置き換え
@@ -266,6 +327,9 @@ export class LoomSceneSync {
       // シーングラフをクリア
       this._sceneGraph.stop();
       this._sceneGraph = new this.LoomClass({ nodes: [], edges: [] });
+      if (this._started) {
+        this._sceneGraph.start();
+      }
     } else {
       // オブジェクト単位グラフをクリア
       const targetId = msg.scope.object;
@@ -310,6 +374,12 @@ export class LoomSceneSync {
     for (const engine of this._objectGraphs.values()) {
       engine.stop();
     }
+  }
+
+  dispose() {
+    this.stop();
+    this._objectGraphs.clear();
+    adapterRegistry.delete(this.adapterId);
   }
 
   sendGraph(scope, graph) {

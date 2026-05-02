@@ -774,15 +774,43 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 `html/assets/js/scenesync/loom/loom-integration.js` で LoomSceneSync を統合。
 
 特性と制限：
-- **Loom ランタイム統合**: Loom グラフ定義を受け取ると、各クライアント側で独立に評価
-- **サーバー側は検証・中継のみ**: グラフの内容は評価しない
-- **手動操作との競合対策**:
-  - TransformControls で編集中のオブジェクトに対しては Loom sink を適用しない（ローカル viewer 内のみ）
-  - XR grab 状態のオブジェクトに対しても同様に一時停止
-  - 編集終了後に Loom は改めて評価を再開
-- **再 broadcast なし**: Loom による transform 変更を `scene-delta` として再 broadcast しない
-  - 理由：各クライアントが同じグラフを同じ serverClock で評価する思想のため、再 broadcast すると sync ズレが生じやすい
-- **入力イベント**: `scene-graph-input` は Phase 1 では予約扱い（Phase 2 以降）
+
+**Experimental Protocol**
+- `scene-graph-*` は experimental なグラフプロトコルであり、仕様は Phase を通じて進化する可能性がある
+
+**Phase 1 実装範囲**
+- Web viewer のみ実装（Unity / Godot / Unreal は Phase 2 以降）
+- `loom.js` は `afjk/loom` リポジトリの vendored copy として扱われ、upstream と同期可能
+- SceneSync 固有の制限・制御ロジックは `loom-scenesync.js` 側で処理
+
+**Node Type Whitelist**
+- remote `scene-graph-*` payload から実行可能な Loom node type は以下に限定される：
+  - `clock`, `constant`, `sine`, `add`, `multiply`
+  - `serverClock`
+  - `sceneSetPosition`, `sceneSetRotation`, `sceneSetScale`, `sceneSetColor`, `sceneSetVisible`
+- 以下の node type は禁止（リモート graph では実行不可）：
+  - DOM 操作: `setText`, `setStyle`, `setAttr`, `log`
+  - Input/Event: `pointerClick`, `pointerPosition`, `keyDown`, `keyUp`
+  - 制御フロー: `filter`, `sample`, `merge` など
+
+**手動操作との競合対策**
+- TransformControls で編集中のオブジェクトに対しては Loom sink を適用しない（ローカル viewer 内のみ）
+- XR grab 状態のオブジェクトに対しても同様に一時停止
+- 編集終了後に Loom は改めて評価を再開
+
+**オブジェクト スコープの自動注入**
+- `scope: { object: "cube1" }` を指定した場合、SceneSync sink node の `params.target` が未指定なら自動注入される
+- これにより、グラフ定義から target 指定を省略可能
+
+**GLB / Group 対応**
+- `sceneSetColor` は root object が Group の場合も、子 Mesh の material に色を適用する
+
+**再 broadcast なし**
+- Loom による transform 変更を `scene-delta` として再 broadcast しない
+- 理由：各クライアントが同じグラフを同じ serverClock で評価する思想のため、再 broadcast すると sync ズレが生じやすい
+
+**入力イベント**
+- `scene-graph-input` は Phase 1 では予約扱い（Phase 2 以降）
 
 #### Unity / Godot / Unreal — 未実装（Phase 2 以降）
 
