@@ -21,6 +21,7 @@ import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
 import { createHistoryManager, HistoryManager } from './history/history-manager.js';
 import { createUserManager } from './user/user-manager.js';
 import { createLinkManager } from './link/link-manager.js';
+import { createSceneSyncLoomIntegration } from './loom/loom-integration.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -1691,6 +1692,32 @@ let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
 let reconnectTimer = null;
 
+// ── Loom 統合初期化 ──────────────────────────────────
+const loomIntegration = createSceneSyncLoomIntegration({
+  getObjectById: (objectId) => managedObjects.get(objectId) || null,
+  send: (payload) => broadcast(payload),
+  getServerTime: () => Date.now() / 1000,
+  isObjectBeingEdited: (objectId) => {
+    if (!objectId) return false;
+
+    const transformObjectId = transformCtrl.object?.userData?.objectId;
+    if (transformObjectId === objectId) return true;
+
+    if (xrState.twoHand?.active && xrState.twoHand.object?.userData?.objectId === objectId) {
+      return true;
+    }
+
+    for (const grabber of xrState.grabbers || []) {
+      if (grabber.active && grabber.object?.userData?.objectId === objectId) {
+        return true;
+      }
+    }
+
+    return false;
+  },
+  showToast,
+});
+
 // ── ニックネーム編集 ───────────────────────────────────
 
 function updateNicknameLabel() {
@@ -2303,21 +2330,7 @@ function handleHandoff(data) {
 }
 
 function handleSceneGraphMessage(msg) {
-  const scopeStr = msg.scope === 'scene' ? 'scene' : JSON.stringify(msg.scope);
-  switch (msg.type) {
-    case 'scene-graph-set':
-      console.log('[SceneSync] Received scene-graph-set scope=' + scopeStr + ' nodes=' + (msg.graph?.nodes?.length || 0) + ' edges=' + (msg.graph?.edges?.length || 0));
-      break;
-    case 'scene-graph-clear':
-      console.log('[SceneSync] Received scene-graph-clear scope=' + scopeStr);
-      break;
-    case 'scene-graph-patch':
-      console.log('[SceneSync] Received scene-graph-patch scope=' + scopeStr + (msg.graph ? ' nodes=' + msg.graph.nodes.length + ' edges=' + msg.graph.edges.length : ''));
-      break;
-    case 'scene-graph-input':
-      console.log('[SceneSync] Received scene-graph-input scope=' + scopeStr + ' ref=' + msg.ref);
-      break;
-  }
+  loomIntegration.handlePayload(msg);
 }
 
 function sendAiResult(targetId, requestId, result = {}) {

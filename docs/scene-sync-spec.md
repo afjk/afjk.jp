@@ -769,37 +769,47 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 
 ### クライアント側の実装
 
-afjk.jp 側は scene-graph メッセージを中継するのみで、評価責任はクライアント側にある。
+#### Web viewer（`html/assets/js/scenesync/scene.js`）— Phase 1 実装済み
 
-```javascript
-// メッセージ受信
-function handleSceneGraphMessage(msg) {
-  // afjk.jp 側では中継のみを行う。実際の評価は LoomSceneSync に委ねる。
-  if (typeof loomSceneSync?.handleMessage === 'function') {
-    loomSceneSync.handleMessage(msg);
-  } else {
-    // Loom がまだ統合されていない場合
-    console.log('[SceneSync] received Loom graph message', msg);
-  }
-}
+`html/assets/js/scenesync/loom/loom-integration.js` で LoomSceneSync を統合。
 
-// メッセージ送信
-function broadcastSceneGraph(type, scope, graph = null) {
-  const payload = {
-    type,
-    scope,
-  };
-  if (graph) {
-    payload.graph = graph;
-  }
-  broadcast({ ...payload });
-}
-```
+特性と制限：
+- **Loom ランタイム統合**: Loom グラフ定義を受け取ると、各クライアント側で独立に評価
+- **サーバー側は検証・中継のみ**: グラフの内容は評価しない
+- **手動操作との競合対策**:
+  - TransformControls で編集中のオブジェクトに対しては Loom sink を適用しない（ローカル viewer 内のみ）
+  - XR grab 状態のオブジェクトに対しても同様に一時停止
+  - 編集終了後に Loom は改めて評価を再開
+- **再 broadcast なし**: Loom による transform 変更を `scene-delta` として再 broadcast しない
+  - 理由：各クライアントが同じグラフを同じ serverClock で評価する思想のため、再 broadcast すると sync ズレが生じやすい
+- **入力イベント**: `scene-graph-input` は Phase 1 では予約扱い（Phase 2 以降）
 
-### デモ
+#### Unity / Godot / Unreal — 未実装（Phase 2 以降）
+
+#### デモ
 
 `html/scenesync-loom-demo.html` で scene-graph-* メッセージの送受信を確認できる。  
 ブラウザで複数タブを開き、別々のクライアントとして接続するだけで、メッセージの配信を確認可能。
+
+例：sine wave でオブジェクトを上下に動かす
+
+```json
+{
+  "type": "scene-graph-set",
+  "scope": "scene",
+  "graph": {
+    "nodes": [
+      { "id": "clock", "type": "serverClock" },
+      { "id": "sine", "type": "sine", "params": { "freq": 0.2, "amplitude": 2 } },
+      { "id": "pos", "type": "sceneSetPosition", "params": { "target": "cube1", "y": 0.5, "z": 0 } }
+    ],
+    "edges": [
+      { "from": "clock.t", "to": "sine.t" },
+      { "from": "sine.out", "to": "pos.x" }
+    ]
+  }
+}
+```
 
 ---
 
