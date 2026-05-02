@@ -336,6 +336,20 @@
       }
     }
 
+    function getPresenceWebSocketUrl(roomId) {
+      const encodedRoom = encodeURIComponent(roomId);
+      const isLocal =
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1';
+
+      if (isLocal) {
+        return `ws://${window.location.hostname}:8787?room=${encodedRoom}`;
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${window.location.host}/presence?room=${encodedRoom}`;
+    }
+
     function connect() {
       const roomId = sanitizeRoom(document.getElementById('roomId').value);
       const nickname = document.getElementById('nickname').value || 'DemoUser';
@@ -345,8 +359,8 @@
         return;
       }
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/presence?room=${encodeURIComponent(roomId)}`;
+      const wsUrl = getPresenceWebSocketUrl(roomId);
+      console.log('[Loom Demo] connecting to', wsUrl);
 
       ws = new WebSocket(wsUrl);
 
