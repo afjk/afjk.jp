@@ -165,14 +165,36 @@ Always prefer object scope for object-specific behavior.
   - x and z default base should usually be `0`
   - y default base should usually be `0.5` (assuming object origin at center)
 - For rotation animation:
-  - values are in radians
-  - quaternion output uses `[x, y, z, w]` format
+  - values are Euler angles in radians
+  - `sceneSetRotation` accepts `x`, `y`, and `z` (Euler angles, not quaternion)
+  - Do not use quaternion `[x, y, z, w]` for `sceneSetRotation`
 - Do not broadcast per-frame `scene-delta` results from Loom animation
 - Send graph definitions once, not animation results repeatedly
 
 ---
 
 ## Recipes
+
+**Important notes before using recipes:**
+
+### Graph Replacement Behavior
+
+SceneSync currently stores **one Loom graph per object**. When you send a new `scene-graph-set` with the same `scope.object`, it **replaces the previous graph** for that object.
+
+- If you send a movement graph, then a color graph separately, the movement will be replaced and stop.
+- **Solution:** Combine multiple effects into a single graph instead of sending multiple separate `scene-graph-set` payloads.
+- See section "6.8 Combined example: movement + color" for a pattern.
+
+### Coordinate Assumptions
+
+The recipes below assume a test cube located around `[0, 0.5, 0]` (close to world origin). When applying recipes to arbitrary objects:
+
+1. **Inspect the object's current position** first (use `GET /api/room/{roomId}/scene` to check)
+2. **Use the object's current position as the baseline** for fixed axes
+3. **Do not blindly use `x: 0`, `y: 0.5`, `z: 0`** for objects that should stay near their current location
+4. If an object should stay in place while animating, use its current position values as the fixed axes in the sink node
+
+---
 
 ### 6.1 Move left and right
 
@@ -377,6 +399,69 @@ Remove all Loom graph behavior from object `cube1`.
   "scope": { "object": "cube1" }
 }
 ```
+
+### 6.8 Combined example: movement + color
+
+Object `cube1` moves left-right while pulsing color from blue to cyan.
+
+This demonstrates how to **combine multiple effects in a single graph** to avoid replacement issues.
+
+```json
+{
+  "type": "scene-graph-set",
+  "scope": { "object": "cube1" },
+  "graph": {
+    "nodes": [
+      { "id": "clock", "type": "serverClock" },
+      {
+        "id": "sine_pos",
+        "type": "sine",
+        "params": {
+          "freq": 0.2,
+          "amplitude": 2,
+          "offset": 0
+        }
+      },
+      {
+        "id": "sine_color",
+        "type": "sine",
+        "params": {
+          "freq": 0.5,
+          "amplitude": 0.5,
+          "offset": 0.5
+        }
+      },
+      {
+        "id": "pos",
+        "type": "sceneSetPosition",
+        "params": {
+          "y": 0.5,
+          "z": 0
+        }
+      },
+      {
+        "id": "color",
+        "type": "sceneSetColor",
+        "params": {
+          "b": 1
+        }
+      }
+    ],
+    "edges": [
+      { "from": "clock.t", "to": "sine_pos.t" },
+      { "from": "sine_pos.out", "to": "pos.x" },
+      { "from": "clock.t", "to": "sine_color.t" },
+      { "from": "sine_color.out", "to": "color.g" }
+    ]
+  }
+}
+```
+
+**Key points:**
+- Two independent sine waves in one graph (different frequencies and amplitudes)
+- Position sink receives `sine_pos` for X movement
+- Color sink receives `sine_color` for green channel pulse
+- Sending this single graph once maintains both effects without replacement
 
 ---
 
