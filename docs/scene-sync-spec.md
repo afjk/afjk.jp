@@ -690,6 +690,119 @@ Pose に加えて：
 
 ---
 
+## Loom グラフプロトコル（`scene-graph-*`）
+
+Loom（リアルタイムグラフプロセッシング）との連携を実現するグラフメッセージプロトコル。  
+afjk.jp 側は Loom グラフを評価せず、ステートレスなメッセージとしてルーム内で中継する。評価責任はクライアント側にある。
+
+### メッセージタイプ
+
+#### `scene-graph-set`（グラフの全置換）
+
+```json
+{
+  "type": "scene-graph-set",
+  "scope": "scene",
+  "graph": {
+    "nodes": [
+      { "id": "clock", "type": "serverClock" },
+      { "id": "sine", "type": "sine", "params": { "freq": 1, "amplitude": 50 } },
+      { "id": "pos", "type": "sceneSetPosition", "params": { "target": "cube1" } }
+    ],
+    "edges": [
+      { "from": "clock.t", "to": "sine.t" },
+      { "from": "sine.out", "to": "pos.x" }
+    ]
+  }
+}
+```
+
+`scope` は以下のいずれかのみ許可：
+- `"scene"`：全シーンに適用
+- `{ "object": "cube1" }`：特定オブジェクトに適用
+
+#### `scene-graph-clear`（グラフをクリア）
+
+```json
+{
+  "type": "scene-graph-clear",
+  "scope": "scene"
+}
+```
+
+#### `scene-graph-patch`（グラフの差分更新）
+
+afjk.jp 側では `scene-graph-patch` も他の scene-graph メッセージと同様に中継するのみ。
+受信側の LoomSceneSync が `graph` を含む `scene-graph-patch` を `scene-graph-set` 相当として扱うか、
+本来の差分パッチとして処理するかは、クライアント側の実装に任せる。
+
+```json
+{
+  "type": "scene-graph-patch",
+  "scope": "scene",
+  "graph": {
+    "nodes": [...],
+    "edges": [...]
+  }
+}
+```
+
+#### `scene-graph-input`（入力イベント）
+
+Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側での処理なし。
+
+```json
+{
+  "type": "scene-graph-input",
+  "scope": "scene",
+  "ref": "click.event",
+  "payload": { "x": 100, "y": 200 }
+}
+```
+
+### サーバー側の動作
+
+- **検証**: `type`, `scope`, `graph` の基本的な JSON 形式を検証
+- **サイズ制限**: メッセージサイズが 64 KB を超える場合は 413 を返す
+- **中継**: 同一ルーム内の全クライアントへ handoff 形式で配信
+- **評価なし**: グラフの内容は解析しない
+
+### クライアント側の実装
+
+afjk.jp 側は scene-graph メッセージを中継するのみで、評価責任はクライアント側にある。
+
+```javascript
+// メッセージ受信
+function handleSceneGraphMessage(msg) {
+  // afjk.jp 側では中継のみを行う。実際の評価は LoomSceneSync に委ねる。
+  if (typeof loomSceneSync?.handleMessage === 'function') {
+    loomSceneSync.handleMessage(msg);
+  } else {
+    // Loom がまだ統合されていない場合
+    console.log('[SceneSync] received Loom graph message', msg);
+  }
+}
+
+// メッセージ送信
+function broadcastSceneGraph(type, scope, graph = null) {
+  const payload = {
+    type,
+    scope,
+  };
+  if (graph) {
+    payload.graph = graph;
+  }
+  broadcast({ ...payload });
+}
+```
+
+### デモ
+
+`html/scenesync-loom-demo.html` で scene-graph-* メッセージの送受信を確認できる。  
+ブラウザで複数タブを開き、別々のクライアントとして接続するだけで、メッセージの配信を確認可能。
+
+---
+
 ## 実装ガイドライン
 
 ### WebXR クライアント（`scene.js`）

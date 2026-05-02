@@ -12,6 +12,15 @@ const MAX_MESSAGE_SIZE = 131072; // 128 KB max WebSocket message
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
+// ── Scene Graph Protocol ────────────────────────────────────────────────────
+const SCENE_GRAPH_MESSAGE_TYPES = new Set([
+  'scene-graph-set',
+  'scene-graph-clear',
+  'scene-graph-patch',
+  'scene-graph-input'
+]);
+const SCENE_GRAPH_MAX_SIZE = 64 * 1024; // 64 KB for graph payloads
+
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
@@ -113,6 +122,65 @@ function inferRoomFromReq(req) {
     return `${parts[0]}.${parts[1]}.${parts[2]}.x`;
   }
   return ip || 'global';
+}
+
+function isValidScope(scope) {
+  if (scope === 'scene') return true;
+  if (typeof scope === 'object' && scope !== null && !Array.isArray(scope)) {
+    return typeof scope.object === 'string' && scope.object.length > 0;
+  }
+  return false;
+}
+
+function validateSceneGraphMessage(msg) {
+  if (!msg || typeof msg !== 'object') {
+    return { ok: false, error: 'message must be an object' };
+  }
+  if (typeof msg.type !== 'string') {
+    return { ok: false, error: 'type must be a string' };
+  }
+  if (!SCENE_GRAPH_MESSAGE_TYPES.has(msg.type)) {
+    return { ok: false, error: 'unsupported scene-graph message type' };
+  }
+
+  if (!isValidScope(msg.scope)) {
+    return { ok: false, error: 'invalid scope' };
+  }
+
+  if (msg.type === 'scene-graph-set' || msg.type === 'scene-graph-patch') {
+    if (!msg.graph || typeof msg.graph !== 'object') {
+      return { ok: false, error: 'graph is required' };
+    }
+    if (!Array.isArray(msg.graph.nodes) || !Array.isArray(msg.graph.edges)) {
+      return { ok: false, error: 'graph.nodes and graph.edges must be arrays' };
+    }
+  }
+
+  if (msg.type === 'scene-graph-input') {
+    if (typeof msg.ref !== 'string') {
+      return { ok: false, error: 'ref must be a string' };
+    }
+  }
+
+  return { ok: true };
+}
+
+function logSceneGraphMessage(msg) {
+  const scopeStr = msg.scope === 'scene' ? 'scene' : JSON.stringify(msg.scope);
+  switch (msg.type) {
+    case 'scene-graph-set':
+      log('[SceneSync] scene-graph-set scope=' + scopeStr + ' nodes=' + msg.graph.nodes.length + ' edges=' + msg.graph.edges.length);
+      break;
+    case 'scene-graph-clear':
+      log('[SceneSync] scene-graph-clear scope=' + scopeStr);
+      break;
+    case 'scene-graph-patch':
+      log('[SceneSync] scene-graph-patch scope=' + scopeStr + (msg.graph ? ' nodes=' + msg.graph.nodes.length + ' edges=' + msg.graph.edges.length : ''));
+      break;
+    case 'scene-graph-input':
+      log('[SceneSync] scene-graph-input scope=' + scopeStr + ' ref=' + msg.ref);
+      break;
+  }
 }
 
 function getRequestUrl(req) {
@@ -601,6 +669,39 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
       payload: nextPayload,
       sender,
     });
+  }
+
+  if (nextPayload?.type && SCENE_GRAPH_MESSAGE_TYPES.has(nextPayload.type)) {
+    const validation = validateSceneGraphMessage(nextPayload);
+    if (!validation.ok) {
+      return {
+        status: 400,
+        body: { error: 'invalid scene-graph message', details: validation.error }
+      };
+    }
+
+    const msgSize = JSON.stringify(nextPayload).length;
+    if (msgSize > SCENE_GRAPH_MAX_SIZE) {
+      return {
+        status: 413,
+        body: { error: 'scene-graph message too large' }
+      };
+    }
+
+    logSceneGraphMessage(nextPayload);
+
+    const message = {
+      type: 'handoff',
+      from: sender,
+      payload: nextPayload
+    };
+    peers.forEach(client => safeSend(client.conn, message));
+
+    const userPresent = Boolean(onBehalfOfUserId) && peers.some(client => client.userId === onBehalfOfUserId);
+    return {
+      status: 200,
+      body: createBroadcastResponse(roomId, peers, userPresent),
+    };
   }
 
   const message = {
@@ -1147,7 +1248,8 @@ function createPresenceServer() {
           return;
         }
 
-        if (payload && typeof payload === 'object' && payload.payload && typeof payload.payload === 'object') {
+        // For scene-graph-* messages, don't unwrap payload
+        if (payload && typeof payload === 'object' && payload.payload && typeof payload.payload === 'object' && !SCENE_GRAPH_MESSAGE_TYPES.has(payload.type)) {
           payload = payload.payload;
         }
 
@@ -1240,6 +1342,30 @@ function createPresenceServer() {
           break;
         case 'broadcast':
           if (data.payload) {
+            // Validate scene-graph-* messages
+            if (SCENE_GRAPH_MESSAGE_TYPES.has(data.payload.type)) {
+              const validation = validateSceneGraphMessage(data.payload);
+              if (!validation.ok) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: 'invalid scene-graph message',
+                  details: validation.error
+                });
+                return;
+              }
+
+              const msgSize = JSON.stringify(data.payload).length;
+              if (msgSize > SCENE_GRAPH_MAX_SIZE) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: 'scene-graph message too large'
+                });
+                return;
+              }
+
+              logSceneGraphMessage(data.payload);
+            }
+
             broadcastHandoff(client, data);
           }
           break;
