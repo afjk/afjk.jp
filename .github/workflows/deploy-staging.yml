@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+      - codex/**
+      - experiment/**
+  workflow_dispatch:
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -22,9 +29,11 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           timeout: 120s
           script: |
+            DEPLOY_BRANCH='${{ github.ref_name }}'
             cd ~/github/afjk.jp
-            git fetch origin
-            git reset --hard origin/main
+            git fetch origin "${DEPLOY_BRANCH}"
+            git checkout -B "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}"
+            git reset --hard "origin/${DEPLOY_BRANCH}"
             docker compose up -d --build presence-server
             docker compose up -d mediamtx
             docker compose up -d --force-recreate https-portal
