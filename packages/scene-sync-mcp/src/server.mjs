@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { SceneSyncClient, SceneSyncApiError } from './scene-sync-client.mjs'
+import { SceneSyncClient } from './scene-sync-client.mjs'
 import { SessionStore } from './session-store.mjs'
 import {
   ValidationError,
@@ -36,25 +36,12 @@ function getSession() {
   return session
 }
 
-// Helper to format API errors for users
-function formatApiError(error) {
-  if (error instanceof SceneSyncApiError) {
-    return `API error (${error.status}): ${error.message}`
-  }
-  return error.message
-}
-
 // Helper to check aiCommand response for errors
 function assertAiCommandOk(response) {
-  if (response?.result?.error) {
-    throw new Error(response.result.error)
-  }
-
-  if (response?.result?.ok === false) {
-    throw new Error(response.result.error || response.result.message || 'AI command failed')
-  }
-
   if (response?.error) {
+    if (typeof response.error === 'object') {
+      throw response.error
+    }
     throw new Error(response.error)
   }
 
@@ -190,9 +177,9 @@ async function addPrimitiveHandler(primitive, args) {
     })
   } catch (e) {
     if (e instanceof ValidationError) {
-      return errorResult(e.message)
+      return errorResult(e)
     }
-    return errorResult(formatApiError(e))
+    return errorResult(e)
   }
 }
 
@@ -227,9 +214,9 @@ server.registerTool(
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -267,7 +254,7 @@ server.registerTool(
         expiresInSec
       })
     } catch (e) {
-      return errorResult(e.message)
+      return errorResult(e)
     }
   }
 )
@@ -287,14 +274,14 @@ server.registerTool(
       const summarized = summarizeScene(response)
 
       return jsonResult({
-        ok: true,
-        ...summarized
+        ...summarized,
+        ok: true
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -410,16 +397,16 @@ server.registerTool(
       )
 
       return jsonResult({
+        ...response,
         ok: true,
         objectId: finalObjectId,
-        action: 'uploadGlbFromUrl',
-        result: response.result
+        action: 'uploadGlbFromUrl'
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -455,9 +442,9 @@ server.registerTool(
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -493,9 +480,9 @@ server.registerTool(
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -531,9 +518,9 @@ server.registerTool(
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -575,9 +562,9 @@ server.registerTool(
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -604,16 +591,16 @@ server.registerTool(
       assertAiCommandOk(response)
 
       return jsonResult({
+        ...response,
         ok: true,
         objectId,
-        action: 'focusObject',
-        result: response.result
+        action: 'focusObject'
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -639,14 +626,14 @@ server.registerTool(
       const sanitized = sanitizeScreenshotResult(response)
 
       return jsonResult({
-        ok: true,
-        ...sanitized
+        ...sanitized,
+        ok: true
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -674,15 +661,15 @@ server.registerTool(
       )
 
       return jsonResult({
+        ...response,
         ok: true,
-        action: 'getCameraPose',
-        result: response.result
+        action: 'getCameraPose'
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -712,15 +699,15 @@ server.registerTool(
       )
 
       return jsonResult({
+        ...response,
         ok: true,
-        action: 'getHistory',
-        result: response.result
+        action: 'getHistory'
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -748,15 +735,15 @@ server.registerTool(
       )
 
       return jsonResult({
+        ...response,
         ok: true,
-        action: 'undo',
-        result: response.result
+        action: 'undo'
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -784,15 +771,15 @@ server.registerTool(
       )
 
       return jsonResult({
+        ...response,
         ok: true,
-        action: 'redo',
-        result: response.result
+        action: 'redo'
       })
     } catch (e) {
       if (e instanceof ValidationError) {
-        return errorResult(e.message)
+        return errorResult(e)
       }
-      return errorResult(formatApiError(e))
+      return errorResult(e)
     }
   }
 )
@@ -823,7 +810,7 @@ server.registerTool(
         message: 'Scene Sync link revoked.'
       })
     } catch (e) {
-      return errorResult(e.message)
+      return errorResult(e)
     }
   }
 )
@@ -846,14 +833,14 @@ if (process.env.SCENE_SYNC_ENABLE_RAW_TOOLS === 'true') {
         const response = await client.broadcast(session.roomId, session.sessionId, payload)
 
         return jsonResult({
-          ok: true,
-          ...response
+          ...response,
+          ok: true
         })
       } catch (e) {
         if (e instanceof ValidationError) {
-          return errorResult(e.message)
+          return errorResult(e)
         }
-        return errorResult(formatApiError(e))
+        return errorResult(e)
       }
     }
   )
