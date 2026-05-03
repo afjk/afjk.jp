@@ -15,6 +15,14 @@ It provides client methods instead of raw `fetch()` calls:
 - `aiCommand(roomId, sessionId, action, params)`
 - `revoke(sessionId)`
 
+These methods intentionally mirror the stable tool names documented in:
+
+- `scene_sync_redeem`
+- `scene_sync_get_scene`
+- `scene_sync_broadcast`
+- `scene_sync_ai_command`
+- `scene_sync_revoke`
+
 ## Files
 
 - `src/scene-sync-client.mjs`
@@ -119,5 +127,13 @@ const result = await handleCodexFunctionCall(toolCall, client);
 - `uploadGlbFromUrl` requires `params.url`
 - primitive `scene-add` requires `payload.asset.primitive`
 - primitive `scene-add` requires `payload.asset.color`
+
+## Verification policy
+
+- Use `getScene(roomId, sessionId)` before mutations when state matters.
+- Use `getScene(roomId, sessionId)` after `scene-add`, `scene-delta`,
+  `scene-remove`, and `uploadGlbFromUrl` when correctness matters more than
+  speed.
+- For `aiCommand`, check both top-level `ok` and nested `result.ok`.
 
 This client does not persist session state. Store `sessionId`, `roomId`, and `expiresAt` in the host application.
