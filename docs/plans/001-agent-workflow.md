@@ -1,34 +1,34 @@
 # Agent-Driven Development Workflow
 
-## Development flow
-1. **Plan**: Add/update a concise plan in `docs/plans/...`.
-2. **Issue**: Create one GitHub issue for one implementation task.
-3. **Branch**: Create a focused branch for that single issue.
-4. **PR**: Open one PR scoped to the issue and plan.
-5. **CI**: Run required checks and resolve failures.
-6. **Staging**: Deploy to staging when applicable.
-7. **Human verification**: Human reviewer validates behavior on staging as needed.
-8. **Follow-up**: Record discovered non-scope tasks as follow-up issues.
+## 開発フロー
+1. **plan**: `docs/plans/...` に簡潔な計画を追加/更新。
+2. **issue**: 1 実装タスクにつき 1 issue を作成。
+3. **branch**: issue 単位で専用 branch を作成。
+4. **PR**: issue と plan に対応する 1 PR を作成。
+5. **CI**: 必要な checks を実行し、失敗を解消。
+6. **staging**: 必要に応じて staging へ反映。
+7. **human verification**: 人間レビュアーが挙動を確認。
+8. **follow-up**: スコープ外で見つかった作業を follow-up issue 化。
 
-## Handling additional tasks found during implementation
-- Log newly discovered work immediately in a follow-up issue.
-- Keep the current PR focused on its acceptance criteria.
-- Pull in extra work only when it is required to complete current acceptance criteria.
+## 実装中に追加タスクを見つけた場合
+- 発見した時点で follow-up issue を作成する。
+- 現在 PR は current acceptance criteria に集中する。
+- 追加作業を現在 PR に入れるのは、acceptance criteria 達成に必須な場合のみ。
 
-## Task classification
-- **bug**: Incorrect behavior vs expected behavior.
-- **blocker**: Prevents progress on the current task.
-- **follow-up**: Needed improvement not required for current acceptance criteria.
-- **new idea**: Potential enhancement not yet prioritized.
-- **refactor**: Structural/code-quality improvement without intended behavior change.
+## タスク分類
+- **bug**: 期待挙動との差異がある不具合。
+- **blocker**: 現在タスクの進行を止める問題。
+- **follow-up**: 今の acceptance criteria には不要だが必要な改善。
+- **new idea**: 将来検討する拡張案。
+- **refactor**: 挙動変更を意図しない構造改善。
 
-## Interruption rules
-- Include additional work in current PR **only if required** by current acceptance criteria.
-- Create a **follow-up issue** for non-blocking improvements.
-- Create a **blocker issue** for work that prevents current progress.
-- Mark **release blocker** when unresolved work should stop release.
+## 割り込みルール
+- 現在 PR へ追加できるのは「現在の acceptance criteria に必須な作業」のみ。
+- 非 blocking な改善は follow-up issue を作る。
+- 進行不能にする課題は blocker issue を作る。
+- release を止めるべき課題は release-blocker を付与する。
 
-## Suggested labels
+## 推奨ラベル
 - `area:scenesync`
 - `area:loom`
 - `area:file-transfer`

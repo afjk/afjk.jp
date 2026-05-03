@@ -4,9 +4,9 @@ about: Task discovered during implementation that should be tracked separately
 labels: [type:follow-up]
 ---
 
-## Summary
+## 概要
 
-## Discovered while working on
+## どの作業中に見つかったか
 - Issue/PR: #
 
 ## Area
@@ -15,12 +15,12 @@ labels: [type:follow-up]
 ## Type
 - follow-up | blocker | bug | refactor | new-idea
 
-## Why this should not be included in the current PR
+## 今回のPRに含めない理由
 
-## Suggested priority
+## 優先度（提案）
 - now | next | later
 
-## Related files
+## 関連ファイル
 - 
 
 ## Blocking status

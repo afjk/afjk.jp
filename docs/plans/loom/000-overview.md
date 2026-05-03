@@ -1,24 +1,24 @@
 # Loom Area Overview
 
-## Purpose
-Own Loom logic graph/runtime behavior and integration with Scene Sync at clear boundaries.
+## 目的
+Loom の logic graph / runtime behavior と、Scene Sync との integration boundary を担当する。
 
-## What belongs in this area
-- Loom runtime execution model and node behavior.
-- Logic graph evaluation flow.
-- Contracted integration points with Scene Sync.
-- Runtime-authoring boundary rules.
+## この area に含めるもの
+- Loom runtime execution model。
+- Logic graph evaluation flow。
+- Scene Sync との契約済み integration point。
+- runtime-authoring boundary のルール。
 
-## What does not belong in this area
-- Scene Sync internals outside integration contracts.
-- FileTransfer feature work.
-- Platform pipeline/process changes unless Loom delivery requires them.
+## この area に含めないもの
+- integration contract 外の Scene Sync 内部実装。
+- FileTransfer 機能。
+- Loom 提供に不要な platform 運用変更。
 
-## Example implementation plans to add later
-- Loom runtime lifecycle and scheduling improvements.
-- Scene Sync integration contract hardening.
-- Runtime-authoring boundary validation.
+## 今後追加しうる implementation plan 例
+- Loom runtime lifecycle / scheduling 改善。
+- Scene Sync integration contract の強化。
+- runtime-authoring boundary の検証整備。
 
 ## Notes for agents
-- Treat Loom and Scene Sync as related but separate.
-- Capture contract changes explicitly and avoid silent cross-area scope growth.
+- Loom と Scene Sync は「関連あり・責務分離」で扱う。
+- contract 変更は明示し、暗黙の scope 拡張を避ける。

@@ -1,24 +1,24 @@
 # Scene Sync Area Overview
 
-## Purpose
-Own scene state synchronization, scene object operations, and AI-accessible scene control behaviors.
+## 目的
+Scene state synchronization、scene object operations、AI-accessible scene control を担当する。
 
-## What belongs in this area
-- Scene state sync protocols and consistency behavior.
-- Scene object create/update/delete operations.
-- Agent-facing controls for scene manipulation.
-- Scene Dev Tool capabilities tied to scene synchronization.
+## この area に含めるもの
+- Scene state sync のプロトコルと整合性制御。
+- Scene object の create/update/delete。
+- agent からの scene 操作用インターフェース。
+- Scene Dev Tool のうち同期責務に関わるもの。
 
-## What does not belong in this area
-- Loom runtime logic internals (except defined integration boundaries).
-- FileTransfer transport/UX work.
-- General CI/release workflow changes unless required for Scene Sync delivery.
+## この area に含めないもの
+- Loom ランタイム内部（明示的な連携境界を除く）。
+- FileTransfer の transport / UX。
+- Scene Sync 提供に不要な CI/release 運用変更。
 
-## Example implementation plans to add later
-- Scene state conflict resolution strategy.
-- Scene object operation audit trail.
-- AI-safe scene command surface and permissions.
+## 今後追加しうる implementation plan 例
+- Scene state conflict resolution。
+- Scene object operation の監査ログ。
+- AI-safe な scene command surface。
 
 ## Notes for agents
-- Coordinate integration points with Loom through explicit interface tasks.
-- Keep Scene Sync PRs focused; document cross-area impacts as follow-up tasks.
+- Loom 連携は interface task として明示する。
+- cross-area 影響は黙って混ぜず、必要なら follow-up task として記録する。

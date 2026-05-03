@@ -1,47 +1,46 @@
-# AGENTS Guide
+# AGENTS ガイド
 
-## Repository purpose
-This repository hosts afjk.jp platform and related tooling for real-time scene synchronization, Loom runtime integration, FileTransfer capabilities, and supporting platform workflows (CI, staging, release, deployment, and agent operations).
+## リポジトリの目的
+このリポジトリは、afjk.jp の基盤と関連ツールを管理します。主に Scene Sync、Loom 連携、FileTransfer、そして CI / staging / release / deployment / agent 運用を対象にします。
 
-## Important project areas
-- **Scene Sync**: scene state synchronization, scene object operations, AI-accessible scene control, and Scene Dev Tool work.
-- **Loom integration**: logic graph/runtime behavior and integration boundaries with Scene Sync.
-- **FileTransfer**: room-based file transfer, fallback transport paths, and file sharing UX.
-- **Platform / deployment / tooling**: CI, release, staging, deployment, repo workflow, and agent workflow support.
+## 主要エリア
+- **Scene Sync**: シーン状態同期、オブジェクト操作、AI からのシーン制御、Scene Dev Tool 関連。
+- **Loom**: ロジックグラフ / ランタイム挙動、Scene Sync との連携境界。
+- **FileTransfer**: ルームベースのファイル転送、fallback 経路、共有 UX。
+- **Platform**: CI、release、staging、deployment、リポジトリ運用、agent workflow。
 
-## Scope discipline
-- Follow **one task = one issue = one PR**.
-- Do not mix unrelated changes in the same PR.
-- Do not add speculative refactors.
-- Do not silently expand scope beyond the issue and plan.
-- Keep PRs small, reviewable, and easy to revert.
+## スコープ管理
+- **one task = one issue = one PR** を厳守してください。
+- 無関係な変更を同じ PR に混ぜないでください。Do not mix unrelated changes.
+- 推測ベースの先回りリファクタは避けてください。
+- scope を黙って拡張しないでください。
+- PR は小さく、レビューしやすく、必要なら revert しやすく保ってください。
 
-## New task handling
-- If you discover new work while implementing, record it as a **follow-up task**.
-- Include new work in the current PR only when required to meet current acceptance criteria.
-- Do not add unrelated improvements to the current PR.
+## 追加タスクの扱い
+- 実装中に新しい作業を見つけたら **follow-up task** として記録してください。
+- 現在の **acceptance criteria** を満たすために必須な場合のみ、現在の PR に含めてください。
+- それ以外は別 issue / 別 PR に分離してください。
 
-## PR requirements
-Each PR should include:
-- Related issue
-- Related plan document
-- Summary
-- What changed
-- What was intentionally not changed
-- Tests/checks run (or why not run)
-- Risks
-- Follow-up tasks
+## PR に必ず書くこと
+- **related issue**
+- **related plan**
+- 概要（summary）
+- 変更内容（what changed）
+- 意図的に変更していないこと（out of scope を含む）
+- **tests**（実行内容、または実行できない理由）
+- **risks**
+- follow-up tasks
 
-## Testing expectations
-- Run relevant tests/checks for the changed area when available.
-- If tests/checks cannot run, explain why in the PR.
+## テスト方針
+- 変更対象エリアに関連する tests / checks があれば実行してください。
+- 実行できない場合は、理由を PR に明記してください。
 
-## Documentation expectations
-- Update documentation when behavior, public usage, or workflow changes.
+## ドキュメント更新方針
+- 挙動、公開利用方法、運用フローに変更がある場合は関連ドキュメントを更新してください。
 
-## Safety rules
-- Avoid touching unrelated areas.
-- Avoid broad formatting-only changes.
-- Avoid adding dependencies unless necessary.
-- Avoid modifying application logic in repository bootstrap tasks.
-- Keep changes easy to review.
+## 安全ルール
+- 無関係な領域への変更を避ける。
+- 大量の formatting-only 変更を避ける。
+- 必要性が明確でない依存追加を避ける。
+- repository bootstrap タスクで application logic を変更しない。
+- 常に「小さく、明確で、レビューしやすい差分」を優先する。

@@ -4,7 +4,7 @@ about: Planned implementation work
 labels: [agent:needs-plan]
 ---
 
-## Summary
+## 概要
 
 ## Area
 - scenesync | loom | file-transfer | platform | docs
@@ -12,21 +12,21 @@ labels: [agent:needs-plan]
 ## Type
 - feature | bug | refactor | platform
 
-## Related plan
+## 関連プラン
 - `docs/plans/...`
 
-## Background
+## 背景
 
-## Requirements
+## 要件
 
 ## Acceptance criteria
 - [ ]
 
 ## Out of scope
 
-## Suggested files
+## 変更候補ファイル
 - 
 
-## Test plan
+## テスト計画
 
-## Risks
+## リスク

@@ -4,31 +4,31 @@ about: Report a bug found during review or staging
 labels: [type:bug]
 ---
 
-## Summary
+## 概要
 
 ## Area
 - scenesync | loom | file-transfer | platform | docs
 
-## Steps to reproduce
+## 再現手順
 1. 
 2. 
 3. 
 
-## Expected behavior
+## 期待される挙動
 
-## Actual behavior
+## 実際の挙動
 
-## Environment
+## 環境
 - Commit/branch:
 - Environment (local/staging/prod):
 - Browser/runtime/device:
 
-## Screenshots or logs
+## スクリーンショットまたはログ
 
-## Severity
+## 重大度
 - low | medium | high | critical
 
-## Workaround
+## 回避策
 
 ## Release blocker?
 - [ ] Yes

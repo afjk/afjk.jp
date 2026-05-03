@@ -1,43 +1,43 @@
-## Summary
+## 概要
 
-## Related issue
+## 関連Issue
 - Closes #
 
-## Related plan
+## 関連プラン
 - `docs/plans/...`
 
-## Area
+## 対象エリア
 - [ ] scenesync
 - [ ] loom
 - [ ] file-transfer
 - [ ] platform
 - [ ] docs
 
-## Type of change
+## 変更種別
 - [ ] feature
 - [ ] bug fix
 - [ ] refactor
 - [ ] docs
 - [ ] workflow/platform
 
-## What changed
+## 変更内容
 
-## What was intentionally not changed
+## 意図的に変更していないこと
 
-## How to test
+## テスト方法
 
-## Test results
+## テスト結果
 
-## Screenshots or videos (if UI-related)
+## UI変更がある場合のスクリーンショット/動画
 
-## Risks
+## リスク
 
 ## Follow-up tasks
 - #
 
-## Checklist
-- [ ] This PR does not include unrelated changes.
-- [ ] This PR follows the related plan.
-- [ ] I documented any follow-up tasks.
-- [ ] I ran relevant tests or explained why they could not be run.
-- [ ] I updated docs if behavior changed.
+## チェックリスト
+- [ ] この PR に無関係な変更を含めていない。
+- [ ] この PR は関連 plan に沿っている。
+- [ ] 必要な follow-up tasks を記録した。
+- [ ] 関連 tests を実行した、または実行できない理由を記載した。
+- [ ] 挙動変更がある場合は docs を更新した。
