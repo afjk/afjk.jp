@@ -2,7 +2,7 @@
   {
     "type": "function",
     "name": "scene_sync_redeem",
-    "description": "Redeem a 6-digit Scene Sync pairing code and create an AI session.",
+    "description": "Stable Scene Sync tool: redeem a 6-digit pairing code and create an AI session.",
     "parameters": {
       "type": "object",
       "required": ["code"],
@@ -18,7 +18,7 @@
   {
     "type": "function",
     "name": "scene_sync_get_scene",
-    "description": "Read the current Scene Sync scene state for the linked room.",
+    "description": "Stable Scene Sync tool: read the current scene snapshot for the linked room. Use before and after mutations when verification matters.",
     "parameters": {
       "type": "object",
       "required": ["roomId", "sessionId"],
@@ -36,7 +36,7 @@
   {
     "type": "function",
     "name": "scene_sync_broadcast",
-    "description": "Apply a scene mutation such as scene-add, scene-delta, scene-remove, scene-env, or scene-batch.",
+    "description": "Stable Scene Sync tool: apply a scene mutation such as scene-add, scene-delta, scene-remove, scene-env, or scene-batch.",
     "parameters": {
       "type": "object",
       "required": ["roomId", "sessionId", "payload"],
@@ -49,7 +49,7 @@
         },
         "payload": {
           "type": "object",
-          "description": "Scene mutation payload. For primitive scene-add, include payload.asset.type, payload.asset.primitive, and payload.asset.color.",
+          "description": "Scene mutation payload. Required: payload.kind. For primitive scene-add, include payload.asset.type, payload.asset.primitive, and payload.asset.color. Use scene-delta for partial updates and scene-remove for deletes.",
           "required": ["kind"],
           "properties": {
             "kind": {
@@ -65,7 +65,7 @@
   {
     "type": "function",
     "name": "scene_sync_ai_command",
-    "description": "Run a browser-only Scene Sync command such as getCameraPose, focusObject, screenshot, or uploadGlbFromUrl.",
+    "description": "Stable Scene Sync tool: run a browser-only command such as getCameraPose, focusObject, screenshot, undo, redo, getHistory, or uploadGlbFromUrl.",
     "parameters": {
       "type": "object",
       "required": ["roomId", "sessionId", "action"],
@@ -90,7 +90,7 @@
         },
         "params": {
           "type": "object",
-          "description": "For focusObject send params.objectId. For uploadGlbFromUrl send params.url.",
+          "description": "For focusObject send params.objectId. For uploadGlbFromUrl send params.url. After uploadGlbFromUrl, read the scene snapshot if deduplication or placement verification matters.",
           "additionalProperties": true
         }
       },
@@ -100,7 +100,7 @@
   {
     "type": "function",
     "name": "scene_sync_revoke",
-    "description": "Revoke the current Scene Sync AI session.",
+    "description": "Stable Scene Sync tool: revoke the current AI session.",
     "parameters": {
       "type": "object",
       "required": ["sessionId"],
