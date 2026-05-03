@@ -1597,6 +1597,19 @@ const sceneInspectorValidationEl = document.getElementById('scene-inspector-vali
 const sceneInspectorDiffEl = document.getElementById('scene-inspector-diff');
 const sceneInspectorEditorEl = document.getElementById('scene-inspector-editor');
 const sceneInspectorOutputEl = document.getElementById('scene-inspector-output');
+const sceneInspectorObjectMetaEl = document.getElementById('scene-inspector-object-meta');
+const sceneInspectorObjectEmptyEl = document.getElementById('scene-inspector-object-empty');
+const sceneInspectorObjectHeadEl = document.getElementById('scene-inspector-object-head');
+const sceneInspectorObjectActionsEl = document.getElementById('scene-inspector-object-actions');
+const sceneInspectorObjectEditBtn = document.getElementById('scene-inspector-object-edit');
+const sceneInspectorObjectValidateBtn = document.getElementById('scene-inspector-object-validate');
+const sceneInspectorObjectApplyBtn = document.getElementById('scene-inspector-object-apply');
+const sceneInspectorObjectCancelBtn = document.getElementById('scene-inspector-object-cancel');
+const sceneInspectorObjectNoteEl = document.getElementById('scene-inspector-object-note');
+const sceneInspectorObjectValidationEl = document.getElementById('scene-inspector-object-validation');
+const sceneInspectorObjectDiffEl = document.getElementById('scene-inspector-object-diff');
+const sceneInspectorObjectEditorEl = document.getElementById('scene-inspector-object-editor');
+const sceneInspectorObjectOutputEl = document.getElementById('scene-inspector-object-output');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -1725,6 +1738,15 @@ const sceneInspectorState = {
   parsedSnapshot: null,
   validationErrors: [],
   diffSummary: null,
+  objectEditor: {
+    isEditing: false,
+    objectId: null,
+    baseObject: null,
+    draftText: '',
+    parsedObject: null,
+    validationErrors: [],
+    diffSummary: null,
+  },
 };
 
 // ── Loom 統合初期化 ──────────────────────────────────
@@ -3148,6 +3170,11 @@ function formatSceneInspectorIgnoredEntry(entry) {
   return `${entry.path}: ${entry.reason}`;
 }
 
+function trimSceneInspectorPathPrefix(path, prefix) {
+  if (!prefix) return path;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
 function getChangedObjectIds(baseObjects, editedObjects) {
   const changedObjectIds = [];
   const allObjectIds = new Set([
@@ -3349,8 +3376,11 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
   return { errors, summary, operation };
 }
 
-function formatSceneInspectorSummary(summary) {
+function formatSceneInspectorSummary(summary, options = {}) {
   if (!summary) return '';
+  const changedPrefix = options.changedPrefix || '';
+  const ignoredPrefix = options.ignoredPrefix || '';
+  const changedLabel = options.changedLabel || null;
   if (summary.actionCount === 0) {
     const lines = ['No editable changes detected.'];
     lines.push('Applied: none');
@@ -3359,7 +3389,11 @@ function formatSceneInspectorSummary(summary) {
     }
     if (summary.ignoredEntries.length > 0) {
       lines.push('Ignored:');
-      lines.push(...summary.ignoredEntries.map((entry) => `- ${formatSceneInspectorIgnoredEntry(entry)}`));
+      lines.push(
+        ...summary.ignoredEntries.map((entry) =>
+          `- ${trimSceneInspectorPathPrefix(formatSceneInspectorIgnoredEntry(entry), ignoredPrefix)}`
+        )
+      );
     }
     return lines.join('\n');
   }
@@ -3372,9 +3406,11 @@ function formatSceneInspectorSummary(summary) {
   if (summary.changedFieldsByObject.length > 0) {
     lines.push('Applied:');
     lines.push(
-      ...summary.changedFieldsByObject.map((entry) =>
-        `- objects.${entry.objectId}: ${entry.fields.join(', ')}`
-      )
+      ...summary.changedFieldsByObject.map((entry) => {
+        const targetLabel = changedLabel
+          || trimSceneInspectorPathPrefix(`objects.${entry.objectId}`, changedPrefix);
+        return `- ${targetLabel}: ${entry.fields.join(', ')}`;
+      })
     );
   }
   if (summary.lockedObjectIds.length > 0) {
@@ -3382,14 +3418,19 @@ function formatSceneInspectorSummary(summary) {
   }
   if (summary.ignoredEntries.length > 0) {
     lines.push('Ignored:');
-    lines.push(...summary.ignoredEntries.map((entry) => `- ${formatSceneInspectorIgnoredEntry(entry)}`));
+    lines.push(
+      ...summary.ignoredEntries.map((entry) =>
+        `- ${trimSceneInspectorPathPrefix(formatSceneInspectorIgnoredEntry(entry), ignoredPrefix)}`
+      )
+    );
   }
 
   return lines.join('\n');
 }
 
-function formatSceneInspectorValidationMessage(summary) {
+function formatSceneInspectorValidationMessage(summary, options = {}) {
   if (!summary) return '';
+  const ignoredPrefix = options.ignoredPrefix || '';
 
   const lines = [];
   if (summary.actionCount === 0) {
@@ -3402,7 +3443,11 @@ function formatSceneInspectorValidationMessage(summary) {
 
   const previewEntries = summary.ignoredEntries.slice(0, 4);
   if (previewEntries.length > 0) {
-    lines.push(...previewEntries.map((entry) => `- ${formatSceneInspectorIgnoredEntry(entry)}`));
+    lines.push(
+      ...previewEntries.map((entry) =>
+        `- ${trimSceneInspectorPathPrefix(formatSceneInspectorIgnoredEntry(entry), ignoredPrefix)}`
+      )
+    );
     if (summary.ignoredEntries.length > previewEntries.length) {
       lines.push(`- ...and ${summary.ignoredEntries.length - previewEntries.length} more ignored change(s).`);
     }
@@ -3415,12 +3460,72 @@ function formatSceneInspectorValidationMessage(summary) {
   return lines.join('\n');
 }
 
+function buildSelectedObjectInspectorContext(snapshot) {
+  const objectId = snapshot.selection.objectId;
+  if (!objectId) {
+    return {
+      objectId: null,
+      objectSnapshot: null,
+    };
+  }
+
+  return {
+    objectId,
+    objectSnapshot: snapshot.objects?.[objectId] ? cloneInspectorValue(snapshot.objects[objectId]) : null,
+  };
+}
+
+function buildObjectBlockDiff(objectId, baseObject, editedObject) {
+  const baseSnapshot = {
+    objects: {
+      [objectId]: cloneInspectorValue(baseObject),
+    },
+  };
+  const editedSnapshot = {
+    objects: {
+      [objectId]: editedObject,
+    },
+  };
+  return buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot);
+}
+
+function formatObjectBlockHeader(objectId, objectSnapshot) {
+  if (!objectId || !objectSnapshot) return '';
+  const assetType = objectSnapshot.asset?.type || 'none';
+  return [
+    `objectId: ${objectId}`,
+    `type: ${objectSnapshot.type || 'unknown'}`,
+    `assetType: ${assetType}`,
+  ].join('\n');
+}
+
+function resetSceneInspectorObjectEditor({ preserveObjectId = false } = {}) {
+  const nextObjectId = preserveObjectId ? sceneInspectorState.objectEditor.objectId : null;
+  sceneInspectorState.objectEditor = {
+    isEditing: false,
+    objectId: nextObjectId,
+    baseObject: null,
+    draftText: '',
+    parsedObject: null,
+    validationErrors: [],
+    diffSummary: null,
+  };
+}
+
 function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   const roomLabel = snapshot.room || 'no-room';
   const selectedLabel = snapshot.selection.objectId || 'none';
+  const selectedObject = buildSelectedObjectInspectorContext(snapshot);
+  let objectEditorState = sceneInspectorState.objectEditor;
+  const objectPathPrefix = selectedObject.objectId ? `objects.${selectedObject.objectId}` : '';
   if (sceneInspectorSummaryEl) {
     sceneInspectorSummaryEl.textContent =
       `Room ${roomLabel} | ${snapshot.objectCount} objects | selected ${selectedLabel} | ${new Date().toLocaleTimeString()}`;
+  }
+
+  if (objectEditorState.isEditing && objectEditorState.objectId !== selectedObject.objectId) {
+    resetSceneInspectorObjectEditor();
+    objectEditorState = sceneInspectorState.objectEditor;
   }
 
   if (sceneInspectorOutputEl && !sceneInspectorState.isEditing) {
@@ -3436,14 +3541,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   sceneInspectorEditMetaEl.hidden = !isEditing;
   sceneInspectorEditorEl.hidden = !isEditing;
   sceneInspectorOutputEl.hidden = isEditing;
-
-  if (!isEditing) {
-    sceneInspectorValidationEl.hidden = true;
-    sceneInspectorDiffEl.hidden = true;
-    return;
-  }
-
-  if (sceneInspectorEditorEl && sceneInspectorEditorEl.value !== sceneInspectorState.draftText) {
+  if (isEditing && sceneInspectorEditorEl && sceneInspectorEditorEl.value !== sceneInspectorState.draftText) {
     sceneInspectorEditorEl.value = sceneInspectorState.draftText;
   }
 
@@ -3456,8 +3554,8 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
 
   const hasErrors = sceneInspectorState.validationErrors.length > 0;
   const summary = sceneInspectorState.diffSummary;
-  const hasWarnings = !hasErrors && !!summary && (summary.actionCount === 0 || summary.ignoredEntries.length > 0);
-  sceneInspectorValidationEl.hidden = !hasErrors && !hasWarnings;
+  const hasWarnings = isEditing && !hasErrors && !!summary && (summary.actionCount === 0 || summary.ignoredEntries.length > 0);
+  sceneInspectorValidationEl.hidden = !isEditing || (!hasErrors && !hasWarnings);
   sceneInspectorValidationEl?.classList.toggle('is-error', hasErrors);
   sceneInspectorValidationEl?.classList.toggle('is-warning', hasWarnings);
   if (sceneInspectorValidationEl) {
@@ -3472,10 +3570,74 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
     }
   }
 
-  const summaryText = formatSceneInspectorSummary(summary);
-  sceneInspectorDiffEl.hidden = !summaryText;
+  const summaryText = isEditing ? formatSceneInspectorSummary(summary) : '';
+  sceneInspectorDiffEl.hidden = !isEditing || !summaryText;
   if (sceneInspectorDiffEl) {
     sceneInspectorDiffEl.textContent = summaryText;
+  }
+
+  const hasSelection = !!selectedObject.objectId && !!selectedObject.objectSnapshot;
+  const objectEditorIsEditing = objectEditorState.isEditing && hasSelection;
+  if (sceneInspectorObjectMetaEl) {
+    sceneInspectorObjectMetaEl.textContent = hasSelection
+      ? `${selectedObject.objectId}`
+      : 'No object selected';
+  }
+  sceneInspectorObjectEmptyEl.hidden = hasSelection;
+  sceneInspectorObjectHeadEl.hidden = !hasSelection;
+  sceneInspectorObjectActionsEl.hidden = !hasSelection;
+  sceneInspectorObjectNoteEl.hidden = !objectEditorIsEditing;
+  sceneInspectorObjectOutputEl.hidden = !hasSelection || objectEditorIsEditing;
+  sceneInspectorObjectEditorEl.hidden = !objectEditorIsEditing;
+  sceneInspectorObjectEditBtn.hidden = objectEditorIsEditing;
+  sceneInspectorObjectValidateBtn.hidden = !objectEditorIsEditing;
+  sceneInspectorObjectApplyBtn.hidden = !objectEditorIsEditing;
+  sceneInspectorObjectCancelBtn.hidden = !objectEditorIsEditing;
+
+  if (sceneInspectorObjectHeadEl) {
+    sceneInspectorObjectHeadEl.textContent = hasSelection
+      ? formatObjectBlockHeader(selectedObject.objectId, selectedObject.objectSnapshot)
+      : '';
+  }
+
+  if (hasSelection && sceneInspectorObjectOutputEl && !objectEditorIsEditing) {
+    sceneInspectorObjectOutputEl.textContent = JSON.stringify(selectedObject.objectSnapshot, null, 2);
+  }
+  if (objectEditorIsEditing && sceneInspectorObjectEditorEl && sceneInspectorObjectEditorEl.value !== objectEditorState.draftText) {
+    sceneInspectorObjectEditorEl.value = objectEditorState.draftText;
+  }
+
+  const objectHasErrors = objectEditorState.validationErrors.length > 0;
+  const objectSummary = objectEditorState.diffSummary;
+  const objectHasWarnings = !objectHasErrors && !!objectSummary
+    && (objectSummary.actionCount === 0 || objectSummary.ignoredEntries.length > 0);
+  sceneInspectorObjectValidationEl.hidden = !objectEditorIsEditing || (!objectHasErrors && !objectHasWarnings);
+  sceneInspectorObjectValidationEl?.classList.toggle('is-error', objectHasErrors);
+  sceneInspectorObjectValidationEl?.classList.toggle('is-warning', objectHasWarnings);
+  if (sceneInspectorObjectValidationEl) {
+    if (objectHasErrors) {
+      sceneInspectorObjectValidationEl.textContent = objectEditorState.validationErrors
+        .map((message) => `- ${trimSceneInspectorPathPrefix(message, `${objectPathPrefix}.`)}`)
+        .join('\n');
+    } else if (objectHasWarnings) {
+      sceneInspectorObjectValidationEl.textContent = formatSceneInspectorValidationMessage(objectSummary, {
+        ignoredPrefix: `${objectPathPrefix}.`,
+      });
+    } else {
+      sceneInspectorObjectValidationEl.textContent = '';
+    }
+  }
+
+  const objectSummaryText = objectEditorIsEditing
+    ? formatSceneInspectorSummary(objectSummary, {
+        changedPrefix: `objects.${selectedObject.objectId}`,
+        changedLabel: selectedObject.objectId,
+        ignoredPrefix: `${objectPathPrefix}.`,
+      })
+    : '';
+  sceneInspectorObjectDiffEl.hidden = !objectEditorIsEditing || !objectSummaryText;
+  if (sceneInspectorObjectDiffEl) {
+    sceneInspectorObjectDiffEl.textContent = objectSummaryText;
   }
 }
 
@@ -3484,6 +3646,7 @@ function buildSceneInspectorEditSnapshot() {
 }
 
 function enterSceneInspectorEditMode() {
+  resetSceneInspectorObjectEditor();
   const snapshot = buildSceneInspectorEditSnapshot();
   sceneInspectorState.isEditing = true;
   sceneInspectorState.baseSnapshot = snapshot;
@@ -3503,6 +3666,36 @@ function exitSceneInspectorEditMode() {
   sceneInspectorState.draftText = '';
   sceneInspectorState.validationErrors = [];
   sceneInspectorState.diffSummary = null;
+  refreshSceneInspector();
+}
+
+function enterSceneInspectorObjectEditMode() {
+  if (sceneInspectorState.isEditing) {
+    exitSceneInspectorEditMode();
+  }
+  const snapshot = buildSceneInspectorSnapshot();
+  const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
+  if (!objectId || !objectSnapshot) {
+    showToast('オブジェクトを選択してから編集してください');
+    return;
+  }
+
+  sceneInspectorState.objectEditor = {
+    isEditing: true,
+    objectId,
+    baseObject: objectSnapshot,
+    draftText: JSON.stringify(objectSnapshot, null, 2),
+    parsedObject: cloneInspectorValue(objectSnapshot),
+    validationErrors: [],
+    diffSummary: null,
+  };
+  renderSceneInspector(snapshot);
+  sceneInspectorObjectEditorEl?.focus();
+  sceneInspectorObjectEditorEl?.setSelectionRange(0, 0);
+}
+
+function exitSceneInspectorObjectEditMode() {
+  resetSceneInspectorObjectEditor();
   refreshSceneInspector();
 }
 
@@ -3533,6 +3726,42 @@ function validateSceneInspectorDraft() {
   return result;
 }
 
+function validateSceneInspectorObjectDraft() {
+  const objectEditorState = sceneInspectorState.objectEditor;
+  const draftText = sceneInspectorObjectEditorEl?.value ?? objectEditorState.draftText;
+  objectEditorState.draftText = draftText;
+
+  let parsedObject;
+  try {
+    parsedObject = JSON.parse(draftText);
+  } catch (error) {
+    objectEditorState.parsedObject = null;
+    objectEditorState.validationErrors = [`Invalid JSON: ${error.message}`];
+    objectEditorState.diffSummary = null;
+    renderSceneInspector();
+    return null;
+  }
+
+  if (!parsedObject || typeof parsedObject !== 'object' || Array.isArray(parsedObject)) {
+    objectEditorState.parsedObject = null;
+    objectEditorState.validationErrors = ['Selected object JSON block must be an object.'];
+    objectEditorState.diffSummary = null;
+    renderSceneInspector();
+    return null;
+  }
+
+  objectEditorState.parsedObject = parsedObject;
+  const result = buildObjectBlockDiff(
+    objectEditorState.objectId,
+    objectEditorState.baseObject,
+    parsedObject
+  );
+  objectEditorState.validationErrors = result.errors;
+  objectEditorState.diffSummary = result.summary;
+  renderSceneInspector();
+  return result;
+}
+
 function applySceneInspectorDraft() {
   const result = validateSceneInspectorDraft();
   if (!result) return;
@@ -3549,6 +3778,24 @@ function applySceneInspectorDraft() {
     ? 'Scene JSON change を broadcast しました'
     : `${result.summary.actionCount} 件の Scene JSON change を broadcast しました`);
   exitSceneInspectorEditMode();
+}
+
+function applySceneInspectorObjectDraft() {
+  const result = validateSceneInspectorObjectDraft();
+  if (!result) return;
+  if (result.errors.length > 0) return;
+  if (!result.operation) {
+    showToast('適用できる object change はありません');
+    return;
+  }
+
+  const objectId = sceneInspectorState.objectEditor.objectId;
+  applyOperationToScene(result.operation);
+  broadcast(result.operation);
+  notifySceneStateChanged('scene-inspector-object-json-edit-applied');
+  notifySelectionChanged('scene-inspector-object-json-edit-applied');
+  showToast(`Object ${objectId} の editable change を broadcast しました`);
+  exitSceneInspectorObjectEditMode();
 }
 
 function buildSceneInspectorSnapshot() {
@@ -3769,6 +4016,23 @@ sceneInspectorEditorEl?.addEventListener('input', () => {
   sceneInspectorState.validationErrors = [];
   sceneInspectorState.diffSummary = null;
 });
+sceneInspectorObjectEditBtn?.addEventListener('click', enterSceneInspectorObjectEditMode);
+sceneInspectorObjectValidateBtn?.addEventListener('click', () => {
+  const result = validateSceneInspectorObjectDraft();
+  if (!result || result.errors.length > 0) return;
+  showToast(
+    result.operation
+      ? 'Selected object changes are ready to broadcast'
+      : 'No editable object changes detected'
+  );
+});
+sceneInspectorObjectApplyBtn?.addEventListener('click', applySceneInspectorObjectDraft);
+sceneInspectorObjectCancelBtn?.addEventListener('click', exitSceneInspectorObjectEditMode);
+sceneInspectorObjectEditorEl?.addEventListener('input', () => {
+  sceneInspectorState.objectEditor.draftText = sceneInspectorObjectEditorEl.value;
+  sceneInspectorState.objectEditor.validationErrors = [];
+  sceneInspectorState.objectEditor.diffSummary = null;
+});
 pairingDialog?.addEventListener('click', (event) => {
   if (event.target === pairingDialog) {
     cancelPairing();
@@ -3781,6 +4045,10 @@ document.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape' && sceneInspectorState.isEditing) {
     exitSceneInspectorEditMode();
+    return;
+  }
+  if (event.key === 'Escape' && sceneInspectorState.objectEditor.isEditing) {
+    exitSceneInspectorObjectEditMode();
     return;
   }
   if (event.key === 'Escape' && sceneInspectorState.isOpen) {

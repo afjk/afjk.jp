@@ -378,7 +378,54 @@
     .scene-inspector-editor:focus {
       border-color: rgba(68,136,255,0.7);
     }
-    #scene-inspector-output {
+    .scene-inspector-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .scene-inspector-section-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .scene-inspector-section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .scene-inspector-section-meta {
+      color: rgba(255,255,255,0.58);
+      font-size: 11px;
+    }
+    .scene-inspector-empty {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px dashed rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.65);
+      white-space: pre-wrap;
+    }
+    .scene-inspector-object-head {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      white-space: pre-wrap;
+      color: rgba(255,255,255,0.82);
+    }
+    .scene-inspector-object-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .scene-inspector-object-actions .chip {
+      justify-content: center;
+    }
+    #scene-inspector-output,
+    #scene-inspector-object-output {
       margin: 0;
       padding: 12px;
       border-radius: 8px;
@@ -599,6 +646,29 @@
     <pre id="scene-inspector-output">{
   "status": "waiting-for-scene"
 }</pre>
+    <section id="scene-inspector-object-section" class="scene-inspector-section">
+      <div class="scene-inspector-section-header">
+        <div class="scene-inspector-section-title">Selected Object JSON</div>
+        <div id="scene-inspector-object-meta" class="scene-inspector-section-meta">No object selected</div>
+      </div>
+      <div id="scene-inspector-object-empty" class="scene-inspector-empty">Select an object in the scene to edit its JSON block as text.</div>
+      <div id="scene-inspector-object-head" class="scene-inspector-object-head" hidden></div>
+      <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
+        <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
+        <button id="scene-inspector-object-validate" class="chip" type="button" hidden>Validate / Preview</button>
+        <button id="scene-inspector-object-apply" class="chip primary" type="button" hidden>Broadcast Object Changes</button>
+        <button id="scene-inspector-object-cancel" class="chip" type="button" hidden>Cancel</button>
+      </div>
+      <p id="scene-inspector-object-note" class="scene-inspector-note" hidden>
+        Object block editing uses the same safe delta policy as scene JSON edit mode. Non-editable fields stay ignored even if they appear in the block.
+      </p>
+      <div id="scene-inspector-object-validation" class="scene-inspector-validation" hidden></div>
+      <div id="scene-inspector-object-diff" class="scene-inspector-diff" hidden></div>
+      <textarea id="scene-inspector-object-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
+      <pre id="scene-inspector-object-output" hidden>{
+  "status": "no-selection"
+}</pre>
+    </section>
   </aside>
   <button id="add-btn" title="GLB を追加">＋</button>
   <input type="file" id="file-input" accept=".glb" style="display:none">
