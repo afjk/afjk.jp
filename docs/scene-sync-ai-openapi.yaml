@@ -5,6 +5,8 @@ info:
   description: |
     Provider-neutral wrapper API for Scene Sync. Any AI client can call these
     endpoints by passing the opaque `sessionId` in the request body.
+    Stable AI-facing tool names are documented separately in
+    `docs/scene-sync-ai-spec.md` and map to this HTTP surface without renaming.
 servers:
   - url: https://afjk.jp/presence/api/ai
     description: Production
@@ -13,6 +15,8 @@ paths:
     post:
       operationId: redeemAiLink
       summary: Redeem a 6-digit pairing code and create an AI session
+      description: |
+        Stable AI tool mapping: `scene_sync_redeem`.
       requestBody:
         required: true
         content:
@@ -31,10 +35,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AiRedeemResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '410':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /link/revoke:
     post:
       operationId: revokeAiLink
       summary: Revoke an AI session and underlying Scene Sync link
+      description: |
+        Stable AI tool mapping: `scene_sync_revoke`.
       requestBody:
         required: true
         content:
@@ -52,10 +66,19 @@ paths:
                 properties:
                   ok:
                     type: boolean
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /room/{roomId}/scene:
     post:
       operationId: getSceneViaAiSession
       summary: Get current scene state
+      description: |
+        Stable AI tool mapping: `scene_sync_get_scene`.
+        Use this as the source of truth for before/after verification.
       parameters:
         - in: path
           name: roomId
@@ -75,14 +98,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SceneState'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /room/{roomId}/broadcast:
     post:
       operationId: broadcastSceneMutationViaAiSession
       summary: Apply a scene mutation
       description: |
+        Stable AI tool mapping: `scene_sync_broadcast`.
         Use this for scene-add, scene-delta, scene-remove, scene-env, and scene-batch.
         When creating a primitive object such as a box, always include `payload.asset`
         with `type`, `primitive`, and `color`.
+        Verify with `/room/{roomId}/scene` after create/update/delete when
+        object correctness matters.
       parameters:
         - in: path
           name: roomId
@@ -129,14 +165,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BroadcastResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /room/{roomId}/ai-command:
     post:
       operationId: runAiCommandViaAiSession
       summary: Request a browser-only action from the linked peer
       description: |
+        Stable AI tool mapping: `scene_sync_ai_command`.
         Use this for browser-only actions such as camera queries, focus, undo/redo,
         screenshots, and URL-based GLB import. For `focusObject`, always send
         `params.objectId`. Do not call `focusObject` without an object id.
+        For `uploadGlbFromUrl`, confirm the result with `/room/{roomId}/scene`
+        when deduplication or placement accuracy matters.
       parameters:
         - in: path
           name: roomId
@@ -209,7 +260,92 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AiCommandResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
+  responses:
+    ValidationError:
+      description: Missing or malformed request parameters.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error:
+              code: validation_error
+              message: focusObject requires params.objectId
+              retryable: false
+    UnauthorizedError:
+      description: Session is invalid, expired, or revoked.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error:
+              code: unauthorized
+              message: session expired
+              retryable: false
+    ForbiddenError:
+      description: Session does not match the requested room or target.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error:
+              code: forbidden
+              message: session does not match room
+              retryable: false
+    NotFoundError:
+      description: The requested room, object, code, or target peer was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error:
+              code: not_found
+              message: object not found
+              retryable: false
+    ConflictError:
+      description: The request conflicts with current state or a stale token/code.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error:
+              code: conflict
+              message: pairing code already redeemed
+              retryable: true
+    InternalError:
+      description: Unexpected wrapper or browser-side failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error:
+              code: internal_error
+              message: unexpected internal error
+              retryable: true
   schemas:
     SessionOnlyRequest:
       type: object
@@ -230,6 +366,30 @@ components:
           type: string
         expiresAt:
           type: integer
+    ErrorResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+              enum:
+                - validation_error
+                - unauthorized
+                - forbidden
+                - not_found
+                - conflict
+                - internal_error
+            message:
+              type: string
+            retryable:
+              type: boolean
     BroadcastResponse:
       type: object
       required: [ok, room, peers, userPresent]

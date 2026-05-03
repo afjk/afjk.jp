@@ -1,178 +1,302 @@
-# Scene Sync AI 連携・履歴管理 仕様
+# Scene Sync AI Tool Contract
 
-## 目的
+This document defines the stable tool contract for Scene Sync AI integrations.
+It is the source of truth for GPTs, MCP servers, Codex adapters, and thin API
+clients that call the AI wrapper at `https://afjk.jp/presence/api/ai`.
 
-Scene Sync に Undo/Redo 履歴管理と AI からの代理操作機構を追加する。
-REST API 経由で GPTs などの外部 AI が、ユーザーの代理として 3D シーンを操作できるようにする。
+## Scope
 
-## 核心原則
+- Stable tool names exposed to AI runtimes
+- Required and optional parameters
+- Response expectations
+- Error handling policy
+- Scene snapshot before/after policy
+- Concise request/response examples
 
-**人の継続性は AI エージェント側が保持する。**
+Runtime implementation details such as the browser handoff internals stay in
+the broader Scene Sync specs. This contract is intentionally small and stable.
 
-サーバーはステートレスを維持し、AI が `linkToken` によってユーザーを代理する。
-ブラウザ・タブ・WSS 接続は短命なリソースとして扱い、人（userId）を識別する役割を AI に委ねる。
+## Stable Tool Surface
 
-## 用語
+The wrapper exposes five stable top-level tools:
 
-- **peer**: WSS 接続単位。WS 切断で消失する一時的な存在。`peer-{uuid}` 形式。
-- **user**: ブラウザ単位の永続 ID。`scenesync.userId` として localStorage に保存。`usr-{uuid}` 形式。
-  タブ・リロード・ブラウザ再起動を跨いで同一性を保つ。
-- **link**: 特定の userId と特定の room を結ぶ AI の代理権限。`linkToken` で表現。
-- **linkToken**: HMAC 署名付きの代理権限トークン。Bearer として broadcast に添付。
-- **onBehalfOf**: broadcast の `from` フィールドに付与される代理表明。値は userId。
+| Tool name | Purpose |
+| --- | --- |
+| `scene_sync_redeem` | Redeem a 6-digit pairing code and create an AI session |
+| `scene_sync_get_scene` | Read the current scene snapshot for the linked room |
+| `scene_sync_broadcast` | Apply a scene mutation such as object create/update/delete |
+| `scene_sync_ai_command` | Run a browser-only command such as focus, screenshot, or GLB upload |
+| `scene_sync_revoke` | Revoke the current AI session |
 
-## アーキテクチャ概要
+These names are stable across GPTs, Codex, MCP wrappers, and sample clients.
+Do not rename them per provider.
 
-```
-GPT (or any AI)
-   │ HTTPS + Authorization: Bearer <linkToken>
-   ▼
-afjk.jp presence-server
-   ├ /api/link/initiate     (ペアリング開始)
-   ├ /api/link/redeem       (コード→token 交換)
-   ├ /api/link/revoke       (失効)
-   ├ /api/room/{roomId}/broadcast   (linkToken 検証 + onBehalfOf 自動付与)
-   └ /api/room/{roomId}/scene       (シーン取得、既存)
-   │
-   │ WSS broadcast
-   ▼
-ルーム参加者 (Web / Unity / Godot クライアント)
-   │
-   └ HistoryManager (各クライアントが own/proxy 操作のみ履歴化)
-```
+## Scene Mutation Vocabulary
 
-## linkToken 設計
+`scene_sync_broadcast` carries one mutation payload in `payload.kind`.
 
-### 形式
+| `payload.kind` | Meaning | Required fields |
+| --- | --- | --- |
+| `scene-add` | Create an object | `kind`, `objectId` |
+| `scene-delta` | Update an existing object | `kind`, `objectId` |
+| `scene-remove` | Delete an existing object | `kind`, `objectId` |
+| `scene-env` | Update scene environment | `kind`, `envId` |
+| `scene-batch` | Apply multiple mutations atomically | `kind`, `ops` |
 
-HMAC-SHA256 による署名付きトークン。サーバー側にセッション保存不要（ステートレス）。
+Notes:
 
-```
-linkToken = base64url(payload) + "." + base64url(hmac_sha256(payload, SECRET))
+- For primitive `scene-add`, include `payload.asset.type=primitive`,
+  `payload.asset.primitive`, and `payload.asset.color`.
+- `scene-delta` is partial update semantics. Only send fields you intend to
+  change.
+- `scene-remove` is id-based. Do not expect soft delete behavior.
+- `scene-batch` is preferred when multiple changes should share one history
+  unit or one verification cycle.
 
-payload = {
-  linkId: "lnk-{uuid}",
-  userId: "usr-{uuid}",
-  roomId: "abc123",
-  exp: 1735689600000,
-  iat: 1733097600000
+## Browser-Only Command Vocabulary
+
+`scene_sync_ai_command` uses a stable `action` value.
+
+| `action` | Purpose | Required params |
+| --- | --- | --- |
+| `getCameraPose` | Read the browser camera pose | none |
+| `focusObject` | Focus the camera on an object | `params.objectId` |
+| `undo` | Undo one history step | none |
+| `redo` | Redo one history step | none |
+| `getHistory` | Read recent browser history entries | none |
+| `screenshot` | Capture a browser screenshot | none |
+| `uploadGlbFromUrl` | Import a GLB from a URL | `params.url` |
+
+Optional `uploadGlbFromUrl` params:
+
+- `objectId`
+- `name`
+- `position`
+- `rotation`
+- `scale`
+
+`uploadGlbFromUrl` is browser-only. It is not a direct file upload endpoint.
+
+## Required and Optional Parameters
+
+### `scene_sync_redeem`
+
+Required:
+
+- `code`
+
+Optional:
+
+- none
+
+Response expectation:
+
+- Returns `ok`, `sessionId`, `roomId`, `expiresAt`
+
+### `scene_sync_get_scene`
+
+Required:
+
+- `roomId`
+- `sessionId`
+
+Optional:
+
+- none
+
+Response expectation:
+
+- Returns the latest scene snapshot for the room
+- Current stable fields are `envId` and `objects`
+
+### `scene_sync_broadcast`
+
+Required:
+
+- `roomId`
+- `sessionId`
+- `payload`
+- `payload.kind`
+
+Optional top-level fields:
+
+- none
+
+Optional mutation fields depend on `payload.kind`:
+
+- `scene-add`: `name`, `position`, `rotation`, `scale`, `asset`, `meshPath`
+- `scene-delta`: `name`, `position`, `rotation`, `scale`, `asset`, `meshPath`
+- `scene-remove`: none beyond `objectId`
+- `scene-env`: none beyond `envId`
+- `scene-batch`: `ops[*]` follow the same rules as individual mutation payloads
+
+Response expectation:
+
+- Returns transport success, room context, and user presence
+- Current stable fields are `ok`, `room`, `peers`, `userPresent`
+
+### `scene_sync_ai_command`
+
+Required:
+
+- `roomId`
+- `sessionId`
+- `action`
+
+Optional:
+
+- `params`
+- `requestId`
+- `targetPeerId`
+
+Response expectation:
+
+- Returns the same room context fields as `scene_sync_broadcast`
+- Includes `targetPeerId`
+- Includes browser result in `result`
+- `result.kind` is expected to be `ai-result`
+- `result.ok` indicates whether the browser completed the requested action
+
+### `scene_sync_revoke`
+
+Required:
+
+- `sessionId`
+
+Optional:
+
+- none
+
+Response expectation:
+
+- Returns `{ "ok": true }` on successful revoke
+
+## Response Policy
+
+The contract distinguishes three layers of success:
+
+1. HTTP success: the wrapper accepted and processed the request
+2. Wrapper success: top-level `ok: true`
+3. Browser action success: `result.ok: true` for `scene_sync_ai_command`
+
+Implications:
+
+- `scene_sync_broadcast` success means the wrapper accepted the mutation and
+  broadcast it to the room. Confirm object state with a later snapshot if state
+  matters.
+- `scene_sync_ai_command` success requires checking both top-level `ok` and
+  nested `result.ok`.
+- `scene_sync_get_scene` is the authoritative state read for verification.
+
+## Error Handling Policy
+
+Agents should treat errors by class, not by provider-specific wording.
+
+| Class | Typical status | Meaning | Agent action |
+| --- | --- | --- | --- |
+| `validation_error` | `400`, `422` | Required field missing or malformed payload | Fix arguments locally and retry |
+| `unauthorized` | `401` | Session invalid, expired, or revoked | Re-link with `scene_sync_redeem` |
+| `forbidden` | `403` | Session-room mismatch or disallowed target | Stop and confirm room/session |
+| `not_found` | `404` | Room, code, object, or target peer missing | Refresh snapshot or relink |
+| `conflict` | `409`, `410` | State moved, code already redeemed, or stale operation | Refresh snapshot, then retry if still desired |
+| `internal_error` | `500+` | Wrapper or browser-side failure | Retry once if idempotent, otherwise stop |
+
+Preferred error body:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "validation_error",
+    "message": "focusObject requires params.objectId",
+    "retryable": false
+  }
 }
 ```
 
-### TTL（初期値）
+Policy notes:
 
-- 30日（`exp = iat + 30 * 24 * 3600 * 1000`）
-- 自動延長は行わない（Phase 5 以降で検討）
-- 失効条件:
-  - 期限到来による自動失効
-  - `/api/link/revoke` 呼び出しによる明示的失効
-  - サーバー側失効リスト（Phase 3 初期はメモリ保持、token 期限まで）
+- The contract only requires a stable machine-readable `error.code`. Human
+  `message` text may evolve.
+- For `scene_sync_ai_command`, browser failures should surface inside
+  `result.ok=false` even when the wrapper request itself returned HTTP `200`.
+- Agents should not blindly retry `scene-add` or `uploadGlbFromUrl` without a
+  follow-up snapshot, because duplicates are possible.
 
-### 短命にしない理由
+## Scene Snapshot Before/After Policy
 
-ブラウザではなく GPT の会話コンテキストが人の継続性を保持するため、
-都度ペアリングは UX を損なう。AI 側のセッション切れ時にのみ再ペアリングが必要。
+When an action changes scene state, the standard flow is:
 
-## ペアリングコード
+1. Call `scene_sync_get_scene` before the mutation when the current state is
+   not already known in the same turn.
+2. Send one mutation with `scene_sync_broadcast`, or one browser-only action
+   with `scene_sync_ai_command`.
+3. Call `scene_sync_get_scene` after the mutation when object existence,
+   transform accuracy, or deduplication matters.
 
-- 6桁数字（例: `482915`）
-- TTL 5分
-- 1回限り使用（redeem 後は破棄）
-- サーバー内部のメモリマップで管理: `code → { roomId, userId, expiresAt }`
+Use before/after snapshots by default for:
 
-## REST API
+- object creation
+- object update
+- object deletion
+- batch edits
+- GLB upload
 
-### POST /api/link/initiate
+You may skip the before snapshot only when all of the following are true:
 
-ブラウザがペアリングコード発行を要求する。
+- the agent just created the object id itself
+- no branching decision depends on prior state
+- duplicate creation is acceptable
 
-リクエスト:
+You may skip the after snapshot only when the caller explicitly accepts
+best-effort execution without state confirmation.
+
+## Concise Examples
+
+### 1. Redeem
+
+Request:
+
+```json
+{ "code": "123456" }
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "sessionId": "v1.example",
+  "roomId": "abc123",
+  "expiresAt": 1760000000000
+}
+```
+
+### 2. Create object
+
+Request:
 
 ```json
 {
   "roomId": "abc123",
-  "userId": "usr-xxxx-xxxx"
+  "sessionId": "v1.example",
+  "payload": {
+    "kind": "scene-add",
+    "objectId": "ai-cube-1",
+    "name": "Orange Cube",
+    "position": [0, 0.5, 0],
+    "rotation": [0, 0, 0, 1],
+    "scale": [1, 1, 1],
+    "asset": {
+      "type": "primitive",
+      "primitive": "box",
+      "color": "#ff8800"
+    }
+  }
 }
 ```
 
-レスポンス（200）:
-
-```json
-{
-  "code": "482915",
-  "expiresAt": 1733097900000
-}
-```
-
-エラー: 400（パラメータ不正）
-
-### POST /api/link/redeem
-
-AI がペアリングコードを linkToken に交換する。
-
-リクエスト:
-
-```json
-{ "code": "482915" }
-```
-
-レスポンス（200）:
-
-```json
-{
-  "linkToken": "eyJsaW5rSWQ...xxxx.yyyy",
-  "linkId": "lnk-xxxx-xxxx",
-  "userId": "usr-xxxx-xxxx",
-  "roomId": "abc123",
-  "expiresAt": 1735689600000
-}
-```
-
-エラー: 400（コード不正）、404（コード未発行 or 期限切れ）、410（既に使用済み）
-
-### POST /api/link/revoke
-
-リンクを明示的に失効する。
-
-リクエスト（どちらか）:
-
-```json
-{ "linkId": "lnk-xxxx-xxxx" }
-```
-
-```
-Authorization: Bearer <linkToken>
-```
-
-レスポンス（200）:
-
-```json
-{ "ok": true }
-```
-
-副作用: ルーム内に `ai-link-revoked` を broadcast。
-
-### POST /api/room/{roomId}/broadcast（拡張）
-
-既存エンドポイントに linkToken 検証を追加。
-
-リクエストヘッダ:
-
-```
-Authorization: Bearer <linkToken>
-```
-
-サーバー側処理:
-
-1. linkToken の HMAC 検証
-2. payload.roomId と URL の roomId が一致することを確認
-3. payload.exp が未来であることを確認
-4. 失効リストに含まれていないことを確認
-5. broadcast payload に `onBehalfOf: payload.userId` を自動付与
-
-エラー: 401（token 不正・期限切れ・失効済み）、403（roomId 不一致）
-
-レスポンス（200）に `userPresent` を追加:
+Response:
 
 ```json
 {
@@ -183,444 +307,126 @@ Authorization: Bearer <linkToken>
 }
 ```
 
-`userPresent` は対象 userId の peer がルームに 1 つ以上接続中なら true。
-GPT が「ユーザーが今いるか」を判断するために利用。
+### 3. Update object
 
-### GET /api/room/{roomId}/scene
-
-既存仕様のまま。linkToken 認証は任意（不要）。
-
-## 新規 Handoff Kind
-
-### ai-link-established
-
-リンク確立時にルーム全体に通知。
+Request:
 
 ```json
 {
-  "kind": "ai-link-established",
-  "linkId": "lnk-xxxx-xxxx",
-  "userId": "usr-xxxx-xxxx",
   "roomId": "abc123",
-  "expiresAt": 1735689600000
+  "sessionId": "v1.example",
+  "payload": {
+    "kind": "scene-delta",
+    "objectId": "ai-cube-1",
+    "position": [1.25, 0.5, -0.75],
+    "scale": [1.5, 1.5, 1.5]
+  }
 }
 ```
 
-### ai-link-revoked
+### 4. Delete object
 
-リンク失効時にルーム全体に通知。
+Request:
 
 ```json
 {
-  "kind": "ai-link-revoked",
-  "linkId": "lnk-xxxx-xxxx",
-  "reason": "user-revoked" | "expired" | "ai-revoked"
+  "roomId": "abc123",
+  "sessionId": "v1.example",
+  "payload": {
+    "kind": "scene-remove",
+    "objectId": "ai-cube-1"
+  }
 }
 ```
 
-### scene-batch
+### 5. Read snapshot
 
-複数の操作を 1 つのトランザクションとしてまとめる。Undo/Redo の最小単位として扱う。
+Request:
 
 ```json
 {
-  "kind": "scene-batch",
-  "batchId": "batch-xxxx",
-  "actions": [
-    { "kind": "scene-add", "objectId": "...", ... },
-    { "kind": "scene-delta", "objectId": "...", ... }
-  ]
+  "roomId": "abc123",
+  "sessionId": "v1.example"
 }
 ```
 
-### ai-command（Web 専用）
-
-ブラウザ固有の操作を AI が依頼する場合に使用。
+Response:
 
 ```json
 {
-  "kind": "ai-command",
-  "requestId": "req-xxxx",
-  "action": "uploadGlbFromUrl" | "screenshot" | "getCameraPose" | "focusObject" | "undo" | "redo" | "getHistory",
-  "params": { ... },
-  "targetPeerId": "peer-xxxx"
-}
-```
-
-`targetPeerId` 未指定時、サーバーが対象 userId の最新接続 peer を補完する。
-
-現在の実装では `ai-command` は通常 broadcast と異なり、対象 peer へ handoff された後、
-ブラウザが `ai-result` を返し、その結果が HTTP レスポンスにも含まれる。
-
-### ai-result
-
-ブラウザが `ai-command` の実行結果を返す。
-
-```json
-{
-  "kind": "ai-result",
-  "requestId": "req-xxxx",
-  "ok": true,
-  "...": "action-specific result"
-}
-```
-
-実装済み action:
-
-- `getCameraPose`
-- `focusObject`
-- `undo`
-- `redo`
-- `getHistory`
-- `screenshot`
-- `uploadGlbFromUrl`
-
-## curl 運用例
-
-staging での手動確認は以下で行える。
-
-前提:
-
-- Scene Sync ブラウザで `AIにリンク` を押し、6桁コードを表示する
-- ブラウザが参加している room は `redeem` レスポンスの `roomId` を正とする
-- staging URL は `https://staging.afjk.jp/presence/api`
-
-### 1. code を linkToken に交換
-
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/link/redeem \
-  -H 'Content-Type: application/json' \
-  --data '{"code":"482915"}'
-```
-
-成功すると `linkToken`, `linkId`, `userId`, `roomId`, `expiresAt` が返る。
-この時点でブラウザ側には `ai-link-established` が broadcast され、UI は `AIリンク中` になる。
-
-### 2. AI 代理で scene-add を送る
-
-実装は次の 2 形式を受け付ける:
-
-- 直接 payload を POST
-- `{ "payload": ... }` で包んで POST
-
-直接 POST の例:
-
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
-  -H "Authorization: Bearer <linkToken>" \
-  -H 'Content-Type: application/json' \
-  --data '{
-    "kind": "scene-add",
-    "objectId": "ai-test-1",
-    "name": "AI Test",
-    "position": [1, 0.5, 0],
-    "rotation": [0, 0, 0, 1],
-    "scale": [1, 1, 1],
-    "asset": {
-      "type": "primitive",
-      "primitive": "box",
-      "color": "#ff8800"
-    }
-  }'
-```
-
-wrapped payload の例:
-
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
-  -H "Authorization: Bearer <linkToken>" \
-  -H 'Content-Type: application/json' \
-  --data '{
-    "payload": {
-      "kind": "scene-add",
-      "objectId": "ai-test-1",
-      "name": "AI Test",
-      "position": [1, 0.5, 0],
-      "rotation": [0, 0, 0, 1],
-      "scale": [1, 1, 1],
-      "asset": {
-        "type": "primitive",
-        "primitive": "box",
-        "color": "#ff8800"
-      }
-    }
-  }'
-```
-
-レスポンス例:
-
-```json
-{
-  "ok": true,
-  "room": "abc123",
-  "peers": 2,
-  "userPresent": true
-}
-```
-
-### 2.5. ai-command を送る
-
-例: `getCameraPose`
-
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
-  -H "Authorization: Bearer <linkToken>" \
-  -H 'Content-Type: application/json' \
-  --data '{
-    "kind": "ai-command",
-    "requestId": "req-camera-1",
-    "action": "getCameraPose",
-    "params": {}
-  }'
-```
-
-レスポンス例:
-
-```json
-{
-  "ok": true,
-  "room": "abc123",
-  "peers": 1,
-  "userPresent": true,
-  "targetPeerId": "peer-xxxx",
-  "result": {
-    "kind": "ai-result",
-    "requestId": "req-camera-1",
-    "ok": true,
-    "pose": {
-      "position": [5, 5, 5],
-      "quaternion": [0, 0, 0, 1]
+  "envId": "studio",
+  "objects": {
+    "ai-cube-1": {
+      "name": "Orange Cube",
+      "position": [0, 0.5, 0],
+      "scale": [1, 1, 1]
     }
   }
 }
 ```
 
-例: `getHistory`
+### 6. Upload GLB from URL
 
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/room/abc123/broadcast \
-  -H "Authorization: Bearer <linkToken>" \
-  -H 'Content-Type: application/json' \
-  --data '{
-    "kind": "ai-command",
-    "requestId": "req-history-1",
-    "action": "getHistory",
-    "params": { "count": 5 }
-  }'
-```
+Request:
 
-`ai-command` のレスポンスは action ごとに `result` の形が変わる。
-
-### 3. リンク解除
-
-Bearer 付きの例:
-
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/link/revoke \
-  -H "Authorization: Bearer <linkToken>" \
-  -H 'Content-Type: application/json' \
-  --data '{"linkId":"lnk-xxxx-xxxx"}'
-```
-
-`linkId` のみでも解除できる:
-
-```bash
-curl -sS -X POST https://staging.afjk.jp/presence/api/link/revoke \
-  -H 'Content-Type: application/json' \
-  --data '{"linkId":"lnk-xxxx-xxxx"}'
-```
-
-解除時はブラウザ側に `ai-link-revoked` が broadcast される。
-
-## 履歴管理
-
-### データ構造
-
-```javascript
-class HistoryManager {
-  undoStack: HistoryEntry[]   // max 100
-  redoStack: HistoryEntry[]   // max 100
-  onChange: (state) => void   // UI 同期コールバック
-}
-
-HistoryEntry = {
-  id: "hist-{timestamp}-{rand}",
-  timestamp: 1733097600000,
-  summary: "Added Cube",      // 表示用
-  forward: BroadcastMessage,  // やり直し時に送信
-  backward: BroadcastMessage  // 取り消し時に送信
+```json
+{
+  "roomId": "abc123",
+  "sessionId": "v1.example",
+  "action": "uploadGlbFromUrl",
+  "params": {
+    "url": "https://example.com/robot.glb",
+    "objectId": "robot-1",
+    "name": "Robot",
+    "position": [0, 0, 0]
+  }
 }
 ```
 
-### 履歴記録条件
+Response:
 
-クライアントは以下の broadcast のみ自身の undoStack に push する:
-
+```json
+{
+  "ok": true,
+  "room": "abc123",
+  "peers": 3,
+  "userPresent": true,
+  "targetPeerId": "peer-123",
+  "result": {
+    "kind": "ai-result",
+    "requestId": "req-123",
+    "ok": true,
+    "objectId": "robot-1"
+  }
+}
 ```
-msg.from.id === myPeerId   ||   msg.from.onBehalfOf === myUserId
-```
 
-これにより:
+## Integration Notes
 
-- 自分の操作は履歴に積まれる
-- 自分の代理 AI による操作も履歴に積まれる（ユーザーが自分で Undo できる）
-- 他人の操作は履歴に積まれない（他人の Undo に巻き込まれない）
+### GPTs
 
-### 操作と逆操作の対応
+- Expose the five stable tool names directly.
+- Keep tool descriptions short and parameter-driven.
+- Prefer prompting the model to fetch a snapshot before destructive changes.
 
-| forward | backward |
-|---------|----------|
-| scene-add | scene-remove |
-| scene-remove | scene-add（元データを backward に保存） |
-| scene-delta | scene-delta（変更前 transform を backward に保存） |
-| scene-env | scene-env（変更前 envId を backward に保存） |
-| scene-batch | scene-batch（actions を逆順かつ各要素を逆操作化） |
+### MCP
 
-### redoStack のクリア
+- Map each stable tool name to one MCP tool.
+- Preserve the same argument names so adapters stay thin.
+- Surface `error.code` as structured tool errors when possible.
 
-新規操作が push されたとき redoStack をクリア。
-他者の broadcast 受信ではクリアしない（自分の redo は他者の操作で無効化されない）。
+### Codex
 
-### 履歴サイズ制限
+- Keep the function names exactly aligned with
+  `docs/scene-sync-tools-codex.json`.
+- When translating from tool calls to HTTP, avoid adding inferred defaults that
+  are not present in this contract.
+- After `scene-add`, `scene-remove`, `scene-delta`, and `uploadGlbFromUrl`,
+  follow with `scene_sync_get_scene` when correctness matters more than speed.
 
-`MAX_HISTORY = 100`。超過時は最古エントリを shift で破棄。
+## References
 
-### 削除済みオブジェクトの Undo 復元
-
-blob store の TTL は 10 分。10 分経過後の `scene-add` Undo（= 削除の取り消し）は
-mesh の再取得に失敗する可能性がある。
-
-Phase 1 の方針: ユーザーに Toast で通知するのみ（オブジェクトは復元失敗）。
-将来的にローカルキャッシュ機構の検討余地あり。
-
-## クライアント実装要件
-
-### Web クライアント
-
-1. `scenesync.userId` を localStorage で永続管理
-2. AI リンク UI:
-   - 「🔗 AIにリンク」ボタンを設定パネルに配置
-   - ボタン押下で `/api/link/initiate` 呼び出し
-   - 6桁コードを画面に表示（5分カウントダウン付き）
-   - リンク中は「✓ AIリンク中」表示と「解除」ボタン
-3. HistoryManager の組み込み（実装済み）
-4. キーバインド: Ctrl+Z / Cmd+Z / Ctrl+Y / Cmd+Shift+Z（実装済み）
-5. モバイルツールバー: ↶ / ↷ ボタン（実装済み）
-6. `ai-command` ハンドラ:
-   - `uploadGlbFromUrl`: 指定 URL から glB を fetch → blob store に POST → scene-add broadcast
-   - `screenshot`: canvas から JPEG エンコード → blob store に POST → URL 返却
-   - `getCameraPose`: 現在のカメラ position/quaternion を返却
-   - `focusObject`: 指定 objectId にカメラを向ける
-   - `undo` / `redo`: HistoryManager 経由で実行
-   - `getHistory`: 直近 N エントリの summary 配列を返却
-
-### Unity / Godot クライアント
-
-- `scenesync.userId` 相当の永続管理（PlayerPrefs / config file）
-- HistoryManager 相当の実装
-- AI リンク UI（簡易でよい）
-- `ai-command` 受信は省略可能（Web 専用機能のため）
-
-## 実装フェーズ
-
-### Phase 1: ローカル Undo/Redo（実装済み）
-
-- HistoryManager クラス実装
-- scene-add / scene-remove / scene-delta / scene-env の履歴記録
-- キーバインドとモバイル UI
-- userId 永続化
-
-### Phase 2: scene-batch 対応（実装済み）
-
-- HistoryManager.createBatchEntry に forward/backward 引数
-- scene-batch の forward/backward 実行ロジック
-
-### Phase 3: ペアリング & onBehalfOf
-
-- presence-server に `/api/link/*` エンドポイント追加
-- broadcast の Bearer 検証と onBehalfOf 自動付与
-- peer-info に userId を含める
-- 受信側で `from.onBehalfOf === myUserId` を履歴条件に追加
-- Web クライアントの AI リンク UI
-
-### Phase 4: GPTs 統合（進行中）
-
-- OpenAPI 3.x スキーマ作成
-  - 既存 Bearer API: `docs/scene-sync-openapi.yaml`
-  - GPT wrapper API: `docs/scene-sync-gpt-openapi.yaml`
-- GPT Instructions 作成
-  - 詳細版: `docs/scene-sync-gpt-instructions.md`
-  - 短縮版: `docs/scene-sync-gpt-instructions-short.md`
-- GPT 用ラッパー API `/api/gpt/*`
-  - `POST /api/gpt/link/redeem`
-  - `POST /api/gpt/link/revoke`
-  - `POST /api/gpt/room/{roomId}/scene`
-  - `POST /api/gpt/room/{roomId}/broadcast`
-  - `POST /api/gpt/room/{roomId}/ai-command`
-- `sessionId` は `linkToken` を AES-256-GCM で暗号化した opaque token
-  - 形式: `v1.<base64url(iv|ciphertext|tag)>`
-  - TTL: `min(linkToken.exp, now + 24h)`
-  - 復号後は既存 `verifyLinkToken()` を通すため revoke / expiry が連動
-- scene 取得は POST に統一し、query string へ token を露出しない
-- 既存 `/api/link/*` `/api/room/*/broadcast` は変更なし
-
-### Phase 4.5: Provider-neutral AI integration
-
-- `/api/ai/*` alias を追加
-  - `POST /api/ai/link/redeem`
-  - `POST /api/ai/link/revoke`
-  - `POST /api/ai/room/{roomId}/scene`
-  - `POST /api/ai/room/{roomId}/broadcast`
-  - `POST /api/ai/room/{roomId}/ai-command`
-- `/api/gpt/*` は互換維持のため残す
-- provider-neutral OpenAPI
-  - `docs/scene-sync-ai-openapi.yaml`
-- provider-neutral short instructions
-  - `docs/scene-sync-ai-instructions-short.md`
-- provider tool examples
-  - `docs/scene-sync-ai-tool-examples.md`
-- concrete tool definition files
-  - `docs/scene-sync-tools-claude.json`
-  - `docs/scene-sync-tools-codex.json`
-- 目的:
-  - GPTs 以外の AI クライアントから同じ API を呼べるようにする
-  - provider ごとの差分を tool 定義だけに閉じ込める
-
-### Phase 5: ai-command 拡充
-
-- uploadGlbFromUrl, screenshot, getCameraPose, focusObject 等の実装
-- 結果取得用エンドポイント or ai-result kind の検討
-
-### Phase 6: Unity / Godot 移植
-
-- 各クライアントへ HistoryManager と userId 永続化を移植
-- ai-command は不要（Web 専用）
-
-## 合意済み原則
-
-- 履歴は自分と自分が代理された AI のみ。他人の操作は積まない。
-- ピア切断で履歴消失（リロード復元は将来検討）。
-- リンクはユーザー主導のコード発行方式。
-- linkToken は長期（30日）、AI 側がユーザー継続性を保持。
-- 部屋一覧 API は提供しない（プライバシー優先）。
-- マジックリンクや QR ペアリングは Phase 5 以降の検討事項。
-
-## 未決定・保留項目
-
-- linkToken の HMAC 署名検証実装詳細（SECRET 管理、ローテーション）
-- 削除オブジェクトの Undo 復元（blob TTL 超過時の挙動）
-- ブラウザリロード時の履歴復元（localStorage 一時保存）
-- 公開 GPTs 化に向けたレートリミットと認可強化
-- room 一覧 API（公開フラグ方式）
-- スナップショット / 名前付き保存機能
-- 自動延長機構（操作ごとに linkToken 期限を延長）
-
-## 関連ドキュメント
-
-- [`docs/scene-sync-spec.md`](./scene-sync-spec.md) — Scene Sync 本体仕様
-- [`docs/pipe-spec.md`](./pipe-spec.md) — Pipe（P2P 通信）仕様
-- [`docs/scene-sync-ai-openapi.yaml`](./scene-sync-ai-openapi.yaml) — provider-neutral AI wrapper OpenAPI
-- [`docs/scene-sync-ai-instructions-short.md`](./scene-sync-ai-instructions-short.md) — provider-neutral AI instructions
-- [`docs/scene-sync-ai-tool-examples.md`](./scene-sync-ai-tool-examples.md) — Claude / Codex / Copilot / Grok 向け tool サンプル
-- [`docs/scene-sync-tools-claude.json`](./scene-sync-tools-claude.json) — Claude tool definition file
-- [`docs/scene-sync-tools-codex.json`](./scene-sync-tools-codex.json) — Codex / OpenAI function definition file
+- OpenAPI wrapper spec: [`docs/scene-sync-ai-openapi.yaml`](./scene-sync-ai-openapi.yaml)
+- Codex function definitions: [`docs/scene-sync-tools-codex.json`](./scene-sync-tools-codex.json)
+- Examples: [`docs/scene-sync-ai-tool-examples.md`](./scene-sync-ai-tool-examples.md)
+- Example client: [`examples/scene-sync-ai-client/README.md`](../examples/scene-sync-ai-client/README.md)
