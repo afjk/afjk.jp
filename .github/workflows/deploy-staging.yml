@@ -31,9 +31,9 @@ jobs:
           script: |
             DEPLOY_BRANCH='${{ github.ref_name }}'
             cd ~/github/afjk.jp
-            git fetch origin "${DEPLOY_BRANCH}"
-            git checkout -B "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}"
-            git reset --hard "origin/${DEPLOY_BRANCH}"
+            git fetch origin "+refs/heads/${DEPLOY_BRANCH}:refs/remotes/origin/${DEPLOY_BRANCH}"
+            git checkout -B "${DEPLOY_BRANCH}" "refs/remotes/origin/${DEPLOY_BRANCH}"
+            git reset --hard "refs/remotes/origin/${DEPLOY_BRANCH}"
             docker compose up -d --build presence-server
             docker compose up -d mediamtx
             docker compose up -d --force-recreate https-portal
