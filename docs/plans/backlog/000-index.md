@@ -12,19 +12,19 @@
 - 表の顔: すぐ使える3Dシーン同期ツール
 - 裏の顔: 対応先を増やしやすいリアルタイム空間データプラットフォーム
 
-詳細は [product-positioning.md](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/product-positioning.md) を参照。
+詳細は [product-positioning.md](./product-positioning.md) を参照。
 
 ## Track 一覧
 
-- [Scene Sync Dev Tool / IDE](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/scenesync-dev-tool-ide.md)
-- [Loom Language / Node Graph](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/loom-language-node-graph.md)
-- [AI Integration](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/ai-integration.md)
-- [Asset Pipeline / Carrier GLB](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/asset-pipeline-carrier-glb.md)
-- [Shader / Generative Runtime](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/shader-generative-runtime.md)
-- [Advanced Rendering](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/advanced-rendering.md)
-- [WebAR Snapshot Viewer](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/webar-snapshot-viewer.md)
-- [Refactoring / Packages](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/refactoring-packages.md)
-- [Enterprise / Security](/Users/afjk/github/SceneSyncWork/afjk.jp/docs/plans/backlog/enterprise-security.md)
+- [Scene Sync Dev Tool / IDE](./scenesync-dev-tool-ide.md)
+- [Loom Language / Node Graph](./loom-language-node-graph.md)
+- [AI Integration](./ai-integration.md)
+- [Asset Pipeline / Carrier GLB](./asset-pipeline-carrier-glb.md)
+- [Shader / Generative Runtime](./shader-generative-runtime.md)
+- [Advanced Rendering](./advanced-rendering.md)
+- [WebAR Snapshot Viewer](./webar-snapshot-viewer.md)
+- [Refactoring / Packages](./refactoring-packages.md)
+- [Enterprise / Security](./enterprise-security.md)
 
 ## Near-Term Waves
 
@@ -59,4 +59,3 @@
 - backlog doc の更新と runtime 実装を同じ branch に混ぜすぎない
 - first PR を小さくし、track 境界を壊さない
 - cross-track task は、どの track を primary とみなすかを最初に明示する
-
