@@ -101,6 +101,7 @@ AI 連携ドキュメント:
 - Claude tool 定義: [`docs/scene-sync-tools-claude.json`](docs/scene-sync-tools-claude.json)
 - Codex / OpenAI function 定義: [`docs/scene-sync-tools-codex.json`](docs/scene-sync-tools-codex.json)
 - 最小 API client 実装例: [`examples/scene-sync-ai-client/README.md`](examples/scene-sync-ai-client/README.md)
+- **Loom AI Skill** (AI agents / MCP / GPT Actions 向け): [`docs/scene-sync-loom-ai-skill.md`](docs/scene-sync-loom-ai-skill.md) — Loom グラフを使った動的オブジェクト制御ガイド。レシピ、制約、チェックリストを含む。
 - **MCP Server** (Claude Desktop / Claude Code / Codex 向け): [`packages/scene-sync-mcp/`](packages/scene-sync-mcp/) — Claude と統合するための MCP サーバー。詳細は README を参照。
 
 ### pipe.afjk.jp — Piping Server

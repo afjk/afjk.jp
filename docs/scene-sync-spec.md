@@ -695,6 +695,13 @@ Pose に加えて：
 Loom（リアルタイムグラフプロセッシング）との連携を実現するグラフメッセージプロトコル。  
 afjk.jp 側は Loom グラフを評価せず、ステートレスなメッセージとしてルーム内で中継する。評価責任はクライアント側にある。
 
+**For AI agents, MCP tools, and GPT Actions, see:**  
+`docs/scene-sync-loom-ai-skill.md`
+
+AI agents should use existing `scene-graph-set` and `scene-graph-clear` payloads only.  
+Do not introduce ad-hoc high-level behavior payloads.  
+Recipes, safety rules, and implementation guidelines are documented in `docs/scene-sync-loom-ai-skill.md`.
+
 ### メッセージタイプ
 
 #### `scene-graph-set`（グラフの全置換）
