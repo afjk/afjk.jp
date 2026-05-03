@@ -55,7 +55,7 @@ const environmentManager = createEnvironmentManager({
   showToast,
 });
 dom.envSelect?.addEventListener('change', () => {
-  scheduleSceneInspectorRefresh();
+  notifySceneStateChanged('environment-select-change');
 });
 
 setupXrButtons({
@@ -818,7 +818,7 @@ function sendSelectedDelta() {
     rotation: rot,
     scale: scl,
   });
-  scheduleSceneInspectorRefresh();
+  notifySceneStateChanged('selected-transform-sent');
 }
 
 // ── サンプルオブジェクト ──────────────────────────────────
@@ -1165,7 +1165,7 @@ function selectManagedObject(obj) {
   showToolbar();
   updateToolbarActive(transformCtrl.mode);
   updatePeersList();
-  scheduleSceneInspectorRefresh();
+  notifySelectionChanged('object-selected');
 }
 
 function selectObjectAt(clientX, clientY) {
@@ -1201,7 +1201,7 @@ function selectObjectAt(clientX, clientY) {
     transformCtrl.detach();
     hideToolbar();
     updatePeersList();
-    scheduleSceneInspectorRefresh();
+    notifySelectionChanged('selection-cleared-raycast');
   }
 }
 
@@ -1335,7 +1335,7 @@ function deleteSelectedObject() {
     );
 
     broadcast({ kind: 'scene-remove', objectId: deleteId });
-    scheduleSceneInspectorRefresh();
+    notifySceneStateChanged('selected-object-deleted');
   }
 }
 
@@ -1389,7 +1389,7 @@ btnDeselect?.addEventListener('click', () => {
   }
   transformCtrl.detach();
   hideToolbar();
-  scheduleSceneInspectorRefresh();
+  notifySelectionChanged('selection-cleared-button');
 });
 
 btnDelete?.addEventListener('click', () => {
@@ -1709,6 +1709,7 @@ let reconnectTimer = null;
 const sceneInspectorState = {
   isOpen: false,
   refreshTimer: null,
+  lastReason: null,
 };
 
 // ── Loom 統合初期化 ──────────────────────────────────
@@ -1825,7 +1826,7 @@ function applyRoomCode(code) {
   u.searchParams.set('room', cleaned);
   history.replaceState(null, '', u.toString());
   reconnectPresence();
-  scheduleSceneInspectorRefresh();
+  notifyConnectionStateChanged('room-applied');
 }
 
 function generateRoom() {
@@ -1842,7 +1843,7 @@ function clearRoom() {
   u.searchParams.delete('room');
   history.replaceState(null, '', u.toString());
   reconnectPresence();
-  scheduleSceneInspectorRefresh();
+  notifyConnectionStateChanged('room-cleared');
 }
 
 function copyRoomUrl() {
@@ -1957,7 +1958,7 @@ function connectPresence() {
         presenceState.room = data.room;
         updateStatus(true);
         updatePeersList();
-        scheduleSceneInspectorRefresh();
+        notifyConnectionStateChanged('presence-welcome');
         break;
 
       case 'peers': {
@@ -1983,7 +1984,7 @@ function connectPresence() {
         if (isFirstPeers && !sceneReceived) {
           requestSceneFromPeer();
         }
-        scheduleSceneInspectorRefresh();
+        notifyConnectionStateChanged('peers-updated');
         break;
       }
 
@@ -2000,7 +2001,7 @@ function connectPresence() {
     updateStatus(false);
     remoteAvatarManager.disposeAllRemoteAvatars();
     updatePeersList();
-    scheduleSceneInspectorRefresh();
+    notifyConnectionStateChanged('presence-closed');
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -2026,7 +2027,7 @@ function updateStatus(connected) {
     dotEl.className = 'dot off';
     statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
   }
-  scheduleSceneInspectorRefresh();
+  notifyConnectionStateChanged(connected ? 'status-connected' : 'status-disconnected');
 }
 
 // ── シーンリクエスト（後から参加したクライアント用） ───────
@@ -2181,7 +2182,7 @@ function handleHandoff(data) {
           showToast?.('Loom graph restore failed');
         }
       }
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-state-handoff');
       break;
     }
     case 'scene-request': {
@@ -2217,7 +2218,7 @@ function handleHandoff(data) {
         );
         presenceState.historyManager.push(historyEntry);
       }
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-delta-handoff');
       break;
     }
     case 'scene-add': {
@@ -2235,7 +2236,7 @@ function handleHandoff(data) {
         );
         presenceState.historyManager.push(historyEntry);
       }
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-add-handoff');
       break;
     }
     case 'scene-remove': {
@@ -2261,7 +2262,7 @@ function handleHandoff(data) {
       }
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(objectId);
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-remove-handoff');
       break;
     }
     case 'scene-mesh': {
@@ -2295,6 +2296,7 @@ function handleHandoff(data) {
           applyTransform(model, payload);
         }
         managedObjects.set(payload.objectId, model);
+        notifySceneStateChanged('scene-mesh-loaded');
       }).catch((err) => {
         removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
@@ -2307,7 +2309,10 @@ function handleHandoff(data) {
           fallback.userData.objectId = payload.objectId;
           scene.add(fallback);
           managedObjects.set(payload.objectId, fallback);
+          notifySceneStateChanged('scene-mesh-fallback-created');
+          return;
         }
+        notifySceneStateChanged('scene-mesh-load-failed');
       });
       break;
     }
@@ -2315,14 +2320,14 @@ function handleHandoff(data) {
       locks.set(payload.objectId, data.from);
       addLockOverlay(payload.objectId, data.from);
       updatePeersList();
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-lock-handoff');
       break;
     }
     case 'scene-unlock': {
       locks.delete(payload.objectId);
       removeLockOverlay(payload.objectId);
       updatePeersList();
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-unlock-handoff');
       break;
     }
     case 'scene-env': {
@@ -2337,7 +2342,7 @@ function handleHandoff(data) {
           presenceState.historyManager.push(historyEntry);
         }
       }
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('scene-env-handoff');
       break;
     }
     case 'scene-avatar': {
@@ -2348,6 +2353,7 @@ function handleHandoff(data) {
       payload.actions?.forEach(action => {
         handleHandoff({ ...data, payload: action });
       });
+      notifySceneStateChanged('scene-batch-handoff');
       break;
     }
     case 'ai-command': {
@@ -2528,7 +2534,7 @@ async function uploadGlbFromUrl(url, params = {}) {
   model.userData.name = file.name;
   managedObjects.set(model.userData.objectId, model);
   selectManagedObject(model);
-  scheduleSceneInspectorRefresh();
+  notifySceneStateChanged('glb-uploaded-from-url');
 
   const arrayBuffer = await blob.arrayBuffer();
   await uploadAndBroadcast(
@@ -2641,6 +2647,7 @@ function addOrUpdateObject(objectId, info) {
 
   existing.userData.name = info.name;
   applyTransform(existing, info);
+  notifySceneStateChanged('managed-object-updated');
 }
 
 function loadMeshObject(objectId, info, meshPath, existing) {
@@ -2673,7 +2680,7 @@ function loadMeshObject(objectId, info, meshPath, existing) {
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
       return;
     }
-    scheduleSceneInspectorRefresh();
+    notifySceneStateChanged('mesh-load-failed');
   });
 }
 
@@ -2689,7 +2696,7 @@ function replaceManagedObject(objectId, nextObject, info) {
   applyTransform(nextObject, info);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
-  scheduleSceneInspectorRefresh();
+  notifySceneStateChanged('managed-object-replaced');
 }
 
 function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
@@ -2790,7 +2797,7 @@ function applyAssetDelta(obj, asset) {
   if (asset.color) {
     applyObjectColor(obj, asset.color);
   }
-  scheduleSceneInspectorRefresh();
+  notifySceneStateChanged('asset-delta-applied');
 }
 
 // ── Undo/Redo 処理 ──────────────────────────────────────
@@ -2835,7 +2842,7 @@ function applyOperationToScene(operation) {
       }
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(operation.objectId);
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('undo-redo-scene-remove');
       break;
     }
     case 'scene-delta': {
@@ -2846,6 +2853,7 @@ function applyOperationToScene(operation) {
           applyAssetDelta(obj, operation.asset);
         }
       }
+      notifySceneStateChanged('undo-redo-scene-delta');
       break;
     }
     case 'scene-env': {
@@ -2853,12 +2861,12 @@ function applyOperationToScene(operation) {
         source: 'undo-redo',
         broadcastChange: false,
       });
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('undo-redo-scene-env');
       break;
     }
     case 'scene-batch': {
       operation.actions?.forEach(action => applyOperationToScene(action));
-      scheduleSceneInspectorRefresh();
+      notifySceneStateChanged('undo-redo-scene-batch');
       break;
     }
   }
@@ -2914,7 +2922,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       actualMeshPath
     );
     presenceState.historyManager.push(historyEntry);
-    scheduleSceneInspectorRefresh();
+    notifySceneStateChanged('object-uploaded');
 
     broadcast({
       kind: 'scene-add',
@@ -2951,7 +2959,7 @@ const dragDropManager = new DragDropManager({
   onLoaded: async (model, file) => {
     managedObjects.set(model.userData.objectId, model);
     selectManagedObject(model);
-    scheduleSceneInspectorRefresh();
+    notifySelectionChanged('drag-drop-object-selected');
 
     const arrayBuffer = await file.arrayBuffer();
     await uploadAndBroadcast(
@@ -3036,6 +3044,24 @@ function copyPairingCode() {
   return copyText(pairingCode?.textContent?.trim(), 'AIリンクコードをコピーしました');
 }
 
+function serializeInspectorAsset(asset) {
+  if (asset === undefined) return undefined;
+  if (asset === null || typeof asset !== 'object') return asset;
+
+  try {
+    return structuredClone(asset);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(asset));
+    } catch {
+      return {
+        __inspectorSerializationError: true,
+        type: asset?.type || null,
+      };
+    }
+  }
+}
+
 function buildSceneInspectorSnapshot() {
   const objects = {};
   const sortedEntries = Array.from(managedObjects.entries())
@@ -3055,8 +3081,8 @@ function buildSceneInspectorSnapshot() {
     if (obj.userData?.meshPath) {
       entry.meshPath = obj.userData.meshPath;
     }
-    if (obj.userData?.asset) {
-      entry.asset = structuredClone(obj.userData.asset);
+    if (obj.userData?.asset !== undefined) {
+      entry.asset = serializeInspectorAsset(obj.userData.asset);
     }
     if (locks.has(objectId)) {
       const lockInfo = locks.get(objectId);
@@ -3118,6 +3144,23 @@ function scheduleSceneInspectorRefresh() {
     sceneInspectorState.refreshTimer = null;
     refreshSceneInspector();
   }, 80);
+}
+
+function notifyInspectorStateChanged(reason = 'unknown') {
+  sceneInspectorState.lastReason = reason;
+  scheduleSceneInspectorRefresh();
+}
+
+function notifySceneStateChanged(reason) {
+  notifyInspectorStateChanged(`scene:${reason}`);
+}
+
+function notifySelectionChanged(reason) {
+  notifyInspectorStateChanged(`selection:${reason}`);
+}
+
+function notifyConnectionStateChanged(reason) {
+  notifyInspectorStateChanged(`connection:${reason}`);
 }
 
 function setSceneInspectorOpen(nextOpen) {
