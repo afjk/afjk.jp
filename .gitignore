@@ -11,3 +11,6 @@ verdaccio/
 
 node_modules/
 plans/
+!docs/plans/
+!docs/plans/**/
+!docs/plans/**/*.md
