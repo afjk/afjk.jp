@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scene Sync Dev Tool - afjk.jp</title>
+  <meta name="description" content="Developer console for sending Scene Sync payloads, fetching snapshots, and validating AI wrapper requests.">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/css/scenesync-dev-tool.css">
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Scene Sync</p>
+        <h1>Dev Tool Command Console</h1>
+        <p class="lede">Validate JSON, send it through the existing AI wrapper path, inspect the response, and keep a short local history.</p>
+      </div>
+      <div class="hero-links">
+        <a href="/scenesync/">Open Scene Sync</a>
+      </div>
+    </header>
+
+    <section class="panel panel-grid">
+      <label>
+        <span>Room ID</span>
+        <input id="roomId" type="text" autocomplete="off" spellcheck="false" placeholder="abc123">
+      </label>
+      <label>
+        <span>Session ID</span>
+        <input id="sessionId" type="text" autocomplete="off" spellcheck="false" placeholder="v1....">
+      </label>
+      <label>
+        <span>Pairing Code</span>
+        <div class="inline-field">
+          <input id="pairCode" type="text" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" placeholder="123456" maxlength="6">
+          <button id="redeemButton" type="button">Redeem</button>
+        </div>
+      </label>
+      <div class="status-card">
+        <span class="status-label">Session</span>
+        <strong id="sessionStatus">No stored session</strong>
+        <p id="sessionMeta">Redeem a 6-digit code or paste room and session values.</p>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="panel composer">
+        <div class="panel-head">
+          <h2>Payload</h2>
+          <div class="actions">
+            <button id="formatButton" type="button">Format</button>
+            <button id="sendButton" type="button">Send</button>
+            <button id="snapshotButton" type="button">Fetch Snapshot</button>
+          </div>
+        </div>
+        <textarea id="payloadInput" spellcheck="false" aria-label="Scene Sync JSON payload"></textarea>
+        <div class="route-bar">
+          <span>Resolved route</span>
+          <code id="resolvedRoute">broadcast</code>
+        </div>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Validation</h2>
+          </div>
+          <pre id="validationOutput" class="console console-warning">No validation errors.</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Preview</h2>
+          </div>
+          <pre id="previewOutput" class="console">{
+  "kind": "scene-add",
+  "objectId": "dev-cube-1",
+  "name": "Dev Cube",
+  "position": [0, 0.5, 0],
+  "rotation": [0, 0, 0, 1],
+  "scale": [1, 1, 1],
+  "asset": {
+    "type": "primitive",
+    "primitive": "box",
+    "color": "#ff8800"
+  }
+}</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Response / Error</h2>
+          </div>
+          <pre id="responseOutput" class="console">No request sent yet.</pre>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel history-panel">
+      <div class="panel-head">
+        <h2>Recent Payloads</h2>
+        <button id="clearHistoryButton" type="button">Clear History</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </main>
+
+  <script type="module" src="/assets/js/scenesync/dev-tool-console.js"></script>
+</body>
+</html>
