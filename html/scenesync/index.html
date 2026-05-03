@@ -277,6 +277,77 @@
       margin-left: auto;
       flex-shrink: 0;
     }
+    #scene-inspector-panel {
+      position: fixed;
+      top: 96px;
+      right: 12px;
+      width: min(420px, calc(100vw - 24px));
+      max-height: calc(100vh - 120px);
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #fff;
+      z-index: 80;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      font: 12px/1.5 monospace;
+    }
+    #scene-inspector-panel.open {
+      display: flex;
+    }
+    .scene-inspector-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .scene-inspector-header h2 {
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    .scene-inspector-eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.55);
+      margin-bottom: 4px;
+    }
+    .scene-inspector-summary {
+      color: rgba(255,255,255,0.72);
+    }
+    .scene-inspector-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .scene-inspector-actions .chip {
+      justify-content: center;
+    }
+    #scene-inspector-output {
+      margin: 0;
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: #dce7ff;
+      overflow: auto;
+      white-space: pre;
+      word-break: normal;
+      min-height: 180px;
+      flex: 1;
+    }
+    @media (max-width: 720px) {
+      #scene-inspector-panel {
+        top: auto;
+        bottom: 84px;
+        right: 12px;
+        max-height: min(52vh, 420px);
+      }
+    }
 
     /* WebXR ボタン用余白確保 */
     #add-btn.xr-available {
@@ -410,6 +481,12 @@
         <span id="link-label">AIにリンク</span>
       </button>
     </div>
+    <div class="row">
+      <button id="scene-inspector-toggle" class="chip" type="button" title="Scene Inspector を開く">
+        <span>🛠</span>
+        <span>Dev</span>
+      </button>
+    </div>
     <div id="pairing-dialog" class="pairing-dialog" style="display:none;">
       <div class="pairing-content">
         <h3>AI ペアリング</h3>
@@ -443,6 +520,24 @@
   <div id="peers-panel">
     <div id="peers-list"></div>
   </div>
+  <aside id="scene-inspector-panel" aria-live="polite" aria-label="Scene Inspector">
+    <div class="scene-inspector-header">
+      <div>
+        <p class="scene-inspector-eyebrow">Development Tool</p>
+        <h2>Scene Inspector</h2>
+      </div>
+      <button id="scene-inspector-close" class="chip" type="button" title="閉じる">✕</button>
+    </div>
+    <p id="scene-inspector-summary" class="scene-inspector-summary">Scene state is not loaded yet.</p>
+    <div class="scene-inspector-actions">
+      <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
+      <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
+      <a class="chip" href="/scenesync/dev-tool/">Payload Tester</a>
+    </div>
+    <pre id="scene-inspector-output">{
+  "status": "waiting-for-scene"
+}</pre>
+  </aside>
   <button id="add-btn" title="GLB を追加">＋</button>
   <input type="file" id="file-input" accept=".glb" style="display:none">
   <div id="drop-overlay">GLB をドロップして追加</div>
