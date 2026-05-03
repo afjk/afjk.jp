@@ -348,6 +348,11 @@
       color: #ffb4b4;
       white-space: pre-wrap;
     }
+    .scene-inspector-validation.is-warning {
+      background: rgba(255, 184, 77, 0.12);
+      border-color: rgba(255, 184, 77, 0.35);
+      color: #ffe0b3;
+    }
     .scene-inspector-diff {
       padding: 8px 10px;
       border-radius: 8px;
@@ -585,7 +590,7 @@
       <a class="chip" href="/scenesync/dev-tool/">Payload Tester</a>
     </div>
     <p id="scene-inspector-edit-note" class="scene-inspector-note" hidden>
-      Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, and primitive `asset.color` changes are broadcast. Locked objects and non-editable fields are skipped.
+      Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, and primitive `asset.color` changes are broadcast. Root metadata, object add/remove, locks, and non-editable fields are ignored and shown in the preview below.
     </p>
     <div id="scene-inspector-edit-meta" class="scene-inspector-edit-meta" hidden></div>
     <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>

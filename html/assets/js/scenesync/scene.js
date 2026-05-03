@@ -3140,6 +3140,14 @@ function validateColorValue(value, path, errors) {
   return valid;
 }
 
+function addIgnoredSceneInspectorEntry(entries, path, reason) {
+  entries.push({ path, reason });
+}
+
+function formatSceneInspectorIgnoredEntry(entry) {
+  return `${entry.path}: ${entry.reason}`;
+}
+
 function getChangedObjectIds(baseObjects, editedObjects) {
   const changedObjectIds = [];
   const allObjectIds = new Set([
@@ -3156,9 +3164,8 @@ function getChangedObjectIds(baseObjects, editedObjects) {
 
 function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
   const errors = [];
-  const ignoredRootFields = [];
-  const skippedLockedObjects = [];
-  const skippedUnsupported = [];
+  const ignoredEntries = [];
+  const lockedObjectIds = [];
   const actions = [];
   const changedFieldsByObject = [];
 
@@ -3182,7 +3189,11 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
   for (const key of rootKeys) {
     if (key === 'objects') continue;
     if (!valuesEqual(baseSnapshot?.[key], editedSnapshot?.[key])) {
-      ignoredRootFields.push(key);
+      addIgnoredSceneInspectorEntry(
+        ignoredEntries,
+        key,
+        'root metadata is not editable in this prototype'
+      );
     }
   }
 
@@ -3192,15 +3203,23 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
     const editedObject = editedObjects[objectId];
 
     if (!baseObject) {
-      skippedUnsupported.push(`objects.${objectId}: adding new objects is not supported.`);
+      addIgnoredSceneInspectorEntry(
+        ignoredEntries,
+        `objects.${objectId}`,
+        'adding new objects is not supported'
+      );
       continue;
     }
     if (!editedObject || typeof editedObject !== 'object' || Array.isArray(editedObject)) {
-      skippedUnsupported.push(`objects.${objectId}: removing objects is not supported.`);
+      addIgnoredSceneInspectorEntry(
+        ignoredEntries,
+        `objects.${objectId}`,
+        'removing objects is not supported'
+      );
       continue;
     }
     if (isLockedByOthers(objectId)) {
-      skippedLockedObjects.push(objectId);
+      lockedObjectIds.push(objectId);
       continue;
     }
 
@@ -3262,19 +3281,27 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
 
       const unsupportedAssetKeys = changedAssetKeys.filter((key) => key !== 'color');
       if (unsupportedAssetKeys.length > 0) {
-        skippedUnsupported.push(
-          `objects.${objectId}.asset: only asset.color is editable in this prototype.`
-        );
+        for (const key of unsupportedAssetKeys) {
+          addIgnoredSceneInspectorEntry(
+            ignoredEntries,
+            `objects.${objectId}.asset.${key}`,
+            'only asset.color is editable in this prototype'
+          );
+        }
       }
 
       if (changedAssetKeys.includes('color')) {
         if (!editedAsset || typeof editedAsset !== 'object' || Array.isArray(editedAsset)) {
-          skippedUnsupported.push(
-            `objects.${objectId}.asset.color: color edits require an asset object.`
+          addIgnoredSceneInspectorEntry(
+            ignoredEntries,
+            `objects.${objectId}.asset.color`,
+            'color edits require an asset object'
           );
         } else if (!baseAssetIsPrimitive) {
-          skippedUnsupported.push(
-            `objects.${objectId}.asset.color: color edits are limited to primitive objects.`
+          addIgnoredSceneInspectorEntry(
+            ignoredEntries,
+            `objects.${objectId}.asset.color`,
+            'color edits are limited to primitive objects'
           );
         } else if (validateColorValue(editedAsset?.color, `objects.${objectId}.asset.color`, errors)) {
           objectDelta.asset = { color: editedAsset.color };
@@ -3290,7 +3317,11 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
     for (const key of objectKeys) {
       if (EDITABLE_SCENE_OBJECT_FIELDS.has(key)) continue;
       if (!valuesEqual(baseObject?.[key], editedObject?.[key])) {
-        skippedUnsupported.push(`objects.${objectId}.${key}: field is not editable.`);
+        addIgnoredSceneInspectorEntry(
+          ignoredEntries,
+          `objects.${objectId}.${key}`,
+          'field is not editable'
+        );
       }
     }
 
@@ -3305,9 +3336,10 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
     changedObjectCount: changedFieldsByObject.length,
     changedFieldCount: changedFieldsByObject.reduce((count, entry) => count + entry.fields.length, 0),
     changedFieldsByObject,
-    ignoredRootFields,
-    skippedLockedObjects,
-    skippedUnsupported,
+    ignoredEntries: ignoredEntries.sort((left, right) =>
+      left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason)
+    ),
+    lockedObjectIds: lockedObjectIds.sort((left, right) => left.localeCompare(right)),
   };
 
   const operation = actions.length === 0
@@ -3321,14 +3353,13 @@ function formatSceneInspectorSummary(summary) {
   if (!summary) return '';
   if (summary.actionCount === 0) {
     const lines = ['No editable changes detected.'];
-    if (summary.skippedLockedObjects.length > 0) {
-      lines.push(`Skipped locked object(s): ${summary.skippedLockedObjects.join(', ')}`);
+    lines.push('Applied: none');
+    if (summary.lockedObjectIds.length > 0) {
+      lines.push(`Locked objects skipped: ${summary.lockedObjectIds.join(', ')}`);
     }
-    if (summary.ignoredRootFields.length > 0) {
-      lines.push(`Ignored non-editable root field(s): ${summary.ignoredRootFields.join(', ')}`);
-    }
-    if (summary.skippedUnsupported.length > 0) {
-      lines.push(...summary.skippedUnsupported.map((entry) => `Ignored: ${entry}`));
+    if (summary.ignoredEntries.length > 0) {
+      lines.push('Ignored:');
+      lines.push(...summary.ignoredEntries.map((entry) => `- ${formatSceneInspectorIgnoredEntry(entry)}`));
     }
     return lines.join('\n');
   }
@@ -3339,20 +3370,46 @@ function formatSceneInspectorSummary(summary) {
   ];
 
   if (summary.changedFieldsByObject.length > 0) {
+    lines.push('Applied:');
     lines.push(
       ...summary.changedFieldsByObject.map((entry) =>
-        `${entry.objectId}: ${entry.fields.join(', ')}`
+        `- objects.${entry.objectId}: ${entry.fields.join(', ')}`
       )
     );
   }
-  if (summary.skippedLockedObjects.length > 0) {
-    lines.push(`Skipped locked object(s): ${summary.skippedLockedObjects.join(', ')}`);
+  if (summary.lockedObjectIds.length > 0) {
+    lines.push(`Locked objects skipped: ${summary.lockedObjectIds.join(', ')}`);
   }
-  if (summary.ignoredRootFields.length > 0) {
-    lines.push(`Ignored non-editable root field(s): ${summary.ignoredRootFields.join(', ')}`);
+  if (summary.ignoredEntries.length > 0) {
+    lines.push('Ignored:');
+    lines.push(...summary.ignoredEntries.map((entry) => `- ${formatSceneInspectorIgnoredEntry(entry)}`));
   }
-  if (summary.skippedUnsupported.length > 0) {
-    lines.push(...summary.skippedUnsupported.map((entry) => `Ignored: ${entry}`));
+
+  return lines.join('\n');
+}
+
+function formatSceneInspectorValidationMessage(summary) {
+  if (!summary) return '';
+
+  const lines = [];
+  if (summary.actionCount === 0) {
+    lines.push('No editable changes will be broadcast.');
+  } else if (summary.ignoredEntries.length > 0) {
+    lines.push('Some changes are not editable and will be ignored.');
+  } else {
+    return '';
+  }
+
+  const previewEntries = summary.ignoredEntries.slice(0, 4);
+  if (previewEntries.length > 0) {
+    lines.push(...previewEntries.map((entry) => `- ${formatSceneInspectorIgnoredEntry(entry)}`));
+    if (summary.ignoredEntries.length > previewEntries.length) {
+      lines.push(`- ...and ${summary.ignoredEntries.length - previewEntries.length} more ignored change(s).`);
+    }
+  }
+
+  if (summary.lockedObjectIds.length > 0) {
+    lines.push(`- Locked objects skipped: ${summary.lockedObjectIds.join(', ')}`);
   }
 
   return lines.join('\n');
@@ -3394,16 +3451,28 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (sceneInspectorEditMetaEl) {
     const baseTime = baseSnapshot?.generatedAt || 'unknown';
     sceneInspectorEditMetaEl.textContent =
-      `Base snapshot captured at ${baseTime}.\nOnly existing object fields are applied. Object add/remove, ids, locks, room, connection, Loom, meshPath, and arbitrary metadata edits are ignored.`;
+      `Base snapshot captured at ${baseTime}.\nApplied fields: existing object \`name\`, \`position\`, \`rotation\`, \`scale\`, \`visible\`, and primitive \`asset.color\`.\nIgnored fields: root metadata, object add/remove, ids, locks, room, connection, environment, Loom graph state, \`meshPath\`, and all other non-editable fields.`;
   }
 
   const hasErrors = sceneInspectorState.validationErrors.length > 0;
-  sceneInspectorValidationEl.hidden = !hasErrors;
+  const summary = sceneInspectorState.diffSummary;
+  const hasWarnings = !hasErrors && !!summary && (summary.actionCount === 0 || summary.ignoredEntries.length > 0);
+  sceneInspectorValidationEl.hidden = !hasErrors && !hasWarnings;
+  sceneInspectorValidationEl?.classList.toggle('is-error', hasErrors);
+  sceneInspectorValidationEl?.classList.toggle('is-warning', hasWarnings);
   if (sceneInspectorValidationEl) {
-    sceneInspectorValidationEl.textContent = sceneInspectorState.validationErrors.join('\n');
+    if (hasErrors) {
+      sceneInspectorValidationEl.textContent = sceneInspectorState.validationErrors
+        .map((message) => `- ${message}`)
+        .join('\n');
+    } else if (hasWarnings) {
+      sceneInspectorValidationEl.textContent = formatSceneInspectorValidationMessage(summary);
+    } else {
+      sceneInspectorValidationEl.textContent = '';
+    }
   }
 
-  const summaryText = formatSceneInspectorSummary(sceneInspectorState.diffSummary);
+  const summaryText = formatSceneInspectorSummary(summary);
   sceneInspectorDiffEl.hidden = !summaryText;
   if (sceneInspectorDiffEl) {
     sceneInspectorDiffEl.textContent = summaryText;
@@ -3446,7 +3515,7 @@ function validateSceneInspectorDraft() {
     parsedSnapshot = JSON.parse(draftText);
   } catch (error) {
     sceneInspectorState.parsedSnapshot = null;
-    sceneInspectorState.validationErrors = [error.message];
+    sceneInspectorState.validationErrors = [`Invalid JSON: ${error.message}`];
     sceneInspectorState.diffSummary = null;
     renderSceneInspector();
     return null;
