@@ -11,3 +11,7 @@ verdaccio/
 
 node_modules/
 plans/
+
+# Track repository planning docs under docs/plans/
+!docs/plans/
+!docs/plans/**/*.md
