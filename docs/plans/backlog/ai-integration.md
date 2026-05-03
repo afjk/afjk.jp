@@ -23,6 +23,7 @@ Scene Sync と Loom を AI から再現性高く扱うために、stable action 
 ## near-term implementation tasks
 
 - docs と runtime response shape の差分洗い出し
+- error.code / retryable / unauthorized の runtime normalization
 - scene snapshot / before-after policy の固定
 - current scene context injection point の整理
 - Dev Tool から AI instruction を送る前提条件の明文化
@@ -53,9 +54,9 @@ Scene Sync と Loom を AI から再現性高く扱うために、stable action 
 ## suggested first PR
 
 - runtime response shape alignment diff doc と minimal reconciliation plan
+- MCP runtime の structured error normalization と sample client update
 
 ## agent notes
 
 - action 名を branch ごとに揺らさない
 - scene context は「何を inject するか」を先に固定してから UI を広げる
-

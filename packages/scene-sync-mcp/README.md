@@ -226,6 +226,17 @@ Request a screenshot from the browser (may take a few seconds).
 ### scene_sync_revoke
 Revoke the current link. The user must redeem a new code to continue.
 
+## Response Contract
+
+- Success responses are JSON text with `ok: true` and tool-specific fields.
+- Error responses are JSON text with `ok: false` and `error: { code, message, retryable }`.
+- `validation_error` and `unauthorized` are non-retryable.
+- Browser command failures can still appear inside a successful wrapper response
+  as `result.ok: false`; check the nested result when verification matters.
+- Browser command success responses pass through room context fields such as
+  `room`, `peers`, `userPresent`, and `targetPeerId` when the backend returns
+  them.
+
 ## Environment Variables
 
 ### SCENE_SYNC_BASE_URL
@@ -320,6 +331,9 @@ The user has not yet redeemed a pairing code. Ask them to:
 
 ### "Link expired"
 The pairing code has expired. Ask the user to repeat the link flow above.
+
+These cases map to `error.code = unauthorized` when they are raised by a tool
+that requires an active link.
 
 ### "userPresent=false"
 The Scene Sync room is open in the browser, but the user may not be actively viewing it. Ask them to focus the browser window.
