@@ -54,6 +54,9 @@ const environmentManager = createEnvironmentManager({
   dom,
   showToast,
 });
+dom.envSelect?.addEventListener('change', () => {
+  notifySceneStateChanged('environment-select-change');
+});
 
 setupXrButtons({
   renderer,
@@ -815,6 +818,7 @@ function sendSelectedDelta() {
     rotation: rot,
     scale: scl,
   });
+  notifySceneStateChanged('selected-transform-sent');
 }
 
 // ── サンプルオブジェクト ──────────────────────────────────
@@ -1161,6 +1165,7 @@ function selectManagedObject(obj) {
   showToolbar();
   updateToolbarActive(transformCtrl.mode);
   updatePeersList();
+  notifySelectionChanged('object-selected');
 }
 
 function selectObjectAt(clientX, clientY) {
@@ -1196,6 +1201,7 @@ function selectObjectAt(clientX, clientY) {
     transformCtrl.detach();
     hideToolbar();
     updatePeersList();
+    notifySelectionChanged('selection-cleared-raycast');
   }
 }
 
@@ -1329,6 +1335,7 @@ function deleteSelectedObject() {
     );
 
     broadcast({ kind: 'scene-remove', objectId: deleteId });
+    notifySceneStateChanged('selected-object-deleted');
   }
 }
 
@@ -1382,6 +1389,7 @@ btnDeselect?.addEventListener('click', () => {
   }
   transformCtrl.detach();
   hideToolbar();
+  notifySelectionChanged('selection-cleared-button');
 });
 
 btnDelete?.addEventListener('click', () => {
@@ -1573,6 +1581,13 @@ const dotEl = statusEl.querySelector('.dot');
 const nicknameLabel = document.getElementById('nickname-label');
 const nicknameChip = document.getElementById('nickname-chip');
 const roomSectionEl = document.getElementById('room-section');
+const sceneInspectorToggleBtn = document.getElementById('scene-inspector-toggle');
+const sceneInspectorPanel = document.getElementById('scene-inspector-panel');
+const sceneInspectorCloseBtn = document.getElementById('scene-inspector-close');
+const sceneInspectorRefreshBtn = document.getElementById('scene-inspector-refresh');
+const sceneInspectorCopyBtn = document.getElementById('scene-inspector-copy');
+const sceneInspectorSummaryEl = document.getElementById('scene-inspector-summary');
+const sceneInspectorOutputEl = document.getElementById('scene-inspector-output');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -1691,6 +1706,11 @@ let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
 let reconnectTimer = null;
+const sceneInspectorState = {
+  isOpen: false,
+  refreshTimer: null,
+  lastReason: null,
+};
 
 // ── Loom 統合初期化 ──────────────────────────────────
 const loomIntegration = createSceneSyncLoomIntegration({
@@ -1806,6 +1826,7 @@ function applyRoomCode(code) {
   u.searchParams.set('room', cleaned);
   history.replaceState(null, '', u.toString());
   reconnectPresence();
+  notifyConnectionStateChanged('room-applied');
 }
 
 function generateRoom() {
@@ -1822,6 +1843,7 @@ function clearRoom() {
   u.searchParams.delete('room');
   history.replaceState(null, '', u.toString());
   reconnectPresence();
+  notifyConnectionStateChanged('room-cleared');
 }
 
 function copyRoomUrl() {
@@ -1936,6 +1958,7 @@ function connectPresence() {
         presenceState.room = data.room;
         updateStatus(true);
         updatePeersList();
+        notifyConnectionStateChanged('presence-welcome');
         break;
 
       case 'peers': {
@@ -1961,6 +1984,7 @@ function connectPresence() {
         if (isFirstPeers && !sceneReceived) {
           requestSceneFromPeer();
         }
+        notifyConnectionStateChanged('peers-updated');
         break;
       }
 
@@ -1977,6 +2001,7 @@ function connectPresence() {
     updateStatus(false);
     remoteAvatarManager.disposeAllRemoteAvatars();
     updatePeersList();
+    notifyConnectionStateChanged('presence-closed');
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -2002,6 +2027,7 @@ function updateStatus(connected) {
     dotEl.className = 'dot off';
     statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
   }
+  notifyConnectionStateChanged(connected ? 'status-connected' : 'status-disconnected');
 }
 
 // ── シーンリクエスト（後から参加したクライアント用） ───────
@@ -2156,6 +2182,7 @@ function handleHandoff(data) {
           showToast?.('Loom graph restore failed');
         }
       }
+      notifySceneStateChanged('scene-state-handoff');
       break;
     }
     case 'scene-request': {
@@ -2191,6 +2218,7 @@ function handleHandoff(data) {
         );
         presenceState.historyManager.push(historyEntry);
       }
+      notifySceneStateChanged('scene-delta-handoff');
       break;
     }
     case 'scene-add': {
@@ -2208,6 +2236,7 @@ function handleHandoff(data) {
         );
         presenceState.historyManager.push(historyEntry);
       }
+      notifySceneStateChanged('scene-add-handoff');
       break;
     }
     case 'scene-remove': {
@@ -2233,6 +2262,7 @@ function handleHandoff(data) {
       }
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(objectId);
+      notifySceneStateChanged('scene-remove-handoff');
       break;
     }
     case 'scene-mesh': {
@@ -2266,6 +2296,7 @@ function handleHandoff(data) {
           applyTransform(model, payload);
         }
         managedObjects.set(payload.objectId, model);
+        notifySceneStateChanged('scene-mesh-loaded');
       }).catch((err) => {
         removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
@@ -2278,7 +2309,10 @@ function handleHandoff(data) {
           fallback.userData.objectId = payload.objectId;
           scene.add(fallback);
           managedObjects.set(payload.objectId, fallback);
+          notifySceneStateChanged('scene-mesh-fallback-created');
+          return;
         }
+        notifySceneStateChanged('scene-mesh-load-failed');
       });
       break;
     }
@@ -2286,12 +2320,14 @@ function handleHandoff(data) {
       locks.set(payload.objectId, data.from);
       addLockOverlay(payload.objectId, data.from);
       updatePeersList();
+      notifySceneStateChanged('scene-lock-handoff');
       break;
     }
     case 'scene-unlock': {
       locks.delete(payload.objectId);
       removeLockOverlay(payload.objectId);
       updatePeersList();
+      notifySceneStateChanged('scene-unlock-handoff');
       break;
     }
     case 'scene-env': {
@@ -2306,6 +2342,7 @@ function handleHandoff(data) {
           presenceState.historyManager.push(historyEntry);
         }
       }
+      notifySceneStateChanged('scene-env-handoff');
       break;
     }
     case 'scene-avatar': {
@@ -2316,6 +2353,7 @@ function handleHandoff(data) {
       payload.actions?.forEach(action => {
         handleHandoff({ ...data, payload: action });
       });
+      notifySceneStateChanged('scene-batch-handoff');
       break;
     }
     case 'ai-command': {
@@ -2496,6 +2534,7 @@ async function uploadGlbFromUrl(url, params = {}) {
   model.userData.name = file.name;
   managedObjects.set(model.userData.objectId, model);
   selectManagedObject(model);
+  notifySceneStateChanged('glb-uploaded-from-url');
 
   const arrayBuffer = await blob.arrayBuffer();
   await uploadAndBroadcast(
@@ -2608,6 +2647,7 @@ function addOrUpdateObject(objectId, info) {
 
   existing.userData.name = info.name;
   applyTransform(existing, info);
+  notifySceneStateChanged('managed-object-updated');
 }
 
 function loadMeshObject(objectId, info, meshPath, existing) {
@@ -2638,7 +2678,9 @@ function loadMeshObject(objectId, info, meshPath, existing) {
     console.warn('Failed to load mesh for', objectId, ':', err);
     if (!existing) {
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+      return;
     }
+    notifySceneStateChanged('mesh-load-failed');
   });
 }
 
@@ -2654,6 +2696,7 @@ function replaceManagedObject(objectId, nextObject, info) {
   applyTransform(nextObject, info);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
+  notifySceneStateChanged('managed-object-replaced');
 }
 
 function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
@@ -2754,6 +2797,7 @@ function applyAssetDelta(obj, asset) {
   if (asset.color) {
     applyObjectColor(obj, asset.color);
   }
+  notifySceneStateChanged('asset-delta-applied');
 }
 
 // ── Undo/Redo 処理 ──────────────────────────────────────
@@ -2798,6 +2842,7 @@ function applyOperationToScene(operation) {
       }
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(operation.objectId);
+      notifySceneStateChanged('undo-redo-scene-remove');
       break;
     }
     case 'scene-delta': {
@@ -2808,6 +2853,7 @@ function applyOperationToScene(operation) {
           applyAssetDelta(obj, operation.asset);
         }
       }
+      notifySceneStateChanged('undo-redo-scene-delta');
       break;
     }
     case 'scene-env': {
@@ -2815,10 +2861,12 @@ function applyOperationToScene(operation) {
         source: 'undo-redo',
         broadcastChange: false,
       });
+      notifySceneStateChanged('undo-redo-scene-env');
       break;
     }
     case 'scene-batch': {
       operation.actions?.forEach(action => applyOperationToScene(action));
+      notifySceneStateChanged('undo-redo-scene-batch');
       break;
     }
   }
@@ -2874,6 +2922,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       actualMeshPath
     );
     presenceState.historyManager.push(historyEntry);
+    notifySceneStateChanged('object-uploaded');
 
     broadcast({
       kind: 'scene-add',
@@ -2910,6 +2959,7 @@ const dragDropManager = new DragDropManager({
   onLoaded: async (model, file) => {
     managedObjects.set(model.userData.objectId, model);
     selectManagedObject(model);
+    notifySelectionChanged('drag-drop-object-selected');
 
     const arrayBuffer = await file.arrayBuffer();
     await uploadAndBroadcast(
@@ -2992,6 +3042,137 @@ async function copyText(text, successMessage = 'コピーしました') {
 
 function copyPairingCode() {
   return copyText(pairingCode?.textContent?.trim(), 'AIリンクコードをコピーしました');
+}
+
+function serializeInspectorAsset(asset) {
+  if (asset === undefined) return undefined;
+  if (asset === null || typeof asset !== 'object') return asset;
+
+  try {
+    return structuredClone(asset);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(asset));
+    } catch {
+      return {
+        __inspectorSerializationError: true,
+        type: asset?.type || null,
+      };
+    }
+  }
+}
+
+function buildSceneInspectorSnapshot() {
+  const objects = {};
+  const sortedEntries = Array.from(managedObjects.entries())
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+
+  for (const [objectId, obj] of sortedEntries) {
+    const entry = {
+      name: obj.userData?.name || obj.name || objectId,
+      type: obj.type,
+      position: obj.position.toArray(),
+      rotation: obj.quaternion.toArray(),
+      scale: obj.scale.toArray(),
+      visible: obj.visible !== false,
+      childCount: obj.children?.length || 0,
+    };
+
+    if (obj.userData?.meshPath) {
+      entry.meshPath = obj.userData.meshPath;
+    }
+    if (obj.userData?.asset !== undefined) {
+      entry.asset = serializeInspectorAsset(obj.userData.asset);
+    }
+    if (locks.has(objectId)) {
+      const lockInfo = locks.get(objectId);
+      entry.lockedBy = {
+        id: lockInfo?.id || null,
+        nickname: lockInfo?.nickname || null,
+      };
+    }
+
+    objects[objectId] = entry;
+  }
+
+  const snapshot = {
+    kind: 'scene-inspector',
+    room: presenceState.room || activeRoomCode || null,
+    connection: {
+      connected: presenceState.ws?.readyState === WebSocket.OPEN,
+      peerId: presenceState.id,
+      userId: presenceState.userId,
+      sceneReceived,
+    },
+    environment: {
+      currentEnvId: environmentManager.getCurrentEnvId?.() || null,
+      appliedEnvId: environmentManager.getAppliedEnvId?.() || null,
+    },
+    selection: {
+      objectId: transformCtrl.object?.userData?.objectId || null,
+    },
+    objectCount: sortedEntries.length,
+    objects,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const loomGraphState = loomIntegration.exportState();
+  if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
+    snapshot.loomGraphs = loomGraphState;
+  }
+
+  return snapshot;
+}
+
+function refreshSceneInspector() {
+  const snapshot = buildSceneInspectorSnapshot();
+  const roomLabel = snapshot.room || 'no-room';
+  const selectedLabel = snapshot.selection.objectId || 'none';
+  if (sceneInspectorSummaryEl) {
+    sceneInspectorSummaryEl.textContent =
+      `Room ${roomLabel} | ${snapshot.objectCount} objects | selected ${selectedLabel} | ${new Date().toLocaleTimeString()}`;
+  }
+  if (sceneInspectorOutputEl) {
+    sceneInspectorOutputEl.textContent = JSON.stringify(snapshot, null, 2);
+  }
+}
+
+function scheduleSceneInspectorRefresh() {
+  if (!sceneInspectorState.isOpen) return;
+  if (sceneInspectorState.refreshTimer) return;
+  sceneInspectorState.refreshTimer = setTimeout(() => {
+    sceneInspectorState.refreshTimer = null;
+    refreshSceneInspector();
+  }, 80);
+}
+
+function notifyInspectorStateChanged(reason = 'unknown') {
+  sceneInspectorState.lastReason = reason;
+  scheduleSceneInspectorRefresh();
+}
+
+function notifySceneStateChanged(reason) {
+  notifyInspectorStateChanged(`scene:${reason}`);
+}
+
+function notifySelectionChanged(reason) {
+  notifyInspectorStateChanged(`selection:${reason}`);
+}
+
+function notifyConnectionStateChanged(reason) {
+  notifyInspectorStateChanged(`connection:${reason}`);
+}
+
+function setSceneInspectorOpen(nextOpen) {
+  sceneInspectorState.isOpen = nextOpen;
+  sceneInspectorPanel?.classList.toggle('open', nextOpen);
+  sceneInspectorToggleBtn?.classList.toggle('active', nextOpen);
+  if (sceneInspectorToggleBtn) {
+    sceneInspectorToggleBtn.title = nextOpen ? 'Scene Inspector を閉じる' : 'Scene Inspector を開く';
+  }
+  if (nextOpen) {
+    refreshSceneInspector();
+  }
 }
 
 function showPairingDialogLinked(expiresAtMs) {
@@ -3078,6 +3259,16 @@ btnCancelPairing?.addEventListener('click', cancelPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
 btnCopyPairingCode?.addEventListener('click', copyPairingCode);
 pairingCode?.addEventListener('click', copyPairingCode);
+sceneInspectorToggleBtn?.addEventListener('click', () => {
+  setSceneInspectorOpen(!sceneInspectorState.isOpen);
+});
+sceneInspectorCloseBtn?.addEventListener('click', () => {
+  setSceneInspectorOpen(false);
+});
+sceneInspectorRefreshBtn?.addEventListener('click', refreshSceneInspector);
+sceneInspectorCopyBtn?.addEventListener('click', () => {
+  copyText(sceneInspectorOutputEl?.textContent?.trim(), 'Scene JSON をコピーしました');
+});
 pairingDialog?.addEventListener('click', (event) => {
   if (event.target === pairingDialog) {
     cancelPairing();
@@ -3086,12 +3277,18 @@ pairingDialog?.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && pairingDialog?.style.display === 'flex') {
     cancelPairing();
+    return;
+  }
+  if (event.key === 'Escape' && sceneInspectorState.isOpen) {
+    setSceneInspectorOpen(false);
   }
 });
 
 presenceState.linkManager.onStatusChange = () => {
   updateLinkButtonState();
 };
+
+setSceneInspectorOpen(false);
 
 if (sceneSyncOperatorLink) {
   if (SCENE_SYNC_OPERATOR_URL) {
