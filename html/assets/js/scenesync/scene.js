@@ -1586,7 +1586,16 @@ const sceneInspectorPanel = document.getElementById('scene-inspector-panel');
 const sceneInspectorCloseBtn = document.getElementById('scene-inspector-close');
 const sceneInspectorRefreshBtn = document.getElementById('scene-inspector-refresh');
 const sceneInspectorCopyBtn = document.getElementById('scene-inspector-copy');
+const sceneInspectorEditBtn = document.getElementById('scene-inspector-edit');
+const sceneInspectorValidateBtn = document.getElementById('scene-inspector-validate');
+const sceneInspectorApplyBtn = document.getElementById('scene-inspector-apply');
+const sceneInspectorCancelBtn = document.getElementById('scene-inspector-cancel');
 const sceneInspectorSummaryEl = document.getElementById('scene-inspector-summary');
+const sceneInspectorEditNoteEl = document.getElementById('scene-inspector-edit-note');
+const sceneInspectorEditMetaEl = document.getElementById('scene-inspector-edit-meta');
+const sceneInspectorValidationEl = document.getElementById('scene-inspector-validation');
+const sceneInspectorDiffEl = document.getElementById('scene-inspector-diff');
+const sceneInspectorEditorEl = document.getElementById('scene-inspector-editor');
 const sceneInspectorOutputEl = document.getElementById('scene-inspector-output');
 
 function resolvePresenceUrl() {
@@ -1708,8 +1717,14 @@ let sceneRequestAttempt = 0;
 let reconnectTimer = null;
 const sceneInspectorState = {
   isOpen: false,
+  isEditing: false,
   refreshTimer: null,
   lastReason: null,
+  baseSnapshot: null,
+  draftText: '',
+  parsedSnapshot: null,
+  validationErrors: [],
+  diffSummary: null,
 };
 
 // ── Loom 統合初期化 ──────────────────────────────────
@@ -2196,9 +2211,11 @@ function handleHandoff(data) {
       const beforePos = obj.position.toArray();
       const beforeRot = obj.quaternion.toArray();
       const beforeScl = obj.scale.toArray();
+      if (typeof payload.name === 'string') applyObjectName(obj, payload.name);
       if (payload.position) obj.position.fromArray(payload.position);
       if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
       if (payload.scale) obj.scale.fromArray(payload.scale);
+      if (typeof payload.visible === 'boolean') applyObjectVisibility(obj, payload.visible);
       if (payload.asset) {
         applyAssetDelta(obj, payload.asset);
       }
@@ -2645,8 +2662,9 @@ function addOrUpdateObject(objectId, info) {
     return;
   }
 
-  existing.userData.name = info.name;
+  applyObjectName(existing, info.name);
   applyTransform(existing, info);
+  applyObjectVisibility(existing, info.visible);
   notifySceneStateChanged('managed-object-updated');
 }
 
@@ -2692,8 +2710,9 @@ function replaceManagedObject(objectId, nextObject, info) {
   }
 
   nextObject.userData.objectId = objectId;
-  nextObject.userData.name = info.name;
+  applyObjectName(nextObject, info.name);
   applyTransform(nextObject, info);
+  applyObjectVisibility(nextObject, info.visible);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
   notifySceneStateChanged('managed-object-replaced');
@@ -2704,7 +2723,7 @@ function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
   const material = new THREE.MeshStandardMaterial({ color });
   const object = new THREE.Mesh(geometry, material);
   object.userData.objectId = objectId;
-  object.userData.name = info.name;
+  applyObjectName(object, info.name);
   return object;
 }
 
@@ -2737,7 +2756,7 @@ function buildPrimitiveObject(objectId, info, asset) {
   });
   const object = new THREE.Mesh(geometry, material);
   object.userData.objectId = objectId;
-  object.userData.name = info.name;
+  applyObjectName(object, info.name);
   object.userData.asset = structuredClone(asset);
   return object;
 }
@@ -2752,7 +2771,7 @@ function buildUnsupportedAssetObject(objectId, info) {
   group.add(label);
 
   group.userData.objectId = objectId;
-  group.userData.name = info.name;
+  applyObjectName(group, info.name);
   if (info.asset) group.userData.asset = structuredClone(info.asset);
   return group;
 }
@@ -2761,6 +2780,17 @@ function applyTransform(obj, info) {
   if (info.position) obj.position.fromArray(info.position);
   if (info.rotation) obj.quaternion.fromArray(info.rotation);
   if (info.scale) obj.scale.fromArray(info.scale);
+}
+
+function applyObjectName(obj, name) {
+  if (!obj || typeof name !== 'string') return;
+  obj.userData.name = name;
+  obj.name = name;
+}
+
+function applyObjectVisibility(obj, visible) {
+  if (!obj || typeof visible !== 'boolean') return;
+  obj.visible = visible;
 }
 
 function applyObjectColor(obj, color) {
@@ -2848,7 +2878,9 @@ function applyOperationToScene(operation) {
     case 'scene-delta': {
       const obj = managedObjects.get(operation.objectId);
       if (obj) {
+        if (typeof operation.name === 'string') applyObjectName(obj, operation.name);
         applyTransform(obj, operation);
+        if (typeof operation.visible === 'boolean') applyObjectVisibility(obj, operation.visible);
         if (operation.asset) {
           applyAssetDelta(obj, operation.asset);
         }
@@ -3062,6 +3094,394 @@ function serializeInspectorAsset(asset) {
   }
 }
 
+const EDITABLE_SCENE_OBJECT_FIELDS = new Set([
+  'name',
+  'label',
+  'position',
+  'rotation',
+  'scale',
+  'visible',
+  'asset',
+]);
+
+function cloneInspectorValue(value) {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object') return value;
+
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value));
+  }
+}
+
+function valuesEqual(left, right) {
+  if (left === right) return true;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function validateNumberArray(value, size, path, errors) {
+  if (!Array.isArray(value) || value.length !== size) {
+    errors.push(`${path} must be an array of ${size} finite numbers.`);
+    return false;
+  }
+  if (!value.every(entry => Number.isFinite(entry))) {
+    errors.push(`${path} must contain only finite numbers.`);
+    return false;
+  }
+  return true;
+}
+
+function validateColorValue(value, path, errors) {
+  const valid = typeof value === 'string' || typeof value === 'number';
+  if (!valid) {
+    errors.push(`${path} must be a string or number color value.`);
+  }
+  return valid;
+}
+
+function getChangedObjectIds(baseObjects, editedObjects) {
+  const changedObjectIds = [];
+  const allObjectIds = new Set([
+    ...Object.keys(baseObjects || {}),
+    ...Object.keys(editedObjects || {}),
+  ]);
+  for (const objectId of allObjectIds) {
+    if (!valuesEqual(baseObjects?.[objectId], editedObjects?.[objectId])) {
+      changedObjectIds.push(objectId);
+    }
+  }
+  return changedObjectIds.sort((left, right) => left.localeCompare(right));
+}
+
+function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
+  const errors = [];
+  const ignoredRootFields = [];
+  const skippedLockedObjects = [];
+  const skippedUnsupported = [];
+  const actions = [];
+  const changedFieldsByObject = [];
+
+  if (!editedSnapshot || typeof editedSnapshot !== 'object' || Array.isArray(editedSnapshot)) {
+    errors.push('Edited JSON must be an object.');
+    return { errors, summary: null, operation: null };
+  }
+
+  if (!editedSnapshot.objects || typeof editedSnapshot.objects !== 'object' || Array.isArray(editedSnapshot.objects)) {
+    errors.push('Edited JSON must include an `objects` map.');
+    return { errors, summary: null, operation: null };
+  }
+
+  const baseObjects = baseSnapshot?.objects || {};
+  const editedObjects = editedSnapshot.objects || {};
+
+  const rootKeys = new Set([
+    ...Object.keys(baseSnapshot || {}),
+    ...Object.keys(editedSnapshot || {}),
+  ]);
+  for (const key of rootKeys) {
+    if (key === 'objects') continue;
+    if (!valuesEqual(baseSnapshot?.[key], editedSnapshot?.[key])) {
+      ignoredRootFields.push(key);
+    }
+  }
+
+  const changedObjectIds = getChangedObjectIds(baseObjects, editedObjects);
+  for (const objectId of changedObjectIds) {
+    const baseObject = baseObjects[objectId];
+    const editedObject = editedObjects[objectId];
+
+    if (!baseObject) {
+      skippedUnsupported.push(`objects.${objectId}: adding new objects is not supported.`);
+      continue;
+    }
+    if (!editedObject || typeof editedObject !== 'object' || Array.isArray(editedObject)) {
+      skippedUnsupported.push(`objects.${objectId}: removing objects is not supported.`);
+      continue;
+    }
+    if (isLockedByOthers(objectId)) {
+      skippedLockedObjects.push(objectId);
+      continue;
+    }
+
+    const objectDelta = {
+      kind: 'scene-delta',
+      objectId,
+    };
+    const changedFields = [];
+
+    const editedLabel = typeof editedObject.label === 'string' ? editedObject.label : undefined;
+    const editedName = typeof editedObject.name === 'string'
+      ? editedObject.name
+      : editedLabel;
+    if (editedName !== undefined && editedName !== baseObject.name) {
+      objectDelta.name = editedName;
+      changedFields.push('name');
+    }
+
+    if (!valuesEqual(baseObject.position, editedObject.position)) {
+      if (validateNumberArray(editedObject.position, 3, `objects.${objectId}.position`, errors)) {
+        objectDelta.position = [...editedObject.position];
+        changedFields.push('position');
+      }
+    }
+
+    if (!valuesEqual(baseObject.rotation, editedObject.rotation)) {
+      if (validateNumberArray(editedObject.rotation, 4, `objects.${objectId}.rotation`, errors)) {
+        objectDelta.rotation = [...editedObject.rotation];
+        changedFields.push('rotation');
+      }
+    }
+
+    if (!valuesEqual(baseObject.scale, editedObject.scale)) {
+      if (validateNumberArray(editedObject.scale, 3, `objects.${objectId}.scale`, errors)) {
+        objectDelta.scale = [...editedObject.scale];
+        changedFields.push('scale');
+      }
+    }
+
+    if (!valuesEqual(baseObject.visible, editedObject.visible)) {
+      if (typeof editedObject.visible !== 'boolean') {
+        errors.push(`objects.${objectId}.visible must be a boolean.`);
+      } else {
+        objectDelta.visible = editedObject.visible;
+        changedFields.push('visible');
+      }
+    }
+
+    if (!valuesEqual(baseObject.asset, editedObject.asset)) {
+      const baseAsset = baseObject.asset;
+      const editedAsset = editedObject.asset;
+      const baseAssetIsPrimitive = baseAsset?.type === 'primitive';
+      const assetKeys = new Set([
+        ...Object.keys(baseAsset || {}),
+        ...Object.keys(editedAsset || {}),
+      ]);
+      const changedAssetKeys = Array.from(assetKeys)
+        .filter((key) => !valuesEqual(baseAsset?.[key], editedAsset?.[key]));
+
+      const unsupportedAssetKeys = changedAssetKeys.filter((key) => key !== 'color');
+      if (unsupportedAssetKeys.length > 0) {
+        skippedUnsupported.push(
+          `objects.${objectId}.asset: only asset.color is editable in this prototype.`
+        );
+      }
+
+      if (changedAssetKeys.includes('color')) {
+        if (!editedAsset || typeof editedAsset !== 'object' || Array.isArray(editedAsset)) {
+          skippedUnsupported.push(
+            `objects.${objectId}.asset.color: color edits require an asset object.`
+          );
+        } else if (!baseAssetIsPrimitive) {
+          skippedUnsupported.push(
+            `objects.${objectId}.asset.color: color edits are limited to primitive objects.`
+          );
+        } else if (validateColorValue(editedAsset?.color, `objects.${objectId}.asset.color`, errors)) {
+          objectDelta.asset = { color: editedAsset.color };
+          changedFields.push('asset.color');
+        }
+      }
+    }
+
+    const objectKeys = new Set([
+      ...Object.keys(baseObject || {}),
+      ...Object.keys(editedObject || {}),
+    ]);
+    for (const key of objectKeys) {
+      if (EDITABLE_SCENE_OBJECT_FIELDS.has(key)) continue;
+      if (!valuesEqual(baseObject?.[key], editedObject?.[key])) {
+        skippedUnsupported.push(`objects.${objectId}.${key}: field is not editable.`);
+      }
+    }
+
+    if (changedFields.length > 0) {
+      actions.push(objectDelta);
+      changedFieldsByObject.push({ objectId, fields: changedFields });
+    }
+  }
+
+  const summary = {
+    actionCount: actions.length,
+    changedObjectCount: changedFieldsByObject.length,
+    changedFieldCount: changedFieldsByObject.reduce((count, entry) => count + entry.fields.length, 0),
+    changedFieldsByObject,
+    ignoredRootFields,
+    skippedLockedObjects,
+    skippedUnsupported,
+  };
+
+  const operation = actions.length === 0
+    ? null
+    : (actions.length === 1 ? actions[0] : { kind: 'scene-batch', actions });
+
+  return { errors, summary, operation };
+}
+
+function formatSceneInspectorSummary(summary) {
+  if (!summary) return '';
+  if (summary.actionCount === 0) {
+    const lines = ['No editable changes detected.'];
+    if (summary.skippedLockedObjects.length > 0) {
+      lines.push(`Skipped locked object(s): ${summary.skippedLockedObjects.join(', ')}`);
+    }
+    if (summary.ignoredRootFields.length > 0) {
+      lines.push(`Ignored non-editable root field(s): ${summary.ignoredRootFields.join(', ')}`);
+    }
+    if (summary.skippedUnsupported.length > 0) {
+      lines.push(...summary.skippedUnsupported.map((entry) => `Ignored: ${entry}`));
+    }
+    return lines.join('\n');
+  }
+
+  const lines = [
+    `Editable changes: ${summary.changedFieldCount} field(s) across ${summary.changedObjectCount} object(s).`,
+    `Broadcast payload: ${summary.actionCount === 1 ? 'scene-delta' : `scene-batch (${summary.actionCount} scene-delta actions)`}.`,
+  ];
+
+  if (summary.changedFieldsByObject.length > 0) {
+    lines.push(
+      ...summary.changedFieldsByObject.map((entry) =>
+        `${entry.objectId}: ${entry.fields.join(', ')}`
+      )
+    );
+  }
+  if (summary.skippedLockedObjects.length > 0) {
+    lines.push(`Skipped locked object(s): ${summary.skippedLockedObjects.join(', ')}`);
+  }
+  if (summary.ignoredRootFields.length > 0) {
+    lines.push(`Ignored non-editable root field(s): ${summary.ignoredRootFields.join(', ')}`);
+  }
+  if (summary.skippedUnsupported.length > 0) {
+    lines.push(...summary.skippedUnsupported.map((entry) => `Ignored: ${entry}`));
+  }
+
+  return lines.join('\n');
+}
+
+function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
+  const roomLabel = snapshot.room || 'no-room';
+  const selectedLabel = snapshot.selection.objectId || 'none';
+  if (sceneInspectorSummaryEl) {
+    sceneInspectorSummaryEl.textContent =
+      `Room ${roomLabel} | ${snapshot.objectCount} objects | selected ${selectedLabel} | ${new Date().toLocaleTimeString()}`;
+  }
+
+  if (sceneInspectorOutputEl && !sceneInspectorState.isEditing) {
+    sceneInspectorOutputEl.textContent = JSON.stringify(snapshot, null, 2);
+  }
+
+  const isEditing = sceneInspectorState.isEditing;
+  sceneInspectorEditBtn.hidden = isEditing;
+  sceneInspectorValidateBtn.hidden = !isEditing;
+  sceneInspectorApplyBtn.hidden = !isEditing;
+  sceneInspectorCancelBtn.hidden = !isEditing;
+  sceneInspectorEditNoteEl.hidden = !isEditing;
+  sceneInspectorEditMetaEl.hidden = !isEditing;
+  sceneInspectorEditorEl.hidden = !isEditing;
+  sceneInspectorOutputEl.hidden = isEditing;
+
+  if (!isEditing) {
+    sceneInspectorValidationEl.hidden = true;
+    sceneInspectorDiffEl.hidden = true;
+    return;
+  }
+
+  if (sceneInspectorEditorEl && sceneInspectorEditorEl.value !== sceneInspectorState.draftText) {
+    sceneInspectorEditorEl.value = sceneInspectorState.draftText;
+  }
+
+  const baseSnapshot = sceneInspectorState.baseSnapshot;
+  if (sceneInspectorEditMetaEl) {
+    const baseTime = baseSnapshot?.generatedAt || 'unknown';
+    sceneInspectorEditMetaEl.textContent =
+      `Base snapshot captured at ${baseTime}.\nOnly existing object fields are applied. Object add/remove, ids, locks, room, connection, Loom, meshPath, and arbitrary metadata edits are ignored.`;
+  }
+
+  const hasErrors = sceneInspectorState.validationErrors.length > 0;
+  sceneInspectorValidationEl.hidden = !hasErrors;
+  if (sceneInspectorValidationEl) {
+    sceneInspectorValidationEl.textContent = sceneInspectorState.validationErrors.join('\n');
+  }
+
+  const summaryText = formatSceneInspectorSummary(sceneInspectorState.diffSummary);
+  sceneInspectorDiffEl.hidden = !summaryText;
+  if (sceneInspectorDiffEl) {
+    sceneInspectorDiffEl.textContent = summaryText;
+  }
+}
+
+function buildSceneInspectorEditSnapshot() {
+  return cloneInspectorValue(buildSceneInspectorSnapshot());
+}
+
+function enterSceneInspectorEditMode() {
+  const snapshot = buildSceneInspectorEditSnapshot();
+  sceneInspectorState.isEditing = true;
+  sceneInspectorState.baseSnapshot = snapshot;
+  sceneInspectorState.parsedSnapshot = cloneInspectorValue(snapshot);
+  sceneInspectorState.draftText = JSON.stringify(snapshot, null, 2);
+  sceneInspectorState.validationErrors = [];
+  sceneInspectorState.diffSummary = null;
+  renderSceneInspector(snapshot);
+  sceneInspectorEditorEl?.focus();
+  sceneInspectorEditorEl?.setSelectionRange(0, 0);
+}
+
+function exitSceneInspectorEditMode() {
+  sceneInspectorState.isEditing = false;
+  sceneInspectorState.baseSnapshot = null;
+  sceneInspectorState.parsedSnapshot = null;
+  sceneInspectorState.draftText = '';
+  sceneInspectorState.validationErrors = [];
+  sceneInspectorState.diffSummary = null;
+  refreshSceneInspector();
+}
+
+function validateSceneInspectorDraft() {
+  const draftText = sceneInspectorEditorEl?.value ?? sceneInspectorState.draftText;
+  sceneInspectorState.draftText = draftText;
+
+  let parsedSnapshot;
+  try {
+    parsedSnapshot = JSON.parse(draftText);
+  } catch (error) {
+    sceneInspectorState.parsedSnapshot = null;
+    sceneInspectorState.validationErrors = [error.message];
+    sceneInspectorState.diffSummary = null;
+    renderSceneInspector();
+    return null;
+  }
+
+  sceneInspectorState.parsedSnapshot = parsedSnapshot;
+
+  const result = buildSceneInspectorEditableDiff(
+    sceneInspectorState.baseSnapshot,
+    parsedSnapshot
+  );
+  sceneInspectorState.validationErrors = result.errors;
+  sceneInspectorState.diffSummary = result.summary;
+  renderSceneInspector();
+  return result;
+}
+
+function applySceneInspectorDraft() {
+  const result = validateSceneInspectorDraft();
+  if (!result) return;
+  if (result.errors.length > 0) return;
+  if (!result.operation) {
+    showToast('適用できる editable change はありません');
+    return;
+  }
+
+  applyOperationToScene(result.operation);
+  broadcast(result.operation);
+  notifySceneStateChanged('scene-inspector-json-edit-applied');
+  showToast(result.summary.actionCount === 1
+    ? 'Scene JSON change を broadcast しました'
+    : `${result.summary.actionCount} 件の Scene JSON change を broadcast しました`);
+  exitSceneInspectorEditMode();
+}
+
 function buildSceneInspectorSnapshot() {
   const objects = {};
   const sortedEntries = Array.from(managedObjects.entries())
@@ -3125,16 +3545,7 @@ function buildSceneInspectorSnapshot() {
 }
 
 function refreshSceneInspector() {
-  const snapshot = buildSceneInspectorSnapshot();
-  const roomLabel = snapshot.room || 'no-room';
-  const selectedLabel = snapshot.selection.objectId || 'none';
-  if (sceneInspectorSummaryEl) {
-    sceneInspectorSummaryEl.textContent =
-      `Room ${roomLabel} | ${snapshot.objectCount} objects | selected ${selectedLabel} | ${new Date().toLocaleTimeString()}`;
-  }
-  if (sceneInspectorOutputEl) {
-    sceneInspectorOutputEl.textContent = JSON.stringify(snapshot, null, 2);
-  }
+  renderSceneInspector(buildSceneInspectorSnapshot());
 }
 
 function scheduleSceneInspectorRefresh() {
@@ -3267,7 +3678,27 @@ sceneInspectorCloseBtn?.addEventListener('click', () => {
 });
 sceneInspectorRefreshBtn?.addEventListener('click', refreshSceneInspector);
 sceneInspectorCopyBtn?.addEventListener('click', () => {
-  copyText(sceneInspectorOutputEl?.textContent?.trim(), 'Scene JSON をコピーしました');
+  const text = sceneInspectorState.isEditing
+    ? (sceneInspectorEditorEl?.value || sceneInspectorState.draftText)
+    : sceneInspectorOutputEl?.textContent?.trim();
+  copyText(text, 'Scene JSON をコピーしました');
+});
+sceneInspectorEditBtn?.addEventListener('click', enterSceneInspectorEditMode);
+sceneInspectorValidateBtn?.addEventListener('click', () => {
+  const result = validateSceneInspectorDraft();
+  if (!result || result.errors.length > 0) return;
+  showToast(
+    result.operation
+      ? 'Editable changes are ready to broadcast'
+      : 'No editable changes detected'
+  );
+});
+sceneInspectorApplyBtn?.addEventListener('click', applySceneInspectorDraft);
+sceneInspectorCancelBtn?.addEventListener('click', exitSceneInspectorEditMode);
+sceneInspectorEditorEl?.addEventListener('input', () => {
+  sceneInspectorState.draftText = sceneInspectorEditorEl.value;
+  sceneInspectorState.validationErrors = [];
+  sceneInspectorState.diffSummary = null;
 });
 pairingDialog?.addEventListener('click', (event) => {
   if (event.target === pairingDialog) {
@@ -3277,6 +3708,10 @@ pairingDialog?.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && pairingDialog?.style.display === 'flex') {
     cancelPairing();
+    return;
+  }
+  if (event.key === 'Escape' && sceneInspectorState.isEditing) {
+    exitSceneInspectorEditMode();
     return;
   }
   if (event.key === 'Escape' && sceneInspectorState.isOpen) {

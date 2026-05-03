@@ -327,6 +327,52 @@
     .scene-inspector-actions .chip {
       justify-content: center;
     }
+    .scene-inspector-note {
+      color: rgba(255,255,255,0.62);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .scene-inspector-edit-meta {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.8);
+      white-space: pre-wrap;
+    }
+    .scene-inspector-validation {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255, 90, 90, 0.12);
+      border: 1px solid rgba(255, 90, 90, 0.35);
+      color: #ffb4b4;
+      white-space: pre-wrap;
+    }
+    .scene-inspector-diff {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(68, 136, 255, 0.12);
+      border: 1px solid rgba(68, 136, 255, 0.35);
+      color: #cfe0ff;
+      white-space: pre-wrap;
+    }
+    .scene-inspector-editor {
+      width: 100%;
+      min-height: 220px;
+      margin: 0;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      color: #dce7ff;
+      resize: vertical;
+      font: inherit;
+      line-height: 1.5;
+      outline: none;
+    }
+    .scene-inspector-editor:focus {
+      border-color: rgba(68,136,255,0.7);
+    }
     #scene-inspector-output {
       margin: 0;
       padding: 12px;
@@ -532,8 +578,19 @@
     <div class="scene-inspector-actions">
       <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
       <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
+      <button id="scene-inspector-edit" class="chip primary" type="button">Edit JSON</button>
+      <button id="scene-inspector-validate" class="chip" type="button" hidden>Validate</button>
+      <button id="scene-inspector-apply" class="chip primary" type="button" hidden>Broadcast Changes</button>
+      <button id="scene-inspector-cancel" class="chip" type="button" hidden>Cancel</button>
       <a class="chip" href="/scenesync/dev-tool/">Payload Tester</a>
     </div>
+    <p id="scene-inspector-edit-note" class="scene-inspector-note" hidden>
+      Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, and primitive `asset.color` changes are broadcast. Locked objects and non-editable fields are skipped.
+    </p>
+    <div id="scene-inspector-edit-meta" class="scene-inspector-edit-meta" hidden></div>
+    <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>
+    <div id="scene-inspector-diff" class="scene-inspector-diff" hidden></div>
+    <textarea id="scene-inspector-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
     <pre id="scene-inspector-output">{
   "status": "waiting-for-scene"
 }</pre>
