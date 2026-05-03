@@ -23,6 +23,11 @@ These methods intentionally mirror the stable tool names documented in:
 - `scene_sync_ai_command`
 - `scene_sync_revoke`
 
+Transport errors are normalized on `SceneSyncApiError` with `status`, `code`,
+`retryable`, and `details` so callers do not need to infer behavior from HTTP
+status alone. Browser-side command failures can still come back as a successful
+wrapper response with `result.ok: false`.
+
 ## Files
 
 - `src/scene-sync-client.mjs`
@@ -135,5 +140,7 @@ const result = await handleCodexFunctionCall(toolCall, client);
   `scene-remove`, and `uploadGlbFromUrl` when correctness matters more than
   speed.
 - For `aiCommand`, check both top-level `ok` and nested `result.ok`.
+- Treat `unauthorized` and `validation_error` as non-retryable.
+- Treat `conflict` as retryable only after a fresh snapshot.
 
 This client does not persist session state. Store `sessionId`, `roomId`, and `expiresAt` in the host application.

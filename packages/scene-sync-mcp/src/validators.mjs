@@ -1,16 +1,23 @@
 export class ValidationError extends Error {
-  constructor(message) {
+  constructor(message, options = {}) {
     super(message)
     this.name = 'ValidationError'
+    this.code = options.code || 'validation_error'
+    this.retryable = options.retryable ?? false
+    this.details = options.details || null
   }
 }
 
 export function assertLinked(session) {
   if (!session.sessionId || !session.roomId) {
-    throw new ValidationError('Not linked to Scene Sync. Call scene_sync_redeem first.')
+    throw new ValidationError('Not linked to Scene Sync. Call scene_sync_redeem first.', {
+      code: 'unauthorized'
+    })
   }
   if (session.expiresAt && session.expiresAt <= Date.now()) {
-    throw new ValidationError('Scene Sync link expired. Call scene_sync_redeem again.')
+    throw new ValidationError('Scene Sync link expired. Call scene_sync_redeem again.', {
+      code: 'unauthorized'
+    })
   }
 }
 
