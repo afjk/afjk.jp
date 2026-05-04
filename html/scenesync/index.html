@@ -396,6 +396,32 @@
       font-weight: 700;
       color: #fff;
     }
+    .scene-inspector-mode {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: rgba(255,255,255,0.72);
+      font-size: 11px;
+    }
+    .scene-inspector-mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(68,136,255,0.16);
+      border: 1px solid rgba(68,136,255,0.32);
+      color: #dbe8ff;
+    }
+    .scene-inspector-mode-badge.object {
+      background: rgba(85,204,153,0.14);
+      border-color: rgba(85,204,153,0.3);
+      color: #d9fff0;
+    }
+    .scene-inspector-mode-dirty {
+      color: #ffcf8c;
+    }
     .scene-inspector-section-meta {
       color: rgba(255,255,255,0.58);
       font-size: 11px;
@@ -627,10 +653,13 @@
       <button id="scene-inspector-close" class="chip" type="button" title="閉じる">✕</button>
     </div>
     <p id="scene-inspector-summary" class="scene-inspector-summary">Scene state is not loaded yet.</p>
+    <div id="scene-inspector-mode" class="scene-inspector-mode" hidden></div>
     <div class="scene-inspector-actions">
       <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
       <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
       <button id="scene-inspector-edit" class="chip primary" type="button">Edit JSON</button>
+      <button id="scene-inspector-format" class="chip" type="button" hidden>Format JSON</button>
+      <button id="scene-inspector-reset" class="chip" type="button" hidden>Reset to Current</button>
       <button id="scene-inspector-validate" class="chip" type="button" hidden>Validate</button>
       <button id="scene-inspector-apply" class="chip primary" type="button" hidden>Broadcast Changes</button>
       <button id="scene-inspector-cancel" class="chip" type="button" hidden>Cancel</button>
@@ -655,6 +684,8 @@
       <div id="scene-inspector-object-head" class="scene-inspector-object-head" hidden></div>
       <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
         <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
+        <button id="scene-inspector-object-format" class="chip" type="button" hidden>Format JSON</button>
+        <button id="scene-inspector-object-reset" class="chip" type="button" hidden>Reset to Current</button>
         <button id="scene-inspector-object-validate" class="chip" type="button" hidden>Validate / Preview</button>
         <button id="scene-inspector-object-apply" class="chip primary" type="button" hidden>Broadcast Object Changes</button>
         <button id="scene-inspector-object-cancel" class="chip" type="button" hidden>Cancel</button>
