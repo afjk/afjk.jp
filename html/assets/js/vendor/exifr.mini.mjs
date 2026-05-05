@@ -1,7 +1,7 @@
 // exifr v7 mini ESM bundle
 // Source: https://cdn.jsdelivr.net/npm/exifr@7/dist/mini.esm.mjs
-// For local development, this is a minimal implementation.
-// In production, download the actual minified bundle from the CDN above.
+// Retrieved: 2026-05-05
+// NOTE: This is a placeholder stub. For production, replace with the actual minified bundle from the CDN link above.
 
 function parseXmp(xmpString) {
   const result = {};
