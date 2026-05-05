@@ -295,6 +295,10 @@ godot/
 
     { "type": "mesh", "meshPath": "abc12345" }
 
+**Carrier GLB support** (Pre-Phase 1): The Web client delivers glB file uploads via blob store and references them with `{ "type": "mesh", "meshPath": <id> }`. Unspecified `source` defaults to `"carrier"` for backward compatibility.
+
+**Web GLB URL drop support** (Phase 1): The Web client accepts glB URL drops via drag-and-drop interface. Supported format: `.glb` (binary glTF). CORS headers are required on the glB hosting server. GLB file size is limited to 50 MB. Dropped GLB URLs are broadcast as `{ "type": "mesh", "source": "url", "url": "https://..." }` to all clients. JSON-based glTF files (`.gltf`) with external resource references are not supported (Phase 2). The `source: "url"` field explicitly marks URL-direct loads; Unity/Godot clients use this to decide whether to fetch directly from the URL or fall back to blob store lookups.
+
 `image`（Phase 1: Web URL drop のみ実装、Unity/Godot 未実装）:
 
     { "type": "image", "source": "url", "url": "https://..." }
