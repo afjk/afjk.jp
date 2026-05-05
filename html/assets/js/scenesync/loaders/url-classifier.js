@@ -10,7 +10,8 @@ export const URL_KIND = {
 
 const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v'];
 const HLS_EXTS = ['m3u8'];
-const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
+const UNSUPPORTED_EXTS = ['svg'];
 const GLB_EXTS = ['glb', 'gltf'];
 
 /**
@@ -38,6 +39,7 @@ export function classifyUrl(urlString) {
   if (VIDEO_EXTS.includes(ext)) return { kind: URL_KIND.VIDEO, url, ext, host };
   if (HLS_EXTS.includes(ext)) return { kind: URL_KIND.VIDEO_HLS, url, ext, host };
   if (IMAGE_EXTS.includes(ext)) return { kind: URL_KIND.IMAGE, url, ext, host };
+  if (UNSUPPORTED_EXTS.includes(ext)) return { kind: URL_KIND.UNSUPPORTED, url, ext, host };
   if (GLB_EXTS.includes(ext)) return { kind: URL_KIND.GLB, url, ext, host };
   return { kind: URL_KIND.WEBPAGE, url, ext, host };
 }

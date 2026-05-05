@@ -47,6 +47,18 @@ test('classifyUrl', async (t) => {
     assert.equal(classifyUrl('https://example.com/animation.gif').kind, URL_KIND.IMAGE);
   });
 
+  await t.test('avif image URL', () => {
+    assert.equal(classifyUrl('https://example.com/image.avif').kind, URL_KIND.IMAGE);
+  });
+
+  await t.test('bmp image URL', () => {
+    assert.equal(classifyUrl('https://example.com/bitmap.bmp').kind, URL_KIND.IMAGE);
+  });
+
+  await t.test('svg image URL is unsupported', () => {
+    assert.equal(classifyUrl('https://example.com/graphic.svg').kind, URL_KIND.UNSUPPORTED);
+  });
+
   await t.test('glb model URL', () => {
     assert.equal(classifyUrl('https://example.com/model.glb').kind, URL_KIND.GLB);
   });
