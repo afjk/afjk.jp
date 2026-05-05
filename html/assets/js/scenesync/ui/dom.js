@@ -19,5 +19,6 @@ export function getSceneSyncDom() {
     peersList: document.getElementById('peers-list'),
     fileInput: document.getElementById('file-input'),
     dropOverlay: document.getElementById('drop-overlay'),
+    deleteSkyboxBtn: document.getElementById('delete-skybox-btn'),
   };
 }
