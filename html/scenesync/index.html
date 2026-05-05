@@ -579,6 +579,101 @@
     .pairing-buttons .chip {
       flex: 1;
     }
+
+    /* ── クリップボード貼り付けUI ── */
+    #paste-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(68, 136, 255, 0.6);
+      border: none;
+      color: #fff;
+      font-size: 24px;
+      cursor: pointer;
+      z-index: 11;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(6px);
+      transition: background 0.2s;
+    }
+    #paste-btn:hover {
+      background: rgba(68, 136, 255, 0.8);
+    }
+    #paste-sheet {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: flex-end;
+      z-index: 300;
+      animation: slideUp 0.3s ease-out;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    #paste-sheet[hidden] {
+      display: none;
+    }
+    #paste-sheet-panel {
+      background: rgba(20, 20, 20, 0.95);
+      border-top: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px 12px 0 0;
+      padding: 20px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    .paste-sheet-title {
+      font-size: 16px;
+      font-weight: bold;
+      color: #fff;
+      margin-bottom: 8px;
+      font-family: monospace;
+    }
+    .paste-sheet-help {
+      font-size: 13px;
+      color: #aaa;
+      margin-bottom: 12px;
+      font-family: monospace;
+    }
+    #clipboard-paste-target {
+      width: 100%;
+      min-height: 100px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      color: #fff;
+      font-family: monospace;
+      font-size: 13px;
+      margin-bottom: 12px;
+      outline: none;
+    }
+    #clipboard-paste-target:focus {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(68, 136, 255, 0.5);
+    }
+    #paste-sheet-close {
+      width: 100%;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      color: #fff;
+      font-family: monospace;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #paste-sheet-close:hover {
+      background: rgba(0, 0, 0, 0.5);
+    }
   </style>
 </head>
 <body>
@@ -702,8 +797,17 @@
     </section>
   </aside>
   <button id="add-btn" title="GLB/画像を追加">＋</button>
+  <button id="paste-btn" title="クリップボードから追加">📋</button>
   <input type="file" id="file-input" accept=".glb,image/png,image/jpeg,image/webp,.txt,.md,.markdown,text/plain,text/markdown" style="display:none">
   <div id="drop-overlay">GLB / 画像 / テキストをドロップして追加</div>
+  <div id="paste-sheet" hidden>
+    <div id="paste-sheet-panel">
+      <div class="paste-sheet-title">クリップボードから追加</div>
+      <div class="paste-sheet-help">下の枠を長押しして貼り付けてください</div>
+      <div id="clipboard-paste-target" contenteditable="true" inputmode="text"></div>
+      <button id="paste-sheet-close">キャンセル</button>
+    </div>
+  </div>
   <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
   <div id="toast"></div>
   <div id="history-toolbar">

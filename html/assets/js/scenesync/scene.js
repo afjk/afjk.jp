@@ -10,6 +10,7 @@ import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFa
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager } from './components/drag-drop-manager.js';
+import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
@@ -3354,6 +3355,69 @@ const dragDropManager = new DragDropManager({
   textImporter: textImporterCallback,
   urlImporter: urlImporterCallback,
 });
+
+// ── クリップボード貼り付け ────────────────────────────────────────────
+
+function getDefaultImportPosition() {
+  const rect = renderer.domElement.getBoundingClientRect();
+  return dragDropManager.coordinateTransformer.screenToWorld(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2,
+    renderer.domElement
+  );
+}
+
+const clipboardImportManager = new ClipboardImportManager({
+  container: document,
+  getDefaultPosition,
+  showToast,
+  isEditingTarget: (target) => {
+    const el = target instanceof Element ? target : null;
+    if (!el) return false;
+
+    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+    if (el.closest('.cm-editor, .monaco-editor')) return true;
+    if (el.closest('#scene-json-editor, #selected-object-json-editor, #dsl-editor')) return true;
+
+    return false;
+  },
+  handleFile: (file, position) => dragDropManager.handleFile(file, position),
+  handleUrl: (url, position) => urlImporterCallback(url, position),
+  handleText: (text, position, filename) => textImporterCallback(text, position, filename),
+});
+
+// ── クリップボード貼り付けUI のイベントバインディング ─────────────────
+
+const pasteBtn = document.getElementById('paste-btn');
+const pasteSheet = document.getElementById('paste-sheet');
+const clipboardPasteTarget = document.getElementById('clipboard-paste-target');
+const pasteSheetClose = document.getElementById('paste-sheet-close');
+
+if (pasteBtn) {
+  pasteBtn.addEventListener('click', () => {
+    pasteSheet.removeAttribute('hidden');
+    setTimeout(() => clipboardPasteTarget?.focus(), 100);
+  });
+}
+
+if (pasteSheetClose) {
+  pasteSheetClose.addEventListener('click', () => {
+    pasteSheet.setAttribute('hidden', '');
+    clipboardPasteTarget.textContent = '';
+  });
+}
+
+if (pasteSheet) {
+  pasteSheet.addEventListener('click', (e) => {
+    if (e.target === pasteSheet) {
+      pasteSheet.setAttribute('hidden', '');
+      clipboardPasteTarget.textContent = '';
+    }
+  });
+}
+
+// clipboardPasteTarget の paste イベントを clipboardImportManager が拾う
+// (既に container として document がリッスンしているため、追加設定不要)
 
 // ── AI ペアリング UI ───────────────────────────────────────────────────
 
