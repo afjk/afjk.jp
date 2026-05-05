@@ -32,6 +32,10 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
   }
 
   const contentType = res.headers.get('content-type') || 'application/octet-stream';
+  const validPrefixes = ['model/gltf-binary', 'application/octet-stream', 'model/gltf+json'];
+  if (!validPrefixes.some((t) => contentType.startsWith(t))) {
+    console.warn(`[glb-url] unexpected content-type: ${contentType} for ${url}`);
+  }
 
   // Content-Length チェック（サイズ上限 50 MB）
   const contentLength = res.headers.get('content-length');
