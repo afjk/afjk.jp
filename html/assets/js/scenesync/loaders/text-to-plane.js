@@ -26,6 +26,8 @@ export function normalizeTextInput(raw, { maxChars = 5000 } = {}) {
 /**
  * Simple Markdown parsing for phase 1 subset
  * Returns styled text lines and computed canvas height
+ * Note (Phase 1): Wrapped lines from bullet items do not preserve the bullet
+ * indent. Suitable for short labels and titles.
  * @param {string} text - Normalized text (or markdown)
  * @param {object} opts
  *   - canvasWidth: number (px)
@@ -217,6 +219,11 @@ function renderTextToCanvas(text, opts) {
   // Render lines
   let y = padding;
   for (const line of lines) {
+    if (line.style?.gap) {
+      y += fontSizePx * lineHeight * 0.5;
+      continue;
+    }
+
     const fontSize = line.style?.fontSize || fontSizePx;
     const isBold = line.style?.bold || false;
     const fontStr = `${isBold ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
@@ -239,7 +246,7 @@ function renderTextToCanvas(text, opts) {
     y += fontSize * lineHeight;
   }
 
-  return canvas;
+  return { canvas, lines, height: canvasHeight };
 }
 
 /**
@@ -282,7 +289,7 @@ export async function buildTextPlaneGlb(text, {
   }
 
   // Render to canvas
-  const canvas = renderTextToCanvas(normalizedText, {
+  const { canvas, lines } = renderTextToCanvas(normalizedText, {
     canvasWidth,
     padding,
     fontFamily,
@@ -294,14 +301,6 @@ export async function buildTextPlaneGlb(text, {
   });
 
   const canvasHeight = canvas.height;
-  const { lines } = layoutText(normalizedText, {
-    canvasWidth,
-    padding,
-    fontSizePx,
-    lineHeight,
-    fontFamily,
-    markdown,
-  });
 
   // Create texture
   const texture = new THREE.CanvasTexture(canvas);
