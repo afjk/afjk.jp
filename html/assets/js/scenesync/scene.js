@@ -10,6 +10,7 @@ import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager } from './components/drag-drop-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
+import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { extractYaw } from './utils/math.js';
@@ -2999,6 +3000,55 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
   }
 }
 
+function generateBlobId() {
+  const raw = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  return raw.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 24);
+}
+
+async function uploadCarrierGlb(arrayBuffer) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const id = generateBlobId();
+    const res = await fetch(`${BLOB_BASE}/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'model/gltf-binary' },
+      body: arrayBuffer,
+    });
+    if (res.status === 201 || res.status === 200) return id;
+    if (res.status !== 409) throw new Error(`blob upload failed: ${res.status}`);
+  }
+  throw new Error('blob id collision - unable to generate unique ID');
+}
+
+async function imageImporterCallback(file, position) {
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error('画像が大きすぎます (最大10MB)');
+  }
+
+  const arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
+  const meshPath = await uploadCarrierGlb(arrayBuffer);
+
+  const objectId = `img-${meshPath.slice(0, 8)}`;
+  const displayName = `image: ${file.name}`.slice(0, 60);
+  const positionArray = (position && typeof position.toArray === 'function')
+    ? position.toArray()
+    : [0, 1, 0];
+
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: displayName,
+    position: positionArray,
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1],
+    asset: { type: 'mesh', meshPath },
+  };
+
+  broadcast(payload);
+
+  // ローカルにも反映（server側が送信元を除外するため、自分のbroadcastはエコーバックされない）
+  addOrUpdateObject(objectId, payload);
+}
+
 const dragDropManager = new DragDropManager({
   container: document,
   camera,
@@ -3030,6 +3080,7 @@ const dragDropManager = new DragDropManager({
       arrayBuffer
     );
   },
+  imageImporter: imageImporterCallback,
 });
 
 // ── AI ペアリング UI ───────────────────────────────────────────────────

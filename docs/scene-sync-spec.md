@@ -299,6 +299,8 @@ godot/
 
     { "type": "image", "url": "https://..." }
 
+**Note on Web image support**: The Web client (as of Wave 3) internally converts PNG/JPEG/WebP images dropped via UI to carrier GLB format and delivers them as `{ "type": "mesh", "meshPath": <id> }` via the existing blob store. The `asset.type: "image"` wire format is reserved for future cross-platform standardization but not yet implemented. Images are thus indistinguishable from other meshes at the protocol level.
+
 `video`（IF 定義のみ、未実装）:
 
     { "type": "video", "url": "https://..." }

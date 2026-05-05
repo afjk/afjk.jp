@@ -5,6 +5,13 @@ function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
 }
 
+function isSupportedImageFile(file) {
+  if (!file) return false;
+  const supportedMimes = ['image/png', 'image/jpeg', 'image/webp'];
+  const supportedExts = /\.(png|jpe?g|webp)$/i;
+  return supportedMimes.includes(file.type) || supportedExts.test(file.name || '');
+}
+
 export class DragDropManager {
   constructor(options) {
     const {
@@ -23,6 +30,7 @@ export class DragDropManager {
       dracoPath,
       maxDimension,
       glbLoader,
+      imageImporter,
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -40,6 +48,7 @@ export class DragDropManager {
     this.onLoaded = onLoaded;
     this.onLoadStart = onLoadStart;
     this.onLoadEnd = onLoadEnd;
+    this.imageImporter = imageImporter;
     this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene, {
       getRaycastTargets,
     });
@@ -122,12 +131,23 @@ export class DragDropManager {
   }
 
   async handleFile(file, position) {
-    if (!isGlbFile(file)) {
-      this.showToast?.('GLBファイルのみ対応しています');
+    if (isGlbFile(file)) {
+      return this._loadFile(file, position || this._defaultDropPosition());
+    }
+
+    if (this.imageImporter && isSupportedImageFile(file)) {
+      const dropPos = position || this._defaultDropPosition();
+      try {
+        await this.imageImporter(file, dropPos);
+      } catch (error) {
+        console.warn('[drag-drop] image import failed:', error);
+        this.showToast?.(error?.message || '画像の読み込みに失敗しました');
+      }
       return null;
     }
 
-    return this._loadFile(file, position || this._defaultDropPosition());
+    this.showToast?.('GLB / 画像ファイルのみ対応しています');
+    return null;
   }
 
   _onAddClick() {
