@@ -17,39 +17,18 @@ export async function loadVideoTextureFromUrl(url, opts) {
 
   await new Promise((resolve, reject) => {
     let settled = false;
-    const onLoaded = () => {
-      if (!settled) {
-        settled = true;
-        resolve();
-      }
+    let timerId = null;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timerId !== null) clearTimeout(timerId);
+      fn(arg);
     };
-    const onError = () => {
-      if (!settled) {
-        settled = true;
-        reject(new Error('動画の読み込みに失敗しました（CORS 設定が必要、または URL が無効です）'));
-      }
-    };
+    const onLoaded = () => finish(resolve);
+    const onError = () => finish(reject, new Error('動画の読み込みに失敗しました（CORS 設定が必要、または URL が無効です）'));
     video.addEventListener('loadedmetadata', onLoaded, { once: true });
     video.addEventListener('error', onError, { once: true });
-    const timerId = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        reject(new Error('動画の読み込みがタイムアウトしました'));
-      }
-    }, timeoutMs);
-
-    // cleanup on resolve/reject
-    const cleanup = () => clearTimeout(timerId);
-    const originalResolve = resolve;
-    const originalReject = reject;
-    resolve = (...args) => {
-      cleanup();
-      originalResolve(...args);
-    };
-    reject = (...args) => {
-      cleanup();
-      originalReject(...args);
-    };
+    timerId = setTimeout(() => finish(reject, new Error('動画の読み込みがタイムアウトしました')), timeoutMs);
   });
 
   const aspect = video.videoWidth / video.videoHeight || 16 / 9;

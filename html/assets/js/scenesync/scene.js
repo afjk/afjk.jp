@@ -2669,7 +2669,7 @@ async function handleAiCommand(from, payload) {
 
 // ── シーン同期ヘルパー ───────────────────────────────────
 
-function addOrUpdateObject(objectId, info) {
+function addOrUpdateObject(objectId, info, options = {}) {
   const existing = managedObjects.get(objectId);
   const asset = info.asset;
 
@@ -2686,7 +2686,7 @@ function addOrUpdateObject(objectId, info) {
         break;
       case 'video':
         if (asset.url) {
-          loadVideoObject(objectId, info, asset.url, existing);
+          loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle);
           return;
         }
         break;
@@ -2747,13 +2747,13 @@ function loadMeshObject(objectId, info, meshPath, existing) {
   });
 }
 
-function loadVideoObject(objectId, info, videoUrl, existing) {
+function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
   addLoadingOverlay(objectId, info.name || objectId, info);
-  const initialPosition = info.position
-    ? new THREE.Vector3().fromArray(info.position)
-    : undefined;
+  const promise = prebuilt
+    ? Promise.resolve(prebuilt)
+    : loadVideoTextureFromUrl(videoUrl, { THREE });
 
-  loadVideoTextureFromUrl(videoUrl, { THREE }).then((bundle) => {
+  promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const { group } = createVideoPlaneGroup(bundle, THREE);
     group.userData.objectId = objectId;
@@ -2775,7 +2775,8 @@ function loadVideoObject(objectId, info, videoUrl, existing) {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
     if (!existing) {
-      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+      const failedInfo = { ...info, name: `${info.name || objectId} (動画読み込み失敗)` };
+      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xff4444), failedInfo);
       return;
     }
     notifySceneStateChanged('video-load-failed');
@@ -3165,8 +3166,8 @@ async function videoUrlImporterCallback(url, position) {
 
   broadcast(payload);
 
-  // ローカルにも反映
-  addOrUpdateObject(objectId, payload);
+  // ローカルにも反映: prebuilt bundle を渡してロードを省略
+  addOrUpdateObject(objectId, payload, { prebuiltVideoBundle: bundle });
 }
 
 const dragDropManager = new DragDropManager({
