@@ -13,6 +13,7 @@ import { DragDropManager } from './components/drag-drop-manager.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
+import { buildImageSkySphereGlb } from './loaders/image-to-sky-sphere.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
@@ -62,8 +63,85 @@ const environmentManager = createEnvironmentManager({
   dom,
   showToast,
 });
+
+// Skybox Sphere 管理
+function isSkySphereObject(obj) {
+  return obj?.metadata?.role === 'sky-sphere'
+    || obj?.objectId?.startsWith('sky-')
+    || obj?.name?.startsWith('sky:');
+}
+
+function isSkySphereThreeObject(obj) {
+  let current = obj;
+
+  while (current) {
+    const objectId = current.userData?.objectId;
+    const metadata = current.userData?.metadata;
+    const name = current.userData?.name;
+
+    if (
+      metadata?.role === 'sky-sphere' ||
+      objectId?.startsWith('sky-') ||
+      name?.startsWith('sky:')
+    ) {
+      return true;
+    }
+
+    current = current.parent;
+  }
+
+  return false;
+}
+
+function getSkySphereObjects() {
+  const result = [];
+  for (const [objectId, obj] of managedObjects.entries()) {
+    const info = {
+      objectId,
+      metadata: obj.userData?.metadata,
+      name: obj.userData?.name,
+    };
+    if (isSkySphereObject(info)) {
+      result.push(info);
+    }
+  }
+  return result;
+}
+
+function updateEnvironmentMenuSkyboxControls() {
+  const hasSkybox = getSkySphereObjects().length > 0;
+  if (dom.deleteSkyboxBtn) {
+    dom.deleteSkyboxBtn.hidden = !hasSkybox;
+  }
+}
+
 dom.envSelect?.addEventListener('change', () => {
   notifySceneStateChanged('environment-select-change');
+  updateEnvironmentMenuSkyboxControls();
+});
+
+dom.deleteSkyboxBtn?.addEventListener('click', () => {
+  const skyObjects = getSkySphereObjects();
+
+  if (skyObjects.length === 0) {
+    showToast('削除するSkyboxはありません');
+    updateEnvironmentMenuSkyboxControls();
+    return;
+  }
+
+  const count = skyObjects.length;
+  for (const obj of skyObjects) {
+    deleteObjectById(obj.objectId);
+  }
+
+  showToast(
+    count === 1
+      ? 'Skyboxを削除しました'
+      : `Skyboxを${count}個削除しました`
+  );
+
+  updateEnvironmentMenuSkyboxControls();
+  notifySceneStateChanged('skybox-deleted');
 });
 
 setupXrButtons({
@@ -246,7 +324,8 @@ function onXrSelectStart(ctrl) {
   xrRaycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
   xrRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(xrTmpMatrix);
 
-  const targets = Array.from(managedObjects.values());
+  const targets = Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj));
   const hits = xrRaycaster.intersectObjects(targets, true);
   if (hits.length === 0) return;
 
@@ -1182,7 +1261,8 @@ function selectObjectAt(clientX, clientY) {
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
-  const targets = Array.from(managedObjects.values());
+  const targets = Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj));
   const hits = raycaster.intersectObjects(targets, true);
   if (hits.length > 0) {
     let obj = hits[0].object;
@@ -1270,7 +1350,8 @@ renderer.domElement.addEventListener('touchend', (e) => {
         pointer.x = ((tapX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((tapY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
-        const targets = Array.from(managedObjects.values());
+        const targets = Array.from(managedObjects.values())
+          .filter(obj => !isSkySphereThreeObject(obj));
         const hits = raycaster.intersectObjects(targets, true);
         if (hits.length === 0) {
           broadcast({
@@ -1286,6 +1367,58 @@ renderer.domElement.addEventListener('touchend', (e) => {
 }, { passive: false });
 
 // ── 削除ロジック（共通） ──────────────────────────────────
+
+function deleteObjectById(objectId) {
+  const attached = managedObjects.get(objectId);
+  if (!attached) return;
+
+  if (transformCtrl.object === attached) {
+    transformCtrl.detach();
+    hideToolbar();
+  }
+
+  if (locks.has(objectId)) {
+    const lockInfo = locks.get(objectId);
+    const lockOwnerId = lockInfo?.id;
+    if (lockOwnerId && lockOwnerId !== presenceState.id) {
+      showToast('他のユーザーが編集中です');
+      return;
+    }
+    // 自分のロックなら unlock をブロードキャストして解除
+    broadcast({ kind: 'scene-unlock', objectId });
+  }
+
+  removeLockOverlay(objectId);
+  locks.delete(objectId);
+
+  // 削除前にオブジェクト情報を保存
+  const name = attached.userData.name || objectId;
+  const position = attached.position.toArray();
+  const rotation = attached.quaternion.toArray();
+  const scale = attached.scale.toArray();
+  const asset = attached.userData.asset || {};
+
+  scene.remove(attached);
+  attached.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose());
+      } else {
+        child.material.dispose();
+      }
+    }
+  });
+  managedObjects.delete(objectId);
+
+  // 履歴に追加
+  presenceState.historyManager.push(
+    HistoryManager.createRemoveEntry(objectId, name, asset, position, rotation, scale)
+  );
+
+  broadcast({ kind: 'scene-remove', objectId });
+  updateEnvironmentMenuSkyboxControls();
+}
 
 function deleteSelectedObject() {
   const attached = transformCtrl.object;
@@ -1303,46 +1436,7 @@ function deleteSelectedObject() {
   hideToolbar();
 
   if (deleteId) {
-    if (locks.has(deleteId)) {
-      const lockInfo = locks.get(deleteId);
-      const lockOwnerId = lockInfo?.id;
-      if (lockOwnerId && lockOwnerId !== presenceState.id) {
-        showToast('他のユーザーが編集中です');
-        return;
-      }
-      // 自分のロックなら unlock をブロードキャストして解除
-      broadcast({ kind: 'scene-unlock', objectId: deleteId });
-    }
-
-    removeLockOverlay(deleteId);
-    locks.delete(deleteId);
-
-    // 削除前にオブジェクト情報を保存
-    const name = attached.userData.name || deleteId;
-    const position = attached.position.toArray();
-    const rotation = attached.quaternion.toArray();
-    const scale = attached.scale.toArray();
-    const asset = attached.userData.asset || {};
-
-    scene.remove(attached);
-    attached.traverse(child => {
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) {
-        if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.dispose());
-        } else {
-          child.material.dispose();
-        }
-      }
-    });
-    managedObjects.delete(deleteId);
-
-    // 履歴に追加
-    presenceState.historyManager.push(
-      HistoryManager.createRemoveEntry(deleteId, name, asset, position, rotation, scale)
-    );
-
-    broadcast({ kind: 'scene-remove', objectId: deleteId });
+    deleteObjectById(deleteId);
     notifySceneStateChanged('selected-object-deleted');
   }
 }
@@ -2327,6 +2421,7 @@ function handleHandoff(data) {
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(objectId);
       notifySceneStateChanged('scene-remove-handoff');
+      updateEnvironmentMenuSkyboxControls();
       break;
     }
     case 'scene-mesh': {
@@ -2947,12 +3042,14 @@ function replaceManagedObject(objectId, nextObject, info) {
   }
 
   nextObject.userData.objectId = objectId;
+  nextObject.userData.metadata = info.metadata;
   applyObjectName(nextObject, info.name);
   applyTransform(nextObject, info);
   applyObjectVisibility(nextObject, info.visible);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
   notifySceneStateChanged('managed-object-replaced');
+  updateEnvironmentMenuSkyboxControls();
 }
 
 function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
@@ -3116,6 +3213,7 @@ function applyOperationToScene(operation) {
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(operation.objectId);
       notifySceneStateChanged('undo-redo-scene-remove');
+      updateEnvironmentMenuSkyboxControls();
       break;
     }
     case 'scene-delta': {
@@ -3232,37 +3330,73 @@ async function uploadCarrierGlb(arrayBuffer) {
   throw new Error('blob id collision - unable to generate unique ID');
 }
 
-async function imageImporterCallback(file, position) {
+async function imageImporterCallback(file, position, context = {}) {
   if (file.size > 10 * 1024 * 1024) {
     throw new Error('画像が大きすぎます (最大10MB)');
   }
 
-  const arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
-  const meshPath = await uploadCarrierGlb(arrayBuffer);
+  const { targetKind = 'scene' } = context;
+  const isSkyTarget = targetKind === 'sky';
 
-  const objectId = `img-${meshPath.slice(0, 8)}`;
-  const displayName = `image: ${file.name}`.slice(0, 60);
-  const positionArray = (position && typeof position.toArray === 'function')
-    ? position.toArray()
-    : [0, 1, 0];
+  let arrayBuffer, meshPath, objectId, displayName, positionArray, payload;
 
-  const payload = {
-    kind: 'scene-add',
-    objectId,
-    name: displayName,
-    position: positionArray,
-    rotation: [0, 0, 0, 1],
-    scale: [1, 1, 1],
-    asset: { type: 'mesh', meshPath },
-  };
+  if (isSkyTarget) {
+    const result = await buildImageSkySphereGlb(file, {
+      THREE,
+      GLTFExporter,
+      radius: 50,
+      widthSegments: 64,
+      heightSegments: 32,
+    });
+    arrayBuffer = result.arrayBuffer;
+    meshPath = await uploadCarrierGlb(arrayBuffer);
 
-  broadcast(payload);
+    objectId = `sky-${meshPath.slice(0, 8)}`;
+    displayName = `sky: ${file.name || 'image'}`.slice(0, 60);
+    positionArray = [0, 0, 0];
 
-  // ローカルにも反映（server側が送信元を除外するため、自分のbroadcastはエコーバックされない）
-  addOrUpdateObject(objectId, payload);
+    payload = {
+      kind: 'scene-add',
+      objectId,
+      name: displayName,
+      position: positionArray,
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      metadata: {
+        role: 'sky-sphere',
+      },
+      asset: { type: 'mesh', meshPath },
+    };
+
+    broadcast(payload);
+    addOrUpdateObject(objectId, payload);
+    showToast('Skyboxを追加しました');
+  } else {
+    arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
+    meshPath = await uploadCarrierGlb(arrayBuffer);
+
+    objectId = `img-${meshPath.slice(0, 8)}`;
+    displayName = `image: ${file.name}`.slice(0, 60);
+    positionArray = (position && typeof position.toArray === 'function')
+      ? position.toArray()
+      : [0, 1, 0];
+
+    payload = {
+      kind: 'scene-add',
+      objectId,
+      name: displayName,
+      position: positionArray,
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      asset: { type: 'mesh', meshPath },
+    };
+
+    broadcast(payload);
+    addOrUpdateObject(objectId, payload);
+  }
 }
 
-async function textImporterCallback(text, position, filename = 'text.md') {
+async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
   const { arrayBuffer } = await buildTextPlaneGlb(text, {
     THREE,
     GLTFExporter,
@@ -3299,7 +3433,7 @@ function generateObjectId(prefix) {
   return `${prefix}-${id}`;
 }
 
-async function urlImporterCallback(url, position) {
+async function urlImporterCallback(url, position, context = {}) {
   const resolved = resolveDroppedUrl(url);
 
   for (const note of resolved.notes || []) {
@@ -3326,7 +3460,7 @@ async function urlImporterCallback(url, position) {
     }),
     position: positionArray,
     textImporter: (text, filename) =>
-      textImporterCallback(text, position, filename),
+      textImporterCallback(text, position, filename, context),
     THREE,
     GLTFLoader,
   };
