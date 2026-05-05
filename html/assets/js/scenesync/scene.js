@@ -3478,8 +3478,11 @@ const dragDropManager = new DragDropManager({
   dropOverlay: dom.dropOverlay,
   showToast,
   glbLoader,
+  THREE,
   getRaycastTargets: () => Array.from(managedObjects.values())
     .filter(obj => obj.userData?.dropRaycastTarget && obj.visible !== false),
+  getPlacementTargets: () => Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj) && obj.visible !== false),
   onLoadStart: async ({ objectId, file, position }) => {
     addLoadingOverlay(objectId, file.name, { position: position?.toArray?.() });
   },
