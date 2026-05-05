@@ -83,7 +83,6 @@ export class ClipboardImportManager {
       case 'file':
         try {
           await this.handleFile(payload.file, position);
-          this.showToast?.('クリップボードからファイルを追加しました');
         } catch (err) {
           console.warn('[clipboard] file import failed:', err);
           this.showToast?.(err?.message || 'ファイルの読み込みに失敗しました');
