@@ -11,6 +11,7 @@ import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager } from './components/drag-drop-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
+import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { extractYaw } from './utils/math.js';
@@ -3049,6 +3050,38 @@ async function imageImporterCallback(file, position) {
   addOrUpdateObject(objectId, payload);
 }
 
+async function textImporterCallback(text, position, filename = 'text.md') {
+  const { arrayBuffer } = await buildTextPlaneGlb(text, {
+    THREE,
+    GLTFExporter,
+    markdown: /\.(md|markdown)$/i.test(filename),
+  });
+
+  const blobId = generateBlobId();
+  await uploadCarrierGlb(blobId, arrayBuffer);
+
+  const objectId = `txt-${blobId.slice(0, 8)}`;
+  const displayName = `text: ${filename}`.slice(0, 60);
+  const positionArray = (position && typeof position.toArray === 'function')
+    ? position.toArray()
+    : [0, 1, 0];
+
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: displayName,
+    position: positionArray,
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1],
+    asset: { type: 'mesh', meshPath: blobId },
+  };
+
+  broadcast(payload);
+
+  // ローカルにも反映
+  addOrUpdateObject(objectId, payload);
+}
+
 const dragDropManager = new DragDropManager({
   container: document,
   camera,
@@ -3081,6 +3114,7 @@ const dragDropManager = new DragDropManager({
     );
   },
   imageImporter: imageImporterCallback,
+  textImporter: textImporterCallback,
 });
 
 // ── AI ペアリング UI ───────────────────────────────────────────────────
