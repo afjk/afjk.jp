@@ -3369,7 +3369,7 @@ function getDefaultImportPosition() {
 
 const clipboardImportManager = new ClipboardImportManager({
   container: document,
-  getDefaultPosition,
+  getDefaultPosition: getDefaultImportPosition,
   showToast,
   isEditingTarget: (target) => {
     const el = target instanceof Element ? target : null;
@@ -3393,31 +3393,49 @@ const pasteSheet = document.getElementById('paste-sheet');
 const clipboardPasteTarget = document.getElementById('clipboard-paste-target');
 const pasteSheetClose = document.getElementById('paste-sheet-close');
 
-if (pasteBtn) {
+function closePasteSheet() {
+  if (pasteSheet) {
+    pasteSheet.setAttribute('hidden', '');
+  }
+  if (clipboardPasteTarget) {
+    clipboardPasteTarget.textContent = '';
+  }
+}
+
+if (pasteBtn && pasteSheet) {
   pasteBtn.addEventListener('click', () => {
     pasteSheet.removeAttribute('hidden');
     setTimeout(() => clipboardPasteTarget?.focus(), 100);
   });
 }
 
-if (pasteSheetClose) {
+if (pasteSheetClose && pasteSheet) {
   pasteSheetClose.addEventListener('click', () => {
-    pasteSheet.setAttribute('hidden', '');
-    clipboardPasteTarget.textContent = '';
+    closePasteSheet();
   });
 }
 
 if (pasteSheet) {
   pasteSheet.addEventListener('click', (e) => {
     if (e.target === pasteSheet) {
-      pasteSheet.setAttribute('hidden', '');
-      clipboardPasteTarget.textContent = '';
+      closePasteSheet();
     }
   });
 }
 
-// clipboardPasteTarget の paste イベントを clipboardImportManager が拾う
-// (既に container として document がリッスンしているため、追加設定不要)
+// #clipboard-paste-target に専用の paste handler
+if (clipboardPasteTarget) {
+  clipboardPasteTarget.addEventListener('paste', async (event) => {
+    const handled = await clipboardImportManager.handlePasteEvent(event, {
+      force: true,
+      position: getDefaultImportPosition(),
+    });
+
+    if (handled) {
+      closePasteSheet();
+    }
+  });
+}
 
 // ── AI ペアリング UI ───────────────────────────────────────────────────
 

@@ -55,18 +55,27 @@ export class ClipboardImportManager {
   }
 
   async _onPaste(event) {
-    // 編集対象中は無視
-    if (this.isEditingTarget?.(event.target)) {
-      return;
+    await this.handlePasteEvent(event);
+  }
+
+  async handlePasteEvent(event, options = {}) {
+    const {
+      force = false,
+      position = null,
+    } = options;
+
+    if (!force && this.isEditingTarget?.(event.target)) {
+      return false;
     }
 
     const payload = parseClipboardDataTransfer(event.clipboardData);
     if (!payload || payload.kind === 'empty') {
-      return;
+      return false;
     }
 
     event.preventDefault();
-    await this.importPayload(payload, this._resolvePosition());
+    await this.importPayload(payload, position || this._resolvePosition());
+    return true;
   }
 
   async importPayload(payload, position) {
@@ -74,6 +83,7 @@ export class ClipboardImportManager {
       case 'file':
         try {
           await this.handleFile(payload.file, position);
+          this.showToast?.('クリップボードからファイルを追加しました');
         } catch (err) {
           console.warn('[clipboard] file import failed:', err);
           this.showToast?.(err?.message || 'ファイルの読み込みに失敗しました');
@@ -92,8 +102,8 @@ export class ClipboardImportManager {
 
       case 'text':
         try {
-          this.showToast?.('クリップボードからテキストを追加しました');
           await this.handleText(payload.text, position, payload.filename);
+          this.showToast?.('クリップボードからテキストを追加しました');
         } catch (err) {
           console.warn('[clipboard] text import failed:', err);
           this.showToast?.(err?.message || 'テキストの読み込みに失敗しました');

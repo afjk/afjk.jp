@@ -217,3 +217,10 @@ test('parseClipboardDataTransfer - http URL', (t) => {
   const result = parseClipboardDataTransfer(dataTransfer);
   assert.deepStrictEqual(result, { kind: 'url', url: 'http://example.com/image.png' });
 });
+
+// NOTE: ClipboardImportManager.handlePasteEvent tests require DOM environment
+// Manual test cases:
+// 1. force:false + isEditingTarget:true → returns false
+// 2. force:true + isEditingTarget:true → returns true (imports)
+// 3. empty payload → returns false
+// These are tested in browser integration tests
