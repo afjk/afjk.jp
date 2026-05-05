@@ -28,6 +28,7 @@ function normalizePositionContext(input, fallbackPosition) {
       targetKind: input.targetKind ?? 'scene',
       clientX: input.clientX,
       clientY: input.clientY,
+      upness: input.upness,
     };
   }
 
@@ -38,6 +39,7 @@ function normalizePositionContext(input, fallbackPosition) {
       targetKind: 'scene',
       clientX: undefined,
       clientY: undefined,
+      upness: undefined,
     };
   }
 
@@ -46,8 +48,11 @@ function normalizePositionContext(input, fallbackPosition) {
     targetKind: 'scene',
     clientX: undefined,
     clientY: undefined,
+    upness: undefined,
   };
 }
+
+const SKY_DROP_UPNESS_THRESHOLD = 0.35;
 
 export class DragDropManager {
   constructor(options) {
@@ -64,12 +69,14 @@ export class DragDropManager {
       onLoadStart,
       onLoadEnd,
       getRaycastTargets,
+      getPlacementTargets,
       dracoPath,
       maxDimension,
       glbLoader,
       imageImporter,
       textImporter,
       urlImporter,
+      THREE: ThreeModule,
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -90,6 +97,8 @@ export class DragDropManager {
     this.imageImporter = imageImporter;
     this.textImporter = textImporter;
     this.urlImporter = urlImporter;
+    this.getPlacementTargets = getPlacementTargets;
+    this.THREE = ThreeModule || (globalThis.THREE || {});
     this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene, {
       getRaycastTargets,
     });
@@ -143,27 +152,67 @@ export class DragDropManager {
     );
   }
 
-  _dropPositionFromEvent(event) {
-    let position;
-    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
-      position = this.coordinateTransformer.screenToWorld(
-        event.clientX,
-        event.clientY,
-        this.renderer.domElement
-      );
-    } else {
-      position = this._defaultDropPosition();
-    }
-
+  _createDropRay(event) {
     const rect = this.renderer.domElement.getBoundingClientRect();
-    const isUpperArea = event.clientY < rect.top + rect.height * 0.3;
-    const targetKind = isUpperArea ? 'sky' : 'scene';
+
+    const ndc = new this.THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+
+    const raycaster = new this.THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.camera);
+
+    const worldUp = new this.THREE.Vector3(0, 1, 0);
+    const upness = raycaster.ray.direction.dot(worldUp);
 
     return {
-      position,
-      targetKind,
+      raycaster,
+      ray: raycaster.ray,
+      ndc,
+      upness,
+    };
+  }
+
+  _findPlacementHit(raycaster) {
+    const targets = this.getPlacementTargets?.() || [];
+
+    if (!targets.length) return null;
+
+    const hits = raycaster.intersectObjects(targets, true);
+    return hits[0] || null;
+  }
+
+  _dropPositionFromEvent(event) {
+    const rayInfo = this._createDropRay(event);
+    const hit = this._findPlacementHit(rayInfo.raycaster);
+
+    if (hit) {
+      return {
+        position: hit.point.clone(),
+        targetKind: 'scene',
+        clientX: event.clientX,
+        clientY: event.clientY,
+        upness: rayInfo.upness,
+      };
+    }
+
+    if (rayInfo.upness > SKY_DROP_UPNESS_THRESHOLD) {
+      return {
+        position: this._defaultDropPosition(),
+        targetKind: 'sky',
+        clientX: event.clientX,
+        clientY: event.clientY,
+        upness: rayInfo.upness,
+      };
+    }
+
+    return {
+      position: this._defaultDropPosition(),
+      targetKind: 'scene',
       clientX: event.clientX,
       clientY: event.clientY,
+      upness: rayInfo.upness,
     };
   }
 
@@ -208,6 +257,7 @@ export class DragDropManager {
           targetKind: normalized.targetKind,
           clientX: normalized.clientX,
           clientY: normalized.clientY,
+          upness: normalized.upness,
         });
       } catch (error) {
         console.warn('[drag-drop] image import failed:', error);
@@ -223,6 +273,7 @@ export class DragDropManager {
           targetKind: normalized.targetKind,
           clientX: normalized.clientX,
           clientY: normalized.clientY,
+          upness: normalized.upness,
         });
       } catch (error) {
         console.warn('[drag-drop] text import failed:', error);
