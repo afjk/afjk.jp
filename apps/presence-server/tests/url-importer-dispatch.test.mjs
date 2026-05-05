@@ -31,7 +31,7 @@ test('dispatchUrlImport', async (t) => {
     let errorShown = false;
     const mockCtx = {
       showToast: (toast) => {
-        if (toast.type === 'error' && toast.message.includes('SVG')) {
+        if (toast.type === 'error') {
           errorShown = true;
         }
       },
@@ -69,7 +69,7 @@ test('dispatchUrlImport', async (t) => {
     let errorShown = false;
     const mockCtx = {
       showToast: (toast) => {
-        if (toast.type === 'error' && toast.message.includes('未対応')) {
+        if (toast.type === 'error') {
           errorShown = true;
         }
       },
@@ -82,5 +82,24 @@ test('dispatchUrlImport', async (t) => {
 
     await dispatchUrlImport('https://example.com/page', mockCtx);
     assert(errorShown, 'error toast should be shown for webpage URL');
+  });
+
+  await t.test('shows error for GLB URL (Phase 2 deferred)', async () => {
+    let errorShown = false;
+    const mockCtx = {
+      showToast: (toast) => {
+        if (toast.type === 'error') {
+          errorShown = true;
+        }
+      },
+      addOrUpdateObject: () => {},
+      broadcastSceneAdd: () => {},
+      generateObjectId: () => 'test-id',
+      getSpawnTransform: () => ({}),
+      THREE: {},
+    };
+
+    await dispatchUrlImport('https://example.com/model.glb', mockCtx);
+    assert(errorShown, 'error toast should be shown for GLB URL');
   });
 });

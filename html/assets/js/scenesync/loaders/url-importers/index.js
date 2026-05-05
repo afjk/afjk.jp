@@ -35,8 +35,24 @@ export async function dispatchUrlImport(url, ctx) {
     return await importImageUrl(classified.url, ctx);
   }
 
+  if (classified.kind === URL_KIND.GLB) {
+    ctx.showToast({
+      type: 'error',
+      message: '3D モデル URL ドロップは次フェーズで対応予定です',
+    });
+    return;
+  }
+
+  if (classified.kind === URL_KIND.WEBPAGE) {
+    ctx.showToast({
+      type: 'error',
+      message: 'この URL は対応していません（動画/画像の直接 URL のみ対応）',
+    });
+    return;
+  }
+
   ctx.showToast({
     type: 'error',
-    message: '未対応の URL です（画像・動画 URL のみ対応）',
+    message: '未対応の URL です',
   });
 }

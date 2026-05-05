@@ -2832,7 +2832,6 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
     if (info.asset) group.userData.asset = structuredClone(info.asset);
 
     // Store for disposal
-    managedObjects.get(objectId)?.userData?.disposable?.();
     group.userData.disposable = () => {
       texture.dispose();
       geometry.dispose();
@@ -2851,11 +2850,12 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
-    if (!existing) {
-      const failedInfo = { ...info, name: `${info.name || objectId} (画像読み込み失敗)` };
-      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
-      return;
-    }
+    showToast({
+      type: 'error',
+      message: `画像の読み込みに失敗しました: ${err?.message || 'CORS エラーの可能性'}`,
+    });
+    const failedInfo = { ...info, name: `${info.name || objectId} (load failed)` };
+    replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
     notifySceneStateChanged('image-load-failed');
   });
 }
@@ -2864,6 +2864,10 @@ function replaceManagedObject(objectId, nextObject, info) {
   const current = managedObjects.get(objectId);
   if (current) {
     if (transformCtrl.object === current) transformCtrl.detach();
+    // Call disposable if it exists (for textures, geometries, materials)
+    if (current.userData?.disposable) {
+      current.userData.disposable();
+    }
     scene.remove(current);
   }
 
