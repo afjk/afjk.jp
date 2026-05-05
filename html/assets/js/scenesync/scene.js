@@ -2913,6 +2913,8 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
       if (transformCtrl.object === existing) transformCtrl.detach();
       scene.remove(existing);
     } else {
+      // GLB は内部に元のシーン座標を持つため、payload の transform で上書きする
+      // (video/image は plane 構築時に position.y を直接設定するためここでは不要)
       applyTransform(model, info);
     }
 
