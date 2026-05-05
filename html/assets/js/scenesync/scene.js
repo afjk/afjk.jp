@@ -2866,12 +2866,12 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
 
 function disposeMaterial(material) {
   if (!material) return;
-  if (material.map) material.map.dispose();
-  if (material.normalMap) material.normalMap.dispose();
-  if (material.metalnessMap) material.metalnessMap.dispose();
-  if (material.roughnessMap) material.roughnessMap.dispose();
-  if (material.aoMap) material.aoMap.dispose();
-  if (material.emissiveMap) material.emissiveMap.dispose();
+  for (const key of Object.keys(material)) {
+    const value = material[key];
+    if (value && value.isTexture) {
+      value.dispose();
+    }
+  }
   material.dispose();
 }
 
