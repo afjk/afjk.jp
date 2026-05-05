@@ -14,6 +14,7 @@ import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
+import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { extractYaw } from './utils/math.js';
@@ -2313,6 +2314,10 @@ function handleHandoff(data) {
           obj.userData.video.src = '';
           obj.userData.video.load();
         }
+        // Clean up image/texture objects
+        if (obj.userData?.disposable) {
+          obj.userData.disposable();
+        }
         scene.remove(obj);
         managedObjects.delete(objectId);
       }
@@ -2690,6 +2695,12 @@ function addOrUpdateObject(objectId, info, options = {}) {
           return;
         }
         break;
+      case 'image':
+        if (asset.url) {
+          loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle);
+          return;
+        }
+        break;
       default:
         console.warn(`unsupported asset type: ${asset.type}`);
         replaceManagedObject(objectId, buildUnsupportedAssetObject(objectId, info), info);
@@ -2780,6 +2791,72 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
       return;
     }
     notifySceneStateChanged('video-load-failed');
+  });
+}
+
+function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
+  addLoadingOverlay(objectId, info.name || objectId, info);
+
+  const promise = prebuilt
+    ? Promise.resolve(prebuilt)
+    : (async () => {
+        const { loadImageTextureFromUrl, planeSizeFromAspect } = await import('./loaders/url-importers/image.js');
+        const bundle = await loadImageTextureFromUrl(imageUrl, { THREE });
+        const { width, height } = planeSizeFromAspect(bundle.aspect);
+        return { ...bundle, width, height };
+      })();
+
+  promise.then((bundle) => {
+    removeLoadingOverlay(objectId);
+    const { texture, width, height } = bundle;
+
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      alphaTest: 0.01,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = height / 2;
+
+    const group = new THREE.Group();
+    group.add(mesh);
+
+    group.userData.objectId = objectId;
+    group.userData.name = info.name;
+    group.userData.assetType = 'image';
+    if (info.asset) group.userData.asset = structuredClone(info.asset);
+
+    // Store for disposal
+    managedObjects.get(objectId)?.userData?.disposable?.();
+    group.userData.disposable = () => {
+      texture.dispose();
+      geometry.dispose();
+      material.dispose();
+    };
+
+    if (existing) {
+      group.position.copy(existing.position);
+      group.quaternion.copy(existing.quaternion);
+      group.scale.copy(existing.scale);
+      if (transformCtrl.object === existing) transformCtrl.detach();
+      scene.remove(existing);
+    }
+
+    replaceManagedObject(objectId, group, info);
+  }).catch((err) => {
+    removeLoadingOverlay(objectId);
+    console.warn('Failed to load image for', objectId, ':', err);
+    if (!existing) {
+      const failedInfo = { ...info, name: `${info.name || objectId} (画像読み込み失敗)` };
+      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
+      return;
+    }
+    notifySceneStateChanged('image-load-failed');
   });
 }
 
@@ -3138,36 +3215,31 @@ async function textImporterCallback(text, position, filename = 'text.md') {
   addOrUpdateObject(objectId, payload);
 }
 
-async function videoUrlImporterCallback(url, position) {
-  const classified = classifyUrl(url);
-  if (classified.kind !== URL_KIND.VIDEO) {
-    throw new Error('未対応の URL です（Phase 1 は mp4/webm/mov/m4v のみ）');
-  }
+function generateObjectId(prefix) {
+  const raw = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  const id = raw.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 16);
+  return `${prefix}-${id}`;
+}
 
-  const bundle = await loadVideoTextureFromUrl(classified.url, { THREE });
-
-  const blobId = generateBlobId();
-  const objectId = `vid-${blobId.slice(0, 8)}`;
-  const filename = decodeURIComponent(new URL(classified.url).pathname.split('/').pop() || 'video');
-  const displayName = `video: ${filename}`.slice(0, 60);
+async function urlImporterCallback(url, position) {
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
     : [0, 1, 0];
 
-  const payload = {
-    kind: 'scene-add',
-    objectId,
-    name: displayName,
-    position: positionArray,
-    rotation: [0, 0, 0, 1],
-    scale: [1, 1, 1],
-    asset: { type: 'video', url: classified.url },
+  const ctx = {
+    addOrUpdateObject,
+    broadcastSceneAdd: broadcast,
+    showToast,
+    generateObjectId,
+    getSpawnTransform: () => ({
+      position: positionArray,
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    }),
+    THREE,
   };
 
-  broadcast(payload);
-
-  // ローカルにも反映: prebuilt bundle を渡してロードを省略
-  addOrUpdateObject(objectId, payload, { prebuiltVideoBundle: bundle });
+  await dispatchUrlImport(url, ctx);
 }
 
 const dragDropManager = new DragDropManager({
@@ -3203,7 +3275,7 @@ const dragDropManager = new DragDropManager({
   },
   imageImporter: imageImporterCallback,
   textImporter: textImporterCallback,
-  urlImporter: videoUrlImporterCallback,
+  urlImporter: urlImporterCallback,
 });
 
 // ── AI ペアリング UI ───────────────────────────────────────────────────

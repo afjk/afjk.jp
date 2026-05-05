@@ -295,19 +295,21 @@ godot/
 
     { "type": "mesh", "meshPath": "abc12345" }
 
-`image`（IF 定義のみ、未実装）:
+`image`（Phase 1: Web URL drop のみ実装、Unity/Godot 未実装）:
 
-    { "type": "image", "url": "https://..." }
+    { "type": "image", "source": "url", "url": "https://..." }
 
-**Note on Web image support**: The Web client (as of Wave 3) internally converts PNG/JPEG/WebP images dropped via UI to carrier GLB format and delivers them as `{ "type": "mesh", "meshPath": <id> }` via the existing blob store. The `asset.type: "image"` wire format is reserved for future cross-platform standardization but not yet implemented. Images are thus indistinguishable from other meshes at the protocol level.
+**Web image URL drop support** (Phase 1): The Web client accepts image URL drops via drag-and-drop interface. Supported formats: `png`, `jpg`, `jpeg`, `webp`, `gif`, `avif`, `bmp`. Images are rendered on a textured plane. CORS headers are required on the image hosting server. Dropped image URLs are broadcast as `{ "type": "image", "source": "url", "url": "..." }` to all clients. SVG images are explicitly unsupported (XSS risk). Image file drops (direct file upload) are converted to carrier GLB and delivered via the existing blob store (not Phase 1).
+
+**Note on Web image carrier support**: The Web client can also deliver images via carrier GLB (pre-Phase 1 flow): `{ "type": "image", "source": "carrier", "meshPath": <id> }`. The `source` field distinguishes URL-direct loads (`"url"`) from blob store downloads (`"carrier"`). Unspecified `source` defaults to `"carrier"` for backward compatibility.
 
 **Note on Web text support**: The Web client (as of Wave 4) converts plain text and Markdown files dropped via UI to carrier GLB format (canvas-textured plane) and delivers them as `{ "type": "mesh", "meshPath": <id> }` via the existing blob store. Supported formats: `.txt` (plain text) and `.md` / `.markdown` (Markdown with Phase 1 subset: headings (`#`/`##`/`###`), bullet points (`-`/`*`), horizontal rules (`---`). Inline `**bold**` markers are stripped but rendering remains regular weight. Headings are rendered bold automatically). Files are rasterized to 2048px canvas, normalized to max 5000 chars, clamped to 256-8192px height. Text is thus indistinguishable from other meshes at the protocol level.
 
-`video`（Phase 1: Web のみ実装、Unity/Godot 未実装）:
+`video`（Phase 1: Web URL drop のみ実装、Unity/Godot 未実装）:
 
-    { "type": "video", "url": "https://..." }
+    { "type": "video", "source": "url", "url": "https://..." }
 
-**Web video URL drop support** (Phase 1): The Web client accepts video URL drops via drag-and-drop interface. Supported video formats: `mp4`, `webm`, `mov`, `m4v`. The video is rendered on a textured plane with automatic playback (muted, looped). CORS headers are required on the video hosting server. Dropped video URLs are broadcast as `{ "type": "video", "url": "..." }` to all clients. HLS/DASH streams (`.m3u8`, `.mpd`) are not yet supported (Phase 2). Video playback synchronization (play/pause/seek) is not implemented (Phase 2).
+**Web video URL drop support** (Phase 1): The Web client accepts video URL drops via drag-and-drop interface. Supported video formats: `mp4`, `webm`, `mov`, `m4v`. The video is rendered on a textured plane with automatic playback (muted, looped). CORS headers are required on the video hosting server. Dropped video URLs are broadcast as `{ "type": "video", "source": "url", "url": "..." }` to all clients. HLS/DASH streams (`.m3u8`, `.mpd`) are not yet supported (Phase 2). Video playback synchronization (play/pause/seek) is not implemented (Phase 2). The `source: "url"` field explicitly marks URL-direct loads; Unity/Godot clients use this to decide whether to fetch directly from the URL or fall back to blob store lookups.
 
 `audio`（IF 定義のみ、未実装）:
 
