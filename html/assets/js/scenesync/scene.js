@@ -3029,18 +3029,24 @@ async function imageImporterCallback(file, position) {
 
   const objectId = `img-${meshPath.slice(0, 8)}`;
   const displayName = `image: ${file.name}`.slice(0, 60);
+  const positionArray = (position && typeof position.toArray === 'function')
+    ? position.toArray()
+    : [0, 1, 0];
 
   const payload = {
     kind: 'scene-add',
     objectId,
     name: displayName,
-    position: position.toArray(),
+    position: positionArray,
     rotation: [0, 0, 0, 1],
     scale: [1, 1, 1],
     asset: { type: 'mesh', meshPath },
   };
 
   broadcast(payload);
+
+  // ローカルにも反映（server側が送信元を除外するため、自分のbroadcastはエコーバックされない）
+  addOrUpdateObject(objectId, payload);
 }
 
 const dragDropManager = new DragDropManager({
