@@ -3,6 +3,7 @@ export const URL_KIND = {
   VIDEO_HLS: 'video-hls',
   IMAGE: 'image',
   GLB: 'glb',
+  TEXT: 'text',
   WEBPAGE: 'webpage',
   UNSUPPORTED: 'unsupported',
   INVALID: 'invalid',
@@ -13,6 +14,26 @@ const HLS_EXTS = ['m3u8'];
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
 const UNSUPPORTED_EXTS = ['svg', 'gltf'];
 const GLB_EXTS = ['glb'];
+const TEXT_EXTS = ['txt', 'md', 'markdown'];
+
+function classifyTwitterImageUrl(u) {
+  if (u.hostname !== 'pbs.twimg.com') return null;
+  if (!u.pathname.startsWith('/media/')) return null;
+
+  const format = (u.searchParams.get('format') || '').toLowerCase();
+  const normalized = format === 'jpg' ? 'jpeg' : format;
+
+  if (['jpeg', 'png', 'webp', 'gif'].includes(normalized)) {
+    return {
+      kind: URL_KIND.IMAGE,
+      url: u.toString(),
+      ext: normalized,
+      host: u.host,
+    };
+  }
+
+  return null;
+}
 
 /**
  * URL 文字列を分類する純関数。
@@ -33,6 +54,10 @@ export function classifyUrl(urlString) {
   } catch {
     return { kind: URL_KIND.INVALID, url: null, ext: '', host: '' };
   }
+
+  const twitterImage = classifyTwitterImageUrl(u);
+  if (twitterImage) return twitterImage;
+
   const ext = (u.pathname.split('.').pop() || '').toLowerCase();
   const host = u.host;
   const url = u.toString();
@@ -41,6 +66,7 @@ export function classifyUrl(urlString) {
   if (IMAGE_EXTS.includes(ext)) return { kind: URL_KIND.IMAGE, url, ext, host };
   if (UNSUPPORTED_EXTS.includes(ext)) return { kind: URL_KIND.UNSUPPORTED, url, ext, host };
   if (GLB_EXTS.includes(ext)) return { kind: URL_KIND.GLB, url, ext, host };
+  if (TEXT_EXTS.includes(ext)) return { kind: URL_KIND.TEXT, url, ext, host };
   return { kind: URL_KIND.WEBPAGE, url, ext, host };
 }
 

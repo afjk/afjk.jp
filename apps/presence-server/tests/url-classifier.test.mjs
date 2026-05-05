@@ -135,6 +135,36 @@ test('classifyUrl', async (t) => {
   await t.test('http (non-https) URL is valid', () => {
     assert.equal(classifyUrl('http://example.com/v.mp4').kind, URL_KIND.VIDEO);
   });
+
+  await t.test('X/Twitter image CDN URL with format=jpg', () => {
+    const r = classifyUrl('https://pbs.twimg.com/media/HEEjn1xaEAAHiny?format=jpg&name=large');
+    assert.equal(r.kind, URL_KIND.IMAGE);
+    assert.equal(r.ext, 'jpeg');
+  });
+
+  await t.test('X/Twitter image CDN URL with format=png', () => {
+    const r = classifyUrl('https://pbs.twimg.com/media/ABC123?format=png');
+    assert.equal(r.kind, URL_KIND.IMAGE);
+    assert.equal(r.ext, 'png');
+  });
+
+  await t.test('markdown .md file URL', () => {
+    const r = classifyUrl('https://raw.githubusercontent.com/afjk/afjk.jp/main/README.md');
+    assert.equal(r.kind, URL_KIND.TEXT);
+    assert.equal(r.ext, 'md');
+  });
+
+  await t.test('txt file URL', () => {
+    const r = classifyUrl('https://example.com/note.txt');
+    assert.equal(r.kind, URL_KIND.TEXT);
+    assert.equal(r.ext, 'txt');
+  });
+
+  await t.test('markdown .markdown file URL', () => {
+    const r = classifyUrl('https://example.com/doc.markdown');
+    assert.equal(r.kind, URL_KIND.TEXT);
+    assert.equal(r.ext, 'markdown');
+  });
 });
 
 test('parseUriList', async (t) => {

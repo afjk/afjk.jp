@@ -1,6 +1,7 @@
 import { importVideoUrl } from './video.js';
 import { importImageUrl } from './image.js';
 import { importGlbUrl } from './glb.js';
+import { importTextUrl } from './text.js';
 import { classifyUrl, URL_KIND } from '../url-classifier.js';
 
 /**
@@ -38,6 +39,10 @@ export async function dispatchUrlImport(url, ctx) {
 
   if (classified.kind === URL_KIND.GLB) {
     return await importGlbUrl(classified.url, ctx);
+  }
+
+  if (classified.kind === URL_KIND.TEXT) {
+    return await importTextUrl(classified.url, ctx);
   }
 
   if (classified.kind === URL_KIND.WEBPAGE) {
