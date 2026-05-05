@@ -56,8 +56,10 @@ export function createVideoPlaneGroup(textureBundle, THREE) {
   const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
   const material = new THREE.MeshBasicMaterial({
     map: texture,
+    transparent: true,
+    alphaTest: 0.01,
+    depthWrite: true,
     side: THREE.DoubleSide,
-    transparent: false,
     toneMapped: false,
   });
   const mesh = new THREE.Mesh(geometry, material);
