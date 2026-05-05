@@ -47,14 +47,18 @@ export async function buildPlaneGlbFromImage(file, { THREE, GLTFExporter, maxPix
 
   // Create plane geometry and material
   const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
     side: THREE.DoubleSide,
+    toneMapped: false,
   });
 
   // Create mesh and wrap in Group
   const mesh = new THREE.Mesh(geometry, material);
+  // Lift mesh so the bottom edge sits on the group's origin (y=0).
+  // This matches the existing GLB import which grounds objects via groundOffset.
+  mesh.position.y = planeHeight / 2;
   const group = new THREE.Group();
   group.add(mesh);
 
