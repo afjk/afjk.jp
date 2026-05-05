@@ -1,4 +1,59 @@
 /**
+ * Fetch API を使用して画像を Blob として CORS 付きで取得。
+ * Skybox 生成用。
+ * @param {string} url
+ * @param {object} opts - { timeoutMs = 15000 }
+ * @returns {Promise<Blob>}
+ */
+export async function fetchImageBlobForSkybox(url, { timeoutMs = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      mode: 'cors',
+      credentials: 'omit',
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.startsWith('image/')) {
+      throw new Error(`画像URLではありません: ${contentType || 'unknown content-type'}`);
+    }
+
+    const blob = await res.blob();
+
+    if (!blob.type.startsWith('image/')) {
+      throw new Error(`画像Blobではありません: ${blob.type || 'unknown blob type'}`);
+    }
+
+    return blob;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * URL からファイル名を抽出。
+ * @param {string} url
+ * @param {string} fallback
+ * @returns {string}
+ */
+function filenameFromUrl(url, fallback = 'image') {
+  try {
+    const parsed = new URL(url);
+    const last = decodeURIComponent(parsed.pathname.split('/').pop() || '');
+    return last || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * Image タグを使用して CORS 付きで画像をロード。
  * @param {string} url
  * @param {object} opts - { timeoutMs = 15000 }
@@ -67,12 +122,19 @@ export function planeSizeFromAspect(aspect, maxEdgeMeters = 2) {
 
 /**
  * URL から画像をロードし、scene-add を broadcast してローカルに配置。
+ * targetKind が 'sky' の場合は Skybox Sphere を生成。
  * @param {string} url - 分類済みの画像 URL（確定済み）
- * @param {object} ctx - { addOrUpdateObject, broadcastSceneAdd, showToast, generateObjectId, getSpawnTransform, THREE }
+ * @param {object} ctx - { addOrUpdateObject, broadcastSceneAdd, showToast, generateObjectId, getSpawnTransform, THREE, targetKind, replaceSkyboxSphereFromBlob }
  * @returns {Promise<{ objectId, payload }>}
  */
 export async function importImageUrl(url, ctx) {
   try {
+    if (ctx.targetKind === 'sky') {
+      const blob = await fetchImageBlobForSkybox(url);
+      const filename = filenameFromUrl(url, 'skybox-image');
+      return await ctx.replaceSkyboxSphereFromBlob(blob, filename);
+    }
+
     const bundle = await loadImageTextureFromUrl(url, { THREE: ctx.THREE });
     const { texture, aspect } = bundle;
     const { width, height } = planeSizeFromAspect(aspect);
@@ -99,9 +161,13 @@ export async function importImageUrl(url, ctx) {
 
     return { objectId, payload };
   } catch (err) {
+    const errorMsg = ctx.targetKind === 'sky'
+      ? `画像URLをSkybox化できませんでした: ${err?.message || 'CORS等の問題'}`
+      : `画像 URL の読み込みに失敗しました: ${err?.message || 'CORS等の問題'}`;
+
     ctx.showToast({
       type: 'error',
-      message: `画像 URL の読み込みに失敗しました: ${err?.message || 'CORS等の問題'}`,
+      message: errorMsg,
     });
     throw err;
   }
