@@ -26,17 +26,26 @@
 - [Refactoring / Packages](./refactoring-packages.md)
 - [Enterprise / Security](./enterprise-security.md)
 
+## Current Implementation Snapshot
+
+- Scene Sync Dev Tool / IDE: in-scene inspector、JSON copy、scene/object JSON prototype edit、standalone payload tester までは実装済み
+- AI Integration: tool contract docs、OpenAPI、examples、MCP server、structured error normalization は実装済み
+- Asset Pipeline / Carrier GLB: GLB upload に加えて image / text の browser-side carrier GLB、image / video / GLB URL import が実装済み
+- Loom Language / Node Graph: Scene Sync web runtime への graph message integration と export/import state は実装済み、editor UI は未着手
+- Refactoring / Packages: `apps/presence-server` と `packages/scene-sync-mcp` は成立、`scene.js` 分割は進行中、protocol / presence commonization は未完
+- Enterprise / Security: link token、revoke、TTL、scene-lock の下地はあるが、signed asset delivery / audit / role permissions は未着手
+
 ## Near-Term Waves
 
 ### Wave 1
 
-- In-scene Scene Sync Inspector panel follow-up
-- AI contract / runtime response alignment
+- Scene Inspector follow-up: focus action / AI handoff entry / edit scope refinement
+- AI scene context injection policy
 - Loom conflict / ownership refinement
 
 ### Wave 2
 
-- Asset pipeline / carrier GLB design follow-up
+- Asset pipeline metadata / asset reference contract follow-up
 - WebAR USDZ export feasibility
 - Scene Sync protocol extraction plan
 

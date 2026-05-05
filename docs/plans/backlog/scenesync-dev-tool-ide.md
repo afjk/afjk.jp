@@ -20,16 +20,24 @@ Scene Sync 画面の中で scene state を見て、将来的には object / bloc
 - natural language parser の完成
 - multi-user conflict UI の完成
 
+## current implementation status
+
+- ✓ in-scene Scene Inspector panel は `html/scenesync/` に実装済み
+- ✓ realtime scene state JSON view、summary、copy flow、selected object block view は実装済み
+- ✓ scene 全体 JSON と selected object JSON の prototype edit / validate / format / apply flow は実装済み
+- ✓ standalone payload tester は `/scenesync/dev-tool/` に残っており、payload validation、snapshot fetch、history reuse を持つ
+- partial: `focusObject` action 自体は browser / MCP contract に存在するが、inspector からの直接導線はまだ薄い
+- pending: autocomplete editor、node graph editor、AI instruction input
+
 ## near-term implementation tasks
 
-- in-scene inspector follow-up
-- state snapshot interface を明示化する
-- selected object focus action を既存 viewer に足す
-- read-only JSON view と copy flow を安定化する
+- inspector から selected object focus / camera jump を直接叩ける導線を足す
+- scene/object JSON edit の editable scope と ignored field policy をさらに明示化する
+- scene snapshot を AI / external tool に渡す導線を整理する
+- standalone payload tester と in-scene inspector の役割分担を固定する
 
 ## later tasks
 
-- object block editing
 - autocomplete 付き text editor
 - inspector と node graph の接続
 - AI instruction entry with scene context
@@ -58,4 +66,3 @@ Scene Sync 画面の中で scene state を見て、将来的には object / bloc
 
 - `/scenesync/` route とその store / state access を複数 agent で同時に触らない
 - standalone payload tester は補助導線として残し、primary direction は in-scene inspector と明記する
-
