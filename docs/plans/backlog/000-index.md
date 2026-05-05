@@ -43,7 +43,7 @@
 ### Wave 3
 
 - Shader runtime Web MVP
-- image-to-plane / image-to-GLB pipeline
+- ✓ image-to-plane / image-to-GLB pipeline (browser-side carrier GLB, Web UI image drop)
 - Loom code editor / graph prototype
 
 ## Parallelization Rules
