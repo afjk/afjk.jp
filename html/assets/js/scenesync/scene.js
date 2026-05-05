@@ -3194,10 +3194,9 @@ async function textImporterCallback(text, position, filename = 'text.md') {
     markdown: /\.(md|markdown)$/i.test(filename),
   });
 
-  const blobId = generateBlobId();
-  await uploadCarrierGlb(blobId, arrayBuffer);
+  const meshPath = await uploadCarrierGlb(arrayBuffer);
 
-  const objectId = `txt-${blobId.slice(0, 8)}`;
+  const objectId = `txt-${meshPath.slice(0, 8)}`;
   const displayName = `text: ${filename}`.slice(0, 60);
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
@@ -3210,7 +3209,7 @@ async function textImporterCallback(text, position, filename = 'text.md') {
     position: positionArray,
     rotation: [0, 0, 0, 1],
     scale: [1, 1, 1],
-    asset: { type: 'mesh', meshPath: blobId },
+    asset: { type: 'mesh', meshPath },
   };
 
   broadcast(payload);
