@@ -12,6 +12,8 @@ import { DragDropManager } from './components/drag-drop-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
+import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
+import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { extractYaw } from './utils/math.js';
@@ -2305,6 +2307,12 @@ function handleHandoff(data) {
       locks.delete(objectId);
       if (obj) {
         if (transformCtrl.object === obj) { transformCtrl.detach(); hideToolbar(); }
+        // Clean up video objects
+        if (obj.userData?.video) {
+          obj.userData.video.pause();
+          obj.userData.video.src = '';
+          obj.userData.video.load();
+        }
         scene.remove(obj);
         managedObjects.delete(objectId);
       }
@@ -2676,6 +2684,12 @@ function addOrUpdateObject(objectId, info) {
           return;
         }
         break;
+      case 'video':
+        if (asset.url) {
+          loadVideoObject(objectId, info, asset.url, existing);
+          return;
+        }
+        break;
       default:
         console.warn(`unsupported asset type: ${asset.type}`);
         replaceManagedObject(objectId, buildUnsupportedAssetObject(objectId, info), info);
@@ -2730,6 +2744,41 @@ function loadMeshObject(objectId, info, meshPath, existing) {
       return;
     }
     notifySceneStateChanged('mesh-load-failed');
+  });
+}
+
+function loadVideoObject(objectId, info, videoUrl, existing) {
+  addLoadingOverlay(objectId, info.name || objectId, info);
+  const initialPosition = info.position
+    ? new THREE.Vector3().fromArray(info.position)
+    : undefined;
+
+  loadVideoTextureFromUrl(videoUrl, { THREE }).then((bundle) => {
+    removeLoadingOverlay(objectId);
+    const { group } = createVideoPlaneGroup(bundle, THREE);
+    group.userData.objectId = objectId;
+    group.userData.name = info.name;
+    group.userData.video = bundle.video;
+    group.userData.assetType = 'video';
+    if (info.asset) group.userData.asset = structuredClone(info.asset);
+
+    if (existing) {
+      group.position.copy(existing.position);
+      group.quaternion.copy(existing.quaternion);
+      group.scale.copy(existing.scale);
+      if (transformCtrl.object === existing) transformCtrl.detach();
+      scene.remove(existing);
+    }
+
+    replaceManagedObject(objectId, group, info);
+  }).catch((err) => {
+    removeLoadingOverlay(objectId);
+    console.warn('Failed to load video for', objectId, ':', err);
+    if (!existing) {
+      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+      return;
+    }
+    notifySceneStateChanged('video-load-failed');
   });
 }
 
@@ -2897,6 +2946,12 @@ function applyOperationToScene(operation) {
         if (transformCtrl.object === obj) {
           transformCtrl.detach();
           hideToolbar();
+        }
+        // Clean up video objects
+        if (obj.userData?.video) {
+          obj.userData.video.pause();
+          obj.userData.video.src = '';
+          obj.userData.video.load();
         }
         scene.remove(obj);
         managedObjects.delete(operation.objectId);
@@ -3082,6 +3137,38 @@ async function textImporterCallback(text, position, filename = 'text.md') {
   addOrUpdateObject(objectId, payload);
 }
 
+async function videoUrlImporterCallback(url, position) {
+  const classified = classifyUrl(url);
+  if (classified.kind !== URL_KIND.VIDEO) {
+    throw new Error('未対応の URL です（Phase 1 は mp4/webm/mov/m4v のみ）');
+  }
+
+  const bundle = await loadVideoTextureFromUrl(classified.url, { THREE });
+
+  const blobId = generateBlobId();
+  const objectId = `vid-${blobId.slice(0, 8)}`;
+  const filename = decodeURIComponent(new URL(classified.url).pathname.split('/').pop() || 'video');
+  const displayName = `video: ${filename}`.slice(0, 60);
+  const positionArray = (position && typeof position.toArray === 'function')
+    ? position.toArray()
+    : [0, 1, 0];
+
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: displayName,
+    position: positionArray,
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1],
+    asset: { type: 'video', url: classified.url },
+  };
+
+  broadcast(payload);
+
+  // ローカルにも反映
+  addOrUpdateObject(objectId, payload);
+}
+
 const dragDropManager = new DragDropManager({
   container: document,
   camera,
@@ -3115,6 +3202,7 @@ const dragDropManager = new DragDropManager({
   },
   imageImporter: imageImporterCallback,
   textImporter: textImporterCallback,
+  urlImporter: videoUrlImporterCallback,
 });
 
 // ── AI ペアリング UI ───────────────────────────────────────────────────
