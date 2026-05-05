@@ -108,6 +108,31 @@ function getSkySphereObjects() {
   return result;
 }
 
+function getSkySpherePayloads() {
+  const result = [];
+  for (const [objectId, obj] of managedObjects.entries()) {
+    const info = {
+      objectId,
+      metadata: obj.userData?.metadata,
+      name: obj.userData?.name,
+    };
+    if (!isSkySphereObject(info)) continue;
+
+    result.push({
+      kind: 'scene-add',
+      objectId,
+      name: obj.userData?.name || obj.name || objectId,
+      position: obj.position.toArray(),
+      rotation: obj.quaternion.toArray(),
+      scale: obj.scale.toArray(),
+      asset: obj.userData?.asset || null,
+      metadata: obj.userData?.metadata || { role: 'sky-sphere' },
+      meshPath: obj.userData?.meshPath || obj.userData?.asset?.meshPath || null,
+    });
+  }
+  return result;
+}
+
 function updateEnvironmentMenuSkyboxControls() {
   const hasSkybox = getSkySphereObjects().length > 0;
   if (dom.deleteSkyboxBtn) {
@@ -3330,6 +3355,143 @@ async function uploadCarrierGlb(arrayBuffer) {
   throw new Error('blob id collision - unable to generate unique ID');
 }
 
+// Skybox管理のためのヘルパー関数
+
+function applySceneActionLocally(action) {
+  if (!action) return;
+
+  if (action.kind === 'scene-add') {
+    addOrUpdateObject(action.objectId, action);
+    return;
+  }
+
+  if (action.kind === 'scene-remove') {
+    const obj = managedObjects.get(action.objectId);
+    if (!obj) return;
+
+    if (transformCtrl.object === obj) {
+      transformCtrl.detach();
+      hideToolbar();
+    }
+
+    if (obj.userData?.video) {
+      obj.userData.video.pause();
+      obj.userData.video.src = '';
+      obj.userData.video.load();
+    }
+
+    scene.remove(obj);
+    managedObjects.delete(action.objectId);
+    loomIntegration.clearObjectGraph(action.objectId);
+    updateEnvironmentMenuSkyboxControls();
+    notifySceneStateChanged('local-scene-remove');
+    return;
+  }
+
+  if (action.kind === 'scene-batch') {
+    for (const child of action.actions || []) {
+      applySceneActionLocally(child);
+    }
+    return;
+  }
+}
+
+async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox') {
+  const safeName = sourceName || 'skybox';
+
+  const result = await buildImageSkySphereGlb(blob, {
+    THREE,
+    GLTFExporter,
+    radius: 50,
+    widthSegments: 64,
+    heightSegments: 32,
+  });
+
+  const meshPath = await uploadCarrierGlb(result.arrayBuffer);
+  const objectId = `sky-${meshPath.slice(0, 8)}`;
+
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: `sky: ${safeName}`.slice(0, 80),
+    position: [0, 0, 0],
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1],
+    asset: {
+      type: 'mesh',
+      source: 'generated-skybox',
+      meshPath,
+    },
+    meshPath,
+    metadata: {
+      role: 'sky-sphere',
+      generatedFrom: 'image',
+      sourceName: safeName,
+    },
+  };
+
+  return payload;
+}
+
+function createReplaceSkyboxBatchEntry(oldSkyboxPayloads, newSkyboxPayload) {
+  const removeOldActions = oldSkyboxPayloads.map(payload => ({
+    kind: 'scene-remove',
+    objectId: payload.objectId,
+  }));
+
+  const forwardActions = [
+    ...removeOldActions,
+    newSkyboxPayload,
+  ];
+
+  const backwardActions = [
+    ...oldSkyboxPayloads,
+    {
+      kind: 'scene-remove',
+      objectId: newSkyboxPayload.objectId,
+    },
+  ];
+
+  return HistoryManager.createBatchEntry(
+    forwardActions,
+    backwardActions,
+    'Replaced Skybox'
+  );
+}
+
+async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox') {
+  const oldSkyboxPayloads = getSkySpherePayloads();
+  const newSkyboxPayload = await createSkyboxSpherePayloadFromBlob(blob, sourceName);
+
+  const batchEntry = createReplaceSkyboxBatchEntry(
+    oldSkyboxPayloads,
+    newSkyboxPayload
+  );
+
+  // ローカルに適用
+  applySceneActionLocally(batchEntry.forward);
+
+  // リモートに同期
+  broadcast(batchEntry.forward);
+
+  // Undoに登録
+  presenceState.historyManager.push(batchEntry);
+
+  updateEnvironmentMenuSkyboxControls();
+  notifySceneStateChanged('skybox-replaced');
+
+  showToast(
+    oldSkyboxPayloads.length > 0
+      ? 'Skyboxを置き換えました'
+      : 'Skyboxを追加しました'
+  );
+
+  return {
+    objectId: newSkyboxPayload.objectId,
+    payload: newSkyboxPayload,
+  };
+}
+
 async function imageImporterCallback(file, position, context = {}) {
   if (file.size > 10 * 1024 * 1024) {
     throw new Error('画像が大きすぎます (最大10MB)');
@@ -3338,62 +3500,31 @@ async function imageImporterCallback(file, position, context = {}) {
   const { targetKind = 'scene' } = context;
   const isSkyTarget = targetKind === 'sky';
 
-  let arrayBuffer, meshPath, objectId, displayName, positionArray, payload;
-
   if (isSkyTarget) {
-    const result = await buildImageSkySphereGlb(file, {
-      THREE,
-      GLTFExporter,
-      radius: 50,
-      widthSegments: 64,
-      heightSegments: 32,
-    });
-    arrayBuffer = result.arrayBuffer;
-    meshPath = await uploadCarrierGlb(arrayBuffer);
-
-    objectId = `sky-${meshPath.slice(0, 8)}`;
-    displayName = `sky: ${file.name || 'image'}`.slice(0, 60);
-    positionArray = [0, 0, 0];
-
-    payload = {
-      kind: 'scene-add',
-      objectId,
-      name: displayName,
-      position: positionArray,
-      rotation: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-      metadata: {
-        role: 'sky-sphere',
-      },
-      asset: { type: 'mesh', meshPath },
-    };
-
-    broadcast(payload);
-    addOrUpdateObject(objectId, payload);
-    showToast('Skyboxを追加しました');
-  } else {
-    arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
-    meshPath = await uploadCarrierGlb(arrayBuffer);
-
-    objectId = `img-${meshPath.slice(0, 8)}`;
-    displayName = `image: ${file.name}`.slice(0, 60);
-    positionArray = (position && typeof position.toArray === 'function')
-      ? position.toArray()
-      : [0, 1, 0];
-
-    payload = {
-      kind: 'scene-add',
-      objectId,
-      name: displayName,
-      position: positionArray,
-      rotation: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-      asset: { type: 'mesh', meshPath },
-    };
-
-    broadcast(payload);
-    addOrUpdateObject(objectId, payload);
+    return await replaceSkyboxSphereFromBlob(file, file.name || 'skybox');
   }
+
+  const arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
+  const meshPath = await uploadCarrierGlb(arrayBuffer);
+
+  const objectId = `img-${meshPath.slice(0, 8)}`;
+  const displayName = `image: ${file.name}`.slice(0, 60);
+  const positionArray = (position && typeof position.toArray === 'function')
+    ? position.toArray()
+    : [0, 1, 0];
+
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: displayName,
+    position: positionArray,
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1],
+    asset: { type: 'mesh', meshPath },
+  };
+
+  broadcast(payload);
+  addOrUpdateObject(objectId, payload);
 }
 
 async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
@@ -3463,6 +3594,8 @@ async function urlImporterCallback(url, position, context = {}) {
       textImporterCallback(text, position, filename, context),
     THREE,
     GLTFLoader,
+    targetKind: context?.targetKind || 'scene',
+    replaceSkyboxSphereFromBlob,
   };
 
   await dispatchUrlImport(resolved.resolvedUrl, ctx);
