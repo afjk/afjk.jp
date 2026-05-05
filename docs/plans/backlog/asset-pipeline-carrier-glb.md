@@ -35,6 +35,7 @@ Scene Sync に入る多様な asset を placement-compatible に扱うため、G
 - image-to-plane pipeline (✓ Phase 1 done: Web URL drop + TextureLoader plane with png/jpg/jpeg/webp/gif/avif/bmp; ✓ Wave 3: browser-side carrier GLB via Web UI)
 - text-to-plane pipeline (✓ done: browser-side carrier GLB via Web UI, Wave 4)
 - video asset pipeline (✓ Phase 1 done: Web URL drop + VideoTexture plane, mp4/webm/mov/m4v only; Phase 2 needed: playback sync; Phase 3-4: Unity/Godot; HLS/DASH deferred)
+- GLB URL drop pipeline (✓ Phase 1 done: Web URL drop + GLTFLoader mesh, .glb only; .gltf deferred; Phase 2: Unity/Godot; audio asset pipeline parallel)
 - webpage carrier pipeline
 - asset library and reusable asset references
 - transfer-core integration

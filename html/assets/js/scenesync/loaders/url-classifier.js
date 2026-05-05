@@ -11,8 +11,8 @@ export const URL_KIND = {
 const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v'];
 const HLS_EXTS = ['m3u8'];
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
-const UNSUPPORTED_EXTS = ['svg'];
-const GLB_EXTS = ['glb', 'gltf'];
+const UNSUPPORTED_EXTS = ['svg', 'gltf'];
+const GLB_EXTS = ['glb'];
 
 /**
  * URL 文字列を分類する純関数。

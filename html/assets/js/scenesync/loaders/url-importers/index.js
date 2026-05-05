@@ -1,5 +1,6 @@
 import { importVideoUrl } from './video.js';
 import { importImageUrl } from './image.js';
+import { importGlbUrl } from './glb.js';
 import { classifyUrl, URL_KIND } from '../url-classifier.js';
 
 /**
@@ -36,11 +37,7 @@ export async function dispatchUrlImport(url, ctx) {
   }
 
   if (classified.kind === URL_KIND.GLB) {
-    ctx.showToast({
-      type: 'error',
-      message: '3D モデル URL ドロップは次フェーズで対応予定です',
-    });
-    return;
+    return await importGlbUrl(classified.url, ctx);
   }
 
   if (classified.kind === URL_KIND.WEBPAGE) {
