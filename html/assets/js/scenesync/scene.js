@@ -2684,6 +2684,10 @@ function addOrUpdateObject(objectId, info, options = {}) {
         replaceManagedObject(objectId, buildPrimitiveObject(objectId, info, asset), info);
         return;
       case 'mesh':
+        if (asset.source === 'url' && asset.url) {
+          loadMeshObjectFromUrl(objectId, info, asset.url, existing, options.prebuiltGlbModel);
+          return;
+        }
         if (asset.meshPath) {
           loadMeshObject(objectId, info, asset.meshPath, existing);
           return;
@@ -2857,6 +2861,72 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
     const failedInfo = { ...info, name: `${info.name || objectId} (load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
     notifySceneStateChanged('image-load-failed');
+  });
+}
+
+function disposeMaterial(material) {
+  if (!material) return;
+  if (material.map) material.map.dispose();
+  if (material.normalMap) material.normalMap.dispose();
+  if (material.metalnessMap) material.metalnessMap.dispose();
+  if (material.roughnessMap) material.roughnessMap.dispose();
+  if (material.aoMap) material.aoMap.dispose();
+  if (material.emissiveMap) material.emissiveMap.dispose();
+  material.dispose();
+}
+
+function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null) {
+  addLoadingOverlay(objectId, info.name || objectId, info);
+
+  const promise = prebuilt
+    ? Promise.resolve({ model: prebuilt })
+    : (async () => {
+        const { loadGlbFromUrl } = await import('./loaders/url-importers/glb.js');
+        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader });
+      })();
+
+  promise.then(({ model }) => {
+    removeLoadingOverlay(objectId);
+    model.userData.objectId = objectId;
+    model.userData.name = info.name;
+    model.userData.assetType = 'mesh';
+    if (info.asset) model.userData.asset = structuredClone(info.asset);
+
+    // disposable: GLB はテクスチャや material を内包するため scene graph を traverse して dispose
+    model.userData.disposable = () => {
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.geometry?.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach((m) => disposeMaterial(m));
+          } else if (child.material) {
+            disposeMaterial(child.material);
+          }
+        }
+      });
+    };
+
+    if (existing) {
+      model.position.copy(existing.position);
+      model.quaternion.copy(existing.quaternion);
+      model.scale.copy(existing.scale);
+      if (transformCtrl.object === existing) transformCtrl.detach();
+      scene.remove(existing);
+    } else {
+      applyTransform(model, info);
+    }
+
+    replaceManagedObject(objectId, model, info);
+  }).catch((err) => {
+    removeLoadingOverlay(objectId);
+    console.warn('Failed to load GLB URL for', objectId, ':', err);
+    showToast({
+      type: 'error',
+      message: `GLB の読み込みに失敗しました: ${err?.message || 'CORS/サイズ/形式エラーの可能性'}`,
+    });
+    const failedInfo = { ...info, name: `${info.name || objectId} (load failed)` };
+    replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
+    notifySceneStateChanged('glb-url-load-failed');
   });
 }
 
@@ -3240,6 +3310,7 @@ async function urlImporterCallback(url, position) {
       scale: [1, 1, 1],
     }),
     THREE,
+    GLTFLoader,
   };
 
   await dispatchUrlImport(url, ctx);
