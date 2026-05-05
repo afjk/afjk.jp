@@ -301,6 +301,8 @@ godot/
 
 **Note on Web image support**: The Web client (as of Wave 3) internally converts PNG/JPEG/WebP images dropped via UI to carrier GLB format and delivers them as `{ "type": "mesh", "meshPath": <id> }` via the existing blob store. The `asset.type: "image"` wire format is reserved for future cross-platform standardization but not yet implemented. Images are thus indistinguishable from other meshes at the protocol level.
 
+**Note on Web text support**: The Web client (as of Wave 4) converts plain text and Markdown files dropped via UI to carrier GLB format (canvas-textured plane) and delivers them as `{ "type": "mesh", "meshPath": <id> }` via the existing blob store. Supported formats: `.txt` (plain text) and `.md` / `.markdown` (Markdown with Phase 1 subset: headings, bold, bullet points, horizontal rules). Files are rasterized to 2048px canvas, normalized to max 5000 chars, clamped to 256-8192px height. Text is thus indistinguishable from other meshes at the protocol level.
+
 `video`（IF 定義のみ、未実装）:
 
     { "type": "video", "url": "https://..." }

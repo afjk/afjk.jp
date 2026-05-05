@@ -32,9 +32,10 @@ Scene Sync に入る多様な asset を placement-compatible に扱うため、G
 
 ## later tasks
 
-- image-to-plane pipeline (✓ partially done: browser-side carrier GLB via Web UI, Wave 3)
+- image-to-plane pipeline (✓ done: browser-side carrier GLB via Web UI, Wave 3)
+- text-to-plane pipeline (✓ done: browser-side carrier GLB via Web UI, Wave 4)
 - video asset pipeline
-- webpage / text carrier pipeline
+- webpage carrier pipeline
 - asset library and reusable asset references
 - transfer-core integration
 
