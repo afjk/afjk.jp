@@ -32,7 +32,7 @@ export async function importTextUrl(url, ctx) {
     throw err;
   }
 
-  await ctx.textImporter(text, ctx.position || null, filename);
+  await ctx.textImporter(text, filename);
 
   return { objectId: null, payload: null };
 }

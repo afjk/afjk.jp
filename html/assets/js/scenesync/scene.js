@@ -3325,8 +3325,8 @@ async function urlImporterCallback(url, position) {
       scale: [1, 1, 1],
     }),
     position: positionArray,
-    textImporter: (text, importPosition, filename) =>
-      textImporterCallback(text, importPosition || position, filename),
+    textImporter: (text, filename) =>
+      textImporterCallback(text, position, filename),
     THREE,
     GLTFLoader,
   };
