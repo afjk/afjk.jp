@@ -303,9 +303,11 @@ godot/
 
 **Note on Web text support**: The Web client (as of Wave 4) converts plain text and Markdown files dropped via UI to carrier GLB format (canvas-textured plane) and delivers them as `{ "type": "mesh", "meshPath": <id> }` via the existing blob store. Supported formats: `.txt` (plain text) and `.md` / `.markdown` (Markdown with Phase 1 subset: headings (`#`/`##`/`###`), bullet points (`-`/`*`), horizontal rules (`---`). Inline `**bold**` markers are stripped but rendering remains regular weight. Headings are rendered bold automatically). Files are rasterized to 2048px canvas, normalized to max 5000 chars, clamped to 256-8192px height. Text is thus indistinguishable from other meshes at the protocol level.
 
-`video`（IF 定義のみ、未実装）:
+`video`（Phase 1: Web のみ実装、Unity/Godot 未実装）:
 
     { "type": "video", "url": "https://..." }
+
+**Web video URL drop support** (Phase 1): The Web client accepts video URL drops via drag-and-drop interface. Supported video formats: `mp4`, `webm`, `mov`, `m4v`. The video is rendered on a textured plane with automatic playback (muted, looped). CORS headers are required on the video hosting server. Dropped video URLs are broadcast as `{ "type": "video", "url": "..." }` to all clients. HLS/DASH streams (`.m3u8`, `.mpd`) are not yet supported (Phase 2). Video playback synchronization (play/pause/seek) is not implemented (Phase 2).
 
 `audio`（IF 定義のみ、未実装）:
 
