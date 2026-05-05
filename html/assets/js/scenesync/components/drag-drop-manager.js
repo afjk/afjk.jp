@@ -21,6 +21,34 @@ function isSupportedTextFile(file) {
   return supportedMimes.includes(file.type) || supportedExts.test(file.name || '');
 }
 
+function normalizePositionContext(input, fallbackPosition) {
+  if (input?.position) {
+    return {
+      position: input.position,
+      targetKind: input.targetKind ?? 'scene',
+      clientX: input.clientX,
+      clientY: input.clientY,
+    };
+  }
+
+  // Backward compatibility: old callers pass THREE.Vector3 directly.
+  if (input && typeof input.toArray === 'function') {
+    return {
+      position: input,
+      targetKind: 'scene',
+      clientX: undefined,
+      clientY: undefined,
+    };
+  }
+
+  return {
+    position: fallbackPosition,
+    targetKind: 'scene',
+    clientX: undefined,
+    clientY: undefined,
+  };
+}
+
 export class DragDropManager {
   constructor(options) {
     const {
@@ -165,20 +193,22 @@ export class DragDropManager {
   }
 
   async handleFile(file, positionContext) {
+    const normalized = normalizePositionContext(
+      positionContext,
+      this._defaultDropPosition()
+    );
+
     if (isGlbFile(file)) {
-      const pos = positionContext?.position ?? this._defaultDropPosition();
-      return this._loadFile(file, pos);
+      return this._loadFile(file, normalized.position);
     }
 
     if (this.imageImporter && isSupportedImageFile(file)) {
-      const dropPos = positionContext?.position ?? this._defaultDropPosition();
-      const context = {
-        targetKind: positionContext?.targetKind ?? 'scene',
-        clientX: positionContext?.clientX,
-        clientY: positionContext?.clientY,
-      };
       try {
-        await this.imageImporter(file, dropPos, context);
+        await this.imageImporter(file, normalized.position, {
+          targetKind: normalized.targetKind,
+          clientX: normalized.clientX,
+          clientY: normalized.clientY,
+        });
       } catch (error) {
         console.warn('[drag-drop] image import failed:', error);
         this.showToast?.(error?.message || '画像の読み込みに失敗しました');
@@ -187,15 +217,13 @@ export class DragDropManager {
     }
 
     if (this.textImporter && isSupportedTextFile(file)) {
-      const dropPos = positionContext?.position ?? this._defaultDropPosition();
-      const context = {
-        targetKind: positionContext?.targetKind ?? 'scene',
-        clientX: positionContext?.clientX,
-        clientY: positionContext?.clientY,
-      };
       try {
         const text = await file.text();
-        await this.textImporter(text, dropPos, file.name, context);
+        await this.textImporter(text, normalized.position, file.name, {
+          targetKind: normalized.targetKind,
+          clientX: normalized.clientX,
+          clientY: normalized.clientY,
+        });
       } catch (error) {
         console.warn('[drag-drop] text import failed:', error);
         this.showToast?.(error?.message || 'テキストの読み込みに失敗しました');
@@ -203,7 +231,7 @@ export class DragDropManager {
       return null;
     }
 
-    this.showToast?.('GLB / 画像 / テキストファイルのみ対応しています');
+    this.showToast?.('未対応のファイル形式です');
     return null;
   }
 

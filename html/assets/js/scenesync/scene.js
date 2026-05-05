@@ -71,6 +71,28 @@ function isSkySphereObject(obj) {
     || obj?.name?.startsWith('sky:');
 }
 
+function isSkySphereThreeObject(obj) {
+  let current = obj;
+
+  while (current) {
+    const objectId = current.userData?.objectId;
+    const metadata = current.userData?.metadata;
+    const name = current.userData?.name;
+
+    if (
+      metadata?.role === 'sky-sphere' ||
+      objectId?.startsWith('sky-') ||
+      name?.startsWith('sky:')
+    ) {
+      return true;
+    }
+
+    current = current.parent;
+  }
+
+  return false;
+}
+
 function getSkySphereObjects() {
   const result = [];
   for (const [objectId, obj] of managedObjects.entries()) {
@@ -302,7 +324,8 @@ function onXrSelectStart(ctrl) {
   xrRaycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
   xrRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(xrTmpMatrix);
 
-  const targets = Array.from(managedObjects.values());
+  const targets = Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj));
   const hits = xrRaycaster.intersectObjects(targets, true);
   if (hits.length === 0) return;
 
@@ -1238,7 +1261,8 @@ function selectObjectAt(clientX, clientY) {
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
-  const targets = Array.from(managedObjects.values());
+  const targets = Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj));
   const hits = raycaster.intersectObjects(targets, true);
   if (hits.length > 0) {
     let obj = hits[0].object;
@@ -1326,7 +1350,8 @@ renderer.domElement.addEventListener('touchend', (e) => {
         pointer.x = ((tapX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((tapY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
-        const targets = Array.from(managedObjects.values());
+        const targets = Array.from(managedObjects.values())
+          .filter(obj => !isSkySphereThreeObject(obj));
         const hits = raycaster.intersectObjects(targets, true);
         if (hits.length === 0) {
           broadcast({
@@ -1346,6 +1371,11 @@ renderer.domElement.addEventListener('touchend', (e) => {
 function deleteObjectById(objectId) {
   const attached = managedObjects.get(objectId);
   if (!attached) return;
+
+  if (transformCtrl.object === attached) {
+    transformCtrl.detach();
+    hideToolbar();
+  }
 
   if (locks.has(objectId)) {
     const lockInfo = locks.get(objectId);
@@ -1387,6 +1417,7 @@ function deleteObjectById(objectId) {
   );
 
   broadcast({ kind: 'scene-remove', objectId });
+  updateEnvironmentMenuSkyboxControls();
 }
 
 function deleteSelectedObject() {
@@ -2390,6 +2421,7 @@ function handleHandoff(data) {
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(objectId);
       notifySceneStateChanged('scene-remove-handoff');
+      updateEnvironmentMenuSkyboxControls();
       break;
     }
     case 'scene-mesh': {
@@ -3017,6 +3049,7 @@ function replaceManagedObject(objectId, nextObject, info) {
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
   notifySceneStateChanged('managed-object-replaced');
+  updateEnvironmentMenuSkyboxControls();
 }
 
 function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
@@ -3180,6 +3213,7 @@ function applyOperationToScene(operation) {
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(operation.objectId);
       notifySceneStateChanged('undo-redo-scene-remove');
+      updateEnvironmentMenuSkyboxControls();
       break;
     }
     case 'scene-delta': {
