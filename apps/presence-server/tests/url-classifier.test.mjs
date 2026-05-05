@@ -63,8 +63,8 @@ test('classifyUrl', async (t) => {
     assert.equal(classifyUrl('https://example.com/model.glb').kind, URL_KIND.GLB);
   });
 
-  await t.test('gltf model URL', () => {
-    assert.equal(classifyUrl('https://example.com/model.gltf').kind, URL_KIND.GLB);
+  await t.test('gltf model URL is unsupported (Phase 2)', () => {
+    assert.equal(classifyUrl('https://example.com/model.gltf').kind, URL_KIND.UNSUPPORTED);
   });
 
   await t.test('webpage URL', () => {
