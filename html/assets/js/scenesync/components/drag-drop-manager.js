@@ -12,6 +12,14 @@ function isSupportedImageFile(file) {
   return supportedMimes.includes(file.type) || supportedExts.test(file.name || '');
 }
 
+function isSupportedTextFile(file) {
+  if (!file) return false;
+  if (file.size > 1 * 1024 * 1024) return false; // 1MB limit
+  const supportedMimes = ['text/plain', 'text/markdown'];
+  const supportedExts = /\.(txt|md|markdown)$/i;
+  return supportedMimes.includes(file.type) || supportedExts.test(file.name || '');
+}
+
 export class DragDropManager {
   constructor(options) {
     const {
@@ -31,6 +39,7 @@ export class DragDropManager {
       maxDimension,
       glbLoader,
       imageImporter,
+      textImporter,
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -49,6 +58,7 @@ export class DragDropManager {
     this.onLoadStart = onLoadStart;
     this.onLoadEnd = onLoadEnd;
     this.imageImporter = imageImporter;
+    this.textImporter = textImporter;
     this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene, {
       getRaycastTargets,
     });
@@ -146,7 +156,19 @@ export class DragDropManager {
       return null;
     }
 
-    this.showToast?.('GLB / 画像ファイルのみ対応しています');
+    if (this.textImporter && isSupportedTextFile(file)) {
+      const dropPos = position || this._defaultDropPosition();
+      try {
+        const text = await file.text();
+        await this.textImporter(text, dropPos, file.name);
+      } catch (error) {
+        console.warn('[drag-drop] text import failed:', error);
+        this.showToast?.(error?.message || 'テキストの読み込みに失敗しました');
+      }
+      return null;
+    }
+
+    this.showToast?.('GLB / 画像 / テキストファイルのみ対応しています');
     return null;
   }
 
