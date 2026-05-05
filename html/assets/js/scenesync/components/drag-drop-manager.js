@@ -152,6 +152,18 @@ export class DragDropManager {
     );
   }
 
+  _fallbackScenePositionFromEvent(event) {
+    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+      return this.coordinateTransformer.screenToWorld(
+        event.clientX,
+        event.clientY,
+        this.renderer.domElement
+      );
+    }
+
+    return this._defaultDropPosition();
+  }
+
   _createDropRay(event) {
     const rect = this.renderer.domElement.getBoundingClientRect();
 
@@ -184,6 +196,16 @@ export class DragDropManager {
   }
 
   _dropPositionFromEvent(event) {
+    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+      return {
+        position: this._defaultDropPosition(),
+        targetKind: 'scene',
+        clientX: undefined,
+        clientY: undefined,
+        upness: undefined,
+      };
+    }
+
     const rayInfo = this._createDropRay(event);
     const hit = this._findPlacementHit(rayInfo.raycaster);
 
@@ -208,7 +230,7 @@ export class DragDropManager {
     }
 
     return {
-      position: this._defaultDropPosition(),
+      position: this._fallbackScenePositionFromEvent(event),
       targetKind: 'scene',
       clientX: event.clientX,
       clientY: event.clientY,
