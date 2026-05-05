@@ -209,6 +209,26 @@ export class DragDropManager {
     const rayInfo = this._createDropRay(event);
     const hit = this._findPlacementHit(rayInfo.raycaster);
 
+    const debugTargetKind = hit
+      ? 'scene-hit'
+      : rayInfo.upness > SKY_DROP_UPNESS_THRESHOLD
+        ? 'sky'
+        : 'scene-fallback';
+
+    this.lastDropDetection = {
+      hit: !!hit,
+      hitObject: hit?.object?.name || null,
+      hitObjectType: hit?.object?.type || null,
+      hitDistance: hit?.distance ?? null,
+      upness: rayInfo.upness,
+      threshold: SKY_DROP_UPNESS_THRESHOLD,
+      targetKind: debugTargetKind,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+
+    console.debug('[drag-drop] drop detection', this.lastDropDetection);
+
     if (hit) {
       return {
         position: hit.point.clone(),

@@ -3507,6 +3507,11 @@ const dragDropManager = new DragDropManager({
   urlImporter: urlImporterCallback,
 });
 
+window.__sceneSyncDebug = {
+  ...(window.__sceneSyncDebug || {}),
+  dragDropManager,
+};
+
 // ── クリップボード貼り付け ────────────────────────────────────────────
 
 function getDefaultImportPosition() {
