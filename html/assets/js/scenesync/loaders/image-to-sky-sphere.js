@@ -25,9 +25,13 @@ export async function buildImageSkySphereGlb(fileOrBlob, options = {}) {
   texture.needsUpdate = true;
 
   const geometry = new THREE.SphereGeometry(radius, widthSegments, heightSegments);
+  // GLB化後も内側から見えるように、面の向きをジオメトリ側で反転する
+  geometry.scale(-1, 1, 1);
+  geometry.computeVertexNormals();
+
   const material = new THREE.MeshBasicMaterial({
     map: texture,
-    side: THREE.BackSide,
+    side: THREE.FrontSide,
   });
 
   const sphere = new THREE.Mesh(geometry, material);
