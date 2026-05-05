@@ -16,6 +16,7 @@ import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
+import { resolveDroppedUrl } from './loaders/url-resolver.js';
 import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
@@ -3299,6 +3300,16 @@ function generateObjectId(prefix) {
 }
 
 async function urlImporterCallback(url, position) {
+  const resolved = resolveDroppedUrl(url);
+
+  for (const note of resolved.notes || []) {
+    showToast(note);
+  }
+
+  for (const warning of resolved.warnings || []) {
+    showToast(warning);
+  }
+
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
     : [0, 1, 0];
@@ -3313,11 +3324,14 @@ async function urlImporterCallback(url, position) {
       rotation: [0, 0, 0, 1],
       scale: [1, 1, 1],
     }),
+    position: positionArray,
+    textImporter: (text, filename) =>
+      textImporterCallback(text, position, filename),
     THREE,
     GLTFLoader,
   };
 
-  await dispatchUrlImport(url, ctx);
+  await dispatchUrlImport(resolved.resolvedUrl, ctx);
 }
 
 const dragDropManager = new DragDropManager({
