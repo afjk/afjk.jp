@@ -1,5 +1,6 @@
 import { CoordinateTransformer } from '../utils/coordinate-utils.js';
 import { GLBFileLoader } from '../loaders/glb-file-loader.js';
+import { parseUriList, extractUrlFromText } from '../loaders/url-classifier.js';
 
 function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
@@ -40,6 +41,7 @@ export class DragDropManager {
       glbLoader,
       imageImporter,
       textImporter,
+      urlImporter,
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -59,6 +61,7 @@ export class DragDropManager {
     this.onLoadEnd = onLoadEnd;
     this.imageImporter = imageImporter;
     this.textImporter = textImporter;
+    this.urlImporter = urlImporter;
     this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene, {
       getRaycastTargets,
     });
@@ -87,6 +90,15 @@ export class DragDropManager {
 
   _isFileDrag(event) {
     return Array.from(event.dataTransfer?.types || []).includes('Files');
+  }
+
+  _isUrlDrag(event) {
+    const types = Array.from(event.dataTransfer?.types || []);
+    return types.includes('text/uri-list') || types.includes('text/plain');
+  }
+
+  _isDraggableContent(event) {
+    return this._isFileDrag(event) || this._isUrlDrag(event);
   }
 
   _setOverlay(active) {
@@ -191,7 +203,7 @@ export class DragDropManager {
   }
 
   _onDragEnter(event) {
-    if (!this._isFileDrag(event)) return;
+    if (!this._isDraggableContent(event)) return;
 
     event.preventDefault();
     this.dragCounter += 1;
@@ -199,7 +211,7 @@ export class DragDropManager {
   }
 
   _onDragLeave(event) {
-    if (!this._isFileDrag(event)) return;
+    if (!this._isDraggableContent(event)) return;
 
     event.preventDefault();
     this.dragCounter -= 1;
@@ -210,7 +222,7 @@ export class DragDropManager {
   }
 
   _onDragOver(event) {
-    if (!this._isFileDrag(event)) return;
+    if (!this._isDraggableContent(event)) return;
 
     event.preventDefault();
     if (event.dataTransfer) {
@@ -219,13 +231,35 @@ export class DragDropManager {
   }
 
   _onDrop(event) {
-    if (!this._isFileDrag(event)) return;
-
     event.preventDefault();
     this.dragCounter = 0;
     this._setOverlay(false);
 
-    const file = event.dataTransfer?.files?.[0];
+    const dt = event.dataTransfer;
+    if (!dt) return;
+
+    // URL ドロップを先に判定（files が空の場合）
+    if (!dt.files || dt.files.length === 0) {
+      const uriList = dt.getData('text/uri-list');
+      const urls = parseUriList(uriList);
+      let candidate = urls[0];
+      if (!candidate) {
+        candidate = extractUrlFromText(dt.getData('text/plain'));
+      }
+      if (candidate && this.urlImporter) {
+        const dropPos = this._dropPositionFromEvent(event) || this._defaultDropPosition();
+        this.urlImporter(candidate, dropPos).catch((err) => {
+          console.warn('[drag-drop] url import failed:', err);
+          this.showToast?.(err?.message || 'URLの追加に失敗しました');
+        });
+      }
+      return;
+    }
+
+    // ファイルドロップ
+    if (!this._isFileDrag(event)) return;
+
+    const file = dt.files?.[0];
     if (!file) return;
 
     this.handleFile(file, this._dropPositionFromEvent(event)).catch((error) => {
