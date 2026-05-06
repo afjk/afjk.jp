@@ -530,19 +530,26 @@ The package will be available on npm at `@afjk/scene-sync-mcp` and can be used i
 npx -y @afjk/scene-sync-mcp@latest setup codex
 ```
 
+For Claude Desktop:
+
+```bash
+npx -y @afjk/scene-sync-mcp@latest setup claude
+```
+
 ## Manual Test Checklist
 
 1. ✅ Start Scene Sync in browser
 2. ✅ Press "AIにリンク" and note the code
-3. ✅ Register MCP: `npx -y @afjk/scene-sync-mcp@latest setup codex`
-4. ✅ Tell Claude: "Scene Sync に [コード] でリンク"
-5. ✅ Ask: "オレンジ色の箱を中央に置いて"
-6. ✅ Confirm box appears in browser
-7. ✅ Ask: "その箱にカメラをフォーカス"
-8. ✅ Confirm camera focuses on box
-9. ✅ Ask: "スクリーンショットを撮ってください"
-10. ✅ Ask: "リンクを解除"
-11. ✅ Verify `scene_sync_status` returns "Not linked"
+3. ✅ Register MCP in Codex: `npx -y @afjk/scene-sync-mcp@latest setup codex`
+4. ✅ Or print Claude Desktop config: `npx -y @afjk/scene-sync-mcp@latest setup claude`
+5. ✅ Tell Claude or Codex: "Scene Sync に [コード] でリンク"
+6. ✅ Ask: "オレンジ色の箱を中央に置いて"
+7. ✅ Confirm box appears in browser
+8. ✅ Ask: "その箱にカメラをフォーカス"
+9. ✅ Confirm camera focuses on box
+10. ✅ Ask: "スクリーンショットを撮ってください"
+11. ✅ Ask: "リンクを解除"
+12. ✅ Verify `scene_sync_status` returns "Not linked"
 
 ## License
 
