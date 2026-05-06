@@ -37,7 +37,8 @@ You operate Scene Sync on behalf of one linked human user. These instructions ar
   - 環境変更
   - 1 object へのフォーカス
   - スクリーンショット
-  - 1 つの GLB URL の読み込み
+  - 1 つの GLB / image / video / text URL の読み込み
+  - 1 つの skybox image URL の適用
 - 確認を求めるのは次の場合だけ
   - 複数 object の削除
   - 多数 object への一括変更
@@ -79,6 +80,14 @@ Primitive を作るときの必須項目:
 
 Use `/api/ai/room/{roomId}/ai-command` instead of `/broadcast`.
 
+Rules:
+
+- `focusObject` では `params.objectId` を必ず送る
+- `uploadGlbFromUrl` / `addImageFromUrl` / `addVideoFromUrl` / `addTextFromUrl` / `setSkyboxFromImageUrl` では `params.url` を必ず送る
+- `addImageFromUrl` / `addVideoFromUrl` / `addTextFromUrl` では必要なら `objectId` / `name` / `position` / `rotation` / `scale` を送ってよい
+- URL-based import や skybox change の後、検証が必要なら scene snapshot を再取得する
+- CORS や URL 可用性の失敗がありうるので、失敗時は URL の直接取得可否を疑う
+
 ```json
 {
   "sessionId": "v1....",
@@ -101,6 +110,61 @@ Use `/api/ai/room/{roomId}/ai-command` instead of `/broadcast`.
 }
 ```
 
+```json
+{
+  "sessionId": "v1....",
+  "action": "addImageFromUrl",
+  "params": {
+    "url": "https://example.com/reference.jpg",
+    "objectId": "ref-image-1",
+    "name": "Reference Image",
+    "position": [0, 1.2, -1.5],
+    "rotation": [0, 0, 0, 1],
+    "scale": [2, 2, 1]
+  }
+}
+```
+
+```json
+{
+  "sessionId": "v1....",
+  "action": "addVideoFromUrl",
+  "params": {
+    "url": "https://example.com/loop.mp4",
+    "objectId": "loop-video-1",
+    "name": "Loop Video",
+    "position": [0, 1.2, -1.5],
+    "rotation": [0, 0, 0, 1],
+    "scale": [2, 2, 1]
+  }
+}
+```
+
+```json
+{
+  "sessionId": "v1....",
+  "action": "addTextFromUrl",
+  "params": {
+    "url": "https://example.com/notes.txt",
+    "objectId": "notes-1",
+    "name": "Remote Notes",
+    "position": [0, 1.2, -1.5],
+    "rotation": [0, 0, 0, 1],
+    "scale": [2, 2, 1]
+  }
+}
+```
+
+```json
+{
+  "sessionId": "v1....",
+  "action": "setSkyboxFromImageUrl",
+  "params": {
+    "url": "https://example.com/panorama.jpg"
+  }
+}
+```
+
 Implemented actions:
 
 - `getCameraPose`
@@ -110,3 +174,7 @@ Implemented actions:
 - `getHistory`
 - `screenshot`
 - `uploadGlbFromUrl`
+- `addImageFromUrl`
+- `addVideoFromUrl`
+- `addTextFromUrl`
+- `setSkyboxFromImageUrl`
