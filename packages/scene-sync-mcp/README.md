@@ -38,7 +38,19 @@ npx -y @afjk/scene-sync-mcp@latest setup codex --staging
 
 ### Claude Desktop
 
-You can use the npm package directly via `npx`.
+Update Claude Desktop config automatically:
+
+```bash
+npx -y @afjk/scene-sync-mcp@latest setup claude
+```
+
+This command updates `claude_desktop_config.json` and adds or replaces the `scene-sync` entry while preserving your other MCP servers and preferences.
+
+To print the JSON instead of writing it:
+
+```bash
+npx -y @afjk/scene-sync-mcp@latest setup claude --print
+```
 
 Add to your `claude_desktop_config.json`:
 
@@ -80,10 +92,10 @@ Single-command helpers:
 npx -y @afjk/scene-sync-mcp@latest setup codex
 ```
 
-Print Claude Desktop config:
+Print Claude Desktop config without writing:
 
 ```bash
-npx -y @afjk/scene-sync-mcp@latest setup claude
+npx -y @afjk/scene-sync-mcp@latest setup claude --print
 ```
 
 Show local diagnostics:

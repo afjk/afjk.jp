@@ -60,7 +60,7 @@ export async function runCli(args = process.argv.slice(2)) {
   }
 
   if (command === 'setup') {
-    return runSetupCli(rest)
+    return await runSetupCli(rest)
   }
 
   if (command === 'doctor') {
@@ -73,7 +73,7 @@ export async function runCli(args = process.argv.slice(2)) {
   }
 
   if (command === 'codex' || command === 'claude') {
-    return runSetupCli(args)
+    return await runSetupCli(args)
   }
 
   printUsage()

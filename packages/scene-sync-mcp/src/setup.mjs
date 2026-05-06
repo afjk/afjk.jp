@@ -1,6 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { spawnSync } from 'child_process'
+import fs from 'fs/promises'
 import { fileURLToPath } from 'url'
 
 export const defaultSessionFile = path.join(os.homedir(), '.config', 'scene-sync-mcp', 'session.json')
@@ -9,7 +10,7 @@ export const packageSpec = '@afjk/scene-sync-mcp@latest'
 export function printSetupUsage() {
   console.error(`Usage:
   scene-sync-mcp setup codex [--staging] [--name <server-name>]
-  scene-sync-mcp setup claude [--staging]`)
+  scene-sync-mcp setup claude [--staging] [--print]`)
 }
 
 export function getConfig({ staging = false } = {}) {
@@ -66,6 +67,50 @@ export function printClaudeConfig({ staging = false } = {}) {
   process.stdout.write(`${JSON.stringify(formatClaudeConfig({ staging }), null, 2)}\n`)
 }
 
+export function resolveClaudeConfigPath() {
+  const override = process.env.CLAUDE_DESKTOP_CONFIG
+  if (override) return override
+
+  const home = os.homedir()
+  switch (process.platform) {
+    case 'darwin':
+      return path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
+    case 'win32':
+      return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json')
+    default:
+      return path.join(home, '.config', 'Claude', 'claude_desktop_config.json')
+  }
+}
+
+export async function writeClaudeConfig({ staging = false } = {}) {
+  const configPath = resolveClaudeConfigPath()
+  const sceneSyncConfig = formatClaudeConfig({ staging }).mcpServers['scene-sync']
+  let current = {}
+
+  try {
+    const existing = await fs.readFile(configPath, 'utf8')
+    current = JSON.parse(existing)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw new Error(`Failed to read Claude Desktop config at ${configPath}: ${error.message}`)
+    }
+  }
+
+  const next = {
+    ...current,
+    mcpServers: {
+      ...(current.mcpServers || {}),
+      'scene-sync': sceneSyncConfig
+    }
+  }
+
+  await fs.mkdir(path.dirname(configPath), { recursive: true })
+  await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`)
+
+  process.stdout.write(`Updated Claude Desktop config: ${configPath}\n`)
+  return configPath
+}
+
 export function runCodexSetup({ staging = false, name = null } = {}) {
   const { commandString, args } = buildCodexAddCommand({ staging, name })
   const result = spawnSync('codex', args, {
@@ -82,9 +127,10 @@ export function runCodexSetup({ staging = false, name = null } = {}) {
   return result.status ?? 0
 }
 
-export function runSetupCli(args = process.argv.slice(2)) {
+export async function runSetupCli(args = process.argv.slice(2)) {
   const target = args[0]
   const staging = args.includes('--staging')
+  const shouldPrint = args.includes('--print')
   const nameIndex = args.indexOf('--name')
   const name = nameIndex >= 0 ? args[nameIndex + 1] : null
 
@@ -98,7 +144,11 @@ export function runSetupCli(args = process.argv.slice(2)) {
   }
 
   if (target === 'claude') {
-    printClaudeConfig({ staging })
+    if (shouldPrint) {
+      printClaudeConfig({ staging })
+      return 0
+    }
+    await writeClaudeConfig({ staging })
     return 0
   }
 
@@ -109,5 +159,5 @@ export function runSetupCli(args = process.argv.slice(2)) {
 const isDirectExecution = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 
 if (isDirectExecution) {
-  process.exit(runSetupCli())
+  process.exit(await runSetupCli())
 }
