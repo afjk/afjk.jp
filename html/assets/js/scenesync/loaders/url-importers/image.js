@@ -141,7 +141,7 @@ export async function importImageUrl(url, ctx) {
 
     const objectId = ctx.generateObjectId('img');
     const filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'image');
-    const displayName = filename.slice(0, 60) || 'image';
+    const displayName = (ctx.nameOverride || filename).slice(0, 60) || 'image';
     const spawnTransform = ctx.getSpawnTransform();
 
     const payload = {

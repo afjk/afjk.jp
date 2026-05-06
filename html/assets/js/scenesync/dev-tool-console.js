@@ -148,8 +148,12 @@ function validatePayload(value) {
     if (parsed.action === 'focusObject' && typeof parsed.params?.objectId !== 'string') {
       errors.push('focusObject requires params.objectId.');
     }
-    if (parsed.action === 'uploadGlbFromUrl' && typeof parsed.params?.url !== 'string') {
-      errors.push('uploadGlbFromUrl requires params.url.');
+    if (
+      ['uploadGlbFromUrl', 'addImageFromUrl', 'addVideoFromUrl', 'addTextFromUrl', 'setSkyboxFromImageUrl']
+        .includes(parsed.action)
+      && typeof parsed.params?.url !== 'string'
+    ) {
+      errors.push(`${parsed.action} requires params.url.`);
     }
   } else {
     if (typeof parsed.kind !== 'string' || !parsed.kind.trim()) {

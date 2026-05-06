@@ -65,7 +65,7 @@
   {
     "type": "function",
     "name": "scene_sync_ai_command",
-    "description": "Stable Scene Sync tool: run a browser-only command such as getCameraPose, focusObject, screenshot, undo, redo, getHistory, or uploadGlbFromUrl.",
+    "description": "Stable Scene Sync tool: run a browser-only command such as getCameraPose, focusObject, screenshot, undo, redo, getHistory, uploadGlbFromUrl, addImageFromUrl, addVideoFromUrl, addTextFromUrl, or setSkyboxFromImageUrl.",
     "parameters": {
       "type": "object",
       "required": ["roomId", "sessionId", "action"],
@@ -85,12 +85,16 @@
             "redo",
             "getHistory",
             "screenshot",
-            "uploadGlbFromUrl"
+            "uploadGlbFromUrl",
+            "addImageFromUrl",
+            "addVideoFromUrl",
+            "addTextFromUrl",
+            "setSkyboxFromImageUrl"
           ]
         },
         "params": {
           "type": "object",
-          "description": "For focusObject send params.objectId. For uploadGlbFromUrl send params.url. After uploadGlbFromUrl, read the scene snapshot if deduplication or placement verification matters.",
+          "description": "For focusObject send params.objectId. For uploadGlbFromUrl, addImageFromUrl, addVideoFromUrl, addTextFromUrl, and setSkyboxFromImageUrl send params.url. After URL-based imports or skybox changes, read the scene snapshot if verification matters.",
           "additionalProperties": true
         }
       },

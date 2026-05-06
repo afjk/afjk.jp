@@ -39,8 +39,12 @@ export function assertAiCommand(action, params = {}) {
     throw new Error('focusObject requires params.objectId');
   }
 
-  if (action === 'uploadGlbFromUrl' && typeof params.url !== 'string') {
-    throw new Error('uploadGlbFromUrl requires params.url');
+  if (
+    ['uploadGlbFromUrl', 'addImageFromUrl', 'addVideoFromUrl', 'addTextFromUrl', 'setSkyboxFromImageUrl']
+      .includes(action)
+    && typeof params.url !== 'string'
+  ) {
+    throw new Error(`${action} requires params.url`);
   }
 }
 

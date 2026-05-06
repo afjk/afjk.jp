@@ -12,7 +12,7 @@ export async function importVideoUrl(url, ctx) {
 
     const objectId = ctx.generateObjectId('vid');
     const filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'video');
-    const displayName = `video: ${filename}`.slice(0, 60);
+    const displayName = (ctx.nameOverride || `video: ${filename}`).slice(0, 60);
     const spawnTransform = ctx.getSpawnTransform();
 
     const payload = {

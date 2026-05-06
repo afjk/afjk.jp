@@ -25,7 +25,7 @@ The wrapper exposes five stable top-level tools:
 | `scene_sync_redeem` | Redeem a 6-digit pairing code and create an AI session |
 | `scene_sync_get_scene` | Read the current scene snapshot for the linked room |
 | `scene_sync_broadcast` | Apply a scene mutation such as object create/update/delete |
-| `scene_sync_ai_command` | Run a browser-only command such as focus, screenshot, or GLB upload |
+| `scene_sync_ai_command` | Run a browser-only command such as focus, screenshot, GLB import, image/video/text URL import, or skybox update |
 | `scene_sync_revoke` | Revoke the current AI session |
 
 These names are stable across GPTs, Codex, MCP wrappers, and sample clients.
@@ -66,6 +66,10 @@ Notes:
 | `getHistory` | Read recent browser history entries | none |
 | `screenshot` | Capture a browser screenshot | none |
 | `uploadGlbFromUrl` | Import a GLB from a URL | `params.url` |
+| `addImageFromUrl` | Add an image panel from a URL | `params.url` |
+| `addVideoFromUrl` | Add a video panel from a URL | `params.url` |
+| `addTextFromUrl` | Fetch text from a URL and add it as a text panel | `params.url` |
+| `setSkyboxFromImageUrl` | Replace the scene skybox from an image URL | `params.url` |
 
 Optional `uploadGlbFromUrl` params:
 
@@ -76,6 +80,16 @@ Optional `uploadGlbFromUrl` params:
 - `scale`
 
 `uploadGlbFromUrl` is browser-only. It is not a direct file upload endpoint.
+
+Optional params for `addImageFromUrl`, `addVideoFromUrl`, and `addTextFromUrl`:
+
+- `objectId`
+- `name`
+- `position`
+- `rotation`
+- `scale`
+
+`setSkyboxFromImageUrl` currently only requires `params.url`.
 
 ## Required and Optional Parameters
 
@@ -220,7 +234,9 @@ Policy notes:
   `message` text may evolve.
 - For `scene_sync_ai_command`, browser failures should surface inside
   `result.ok=false` even when the wrapper request itself returned HTTP `200`.
-- Agents should not blindly retry `scene-add` or `uploadGlbFromUrl` without a
+- Agents should not blindly retry `scene-add`, `uploadGlbFromUrl`,
+  `addImageFromUrl`, `addVideoFromUrl`, `addTextFromUrl`, or
+  `setSkyboxFromImageUrl` without a
   follow-up snapshot, because duplicates are possible.
 
 ## Scene Snapshot Before/After Policy

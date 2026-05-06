@@ -184,10 +184,11 @@ paths:
       description: |
         Stable AI tool mapping: `scene_sync_ai_command`.
         Use this for browser-only actions such as camera queries, focus, undo/redo,
-        screenshots, and URL-based GLB import. For `focusObject`, always send
+        screenshots, URL-based GLB import, URL-based image/video/text import,
+        and skybox updates. For `focusObject`, always send
         `params.objectId`. Do not call `focusObject` without an object id.
-        For `uploadGlbFromUrl`, confirm the result with `/room/{roomId}/scene`
-        when deduplication or placement accuracy matters.
+        For URL-based imports and skybox changes, confirm the result with
+        `/room/{roomId}/scene` when deduplication or placement accuracy matters.
       parameters:
         - in: path
           name: roomId
@@ -216,11 +217,16 @@ paths:
                     - getHistory
                     - screenshot
                     - uploadGlbFromUrl
+                    - addImageFromUrl
+                    - addVideoFromUrl
+                    - addTextFromUrl
+                    - setSkyboxFromImageUrl
                 params:
                   description: |
                     Parameters depend on `action`. For `focusObject`, send
-                    `{ "objectId": "<target object id>" }`. For `uploadGlbFromUrl`,
-                    send at least `{ "url": "https://..." }`.
+                    `{ "objectId": "<target object id>" }`. For URL-based
+                    imports and skybox changes, send at least
+                    `{ "url": "https://..." }`.
                   oneOf:
                     - $ref: '#/components/schemas/GetCameraPoseParams'
                     - $ref: '#/components/schemas/FocusObjectParams'
@@ -228,6 +234,8 @@ paths:
                     - $ref: '#/components/schemas/GetHistoryParams'
                     - $ref: '#/components/schemas/ScreenshotParams'
                     - $ref: '#/components/schemas/UploadGlbFromUrlParams'
+                    - $ref: '#/components/schemas/UrlImportParams'
+                    - $ref: '#/components/schemas/SetSkyboxFromImageUrlParams'
                 targetPeerId:
                   type: string
             examples:
@@ -253,6 +261,22 @@ paths:
                     url: https://example.com/model.glb
                     objectId: web-demo-1
                     position: [0, 0.5, 0]
+              addImageFromUrl:
+                summary: Add an image panel from a URL
+                value:
+                  sessionId: v1.example
+                  action: addImageFromUrl
+                  params:
+                    url: https://example.com/reference.jpg
+                    objectId: ref-image-1
+                    position: [0, 1.2, -1.5]
+              setSkyboxFromImageUrl:
+                summary: Replace the skybox from an image URL
+                value:
+                  sessionId: v1.example
+                  action: setSkyboxFromImageUrl
+                  params:
+                    url: https://example.com/panorama.jpg
       responses:
         '200':
           description: AI command result
@@ -492,6 +516,36 @@ components:
         url: https://example.com/model.glb
         objectId: web-demo-1
         position: [0, 0.5, 0]
+    UrlImportParams:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        objectId:
+          type: string
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vec3'
+        rotation:
+          $ref: '#/components/schemas/Quat'
+        scale:
+          $ref: '#/components/schemas/Vec3'
+      example:
+        url: https://example.com/reference.jpg
+        objectId: ref-image-1
+        position: [0, 1.2, -1.5]
+    SetSkyboxFromImageUrlParams:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+      example:
+        url: https://example.com/panorama.jpg
     SceneState:
       type: object
       properties:

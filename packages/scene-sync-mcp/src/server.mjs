@@ -183,6 +183,62 @@ async function addPrimitiveHandler(primitive, args) {
   }
 }
 
+const httpUrlSchema = z.string()
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), {
+    message: 'url must be an HTTP(S) URL'
+  })
+
+const urlTransformInputSchema = z.object({
+  url: httpUrlSchema.describe('Publicly fetchable HTTP(S) URL. Must be accessible from the browser.'),
+  objectId: z.string().optional().describe('Unique object ID. Auto-generated if omitted.'),
+  name: z.string().optional().describe('Display name. If omitted, browser may infer from URL filename.'),
+  position: z.array(z.number()).length(3).optional().describe('[x, y, z] position in meters'),
+  rotation: z.array(z.number()).length(4).optional().describe('[x, y, z, w] quaternion'),
+  scale: z.array(z.number()).length(3).optional().describe('[x, y, z] scale')
+})
+
+function makeUrlAssetToolHandler(action, options = {}) {
+  const {
+    objectIdPrefix = 'ai-asset',
+    defaultName = 'Remote Asset',
+    timeout = 60000
+  } = options
+
+  return async ({ url, objectId, name, position, rotation, scale }) => {
+    try {
+      const finalObjectId = objectId || makeObjectId(objectIdPrefix)
+      assertObjectId(finalObjectId)
+
+      const params = {
+        url,
+        objectId: finalObjectId,
+        position: normalizeVec3(position, [0, 0, 0]),
+        rotation: normalizeQuat(rotation),
+        scale: normalizeScale(scale)
+      }
+
+      if (name) {
+        params.name = normalizeName(name, defaultName)
+      }
+
+      const response = await runAiCommand(action, params, { timeout })
+
+      return jsonResult({
+        ...response,
+        ok: true,
+        objectId: finalObjectId,
+        action
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+}
+
 // scene_sync_redeem
 server.registerTool(
   'scene_sync_redeem',
@@ -353,18 +409,8 @@ server.registerTool(
   {
     title: 'Add a GLB model from URL',
     description: 'Add a GLB/glTF model to the Scene Sync scene from a publicly fetchable HTTP(S) URL. The URL must be fetchable by the browser and may require CORS headers.',
-    inputSchema: z.object({
-      url: z.string()
-        .url()
-        .refine((value) => /^https?:\/\//i.test(value), {
-          message: 'url must be an HTTP(S) URL'
-        })
-        .describe('Publicly fetchable GLB/glTF URL. Must be accessible from the browser.'),
-      objectId: z.string().optional().describe('Unique object ID. Auto-generated if omitted.'),
-      name: z.string().optional().describe('Display name. If omitted, browser may infer from URL filename.'),
-      position: z.array(z.number()).length(3).optional().describe('[x, y, z] position in meters'),
-      rotation: z.array(z.number()).length(4).optional().describe('[x, y, z, w] quaternion'),
-      scale: z.array(z.number()).length(3).optional().describe('[x, y, z] scale')
+    inputSchema: urlTransformInputSchema.extend({
+      url: httpUrlSchema.describe('Publicly fetchable GLB/glTF URL. Must be accessible from the browser.')
     }),
     annotations: {
       readOnlyHint: false,
@@ -373,34 +419,107 @@ server.registerTool(
       openWorldHint: true
     }
   },
-  async ({ url, objectId, name, position, rotation, scale }) => {
+  makeUrlAssetToolHandler('uploadGlbFromUrl', {
+    objectIdPrefix: 'ai-model',
+    defaultName: 'GLB Model'
+  })
+)
+
+// scene_sync_add_image_from_url
+server.registerTool(
+  'scene_sync_add_image_from_url',
+  {
+    title: 'Add an image from URL',
+    description: 'Add an image panel to the Scene Sync scene from a publicly fetchable HTTP(S) URL. The URL must be fetchable by the browser and may require CORS headers.',
+    inputSchema: urlTransformInputSchema.extend({
+      url: httpUrlSchema.describe('Publicly fetchable image URL. Must be accessible from the browser.')
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  makeUrlAssetToolHandler('addImageFromUrl', {
+    objectIdPrefix: 'ai-image',
+    defaultName: 'Image Panel'
+  })
+)
+
+// scene_sync_add_video_from_url
+server.registerTool(
+  'scene_sync_add_video_from_url',
+  {
+    title: 'Add a video from URL',
+    description: 'Add a video panel to the Scene Sync scene from a publicly fetchable HTTP(S) URL. The URL must be fetchable by the browser and may require CORS headers.',
+    inputSchema: urlTransformInputSchema.extend({
+      url: httpUrlSchema.describe('Publicly fetchable video URL. Must be accessible from the browser.')
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  makeUrlAssetToolHandler('addVideoFromUrl', {
+    objectIdPrefix: 'ai-video',
+    defaultName: 'Video Panel'
+  })
+)
+
+// scene_sync_add_text_from_url
+server.registerTool(
+  'scene_sync_add_text_from_url',
+  {
+    title: 'Add text from URL',
+    description: 'Fetch text content from a publicly fetchable HTTP(S) URL and add it to the Scene Sync scene as a text panel. The URL must be fetchable by the browser and may require CORS headers.',
+    inputSchema: urlTransformInputSchema.extend({
+      url: httpUrlSchema.describe('Publicly fetchable text URL. Must be accessible from the browser.')
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  makeUrlAssetToolHandler('addTextFromUrl', {
+    objectIdPrefix: 'ai-text',
+    defaultName: 'Text Panel'
+  })
+)
+
+// scene_sync_set_skybox_from_image_url
+server.registerTool(
+  'scene_sync_set_skybox_from_image_url',
+  {
+    title: 'Set skybox from image URL',
+    description: 'Set the Scene Sync skybox from a publicly fetchable HTTP(S) image URL. This replaces the current skybox/environment image in the browser scene.',
+    inputSchema: z.object({
+      url: httpUrlSchema.describe('Publicly fetchable skybox image URL. Must be accessible from the browser.')
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  async ({ url }) => {
     try {
-      const finalObjectId = objectId || makeObjectId('ai-model')
-      assertObjectId(finalObjectId)
-
-      const params = {
-        url,
-        objectId: finalObjectId,
-        position: normalizeVec3(position, [0, 0, 0]),
-        rotation: normalizeQuat(rotation),
-        scale: normalizeScale(scale)
-      }
-
-      if (name) {
-        params.name = normalizeName(name, 'GLB Model')
-      }
-
       const response = await runAiCommand(
-        'uploadGlbFromUrl',
-        params,
+        'setSkyboxFromImageUrl',
+        { url },
         { timeout: 60000 }
       )
 
       return jsonResult({
         ...response,
         ok: true,
-        objectId: finalObjectId,
-        action: 'uploadGlbFromUrl'
+        action: 'setSkyboxFromImageUrl',
+        url
       })
     } catch (e) {
       if (e instanceof ValidationError) {

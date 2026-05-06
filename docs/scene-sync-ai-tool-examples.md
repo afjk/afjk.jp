@@ -21,7 +21,7 @@ Related files:
 2. Store `sessionId`, `roomId`, and `expiresAt`
 3. Read a snapshot with `scene_sync_get_scene` before mutations when state matters
 4. Mutate with `scene_sync_broadcast` or `scene_sync_ai_command`
-5. Read a snapshot after create/update/delete or GLB upload when correctness matters
+5. Read a snapshot after create/update/delete or URL-based asset import / skybox change when correctness matters
 6. Revoke with `scene_sync_revoke` when done
 
 ## Stable Tools
@@ -205,6 +205,73 @@ Related files:
     "position": [0, 0, 0],
     "rotation": [0, 0, 0, 1],
     "scale": [1, 1, 1]
+  }
+}
+```
+
+### Add image from URL
+
+```json
+{
+  "roomId": "abc123",
+  "sessionId": "v1.example",
+  "action": "addImageFromUrl",
+  "params": {
+    "url": "https://example.com/reference.jpg",
+    "objectId": "ref-image-1",
+    "name": "Reference Image",
+    "position": [0, 1.2, -1.5],
+    "rotation": [0, 0, 0, 1],
+    "scale": [2, 2, 1]
+  }
+}
+```
+
+### Add video from URL
+
+```json
+{
+  "roomId": "abc123",
+  "sessionId": "v1.example",
+  "action": "addVideoFromUrl",
+  "params": {
+    "url": "https://example.com/loop.mp4",
+    "objectId": "loop-video-1",
+    "name": "Loop Video",
+    "position": [0, 1.2, -1.5],
+    "rotation": [0, 0, 0, 1],
+    "scale": [2, 2, 1]
+  }
+}
+```
+
+### Add text from URL
+
+```json
+{
+  "roomId": "abc123",
+  "sessionId": "v1.example",
+  "action": "addTextFromUrl",
+  "params": {
+    "url": "https://example.com/notes.txt",
+    "objectId": "notes-1",
+    "name": "Remote Notes",
+    "position": [0, 1.2, -1.5],
+    "rotation": [0, 0, 0, 1],
+    "scale": [2, 2, 1]
+  }
+}
+```
+
+### Set skybox from image URL
+
+```json
+{
+  "roomId": "abc123",
+  "sessionId": "v1.example",
+  "action": "setSkyboxFromImageUrl",
+  "params": {
+    "url": "https://example.com/panorama.jpg"
   }
 }
 ```

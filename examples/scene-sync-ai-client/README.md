@@ -130,6 +130,10 @@ const result = await handleCodexFunctionCall(toolCall, client);
 
 - `focusObject` requires `params.objectId`
 - `uploadGlbFromUrl` requires `params.url`
+- `addImageFromUrl` requires `params.url`
+- `addVideoFromUrl` requires `params.url`
+- `addTextFromUrl` requires `params.url`
+- `setSkyboxFromImageUrl` requires `params.url`
 - primitive `scene-add` requires `payload.asset.primitive`
 - primitive `scene-add` requires `payload.asset.color`
 
@@ -137,7 +141,8 @@ const result = await handleCodexFunctionCall(toolCall, client);
 
 - Use `getScene(roomId, sessionId)` before mutations when state matters.
 - Use `getScene(roomId, sessionId)` after `scene-add`, `scene-delta`,
-  `scene-remove`, and `uploadGlbFromUrl` when correctness matters more than
+  `scene-remove`, `uploadGlbFromUrl`, `addImageFromUrl`, `addVideoFromUrl`,
+  `addTextFromUrl`, and `setSkyboxFromImageUrl` when correctness matters more than
   speed.
 - For `aiCommand`, check both top-level `ok` and nested `result.ok`.
 - Treat `unauthorized` and `validation_error` as non-retryable.

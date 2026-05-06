@@ -4,10 +4,11 @@ An MCP server for controlling [afjk.jp](https://afjk.jp) Scene Sync from Claude 
 
 Scene Sync is a real-time 3D scene synchronization system. This MCP server lets AI models:
 - Redeem pairing codes to link to a user's Scene Sync room
-- Add and manipulate 3D objects (boxes, spheres, primitives, and GLB/glTF models from URL)
+- Add and manipulate 3D objects (boxes, spheres, primitives, and image/video/text/GLB assets from URL)
 - Inspect camera pose
 - Access browser operation history (undo/redo)
 - Focus the camera on objects
+- Update the scene skybox from an image URL
 - Take screenshots
 - Manage the link session
 
@@ -186,6 +187,79 @@ Notes:
 - Local file paths are not supported by this tool.
 - For local files, drag & drop them into the Scene Sync browser UI instead.
 
+### scene_sync_add_image_from_url
+Add an image panel from a publicly fetchable URL.
+
+Input:
+```json
+{
+  "url": "https://example.com/image.jpg",
+  "objectId": "ai-image-1",
+  "name": "Reference Image",
+  "position": [0, 1.5, -2],
+  "rotation": [0, 0, 0, 1],
+  "scale": [2, 2, 1]
+}
+```
+
+Notes:
+- The URL must be accessible from the browser.
+- CORS headers may be required depending on the hosting site.
+
+### scene_sync_add_video_from_url
+Add a video panel from a publicly fetchable URL.
+
+Input:
+```json
+{
+  "url": "https://example.com/video.mp4",
+  "objectId": "ai-video-1",
+  "name": "Loop Video",
+  "position": [0, 1.5, -2],
+  "rotation": [0, 0, 0, 1],
+  "scale": [2, 2, 1]
+}
+```
+
+Notes:
+- The URL must be accessible from the browser.
+- CORS headers may be required depending on the hosting site.
+
+### scene_sync_add_text_from_url
+Fetch text from a publicly fetchable URL and add it as a text panel.
+
+Input:
+```json
+{
+  "url": "https://example.com/notes.txt",
+  "objectId": "ai-text-1",
+  "name": "Remote Notes",
+  "position": [0, 1.5, -2],
+  "rotation": [0, 0, 0, 1],
+  "scale": [2, 2, 1]
+}
+```
+
+Notes:
+- The URL must be accessible from the browser.
+- CORS headers may be required depending on the hosting site.
+- The browser fetches and interprets the remote text content.
+
+### scene_sync_set_skybox_from_image_url
+Set the scene skybox from a publicly fetchable image URL.
+
+Input:
+```json
+{
+  "url": "https://example.com/panorama.jpg"
+}
+```
+
+Notes:
+- This replaces the current browser skybox/environment image.
+- The URL must be accessible from the browser.
+- CORS headers may be required depending on the hosting site.
+
 ### scene_sync_get_camera_pose
 Get the current browser camera position and quaternion.
 
@@ -282,6 +356,10 @@ Browser AI commands in `html/assets/js/scenesync/scene.js` should stay in sync w
 | `focusObject` | `scene_sync_focus_object` | supported |
 | `screenshot` | `scene_sync_screenshot` | supported |
 | `uploadGlbFromUrl` | `scene_sync_add_glb_from_url` | supported |
+| `addImageFromUrl` | `scene_sync_add_image_from_url` | supported |
+| `addVideoFromUrl` | `scene_sync_add_video_from_url` | supported |
+| `addTextFromUrl` | `scene_sync_add_text_from_url` | supported |
+| `setSkyboxFromImageUrl` | `scene_sync_set_skybox_from_image_url` | supported |
 | `getHistory` | `scene_sync_get_history` | supported |
 | `undo` | `scene_sync_undo` | supported |
 | `redo` | `scene_sync_redo` | supported |

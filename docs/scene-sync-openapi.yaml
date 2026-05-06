@@ -371,6 +371,10 @@ components:
           type: string
           enum:
             - uploadGlbFromUrl
+            - addImageFromUrl
+            - addVideoFromUrl
+            - addTextFromUrl
+            - setSkyboxFromImageUrl
             - screenshot
             - getCameraPose
             - focusObject

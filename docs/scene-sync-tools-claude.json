@@ -61,7 +61,7 @@
   },
   {
     "name": "scene_sync_ai_command",
-    "description": "Run a browser-only Scene Sync command such as getCameraPose, focusObject, screenshot, or uploadGlbFromUrl.",
+    "description": "Run a browser-only Scene Sync command such as getCameraPose, focusObject, screenshot, uploadGlbFromUrl, addImageFromUrl, addVideoFromUrl, addTextFromUrl, or setSkyboxFromImageUrl.",
     "input_schema": {
       "type": "object",
       "required": ["roomId", "sessionId", "action"],
@@ -81,12 +81,16 @@
             "redo",
             "getHistory",
             "screenshot",
-            "uploadGlbFromUrl"
+            "uploadGlbFromUrl",
+            "addImageFromUrl",
+            "addVideoFromUrl",
+            "addTextFromUrl",
+            "setSkyboxFromImageUrl"
           ]
         },
         "params": {
           "type": "object",
-          "description": "For focusObject send params.objectId. For uploadGlbFromUrl send params.url.",
+          "description": "For focusObject send params.objectId. For uploadGlbFromUrl, addImageFromUrl, addVideoFromUrl, addTextFromUrl, and setSkyboxFromImageUrl send params.url.",
           "additionalProperties": true
         }
       },

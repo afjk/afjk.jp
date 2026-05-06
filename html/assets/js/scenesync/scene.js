@@ -2738,6 +2738,77 @@ async function uploadGlbFromUrl(url, params = {}) {
   };
 }
 
+function readVector3Array(value, fallback) {
+  return Array.isArray(value) && value.length === 3 ? value : fallback;
+}
+
+function readQuaternionArray(value, fallback) {
+  return Array.isArray(value) && value.length === 4 ? value : fallback;
+}
+
+function createAiUrlImportContext(params = {}, context = {}) {
+  const position = readVector3Array(params.position, [0, 0, 0]);
+  const rotation = readQuaternionArray(params.rotation, [0, 0, 0, 1]);
+  const scale = readVector3Array(params.scale, [1, 1, 1]);
+  let customObjectIdUsed = false;
+
+  return {
+    addOrUpdateObject,
+    broadcastSceneAdd: broadcast,
+    showToast,
+    generateObjectId: (prefix) => {
+      if (!customObjectIdUsed && typeof params.objectId === 'string' && params.objectId.trim()) {
+        customObjectIdUsed = true;
+        return params.objectId.trim();
+      }
+      return generateObjectId(prefix);
+    },
+    getSpawnTransform: () => ({
+      position,
+      rotation,
+      scale,
+    }),
+    nameOverride: (typeof params.name === 'string' && params.name.trim()) ? params.name.trim() : null,
+    position,
+    textImporter: (text, filename) => textImporterCallback(text, position, filename, {
+      ...context,
+      objectId: params.objectId,
+      name: params.name,
+      rotation,
+      scale,
+    }),
+    THREE,
+    GLTFLoader,
+    targetKind: context?.targetKind || 'scene',
+    replaceSkyboxSphereFromBlob,
+  };
+}
+
+function assertAiUrlKind(url, allowedKinds, action) {
+  const classified = classifyUrl(url);
+  if (!allowedKinds.includes(classified.kind)) {
+    throw new Error(`${action} requires a supported ${allowedKinds.join('/')} URL`);
+  }
+  return classified.url;
+}
+
+async function runAiUrlImport(action, params = {}, context = {}) {
+  if (typeof params?.url !== 'string' || !params.url.trim()) {
+    throw new Error(`${action} requires params.url`);
+  }
+
+  const normalizedUrl = assertAiUrlKind(params.url, context.allowedKinds || [], action);
+  const importerContext = createAiUrlImportContext(params, context);
+  const imported = await dispatchUrlImport(normalizedUrl, importerContext);
+
+  return {
+    ok: true,
+    action,
+    url: normalizedUrl,
+    ...(imported || {}),
+  };
+}
+
 async function handleAiCommand(from, payload) {
   const requestId = payload.requestId || `req-${Date.now()}`;
 
@@ -2780,6 +2851,27 @@ async function handleAiCommand(from, payload) {
       }
       case 'uploadGlbFromUrl':
         result = await uploadGlbFromUrl(payload.params?.url, payload.params || {});
+        break;
+      case 'addImageFromUrl':
+        result = await runAiUrlImport(payload.action, payload.params, {
+          allowedKinds: [URL_KIND.IMAGE],
+        });
+        break;
+      case 'addVideoFromUrl':
+        result = await runAiUrlImport(payload.action, payload.params, {
+          allowedKinds: [URL_KIND.VIDEO, URL_KIND.VIDEO_HLS],
+        });
+        break;
+      case 'addTextFromUrl':
+        result = await runAiUrlImport(payload.action, payload.params, {
+          allowedKinds: [URL_KIND.TEXT],
+        });
+        break;
+      case 'setSkyboxFromImageUrl':
+        result = await runAiUrlImport(payload.action, payload.params, {
+          allowedKinds: [URL_KIND.IMAGE],
+          targetKind: 'sky',
+        });
         break;
       default:
         result = { ok: false, error: `unsupported ai-command action: ${payload.action}` };
@@ -3536,19 +3628,25 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
 
   const meshPath = await uploadCarrierGlb(arrayBuffer);
 
-  const objectId = `txt-${meshPath.slice(0, 8)}`;
-  const displayName = `text: ${filename}`.slice(0, 60);
+  const objectId = (typeof context.objectId === 'string' && context.objectId.trim())
+    ? context.objectId.trim()
+    : `txt-${meshPath.slice(0, 8)}`;
+  const displayName = (typeof context.name === 'string' && context.name.trim())
+    ? context.name.trim().slice(0, 60)
+    : `text: ${filename}`.slice(0, 60);
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
     : [0, 1, 0];
+  const rotation = readQuaternionArray(context.rotation, [0, 0, 0, 1]);
+  const scale = readVector3Array(context.scale, [1, 1, 1]);
 
   const payload = {
     kind: 'scene-add',
     objectId,
     name: displayName,
     position: positionArray,
-    rotation: [0, 0, 0, 1],
-    scale: [1, 1, 1],
+    rotation,
+    scale,
     asset: { type: 'mesh', meshPath },
   };
 
@@ -3556,6 +3654,8 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
 
   // ローカルにも反映
   addOrUpdateObject(objectId, payload);
+
+  return { objectId, payload };
 }
 
 function generateObjectId(prefix) {
