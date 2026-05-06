@@ -440,7 +440,7 @@ When adding a new browser AI command:
 ## Security
 
 - **sessionId** is stored only inside the local MCP server process.
-- Session is **memory-only by default**. Set `SCENE_SYNC_SESSION_FILE` for file persistence.
+- Session is persisted by default to `SCENE_SYNC_SESSION_FILE`.
 - Destructive tools (remove, batch operations) are not enabled in this MVP.
 - `scene_sync_raw_broadcast` is disabled by default.
 - The server does not expose sessionId in tool responses.
@@ -486,7 +486,7 @@ For testing with Claude Desktop, modify your config to point to the local direct
   "mcpServers": {
     "scene-sync": {
       "command": "node",
-      "args": ["/path/to/packages/scene-sync-mcp/src/server.mjs"]
+      "args": ["/path/to/packages/scene-sync-mcp/src/cli.mjs", "serve"]
     }
   }
 }
@@ -527,14 +527,14 @@ The GitHub Actions workflow `publish-scene-sync-mcp.yml` will automatically:
 The package will be available on npm at `@afjk/scene-sync-mcp` and can be used immediately with:
 
 ```bash
-npx @afjk/scene-sync-mcp@latest
+npx -y @afjk/scene-sync-mcp@latest setup codex
 ```
 
 ## Manual Test Checklist
 
 1. ✅ Start Scene Sync in browser
 2. ✅ Press "AIにリンク" and note the code
-3. ✅ Start MCP server: `npm start`
+3. ✅ Register MCP: `npx -y @afjk/scene-sync-mcp@latest setup codex`
 4. ✅ Tell Claude: "Scene Sync に [コード] でリンク"
 5. ✅ Ask: "オレンジ色の箱を中央に置いて"
 6. ✅ Confirm box appears in browser
