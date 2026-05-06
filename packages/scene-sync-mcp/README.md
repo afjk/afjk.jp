@@ -14,6 +14,28 @@ Scene Sync is a real-time 3D scene synchronization system. This MCP server lets 
 
 ## Installation
 
+### Fastest setup
+
+For Codex CLI from this package directory:
+
+```bash
+npm install
+npm run setup:codex
+```
+
+For staging:
+
+```bash
+npm install
+npm run setup:codex:staging
+```
+
+These commands:
+
+- register the MCP server with Codex
+- set `SCENE_SYNC_BASE_URL`
+- enable persistent session storage at `~/.config/scene-sync-mcp/session.json`
+
 ### Via npm (recommended for Claude Desktop)
 
 Scene Sync MCP is published to npm as `@afjk/scene-sync-mcp`. You can use it directly with Claude Desktop via `npx`.
@@ -84,6 +106,21 @@ With custom environment:
 
 ```bash
 codex mcp add scene-sync --env SCENE_SYNC_BASE_URL=https://afjk.jp/presence/api/ai -- npx -y @afjk/scene-sync-mcp
+```
+
+Recommended one-liner with persistent session storage:
+
+```bash
+codex mcp add scene-sync \
+  --env SCENE_SYNC_BASE_URL=https://afjk.jp/presence/api/ai \
+  --env SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json \
+  -- npx -y @afjk/scene-sync-mcp
+```
+
+For Claude Desktop, print a ready-to-paste config snippet:
+
+```bash
+npm run setup:claude
 ```
 
 ## Quick Start
@@ -319,7 +356,9 @@ Default: `https://afjk.jp/presence/api/ai`
 API endpoint base URL.
 
 ### SCENE_SYNC_SESSION_FILE
-Optional. If set, session is persisted to this JSON file.
+Default: `$HOME/.config/scene-sync-mcp/session.json`
+
+Session is persisted to this JSON file by default.
 
 Example (note: use full path, not `~`):
 ```bash
@@ -330,7 +369,7 @@ export SCENE_SYNC_SESSION_FILE=/Users/yourname/.config/scene-sync-mcp/session.js
 
 **Important:** Node.js does not automatically expand `~`. Use `$HOME` or full path instead.
 
-Without this, session is memory-only and cleared on restart.
+Override it only when you need a custom location.
 
 ### SCENE_SYNC_DEFAULT_COLOR
 Default: `#ff8800`

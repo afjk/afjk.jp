@@ -4,7 +4,8 @@
   "description": "MCP server for afjk.jp Scene Sync",
   "type": "module",
   "bin": {
-    "scene-sync-mcp": "./src/server.mjs"
+    "scene-sync-mcp": "./src/server.mjs",
+    "scene-sync-mcp-setup": "./src/setup.mjs"
   },
   "files": [
     "src",
@@ -23,6 +24,10 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "dev": "node src/server.mjs"
+    "dev": "node src/server.mjs",
+    "setup:codex": "node src/setup.mjs codex",
+    "setup:codex:staging": "node src/setup.mjs codex --staging",
+    "setup:claude": "node src/setup.mjs claude",
+    "setup:claude:staging": "node src/setup.mjs claude --staging"
   }
 }

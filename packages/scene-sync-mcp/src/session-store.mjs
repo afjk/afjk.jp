@@ -1,9 +1,14 @@
 import fs from 'fs/promises'
+import os from 'os'
 import path from 'path'
+
+function defaultSessionFile() {
+  return path.join(os.homedir(), '.config', 'scene-sync-mcp', 'session.json')
+}
 
 export class SessionStore {
   constructor(options = {}) {
-    this.file = options.file || process.env.SCENE_SYNC_SESSION_FILE || null
+    this.file = options.file || process.env.SCENE_SYNC_SESSION_FILE || defaultSessionFile()
     this.session = {
       sessionId: null,
       roomId: null,
