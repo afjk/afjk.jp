@@ -1,8 +1,16 @@
 {
   "name": "@afjk/scene-sync-mcp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "MCP server for afjk.jp Scene Sync",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/afjk/afjk.jp"
+  },
+  "homepage": "https://github.com/afjk/afjk.jp/tree/main/packages/scene-sync-mcp",
+  "bugs": {
+    "url": "https://github.com/afjk/afjk.jp/issues"
+  },
   "bin": {
     "scene-sync-mcp": "./bin/scene-sync-mcp.js",
     "scene-sync-mcp-setup": "./bin/scene-sync-mcp-setup.js"
