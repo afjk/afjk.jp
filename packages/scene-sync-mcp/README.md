@@ -14,31 +14,36 @@ Scene Sync is a real-time 3D scene synchronization system. This MCP server lets 
 
 ## Installation
 
-### Fastest setup
+Scene Sync MCP is published to npm as `@afjk/scene-sync-mcp`.
 
-For Codex CLI from this package directory:
+### Codex CLI
+
+Recommended:
 
 ```bash
-npm install
-npm run setup:codex
+codex mcp add scene-sync -- npx -y @afjk/scene-sync-mcp@latest
+```
+
+With persistent session storage:
+
+```bash
+codex mcp add scene-sync \
+  --env SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json \
+  -- npx -y @afjk/scene-sync-mcp@latest
 ```
 
 For staging:
 
 ```bash
-npm install
-npm run setup:codex:staging
+codex mcp add scene-sync-staging \
+  --env SCENE_SYNC_BASE_URL=https://staging.afjk.jp/presence/api/ai \
+  --env SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json \
+  -- npx -y @afjk/scene-sync-mcp@latest
 ```
 
-These commands:
+### Claude Desktop
 
-- register the MCP server with Codex
-- set `SCENE_SYNC_BASE_URL`
-- enable persistent session storage at `~/.config/scene-sync-mcp/session.json`
-
-### Via npm (recommended for Claude Desktop)
-
-Scene Sync MCP is published to npm as `@afjk/scene-sync-mcp`. You can use it directly with Claude Desktop via `npx`.
+You can use the npm package directly via `npx`.
 
 Add to your `claude_desktop_config.json`:
 
@@ -54,8 +59,6 @@ Add to your `claude_desktop_config.json`:
 ```
 
 Then fully quit and restart Claude Desktop. For Claude Desktop config path, see https://modelcontextprotocol.io/clients/claude/
-
-#### Custom environment variables
 
 To use staging or customize the session file location:
 
@@ -74,7 +77,28 @@ To use staging or customize the session file location:
 }
 ```
 
-### Local development
+### Setup Helpers
+
+This package also ships a setup helper:
+
+```bash
+npm exec --yes --package=@afjk/scene-sync-mcp@latest scene-sync-mcp-setup codex
+```
+
+For Claude Desktop config output:
+
+```bash
+npm exec --yes --package=@afjk/scene-sync-mcp@latest scene-sync-mcp-setup claude
+```
+
+If your shell does not expose the secondary binary cleanly through `npx`, use the local package scripts instead:
+
+```bash
+npm install
+npm run setup:codex
+```
+
+### Local Development
 
 For development or contributing to the MCP server itself:
 
@@ -83,7 +107,7 @@ npm install
 npm run start
 ```
 
-To use locally with Claude Desktop:
+To use the local checkout with Claude Desktop:
 
 ```json
 {
@@ -96,31 +120,12 @@ To use locally with Claude Desktop:
 }
 ```
 
-For Codex CLI:
+To register the local checkout with Codex:
 
 ```bash
-codex mcp add scene-sync -- npx -y @afjk/scene-sync-mcp
-```
-
-With custom environment:
-
-```bash
-codex mcp add scene-sync --env SCENE_SYNC_BASE_URL=https://afjk.jp/presence/api/ai -- npx -y @afjk/scene-sync-mcp
-```
-
-Recommended one-liner with persistent session storage:
-
-```bash
-codex mcp add scene-sync \
-  --env SCENE_SYNC_BASE_URL=https://afjk.jp/presence/api/ai \
-  --env SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json \
-  -- npx -y @afjk/scene-sync-mcp
-```
-
-For Claude Desktop, print a ready-to-paste config snippet:
-
-```bash
-npm run setup:claude
+cd packages/scene-sync-mcp
+npm install
+npm run setup:codex
 ```
 
 ## Quick Start
