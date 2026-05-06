@@ -26,9 +26,6 @@ const server = new McpServer({
   version: '0.1.0'
 })
 
-// Initialize session from file if configured
-await store.load()
-
 // Helper to get current session or throw error
 function getSession() {
   const session = store.get()
@@ -965,6 +962,8 @@ if (process.env.SCENE_SYNC_ENABLE_RAW_TOOLS === 'true') {
   )
 }
 
-// Connect stdio transport
-const transport = new StdioServerTransport()
-await server.connect(transport)
+export async function startServer() {
+  await store.load()
+  const transport = new StdioServerTransport()
+  await server.connect(transport)
+}

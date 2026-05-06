@@ -1,2 +1,3 @@
 #!/usr/bin/env node
-import '../src/setup.mjs'
+process.argv.splice(2, 0, 'setup')
+await import('../src/cli.mjs')

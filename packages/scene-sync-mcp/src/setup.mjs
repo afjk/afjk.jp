@@ -1,27 +1,28 @@
-#!/usr/bin/env node
 import os from 'os'
 import path from 'path'
 import { spawnSync } from 'child_process'
+import { fileURLToPath } from 'url'
 
-const defaultSessionFile = path.join(os.homedir(), '.config', 'scene-sync-mcp', 'session.json')
+export const defaultSessionFile = path.join(os.homedir(), '.config', 'scene-sync-mcp', 'session.json')
+export const packageSpec = '@afjk/scene-sync-mcp@latest'
 
-function printUsage() {
+export function printSetupUsage() {
   console.error(`Usage:
-  node src/setup.mjs codex [--staging] [--name <server-name>]
-  node src/setup.mjs claude [--staging]`)
+  scene-sync-mcp setup codex [--staging] [--name <server-name>]
+  scene-sync-mcp setup claude [--staging]`)
 }
 
-function getConfig({ staging = false }) {
+export function getConfig({ staging = false } = {}) {
   return {
     baseUrl: staging
       ? 'https://staging.afjk.jp/presence/api/ai'
       : 'https://afjk.jp/presence/api/ai',
     sessionFile: defaultSessionFile,
-    packageSpec: '@afjk/scene-sync-mcp@latest'
+    packageSpec
   }
 }
 
-function runCodexSetup({ staging = false, name = null }) {
+export function buildCodexAddCommand({ staging = false, name = null } = {}) {
   const config = getConfig({ staging })
   const serverName = name || (staging ? 'scene-sync-staging' : 'scene-sync')
   const args = [
@@ -38,25 +39,16 @@ function runCodexSetup({ staging = false, name = null }) {
     config.packageSpec
   ]
 
-  const result = spawnSync('codex', args, {
-    stdio: 'inherit'
-  })
-
-  if (result.error) {
-    console.error('\nFailed to run `codex mcp add` automatically.')
-    console.error('Run this command manually:\n')
-    console.error(
-      `codex mcp add ${serverName} --env SCENE_SYNC_BASE_URL=${config.baseUrl} --env SCENE_SYNC_SESSION_FILE=${config.sessionFile} -- npx -y ${config.packageSpec}`
-    )
-    process.exit(1)
+  return {
+    serverName,
+    args,
+    commandString: `codex ${args.join(' ')}`
   }
-
-  process.exit(result.status ?? 0)
 }
 
-function printClaudeConfig({ staging = false }) {
+export function formatClaudeConfig({ staging = false } = {}) {
   const config = getConfig({ staging })
-  const json = {
+  return {
     mcpServers: {
       'scene-sync': {
         command: 'npx',
@@ -68,26 +60,54 @@ function printClaudeConfig({ staging = false }) {
       }
     }
   }
-
-  process.stdout.write(`${JSON.stringify(json, null, 2)}\n`)
 }
 
-const args = process.argv.slice(2)
-const command = args[0]
-const staging = args.includes('--staging')
-const nameIndex = args.indexOf('--name')
-const name = nameIndex >= 0 ? args[nameIndex + 1] : null
-
-if (!command) {
-  printUsage()
-  process.exit(1)
+export function printClaudeConfig({ staging = false } = {}) {
+  process.stdout.write(`${JSON.stringify(formatClaudeConfig({ staging }), null, 2)}\n`)
 }
 
-if (command === 'codex') {
-  runCodexSetup({ staging, name })
-} else if (command === 'claude') {
-  printClaudeConfig({ staging })
-} else {
-  printUsage()
-  process.exit(1)
+export function runCodexSetup({ staging = false, name = null } = {}) {
+  const { commandString, args } = buildCodexAddCommand({ staging, name })
+  const result = spawnSync('codex', args, {
+    stdio: 'inherit'
+  })
+
+  if (result.error) {
+    console.error('\nFailed to run `codex mcp add` automatically.')
+    console.error('Run this command manually:\n')
+    console.error(commandString)
+    return 1
+  }
+
+  return result.status ?? 0
+}
+
+export function runSetupCli(args = process.argv.slice(2)) {
+  const target = args[0]
+  const staging = args.includes('--staging')
+  const nameIndex = args.indexOf('--name')
+  const name = nameIndex >= 0 ? args[nameIndex + 1] : null
+
+  if (!target) {
+    printSetupUsage()
+    return 1
+  }
+
+  if (target === 'codex') {
+    return runCodexSetup({ staging, name })
+  }
+
+  if (target === 'claude') {
+    printClaudeConfig({ staging })
+    return 0
+  }
+
+  printSetupUsage()
+  return 1
+}
+
+const isDirectExecution = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
+
+if (isDirectExecution) {
+  process.exit(runSetupCli())
 }

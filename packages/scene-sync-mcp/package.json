@@ -1,6 +1,6 @@
 {
   "name": "@afjk/scene-sync-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "MCP server for afjk.jp Scene Sync",
   "type": "module",
   "repository": {
@@ -32,11 +32,12 @@
     "zod": "^3.24.0"
   },
   "scripts": {
-    "start": "node src/server.mjs",
-    "dev": "node src/server.mjs",
-    "setup:codex": "node src/setup.mjs codex",
-    "setup:codex:staging": "node src/setup.mjs codex --staging",
-    "setup:claude": "node src/setup.mjs claude",
-    "setup:claude:staging": "node src/setup.mjs claude --staging"
+    "start": "node src/cli.mjs serve",
+    "dev": "node src/cli.mjs serve",
+    "doctor": "node src/cli.mjs doctor",
+    "setup:codex": "node src/cli.mjs setup codex",
+    "setup:codex:staging": "node src/cli.mjs setup codex --staging",
+    "setup:claude": "node src/cli.mjs setup claude",
+    "setup:claude:staging": "node src/cli.mjs setup claude --staging"
   }
 }

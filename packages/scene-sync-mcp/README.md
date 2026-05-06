@@ -21,24 +21,19 @@ Scene Sync MCP is published to npm as `@afjk/scene-sync-mcp`.
 Recommended:
 
 ```bash
-codex mcp add scene-sync -- npx -y @afjk/scene-sync-mcp@latest
+npx -y @afjk/scene-sync-mcp@latest setup codex
 ```
 
-With persistent session storage:
+Check the resolved base URL and session file:
 
 ```bash
-codex mcp add scene-sync \
-  --env SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json \
-  -- npx -y @afjk/scene-sync-mcp@latest
+npx -y @afjk/scene-sync-mcp@latest doctor
 ```
 
 For staging:
 
 ```bash
-codex mcp add scene-sync-staging \
-  --env SCENE_SYNC_BASE_URL=https://staging.afjk.jp/presence/api/ai \
-  --env SCENE_SYNC_SESSION_FILE=$HOME/.config/scene-sync-mcp/session.json \
-  -- npx -y @afjk/scene-sync-mcp@latest
+npx -y @afjk/scene-sync-mcp@latest setup codex --staging
 ```
 
 ### Claude Desktop
@@ -79,19 +74,27 @@ To use staging or customize the session file location:
 
 ### Setup Helpers
 
-This package also ships a setup helper:
+Single-command helpers:
 
 ```bash
-npm exec --yes --package=@afjk/scene-sync-mcp@latest scene-sync-mcp-setup codex
+npx -y @afjk/scene-sync-mcp@latest setup codex
 ```
 
-For Claude Desktop config output:
+Print Claude Desktop config:
 
 ```bash
-npm exec --yes --package=@afjk/scene-sync-mcp@latest scene-sync-mcp-setup claude
+npx -y @afjk/scene-sync-mcp@latest setup claude
 ```
 
-If your shell does not expose the secondary binary cleanly through `npx`, use the local package scripts instead:
+Show local diagnostics:
+
+```bash
+npx -y @afjk/scene-sync-mcp@latest doctor
+```
+
+The legacy `scene-sync-mcp-setup` binary still works, but the main `scene-sync-mcp` CLI is now the primary entrypoint.
+
+If you prefer a local checkout instead of npm, use the package scripts:
 
 ```bash
 npm install
@@ -114,7 +117,7 @@ To use the local checkout with Claude Desktop:
   "mcpServers": {
     "scene-sync": {
       "command": "node",
-      "args": ["/path/to/packages/scene-sync-mcp/src/server.mjs"]
+      "args": ["/path/to/packages/scene-sync-mcp/src/cli.mjs", "serve"]
     }
   }
 }
