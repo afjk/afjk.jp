@@ -1,13 +1,14 @@
 {
   "name": "@afjk/scene-sync-mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MCP server for afjk.jp Scene Sync",
   "type": "module",
   "bin": {
-    "scene-sync-mcp": "./src/server.mjs",
-    "scene-sync-mcp-setup": "./src/setup.mjs"
+    "scene-sync-mcp": "./bin/scene-sync-mcp.js",
+    "scene-sync-mcp-setup": "./bin/scene-sync-mcp-setup.js"
   },
   "files": [
+    "bin",
     "src",
     "README.md",
     "package.json"
