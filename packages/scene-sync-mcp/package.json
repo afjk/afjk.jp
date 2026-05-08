@@ -13,7 +13,8 @@
   },
   "bin": {
     "scene-sync-mcp": "./bin/scene-sync-mcp.js",
-    "scene-sync-mcp-setup": "./bin/scene-sync-mcp-setup.js"
+    "scene-sync-mcp-setup": "./bin/scene-sync-mcp-setup.js",
+    "scene-sync-mcp-graph-tools": "./bin/scene-sync-mcp-graph-tools.js"
   },
   "files": [
     "bin",
