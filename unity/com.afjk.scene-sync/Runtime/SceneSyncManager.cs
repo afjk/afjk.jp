@@ -606,6 +606,7 @@ namespace Afjk.SceneSync
                 // メッシュなしの場合は Cube を作成
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
+                ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
 
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
@@ -926,6 +927,7 @@ namespace Afjk.SceneSync
         private GameObject ReplaceWithFallbackPrimitive(
             string objectId,
             string name,
+            string meshPath,
             float[] position,
             float[] rotation,
             float[] scale)
@@ -935,6 +937,7 @@ namespace Afjk.SceneSync
 
             var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
             fallback.name = name;
+            ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath);
 
             var fallbackMaterial = GetFallbackImportMaterial();
             var fallbackRenderer = fallback.GetComponent<Renderer>();
@@ -989,7 +992,7 @@ namespace Afjk.SceneSync
                         + ", objectId=" + objectId
                         + ", name=" + name
                         + ", meshPath=" + meshPath);
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -1038,6 +1041,7 @@ namespace Afjk.SceneSync
                     var placeholderInstanceId = placeholder.GetInstanceID();
 
                     var go = new GameObject(name);
+                    ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
 
@@ -1087,7 +1091,7 @@ namespace Afjk.SceneSync
                         + ", loadingError=" + gltf.LoadingError
                         + ", sceneCount=" + gltf.SceneCount
                         + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
 
@@ -1127,7 +1131,7 @@ namespace Afjk.SceneSync
 
                 if (_managedObjects.ContainsKey(objectId))
                 {
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -1135,6 +1139,23 @@ namespace Afjk.SceneSync
                 if (!_managedObjects.ContainsKey(objectId))
                     _knownObjectIds.Remove(objectId);
             }
+        }
+
+        private static SceneSyncIdentity EnsureSceneSyncIdentity(GameObject go)
+        {
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity == null)
+            {
+                identity = go.AddComponent<SceneSyncIdentity>();
+            }
+
+            return identity;
+        }
+
+        private static void ConfigureRemoteTemporaryIdentity(GameObject go, string objectId, string meshPath)
+        {
+            var identity = EnsureSceneSyncIdentity(go);
+            identity.ConfigureRemoteTemporary(objectId, meshPath);
         }
 
         private struct TransformSnapshot

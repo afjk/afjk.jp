@@ -651,6 +651,7 @@ namespace Afjk.SceneSync.Editor
                 // メッシュなしの場合はプレースホルダーの Cube を作成
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
+                ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
                 ApplyTransform(go, position, rotation, scale);
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
@@ -877,6 +878,7 @@ namespace Afjk.SceneSync.Editor
                     // フォールバック: Cube を作成
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
+                    ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
@@ -903,6 +905,7 @@ namespace Afjk.SceneSync.Editor
                 if (success)
                 {
                     var go = new GameObject(name);
+                    ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
 
@@ -924,6 +927,7 @@ namespace Afjk.SceneSync.Editor
                     Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
+                    ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
@@ -937,6 +941,23 @@ namespace Afjk.SceneSync.Editor
             {
                 Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
             }
+        }
+
+        private static SceneSyncIdentity EnsureSceneSyncIdentity(GameObject go)
+        {
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity == null)
+            {
+                identity = go.AddComponent<SceneSyncIdentity>();
+            }
+
+            return identity;
+        }
+
+        private static void ConfigureRemoteTemporaryIdentity(GameObject go, string objectId, string meshPath)
+        {
+            var identity = EnsureSceneSyncIdentity(go);
+            identity.ConfigureRemoteTemporary(objectId, meshPath);
         }
 
         private struct TransformSnapshot
