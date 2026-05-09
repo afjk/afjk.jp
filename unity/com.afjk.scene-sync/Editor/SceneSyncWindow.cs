@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Net.Http;
 using GLTFast;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Afjk.SceneSync.Editor
 {
@@ -174,6 +176,9 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Label("Scene Sync", EditorStyles.boldLabel);
             GUILayout.Space(4);
 
+            DrawSetupSection();
+            GUILayout.Space(8);
+
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
             _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
             _room = EditorGUILayout.TextField("Room", _room);
@@ -217,6 +222,125 @@ namespace Afjk.SceneSync.Editor
                     _client.Disconnect();
                 }
             }
+        }
+
+        private void DrawSetupSection()
+        {
+            var manager = FindSceneSyncManager();
+            var temporaryRoot = FindTemporaryRoot();
+
+            GUILayout.Label("Setup", EditorStyles.boldLabel);
+            GUILayout.Label("SceneSyncManager: " + (manager != null ? "Found" : "Missing"));
+            GUILayout.Label("Temporary Root: " + (temporaryRoot != null ? "Found" : "Missing"));
+
+            if (GUILayout.Button("Create Scene Sync Setup"))
+            {
+                CreateSceneSyncSetup();
+                manager = FindSceneSyncManager();
+                temporaryRoot = FindTemporaryRoot();
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUI.BeginDisabledGroup(manager == null);
+                if (GUILayout.Button("Select SceneSyncManager"))
+                {
+                    Selection.activeGameObject = manager.gameObject;
+                }
+                EditorGUI.EndDisabledGroup();
+
+                EditorGUI.BeginDisabledGroup(temporaryRoot == null);
+                if (GUILayout.Button("Select Temporary Root"))
+                {
+                    Selection.activeGameObject = temporaryRoot;
+                }
+                EditorGUI.EndDisabledGroup();
+            }
+        }
+
+        private void CreateSceneSyncSetup()
+        {
+            var hasChanges = false;
+
+            var manager = FindSceneSyncManager();
+            if (manager == null)
+            {
+                var managerObject = FindRootObjectByName("SceneSyncManager");
+                if (managerObject == null)
+                {
+                    managerObject = new GameObject("SceneSyncManager");
+                    Undo.RegisterCreatedObjectUndo(managerObject, "Create Scene Sync Setup");
+                    hasChanges = true;
+                }
+
+                manager = managerObject.GetComponent<SceneSyncManager>();
+                if (manager == null)
+                {
+                    manager = Undo.AddComponent<SceneSyncManager>(managerObject);
+                    hasChanges = true;
+                }
+            }
+
+            var temporaryRoot = FindTemporaryRoot();
+            if (temporaryRoot == null)
+            {
+                temporaryRoot = new GameObject("SceneSync Temporary");
+                Undo.RegisterCreatedObjectUndo(temporaryRoot, "Create Scene Sync Setup");
+                hasChanges = true;
+            }
+
+            if (hasChanges)
+            {
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            }
+
+            if (manager != null)
+            {
+                Selection.activeGameObject = manager.gameObject;
+            }
+        }
+
+        private SceneSyncManager FindSceneSyncManager()
+        {
+            var roots = SceneManager.GetActiveScene().GetRootGameObjects();
+            foreach (var root in roots)
+            {
+                var manager = root.GetComponentInChildren<SceneSyncManager>(true);
+                if (manager != null)
+                {
+                    return manager;
+                }
+            }
+
+            return null;
+        }
+
+        private GameObject FindTemporaryRoot()
+        {
+            var roots = SceneManager.GetActiveScene().GetRootGameObjects();
+            foreach (var root in roots)
+            {
+                if (root.name == "SceneSync Temporary")
+                {
+                    return root;
+                }
+            }
+
+            return null;
+        }
+
+        private GameObject FindRootObjectByName(string name)
+        {
+            var roots = SceneManager.GetActiveScene().GetRootGameObjects();
+            foreach (var root in roots)
+            {
+                if (root.name == name)
+                {
+                    return root;
+                }
+            }
+
+            return null;
         }
 
         private void OnHierarchyChanged()
