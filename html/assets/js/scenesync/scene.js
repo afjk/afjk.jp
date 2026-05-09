@@ -2950,6 +2950,8 @@ function loadMeshObject(objectId, info, meshPath, existing) {
     ? new THREE.Vector3().fromArray(info.position)
     : undefined;
 
+  console.log('[SceneSync] load mesh', { objectId, meshPath });
+
   glbLoader.loadFromUrl(url, initialPosition, scene, (model) => {
     removeLoadingOverlay(objectId);
     model.userData.objectId = objectId;
@@ -3397,11 +3399,14 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       return;
     }
 
-    // 履歴に追加
-    const asset = model.userData.asset || {
+    // Always use fresh meshPath in asset for newly added local objects
+    const asset = {
+      ...(model.userData.asset || {}),
       type: 'gltf',
       meshPath: actualMeshPath,
     };
+    model.userData.asset = asset;
+
     const historyEntry = HistoryManager.createAddEntry(
       objectId,
       asset,
@@ -3413,6 +3418,8 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     );
     presenceState.historyManager.push(historyEntry);
     notifySceneStateChanged('object-uploaded');
+
+    console.log('[SceneSync] broadcast scene-add', { objectId, meshPath: actualMeshPath });
 
     broadcast({
       kind: 'scene-add',
@@ -3445,6 +3452,20 @@ async function uploadCarrierGlb(arrayBuffer) {
     if (res.status !== 409) throw new Error(`blob upload failed: ${res.status}`);
   }
   throw new Error('blob id collision - unable to generate unique ID');
+}
+
+async function uploadFreshMeshForObject(object) {
+  const arrayBuffer = await exportObjectAsGlb(object);
+  const meshPath = await uploadCarrierGlb(arrayBuffer);
+
+  object.userData.meshPath = meshPath;
+  object.userData.asset = {
+    ...(object.userData.asset || {}),
+    meshPath,
+  };
+
+  console.log('[SceneSync] upload mesh', { objectId: object.userData.objectId, meshPath, bytes: arrayBuffer.byteLength });
+  return meshPath;
 }
 
 // Skybox管理のためのヘルパー関数
