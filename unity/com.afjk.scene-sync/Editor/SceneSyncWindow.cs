@@ -96,6 +96,7 @@ namespace Afjk.SceneSync.Editor
         private static bool IsSyncTarget(GameObject go)
         {
             if (go.hideFlags != HideFlags.None) return false;
+            if (go.transform.parent == null && go.name == "SceneSync Temporary") return false;
             return go.GetComponentInChildren<MeshFilter>() != null
                 || go.GetComponentInChildren<SkinnedMeshRenderer>() != null;
         }
@@ -219,6 +220,7 @@ namespace Afjk.SceneSync.Editor
 
                 if (GUILayout.Button("Disconnect"))
                 {
+                    ClearTemporaryObjects();
                     _client.Disconnect();
                 }
             }
@@ -375,6 +377,23 @@ namespace Afjk.SceneSync.Editor
                 {
                     // 新規オブジェクト
                     _ = SendSceneAdd(go);
+                }
+            }
+
+            // Temporary root 配下の Web 由来オブジェクトも存在確認対象に含める
+            var tempRoot = FindTemporaryRoot();
+            if (tempRoot != null)
+            {
+                foreach (Transform child in tempRoot.transform)
+                {
+                    var childGo = child.gameObject;
+                    var childInstanceId = childGo.GetInstanceID();
+                    currentInstanceIds.Add(childInstanceId);
+
+                    if (_instanceToObjectId.TryGetValue(childInstanceId, out var originalId))
+                    {
+                        currentIds.Add(originalId);
+                    }
                 }
             }
 
@@ -652,6 +671,7 @@ namespace Afjk.SceneSync.Editor
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
                 ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
+                go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                 ApplyTransform(go, position, rotation, scale);
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
@@ -879,6 +899,7 @@ namespace Afjk.SceneSync.Editor
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
                     ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath);
+                    fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
@@ -906,6 +927,7 @@ namespace Afjk.SceneSync.Editor
                 {
                     var go = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
+                    go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
 
@@ -928,6 +950,7 @@ namespace Afjk.SceneSync.Editor
                     var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     fallback.name = name;
                     ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath);
+                    fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
@@ -958,6 +981,63 @@ namespace Afjk.SceneSync.Editor
         {
             var identity = EnsureSceneSyncIdentity(go);
             identity.ConfigureRemoteTemporary(objectId, meshPath);
+        }
+
+        private Transform GetOrCreateTemporaryRoot()
+        {
+            var root = FindTemporaryRoot();
+            if (root != null)
+            {
+                return root.transform;
+            }
+
+            var created = new GameObject("SceneSync Temporary");
+            return created.transform;
+        }
+
+        private void ClearTemporaryObjects()
+        {
+            var root = FindTemporaryRoot()?.transform;
+            if (root == null) return;
+
+            for (var i = root.childCount - 1; i >= 0; i--)
+            {
+                var child = root.GetChild(i).gameObject;
+                ForgetSceneSyncObject(child);
+
+                if (Application.isPlaying)
+                {
+                    Destroy(child);
+                }
+                else
+                {
+                    DestroyImmediate(child);
+                }
+            }
+
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+        }
+
+        private void ForgetSceneSyncObject(GameObject go)
+        {
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity == null || !identity.Temporary || string.IsNullOrEmpty(identity.ObjectId))
+            {
+                return;
+            }
+
+            var objectId = identity.ObjectId;
+            _managedObjects.Remove(objectId);
+            _knownObjectIds.Remove(objectId);
+            _lastSnapshots.Remove(objectId);
+            _meshPaths.Remove(objectId);
+            _locks.Remove(objectId);
+
+            var transforms = go.GetComponentsInChildren<Transform>(true);
+            foreach (var t in transforms)
+            {
+                _instanceToObjectId.Remove(t.gameObject.GetInstanceID());
+            }
         }
 
         private struct TransformSnapshot
