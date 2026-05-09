@@ -3454,20 +3454,6 @@ async function uploadCarrierGlb(arrayBuffer) {
   throw new Error('blob id collision - unable to generate unique ID');
 }
 
-async function uploadFreshMeshForObject(object) {
-  const arrayBuffer = await exportObjectAsGlb(object);
-  const meshPath = await uploadCarrierGlb(arrayBuffer);
-
-  object.userData.meshPath = meshPath;
-  object.userData.asset = {
-    ...(object.userData.asset || {}),
-    meshPath,
-  };
-
-  console.log('[SceneSync] upload mesh', { objectId: object.userData.objectId, meshPath, bytes: arrayBuffer.byteLength });
-  return meshPath;
-}
-
 // Skybox管理のためのヘルパー関数
 
 function applySceneActionLocally(action) {
