@@ -779,7 +779,16 @@ namespace Afjk.SceneSync.Editor
                 if (success)
                 {
                     var go = new GameObject(name);
-                    await gltf.InstantiateMainSceneAsync(go.transform);
+                    var importedGlbRoot = new GameObject("ImportedGlbRoot");
+                    importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
+
+                    // Keep the synchronized object transform on the parent and apply the
+                    // same Unity GLB visual correction as Runtime/SceneSyncManager.
+                    importedGlbRoot.transform.localPosition = Vector3.zero;
+                    importedGlbRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    importedGlbRoot.transform.localScale = Vector3.one;
+
+                    await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
                     ApplyTransform(go, position, rotation, scale);
                     _managedObjects[objectId] = go;
                     _knownObjectIds.Add(objectId);
