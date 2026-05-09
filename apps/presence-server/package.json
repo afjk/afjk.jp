@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
+    "prestart": "node src/patch-inferred-room.mjs",
     "start": "node src/server.mjs",
     "test": "node --test tests/api.test.mjs"
   },
