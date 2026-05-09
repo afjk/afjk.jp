@@ -506,9 +506,9 @@ namespace Afjk.SceneSync.Editor
 
             var objectsBody = objectsMatch.Groups[1].Value;
 
-            // 各 "objectId":{...} を抽出
+            // 各 "objectId":{...} を抽出（asset など1段ネストの {} を含む場合も対応）
             var entryPattern = new System.Text.RegularExpressions.Regex(
-                "\"([^\"]+)\"\\s*:\\s*\\{([^{}]+)\\}");
+                "\"([^\"]+)\"\\s*:\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}");
             var matches = entryPattern.Matches(objectsBody);
 
             foreach (System.Text.RegularExpressions.Match m in matches)
@@ -518,6 +518,7 @@ namespace Afjk.SceneSync.Editor
 
                 // scene-add 相当の JSON を構築して処理
                 var fakeJson = "{\"kind\":\"scene-add\",\"objectId\":\"" + objectId + "\"," + body + "}";
+                Debug.Log("[SceneSync] Restore scene-state object as scene-add: " + fakeJson);
                 HandleSceneAdd(fakeJson);
             }
         }
@@ -580,7 +581,7 @@ namespace Afjk.SceneSync.Editor
 
         private float[] ExtractArray(string json, string key)
         {
-            var pattern = System.Text.RegularExpressions.Regex.Escape(key) + @"\s*\[([\d\.,\-\s]+)\]";
+            var pattern = System.Text.RegularExpressions.Regex.Escape(key) + @"\s*\[\s*([^\]]+)\s*\]";
             var match = System.Text.RegularExpressions.Regex.Match(json, pattern);
             if (!match.Success) return null;
 
@@ -588,10 +589,22 @@ namespace Afjk.SceneSync.Editor
             var result = new float[nums.Length];
             for (int i = 0; i < nums.Length; i++)
             {
-                if (float.TryParse(nums[i].Trim(), out var f))
+                if (float.TryParse(
+                    nums[i].Trim(),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var f))
                     result[i] = f;
+                else
+                    Debug.LogWarning("[SceneSync] Failed to parse float: " + nums[i]);
             }
             return result;
+        }
+
+        private static string FormatArray(float[] values)
+        {
+            if (values == null) return "null";
+            return "[" + string.Join(",", values) + "]";
         }
 
         private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
@@ -649,6 +662,21 @@ namespace Afjk.SceneSync.Editor
             float[] position = ExtractArray(raw, "\"position\":");
             float[] rotation = ExtractArray(raw, "\"rotation\":");
             float[] scale = ExtractArray(raw, "\"scale\":");
+
+            Debug.Log(
+                "[SceneSync] scene-add transform parse: objectId=" + objectId +
+                " position=" + FormatArray(position) +
+                " rotation=" + FormatArray(rotation) +
+                " scale=" + FormatArray(scale)
+            );
+
+            if (position == null || rotation == null || scale == null)
+            {
+                Debug.LogWarning(
+                    "[SceneSync] scene-add missing transform for objectId=" + objectId +
+                    " raw=" + raw
+                );
+            }
 
             var meshPathMatch = System.Text.RegularExpressions.Regex.Match(
                 raw, "\"meshPath\":\"([^\"]+)\"");
@@ -992,6 +1020,8 @@ namespace Afjk.SceneSync.Editor
             }
 
             var created = new GameObject("SceneSync Temporary");
+            created.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            created.transform.localScale = Vector3.one;
             return created.transform;
         }
 
