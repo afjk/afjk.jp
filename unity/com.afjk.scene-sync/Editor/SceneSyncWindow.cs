@@ -273,6 +273,7 @@ namespace Afjk.SceneSync.Editor
             }
             if (EditorGUI.EndChangeCheck())
             {
+                manager.ValidateManagedObjects();
                 MarkManagerDirty(manager);
             }
 
@@ -291,6 +292,7 @@ namespace Afjk.SceneSync.Editor
 
                     if (changed)
                     {
+                        manager.ValidateManagedObjects();
                         MarkManagerDirty(manager);
                     }
                 }

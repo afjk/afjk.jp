@@ -199,6 +199,32 @@ namespace Afjk.SceneSync
             managedObjects.RemoveAll(item => item == null);
         }
 
+        public bool ValidateManagedObjects()
+        {
+            EnsureManagedObjectsList();
+
+            var changed = false;
+            var seen = new HashSet<GameObject>();
+
+            for (var i = managedObjects.Count - 1; i >= 0; i--)
+            {
+                var go = managedObjects[i];
+
+                if (go == null)
+                {
+                    continue;
+                }
+
+                if (go == gameObject || IsTemporaryObject(go) || !seen.Add(go))
+                {
+                    managedObjects.RemoveAt(i);
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
         public async System.Threading.Tasks.Task SyncAllMeshes()
         {
             if (!_connected) return;
