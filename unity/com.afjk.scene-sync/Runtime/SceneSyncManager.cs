@@ -14,6 +14,8 @@ namespace Afjk.SceneSync
         [SerializeField] private string _nickname = "Unity";
         [SerializeField] private bool _autoConnect = true;
         [SerializeField] private Transform _syncRoot;
+        [SerializeField] private bool includeManagerChildren = true;
+        [SerializeField] private List<GameObject> managedObjects = new List<GameObject>();
         [SerializeField] private Transform temporaryRoot;
         [SerializeField] private Material _fallbackImportMaterial;
 
@@ -40,6 +42,17 @@ namespace Afjk.SceneSync
         public string Room => _client?.Room;
         public List<PeerInfo> Peers => _peers;
         public GameObject SelectedObject => _selectedObject;
+        public bool IncludeManagerChildren
+        {
+            get => includeManagerChildren;
+            set => includeManagerChildren = value;
+        }
+        public List<GameObject> ManagedObjects => managedObjects;
+        public Transform TemporaryRoot
+        {
+            get => temporaryRoot;
+            set => temporaryRoot = value;
+        }
 
         public event Action OnConnected;
         public event Action OnDisconnected;
@@ -116,6 +129,100 @@ namespace Afjk.SceneSync
         public void DeselectObject()
         {
             _selectedObject = null;
+        }
+
+        public List<GameObject> GetManagedUnityObjects()
+        {
+            EnsureManagedObjectsList();
+
+            var result = new List<GameObject>();
+            var seen = new HashSet<GameObject>();
+
+            void AddIfValid(GameObject go)
+            {
+                if (go == null) return;
+                if (go == gameObject) return;
+                if (IsTemporaryObject(go)) return;
+                if (!seen.Add(go)) return;
+                result.Add(go);
+            }
+
+            if (includeManagerChildren)
+            {
+                foreach (Transform child in transform)
+                {
+                    AddIfValid(child.gameObject);
+                }
+            }
+
+            foreach (var go in managedObjects)
+            {
+                AddIfValid(go);
+            }
+
+            return result;
+        }
+
+        public bool AddManagedObject(GameObject go)
+        {
+            EnsureManagedObjectsList();
+            if (go == null) return false;
+            if (go == gameObject) return false;
+            if (IsTemporaryObject(go)) return false;
+            if (managedObjects.Contains(go)) return false;
+
+            managedObjects.Add(go);
+            return true;
+        }
+
+        public bool RemoveManagedObject(GameObject go)
+        {
+            EnsureManagedObjectsList();
+            if (go == null) return false;
+
+            var removed = false;
+            for (var i = managedObjects.Count - 1; i >= 0; i--)
+            {
+                if (managedObjects[i] == go)
+                {
+                    managedObjects.RemoveAt(i);
+                    removed = true;
+                }
+            }
+
+            return removed;
+        }
+
+        public void RemoveNullManagedObjects()
+        {
+            EnsureManagedObjectsList();
+            managedObjects.RemoveAll(item => item == null);
+        }
+
+        public bool ValidateManagedObjects()
+        {
+            EnsureManagedObjectsList();
+
+            var changed = false;
+            var seen = new HashSet<GameObject>();
+
+            for (var i = managedObjects.Count - 1; i >= 0; i--)
+            {
+                var go = managedObjects[i];
+
+                if (go == null)
+                {
+                    continue;
+                }
+
+                if (go == gameObject || IsTemporaryObject(go) || !seen.Add(go))
+                {
+                    managedObjects.RemoveAt(i);
+                    changed = true;
+                }
+            }
+
+            return changed;
         }
 
         public async System.Threading.Tasks.Task SyncAllMeshes()
@@ -1188,6 +1295,27 @@ namespace Afjk.SceneSync
         {
             var identity = EnsureSceneSyncIdentity(go);
             identity.ConfigureRemoteTemporary(objectId, meshPath);
+        }
+
+        private void EnsureManagedObjectsList()
+        {
+            if (managedObjects == null)
+            {
+                managedObjects = new List<GameObject>();
+            }
+        }
+
+        private bool IsTemporaryObject(GameObject go)
+        {
+            if (go == null) return false;
+
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity != null && identity.Temporary) return true;
+
+            var root = temporaryRoot != null ? temporaryRoot : GameObject.Find("SceneSync Temporary")?.transform;
+            if (root == null) return false;
+
+            return go == root.gameObject || go.transform.IsChildOf(root);
         }
 
         private Transform GetOrCreateTemporaryRoot()
