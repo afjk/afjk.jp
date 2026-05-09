@@ -29,6 +29,9 @@ namespace Afjk.SceneSync
         private Dictionary<string, string> _locks = new Dictionary<string, string>(); // objectId → lockOwnerId
         private string _currentlyLockedObjectId;
         private Dictionary<string, string> _meshPaths = new Dictionary<string, string>(); // objectId → meshPath
+        private Dictionary<string, string> _hierarchySignatures = new Dictionary<string, string>(); // objectId → child mesh structure
+        private HashSet<string> _pendingMeshResyncObjectIds = new HashSet<string>();
+        private HashSet<string> _pendingMeshRequestObjectIds = new HashSet<string>();
         private bool _sceneReceived = false;
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
@@ -304,11 +307,24 @@ namespace Afjk.SceneSync
 
                 var id = instanceId.ToString();
                 currentIds.Add(id);
+                var hierarchySignature = BuildHierarchySignature(go);
 
                 if (!_knownObjectIds.Contains(id))
                 {
                     // 新規オブジェクト
+                    _hierarchySignatures[id] = hierarchySignature;
                     _ = SendSceneAdd(go);
+                }
+                else if (_hierarchySignatures.TryGetValue(id, out var lastHierarchySignature))
+                {
+                    if (lastHierarchySignature != hierarchySignature && !_pendingMeshResyncObjectIds.Contains(id))
+                    {
+                        _ = SendSceneMesh(go, id, hierarchySignature);
+                    }
+                }
+                else
+                {
+                    _hierarchySignatures[id] = hierarchySignature;
                 }
             }
 
@@ -319,6 +335,7 @@ namespace Afjk.SceneSync
                 {
                     _ = SendSceneRemove(id);
                     _meshPaths.Remove(id);
+                    _hierarchySignatures.Remove(id);
                     _locks.Remove(id);
                 }
             }
@@ -334,6 +351,31 @@ namespace Afjk.SceneSync
                 _instanceToObjectId.Remove(key);
 
             _knownObjectIds = currentIds;
+        }
+
+        private static string BuildHierarchySignature(GameObject go)
+        {
+            var builder = new System.Text.StringBuilder();
+            AppendHierarchySignature(go.transform, builder);
+            return builder.ToString();
+        }
+
+        private static void AppendHierarchySignature(Transform transform, System.Text.StringBuilder builder)
+        {
+            var go = transform.gameObject;
+            builder.Append(go.GetInstanceID())
+                .Append(':')
+                .Append(go.name)
+                .Append(':')
+                .Append(go.GetComponents<MeshFilter>().Length)
+                .Append(':')
+                .Append(go.GetComponents<SkinnedMeshRenderer>().Length)
+                .Append(':')
+                .Append(transform.childCount)
+                .Append(';');
+
+            foreach (Transform child in transform)
+                AppendHierarchySignature(child, builder);
         }
 
         private static bool IsSyncTarget(GameObject go)
@@ -385,6 +427,101 @@ namespace Afjk.SceneSync
             OnObjectRemoved?.Invoke(objectId);
         }
 
+        private async System.Threading.Tasks.Task SendSceneMesh(
+            GameObject go,
+            string objectId,
+            string hierarchySignature = null)
+        {
+            if (go == null || string.IsNullOrEmpty(objectId)) return;
+            if (_pendingMeshResyncObjectIds.Contains(objectId)) return;
+
+            _pendingMeshResyncObjectIds.Add(objectId);
+            try
+            {
+                var glb = await PresenceClientRuntime.ExportGameObjectAsGlb(go);
+                if (glb == null) return;
+
+                var path = PresenceClientRuntime.GenerateRandomPath();
+                _meshPaths[objectId] = path;
+                await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
+
+                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
+                await _client.Broadcast(payload);
+
+                if (hierarchySignature != null)
+                    _hierarchySignatures[objectId] = hierarchySignature;
+            }
+            finally
+            {
+                _pendingMeshResyncObjectIds.Remove(objectId);
+            }
+        }
+
+        private async System.Threading.Tasks.Task SendSceneMeshToPeer(
+            string targetPeerId,
+            GameObject go,
+            string objectId)
+        {
+            if (string.IsNullOrEmpty(targetPeerId) || go == null || string.IsNullOrEmpty(objectId)) return;
+
+            var glb = await PresenceClientRuntime.ExportGameObjectAsGlb(go);
+            if (glb == null) return;
+
+            var path = PresenceClientRuntime.GenerateRandomPath();
+            _meshPaths[objectId] = path;
+            await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
+
+            var pos = go.transform.position;
+            var rot = go.transform.rotation;
+            var scl = go.transform.localScale;
+            var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"name\":\"" + go.name + "\"" +
+                ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
+                ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
+                ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                ",\"meshPath\":\"" + path + "\"}";
+            await _client.SendHandoff(targetPeerId, payload);
+        }
+
+        private async System.Threading.Tasks.Task HandleSceneMeshRequest(string fromId, string raw)
+        {
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"objectId\":\"([^\"]+)\"");
+            if (!objectIdMatch.Success) return;
+
+            var objectId = objectIdMatch.Groups[1].Value;
+            var go = FindManagedObject(objectId);
+            if (go == null) return;
+
+            await SendSceneMeshToPeer(fromId, go, objectId);
+        }
+
+        private void RequestSceneMeshFromPeers(string objectId, string meshPath)
+        {
+            if (string.IsNullOrEmpty(objectId)) return;
+            if (_pendingMeshRequestObjectIds.Contains(objectId)) return;
+
+            var sent = false;
+            foreach (var peer in _peers)
+            {
+                if (peer.id == _client.Id) continue;
+                sent = true;
+                _ = _client.SendHandoff(peer.id,
+                    "{\"kind\":\"scene-mesh-request\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + meshPath + "\"}");
+            }
+
+            if (sent)
+            {
+                _pendingMeshRequestObjectIds.Add(objectId);
+                _ = ClearPendingMeshRequestLater(objectId);
+            }
+        }
+
+        private async System.Threading.Tasks.Task ClearPendingMeshRequestLater(string objectId)
+        {
+            await System.Threading.Tasks.Task.Delay(10000);
+            _pendingMeshRequestObjectIds.Remove(objectId);
+        }
+
         private void OnHandoff(string raw)
         {
             if (!raw.Contains("\"kind\"")) return;
@@ -422,6 +559,11 @@ namespace Afjk.SceneSync
             else if (raw.Contains("\"kind\":\"scene-mesh\""))
             {
                 HandleSceneMesh(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-mesh-request\""))
+            {
+                if (fromId != null)
+                    _ = HandleSceneMeshRequest(fromId, raw);
             }
             else if (raw.Contains("\"kind\":\"scene-lock\""))
             {
@@ -655,6 +797,7 @@ namespace Afjk.SceneSync
 
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
+            _pendingMeshRequestObjectIds.Remove(objectId);
 
             var go = FindManagedObject(objectId);
             var name = go != null ? go.name : objectId;
@@ -989,6 +1132,7 @@ namespace Afjk.SceneSync
                         + ", objectId=" + objectId
                         + ", name=" + name
                         + ", meshPath=" + meshPath);
+                    RequestSceneMeshFromPeers(objectId, meshPath);
                     var fallback = ReplaceWithFallbackPrimitive(objectId, name, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
@@ -1106,6 +1250,7 @@ namespace Afjk.SceneSync
                     + ", meshPath=" + meshPath
                     + ", managedState=" + DescribeManagedObjectState(objectId)
                     + "\n" + ex);
+                RequestSceneMeshFromPeers(objectId, meshPath);
 
                 if (_managedObjects.TryGetValue(objectId, out var currentObject) && currentObject != null)
                 {

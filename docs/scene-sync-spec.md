@@ -175,6 +175,34 @@ glB ファイルをサーバー側に一時保存する HTTP エンドポイン�
     }
 
 `meshPath` がある場合、`<BLOB_BASE>/<meshPath>` から glB を取得する。
+blob store は一時保存なので、TTL 切れ等で取得できない場合がある。その場合、受信側は同室の他クライアントへ `scene-mesh-request` を送り、対象オブジェクトを再 export / re-upload してもらう。
+
+### `scene-mesh-request`（blob 再送要求）
+
+`meshPath` の glB が blob store に存在しない、または取得に失敗した場合に送る。
+
+    {
+      "kind": "scene-mesh-request",
+      "objectId": "obj-001",
+      "meshPath": "expired123",
+      "reason": "blob-missing"
+    }
+
+受信したクライアントは対象 `objectId` を持っていれば GLB を再 export し、新しい blob に upload してリクエスト元へ `scene-mesh` を返す。
+
+### `scene-mesh`（メッシュ差し替え）
+
+対象オブジェクトの GLB を新しい blob path で通知する。既存オブジェクトがある場合、受信側は現在の transform を維持して mesh だけ差し替える。
+
+    {
+      "kind": "scene-mesh",
+      "objectId": "obj-001",
+      "name": "Robot",
+      "meshPath": "fresh456",
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    }
 
 ### `scene-delta`（プロパティ差分）
 

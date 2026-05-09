@@ -1859,6 +1859,7 @@ let activeRoomCode = sanitizeRoomCode(new URLSearchParams(location.search).get('
 let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
+const pendingMeshRequests = new Set();
 let reconnectTimer = null;
 const sceneInspectorState = {
   isOpen: false,
@@ -2309,6 +2310,65 @@ async function respondToSceneRequest(from) {
   }
 }
 
+function requestMeshFromPeers(objectId, meshPath, reason = 'blob-missing') {
+  if (!objectId || pendingMeshRequests.has(objectId)) return;
+
+  const peers = presenceState.peers.filter(p => p.id !== presenceState.id);
+  if (peers.length === 0) return;
+
+  const ws = presenceState.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  pendingMeshRequests.add(objectId);
+  console.warn('[SceneSync] Requesting mesh reupload from peers:', objectId, meshPath || '');
+
+  for (const peer of peers) {
+    ws.send(JSON.stringify({
+      type: 'handoff',
+      targetId: peer.id,
+      payload: {
+        kind: 'scene-mesh-request',
+        objectId,
+        meshPath,
+        reason,
+      },
+    }));
+  }
+
+  setTimeout(() => pendingMeshRequests.delete(objectId), 10000);
+}
+
+async function respondToSceneMeshRequest(from, payload) {
+  const objectId = payload?.objectId;
+  const obj = objectId ? managedObjects.get(objectId) : null;
+  if (!from?.id || !objectId || !obj) return;
+
+  try {
+    const arrayBuffer = await exportObjectAsGlb(obj);
+    const meshPath = await uploadCarrierGlb(arrayBuffer);
+    obj.userData.meshPath = meshPath;
+
+    const ws = presenceState.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    ws.send(JSON.stringify({
+      type: 'handoff',
+      targetId: from.id,
+      payload: {
+        kind: 'scene-mesh',
+        objectId,
+        name: obj.userData.name || obj.name || objectId,
+        position: obj.position.toArray(),
+        rotation: obj.quaternion.toArray(),
+        scale: obj.scale.toArray(),
+        meshPath,
+      },
+    }));
+  } catch (error) {
+    console.warn('[SceneSync] Failed to respond to scene-mesh-request:', objectId, error);
+  }
+}
+
 // ── Handoff 受信（Scene Sync 用） ────────────────────────
 
 function handleHandoff(data) {
@@ -2358,6 +2418,10 @@ function handleHandoff(data) {
     }
     case 'scene-request': {
       respondToSceneRequest(data.from);
+      break;
+    }
+    case 'scene-mesh-request': {
+      respondToSceneMeshRequest(data.from, payload);
       break;
     }
     case 'scene-delta': {
@@ -2465,6 +2529,7 @@ function handleHandoff(data) {
 
       glbLoader.loadFromUrl(url, initialPosition, scene, (model) => {
         removeLoadingOverlay(payload.objectId);
+        pendingMeshRequests.delete(payload.objectId);
         model.userData.objectId = payload.objectId;
         model.userData.name = obj?.userData?.name || payload.name || payload.meshPath;
         model.userData.meshPath = payload.meshPath;
@@ -2485,6 +2550,7 @@ function handleHandoff(data) {
         removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
         console.warn('Failed to load mesh:', err);
+        requestMeshFromPeers(payload.objectId, payload.meshPath, 'scene-mesh-load-failed');
         // 既存オブジェクトがあれば使用し続ける、なければ Box を生成
         if (!obj) {
           const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -2952,6 +3018,7 @@ function loadMeshObject(objectId, info, meshPath, existing) {
 
   glbLoader.loadFromUrl(url, initialPosition, scene, (model) => {
     removeLoadingOverlay(objectId);
+    pendingMeshRequests.delete(objectId);
     model.userData.objectId = objectId;
     model.userData.name = info.name;
     model.userData.meshPath = meshPath;
@@ -2969,6 +3036,7 @@ function loadMeshObject(objectId, info, meshPath, existing) {
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load mesh for', objectId, ':', err);
+    requestMeshFromPeers(objectId, meshPath, 'scene-state-mesh-load-failed');
     if (!existing) {
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
       return;
