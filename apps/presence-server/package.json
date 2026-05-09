@@ -7,7 +7,7 @@
   "scripts": {
     "prestart": "node src/patch-inferred-room.mjs",
     "start": "node src/server.mjs",
-    "test": "node --test tests/api.test.mjs"
+    "test": "node --test tests/api.test.mjs tests/inferred-room.test.mjs"
   },
   "devDependencies": {
     "ws": "^8.18.3"
