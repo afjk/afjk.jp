@@ -114,14 +114,17 @@ function inferRoomFromReq(req) {
   const forwarded = req.headers['x-forwarded-for'];
   const first = forwarded ? forwarded.split(',')[0].trim() : null;
   const ip = first || req.socket.remoteAddress || 'global';
+
   if (ip.includes(':')) {
-    return ip.replace('::ffff:', '').split(':')[0] || 'global-v6';
+    return sanitizeRoom(ip.replace('::ffff:', '').split(':')[0]) || 'global-v6';
   }
+
   const parts = ip.split('.');
   if (parts.length === 4) {
-    return `${parts[0]}.${parts[1]}.${parts[2]}.x`;
+    return sanitizeRoom(`${parts[0]}-${parts[1]}-${parts[2]}-x`) || 'global';
   }
-  return ip || 'global';
+
+  return sanitizeRoom(ip) || 'global';
 }
 
 function isValidScope(scope) {
@@ -1298,7 +1301,7 @@ function createPresenceServer() {
       return;
     }
     const roomOverride = sanitizeRoom(url.searchParams.get('room'));
-    const roomId = roomOverride || inferRoomFromReq(req);
+    const roomId = roomOverride || inferRoomFromReq(req) || 'global';
     const conn = acceptWebSocket(req, socket);
     if (!conn) return;
 
