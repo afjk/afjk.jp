@@ -191,7 +191,7 @@
       bottom: 24px;
       left: 50%;
       transform: translateX(-50%);
-      display: flex;
+      display: none;
       gap: 8px;
       z-index: 50;
     }
@@ -594,7 +594,7 @@
       font-size: 20px;
       cursor: pointer;
       z-index: 11;
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: center;
       backdrop-filter: blur(6px);
@@ -602,6 +602,14 @@
     }
     #paste-btn:hover {
       background: rgba(68, 136, 255, 0.8);
+    }
+    @media (hover: none) and (pointer: coarse) and (max-width: 1024px) {
+      #mobile-toolbar {
+        display: flex;
+      }
+      #paste-btn {
+        display: flex;
+      }
     }
     #paste-sheet {
       position: fixed;
