@@ -53,13 +53,11 @@ static func import_glb(data: PackedByteArray) -> Node3D:
     _print_node_tree(scene, "  ")
 
     # GLB バイト列は改変しない。
-    # Godot の glTF instantiate 結果だけが他クライアントと前後反転するため、
-    # 受信表示用のコンテナ配下で見た目補正を持たせる。
+    # Scene Sync では meshPath GLB の authored orientation をそのまま使う。
+    # クライアント個別の見た目補正は wire rotation と二重化して不整合を生むため行わない。
     var container := Node3D.new()
     container.name = "ImportedGlb"
     container.add_child(scene)
-    if scene is Node3D:
-        (scene as Node3D).rotate_y(PI)
     return container
 
 
