@@ -1038,6 +1038,16 @@ namespace Afjk.SceneSync
                     var placeholderInstanceId = placeholder.GetInstanceID();
 
                     var go = new GameObject(name);
+                    var importedGlbRoot = new GameObject("ImportedGlbRoot");
+                    importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
+
+                    // Scene Sync stores object rotation in wire space.
+                    // GLB assets are authored in glTF/Web space, but Unity imports them into Unity space.
+                    // Keep the synchronized object transform on the parent and apply this asset-local
+                    // correction only to the imported visual root.
+                    importedGlbRoot.transform.localPosition = Vector3.zero;
+                    importedGlbRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    importedGlbRoot.transform.localScale = Vector3.one;
 
                     // プレースホルダーのマッピングを新オブジェクトに移動
                     _instanceToObjectId.Remove(placeholderInstanceId);
@@ -1045,9 +1055,9 @@ namespace Afjk.SceneSync
                     _managedObjects[objectId] = go;
 
                     Debug.Log(
-                        "[SceneSync] Instantiating glTF main scene: parent=" + DescribeGameObject(go)
+                        "[SceneSync] Instantiating glTF main scene: parent=" + DescribeGameObject(importedGlbRoot)
                         + ", placeholder=" + DescribeGameObject(placeholder));
-                    await gltf.InstantiateMainSceneAsync(go.transform);
+                    await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
                     ApplyFallbackMaterialToRenderers(go, replaceAll: false, reason: "post-import broken materials");
 
                     // 位置・回転・スケールを設定（SetParent の前）
