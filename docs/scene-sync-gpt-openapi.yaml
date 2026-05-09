@@ -13,6 +13,7 @@ paths:
     post:
       operationId: redeemGptLink
       summary: Redeem a 6-digit pairing code and create a GPT session
+      description: Redeem a 6-digit pairing code shown by the Scene Sync "AIにリンク" dialog and create an AI session for that room.
       requestBody:
         required: true
         content:
