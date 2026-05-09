@@ -180,6 +180,9 @@ namespace Afjk.SceneSync.Editor
             DrawSetupSection();
             GUILayout.Space(8);
 
+            DrawManagedUnityObjectsSection();
+            GUILayout.Space(8);
+
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
             _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
             _room = EditorGUILayout.TextField("Room", _room);
@@ -224,6 +227,115 @@ namespace Afjk.SceneSync.Editor
                     _client.Disconnect();
                 }
             }
+        }
+
+        private void DrawManagedUnityObjectsSection()
+        {
+            GUILayout.Label("Managed Unity Objects", EditorStyles.boldLabel);
+
+            var manager = FindSceneSyncManager();
+            if (manager == null)
+            {
+                EditorGUILayout.HelpBox(
+                    "Create a SceneSyncManager from Setup to manage Unity objects.",
+                    MessageType.Info
+                );
+                return;
+            }
+
+            EditorGUI.BeginChangeCheck();
+            var includeManagerChildren = EditorGUILayout.Toggle(
+                "Include Manager Children",
+                manager.IncludeManagerChildren
+            );
+            if (EditorGUI.EndChangeCheck())
+            {
+                manager.IncludeManagerChildren = includeManagerChildren;
+                MarkManagerDirty(manager);
+            }
+
+            var managedCount = manager.GetManagedUnityObjects().Count;
+            GUILayout.Label("Managed Unity Objects: " + managedCount);
+
+            GUILayout.Space(4);
+            GUILayout.Label("Explicit Managed Objects:", EditorStyles.label);
+
+            var list = manager.ManagedObjects;
+            EditorGUI.BeginChangeCheck();
+            for (var i = 0; i < list.Count; i++)
+            {
+                list[i] = (GameObject)EditorGUILayout.ObjectField(
+                    $"Object {i + 1}",
+                    list[i],
+                    typeof(GameObject),
+                    true
+                );
+            }
+            if (EditorGUI.EndChangeCheck())
+            {
+                MarkManagerDirty(manager);
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Add Selected"))
+                {
+                    var changed = false;
+                    foreach (var selected in Selection.gameObjects)
+                    {
+                        if (manager.AddManagedObject(selected))
+                        {
+                            changed = true;
+                        }
+                    }
+
+                    if (changed)
+                    {
+                        MarkManagerDirty(manager);
+                    }
+                }
+
+                if (GUILayout.Button("Remove Selected"))
+                {
+                    var changed = false;
+                    foreach (var selected in Selection.gameObjects)
+                    {
+                        if (manager.RemoveManagedObject(selected))
+                        {
+                            changed = true;
+                        }
+                    }
+
+                    if (changed)
+                    {
+                        MarkManagerDirty(manager);
+                    }
+                }
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Remove Missing"))
+                {
+                    var before = manager.ManagedObjects.Count;
+                    manager.RemoveNullManagedObjects();
+                    if (manager.ManagedObjects.Count != before)
+                    {
+                        MarkManagerDirty(manager);
+                    }
+                }
+
+                if (GUILayout.Button("Select SceneSyncManager"))
+                {
+                    Selection.activeGameObject = manager.gameObject;
+                }
+            }
+        }
+
+        private static void MarkManagerDirty(SceneSyncManager manager)
+        {
+            EditorUtility.SetDirty(manager);
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
         }
 
         private void DrawSetupSection()
