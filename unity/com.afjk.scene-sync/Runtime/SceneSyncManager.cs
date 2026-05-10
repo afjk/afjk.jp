@@ -123,7 +123,7 @@ namespace Afjk.SceneSync
 
         public void SelectObject(GameObject go)
         {
-            _selectedObject = go;
+            _selectedObject = ResolveSceneSyncRoot(go);
         }
 
         public void DeselectObject()
@@ -240,6 +240,29 @@ namespace Afjk.SceneSync
             }
 
             return identity;
+        }
+
+        public static SceneSyncIdentity FindSceneSyncIdentityInParents(GameObject go)
+        {
+            if (go == null) return null;
+            return go.GetComponentInParent<SceneSyncIdentity>();
+        }
+
+        public static GameObject ResolveSceneSyncRoot(GameObject go)
+        {
+            if (go == null) return null;
+            var identity = FindSceneSyncIdentityInParents(go);
+            return identity != null ? identity.gameObject : go;
+        }
+
+        public SceneSyncIdentity ResolveIdentity(GameObject go)
+        {
+            return FindSceneSyncIdentityInParents(go);
+        }
+
+        public GameObject ResolveRoot(GameObject go)
+        {
+            return ResolveSceneSyncRoot(go);
         }
 
         public bool ValidateManagedObjects()

@@ -17,6 +17,27 @@ namespace Afjk.SceneSync.Editor
             GetWindow<SceneSyncWindow>("Scene Sync");
         }
 
+        [MenuItem("GameObject/Scene Sync/Select Scene Sync Root", false, 20)]
+        private static void SelectSceneSyncRoot()
+        {
+            var selected = Selection.activeGameObject;
+            var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
+            if (root != null && root != selected)
+            {
+                Selection.activeGameObject = root;
+            }
+        }
+
+        [MenuItem("GameObject/Scene Sync/Select Scene Sync Root", true)]
+        private static bool ValidateSelectSceneSyncRoot()
+        {
+            var selected = Selection.activeGameObject;
+            if (selected == null) return false;
+
+            var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
+            return root != null && root != selected;
+        }
+
         private PresenceClient _client;
         private string _presenceUrl = "wss://afjk.jp/presence";
         private string _blobUrl = "";
@@ -107,13 +128,14 @@ namespace Afjk.SceneSync.Editor
 
             // Selection 変更のチェック
             var selection = Selection.activeGameObject;
+            var selectionRoot = SceneSyncManager.ResolveSceneSyncRoot(selection);
             string selectionId = null;
-            if (selection != null)
+            if (selectionRoot != null)
             {
-                if (_instanceToObjectId.TryGetValue(selection.GetInstanceID(), out var origId))
+                if (_instanceToObjectId.TryGetValue(selectionRoot.GetInstanceID(), out var origId))
                     selectionId = origId;
-                else if (IsSyncTarget(selection))
-                    selectionId = selection.GetInstanceID().ToString();
+                else if (IsSyncTarget(selectionRoot))
+                    selectionId = selectionRoot.GetInstanceID().ToString();
                 // メッシュなしの Unity オブジェクト（Camera 等）は selectionId = null のまま
             }
 
@@ -296,7 +318,8 @@ namespace Afjk.SceneSync.Editor
                     var changed = false;
                     foreach (var selected in Selection.gameObjects)
                     {
-                        if (manager.AddManagedObject(selected))
+                        var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
+                        if (manager.AddManagedObject(root))
                         {
                             changed = true;
                         }
@@ -314,7 +337,8 @@ namespace Afjk.SceneSync.Editor
                     var changed = false;
                     foreach (var selected in Selection.gameObjects)
                     {
-                        if (manager.RemoveManagedObject(selected))
+                        var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
+                        if (manager.RemoveManagedObject(root))
                         {
                             changed = true;
                         }
@@ -682,7 +706,7 @@ namespace Afjk.SceneSync.Editor
             if (go == null) return;
 
             // 現在選択されているオブジェクトなら無視（Last-Writer-Wins）
-            if (Selection.activeGameObject == go) return;
+            if (SceneSyncManager.ResolveSceneSyncRoot(Selection.activeGameObject) == go) return;
 
             // ワイヤー（Three.js 座標系）→ Unity 座標系に逆変換
             if (position != null && position.Length >= 3)
