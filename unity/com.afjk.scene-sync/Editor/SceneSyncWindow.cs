@@ -58,6 +58,7 @@ namespace Afjk.SceneSync.Editor
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private bool _applyingRemoteTransform;
+        private bool _showQuickGuide = false;
 
         private void OnEnable()
         {
@@ -186,9 +187,6 @@ namespace Afjk.SceneSync.Editor
             DrawSetupSection();
             GUILayout.Space(8);
 
-            DrawQuickGuide();
-            GUILayout.Space(8);
-
             DrawManagedUnityObjectsSection();
             GUILayout.Space(8);
 
@@ -234,11 +232,23 @@ namespace Afjk.SceneSync.Editor
                     _client.Disconnect();
                 }
             }
+
+            GUILayout.Space(8);
+            DrawQuickGuide();
         }
 
         private void DrawQuickGuide()
         {
-            GUILayout.Label("Quick Guide", EditorStyles.boldLabel);
+            _showQuickGuide = EditorGUILayout.Foldout(_showQuickGuide, "Quick Guide", true);
+            if (!_showQuickGuide)
+            {
+                EditorGUILayout.LabelField(
+                    "Unity: Add -> Identity -> Publish -> Move root. Remote: move root.",
+                    EditorStyles.miniLabel
+                );
+                return;
+            }
+
             EditorGUILayout.HelpBox(
                 "Unity objects:\n" +
                 "1. Select a GameObject.\n" +
