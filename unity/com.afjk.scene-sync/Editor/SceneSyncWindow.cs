@@ -254,8 +254,20 @@ namespace Afjk.SceneSync.Editor
                 MarkManagerDirty(manager);
             }
 
-            var managedCount = manager.GetManagedUnityObjects().Count;
+            var managedUnityObjects = manager.GetManagedUnityObjects();
+            var managedCount = managedUnityObjects.Count;
             GUILayout.Label("Managed Unity Objects: " + managedCount);
+
+            var identifiedCount = 0;
+            foreach (var go in managedUnityObjects)
+            {
+                var identity = go != null ? go.GetComponent<SceneSyncIdentity>() : null;
+                if (identity != null && identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+                {
+                    identifiedCount++;
+                }
+            }
+            GUILayout.Label($"Identified Unity Objects: {identifiedCount} / {managedCount}");
 
             GUILayout.Space(4);
             GUILayout.Label("Explicit Managed Objects:", EditorStyles.label);
@@ -330,6 +342,24 @@ namespace Afjk.SceneSync.Editor
                 if (GUILayout.Button("Select SceneSyncManager"))
                 {
                     Selection.activeGameObject = manager.gameObject;
+                }
+            }
+
+            if (GUILayout.Button("Ensure Identities"))
+            {
+                var count = manager.EnsureManagedUnityObjectIdentities();
+                if (count > 0)
+                {
+                    EditorUtility.SetDirty(manager);
+                    foreach (var go in manager.GetManagedUnityObjects())
+                    {
+                        var identity = go != null ? go.GetComponent<SceneSyncIdentity>() : null;
+                        if (identity != null)
+                        {
+                            EditorUtility.SetDirty(identity);
+                        }
+                    }
+                    EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
                 }
             }
         }

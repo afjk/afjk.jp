@@ -199,6 +199,49 @@ namespace Afjk.SceneSync
             managedObjects.RemoveAll(item => item == null);
         }
 
+        public int EnsureManagedUnityObjectIdentities()
+        {
+            var count = 0;
+
+            foreach (var go in GetManagedUnityObjects())
+            {
+                if (EnsureUnityManagedIdentity(go) != null)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        public SceneSyncIdentity EnsureUnityManagedIdentity(GameObject go)
+        {
+            if (go == null) return null;
+            if (go == gameObject) return null;
+            if (IsTemporaryObject(go)) return null;
+
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity == null)
+            {
+                identity = go.AddComponent<SceneSyncIdentity>();
+            }
+
+            if (string.IsNullOrWhiteSpace(identity.ObjectId))
+            {
+                identity.ObjectId = GenerateUnityObjectId(go);
+            }
+
+            identity.Origin = SceneSyncOrigin.Unity;
+            identity.Temporary = false;
+
+            if (identity.State == SceneSyncState.Disconnected || identity.State == SceneSyncState.Error)
+            {
+                identity.State = SceneSyncState.Synced;
+            }
+
+            return identity;
+        }
+
         public bool ValidateManagedObjects()
         {
             EnsureManagedObjectsList();
@@ -1303,6 +1346,43 @@ namespace Afjk.SceneSync
             {
                 managedObjects = new List<GameObject>();
             }
+        }
+
+        private static string GenerateUnityObjectId(GameObject go)
+        {
+            var namePart = SanitizeObjectIdPart(go != null ? go.name : "unity-object");
+            var randomPart = Guid.NewGuid().ToString("N").Substring(0, 8);
+            return string.IsNullOrEmpty(namePart)
+                ? "unity-" + randomPart
+                : namePart + "-" + randomPart;
+        }
+
+        private static string SanitizeObjectIdPart(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "unity-object";
+
+            var builder = new System.Text.StringBuilder(value.Length);
+
+            foreach (var c in value.ToLowerInvariant())
+            {
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                {
+                    builder.Append(c);
+                }
+                else if (c == '-' || c == '_' || c == ' ')
+                {
+                    builder.Append('-');
+                }
+            }
+
+            var result = builder.ToString().Trim('-');
+
+            while (result.Contains("--"))
+            {
+                result = result.Replace("--", "-");
+            }
+
+            return string.IsNullOrEmpty(result) ? "unity-object" : result;
         }
 
         private bool IsTemporaryObject(GameObject go)
