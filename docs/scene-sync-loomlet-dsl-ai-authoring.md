@@ -78,21 +78,23 @@ Use Behavior Graphs for animation-like requests such as "bounce the cat", "spin 
 
 ---
 
-## Allowed Scene Sync runtime nodes
+## Scene Sync Behavior Graph Phase 1 node set
 
 The Scene Sync client currently allows these Behavior Graph node types:
 
-- `clock`
+- `serverClock`
 - `constant`
 - `sine`
+- `cosine`
 - `add`
 - `multiply`
-- `serverClock`
 - `sceneSetPosition`
 - `sceneSetRotation`
 - `sceneSetScale`
 - `sceneSetColor`
 - `sceneSetVisible`
+
+Use `serverClock` for shared room animations. Avoid `clock` for AI-generated shared Scene Sync behaviors because local clocks can drift between clients.
 
 Loomlet DSL authoring should map to those runtime nodes through the compiler/adapter.
 
