@@ -53,6 +53,35 @@ namespace Afjk.SceneSync.Editor
             {
                 EditorGUILayout.HelpBox("Scene Sync object with custom state.", MessageType.Info);
             }
+
+            if (HasSelectedChild(identity.gameObject))
+            {
+                EditorGUILayout.Space(8);
+                EditorGUILayout.HelpBox(
+                    "A child of this Scene Sync object is selected. Move the root object for Scene Sync transform synchronization.",
+                    MessageType.Warning
+                );
+
+                if (GUILayout.Button("Select Scene Sync Root"))
+                {
+                    Selection.activeGameObject = identity.gameObject;
+                    EditorGUIUtility.PingObject(identity.gameObject);
+                }
+            }
+        }
+
+        private static bool HasSelectedChild(GameObject root)
+        {
+            foreach (var selected in Selection.gameObjects)
+            {
+                if (selected == null) continue;
+                if (selected != root && selected.transform.IsChildOf(root.transform))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -85,6 +114,12 @@ namespace Afjk.SceneSync.Editor
                 }
 
                 Handles.Label(GetLabelPosition(root), label);
+            }
+
+            var childOwnerRoot = GetSelectedSceneSyncRootChildOwner();
+            if (childOwnerRoot != null)
+            {
+                DrawSelectRootButton(sceneView, childOwnerRoot);
             }
         }
 
@@ -120,6 +155,46 @@ namespace Afjk.SceneSync.Editor
             }
 
             return false;
+        }
+
+        private static GameObject GetSelectedSceneSyncRootChildOwner()
+        {
+            foreach (var selected in Selection.gameObjects)
+            {
+                if (selected == null) continue;
+
+                var identity = selected.GetComponentInParent<SceneSyncIdentity>();
+                if (identity == null) continue;
+
+                var root = identity.gameObject;
+                if (root == selected) continue;
+
+                return root;
+            }
+
+            return null;
+        }
+
+        private static void DrawSelectRootButton(SceneView sceneView, GameObject root)
+        {
+            if (root == null) return;
+
+            Handles.BeginGUI();
+
+            var rect = new Rect(12f, 12f, 240f, 72f);
+            GUILayout.BeginArea(rect, EditorStyles.helpBox);
+            GUILayout.Label("Scene Sync child selected", EditorStyles.boldLabel);
+            GUILayout.Label("Root: " + root.name, EditorStyles.miniLabel);
+
+            if (GUILayout.Button("Select Scene Sync Root"))
+            {
+                Selection.activeGameObject = root;
+                EditorGUIUtility.PingObject(root);
+                sceneView.Repaint();
+            }
+
+            GUILayout.EndArea();
+            Handles.EndGUI();
         }
 
         private static string BuildLabel(SceneSyncIdentity identity)
