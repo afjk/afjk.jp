@@ -139,10 +139,19 @@ namespace Afjk.SceneSync.Editor
             if (selectionRoot != null)
             {
                 if (_instanceToObjectId.TryGetValue(selectionRoot.GetInstanceID(), out var origId))
+                {
                     selectionId = origId;
-                else if (IsSyncTarget(selectionRoot))
-                    selectionId = selectionRoot.GetInstanceID().ToString();
-                // メッシュなしの Unity オブジェクト（Camera 等）は selectionId = null のまま
+                }
+                else
+                {
+                    var identity = selectionRoot.GetComponent<SceneSyncIdentity>();
+                    if (identity != null
+                        && !string.IsNullOrWhiteSpace(identity.ObjectId)
+                        && _managedObjects.ContainsKey(identity.ObjectId))
+                    {
+                        selectionId = identity.ObjectId;
+                    }
+                }
             }
 
             // ロック状態の更新
