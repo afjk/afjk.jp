@@ -540,11 +540,8 @@ namespace Afjk.SceneSync.Editor
             {
                 var objectId = kvp.Key;
                 var go = kvp.Value;
+                if (string.IsNullOrWhiteSpace(objectId)) continue;
                 if (go == null) continue;
-
-                var identity = go.GetComponent<SceneSyncIdentity>();
-                if (identity == null) continue;
-                if (identity.ObjectId != objectId) continue;
 
                 currentIds.Add(objectId);
                 currentInstanceIds.Add(go.GetInstanceID());
