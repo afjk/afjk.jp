@@ -796,11 +796,23 @@ namespace Afjk.SceneSync.Editor
             return "[" + string.Join(",", values) + "]";
         }
 
+        private static string JsonEscape(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\n", "\\n")
+                .Replace("\r", "\\r");
+        }
+
+        private static string FormatFloat(float value)
+        {
+            return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
         {
-            if (go == null) return;
-
-            var objectId = go.GetInstanceID().ToString();
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
@@ -818,12 +830,12 @@ namespace Afjk.SceneSync.Editor
             // アップロードを先に完了させてから Broadcast する
             if (glb != null && path != null)
             {
-                _meshPaths[objectId] = path;
+                _meshPaths[go.GetInstanceID().ToString()] = path;
                 await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
             }
 
             var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + objectId + "\",\"name\":\"" + go.name + "\"" +
+            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
                 ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                 ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                 ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
@@ -876,9 +888,10 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
+            var seen = new HashSet<GameObject>();
             foreach (var go in manager.GetManagedUnityObjects())
             {
-                if (go == null) continue;
+                if (go == null || !seen.Add(go)) continue;
                 if (ShouldSkipPublishObject(go)) continue;
 
                 var identity = EnsureUnityIdentityForPublish(manager, go);
@@ -974,11 +987,11 @@ namespace Afjk.SceneSync.Editor
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
-            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + objectId + "\",\"name\":\"" + go.name + "\"" +
-                ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
-                ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                ",\"meshPath\":\"" + path + "\"}";
+            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + JsonEscape(objectId) + "\",\"name\":\"" + JsonEscape(go.name) + "\"" +
+                ",\"position\":[" + FormatFloat(pos.x) + "," + FormatFloat(pos.y) + "," + FormatFloat(-pos.z) + "]" +
+                ",\"rotation\":[" + FormatFloat(rot.x) + "," + FormatFloat(rot.y) + "," + FormatFloat(-rot.z) + "," + FormatFloat(-rot.w) + "]" +
+                ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
+                ",\"meshPath\":\"" + JsonEscape(path) + "\"}";
             await _client.Broadcast(payload);
 
             _managedObjects[objectId] = go;
