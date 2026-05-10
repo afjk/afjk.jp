@@ -993,6 +993,9 @@ namespace Afjk.SceneSync.Editor
                 if (go == null) continue;
                 if (ShouldSkipTransformSync(go)) continue;
 
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity == null || identity.ObjectId != objectId) continue;
+
                 if (!_lastSnapshots.TryGetValue(objectId, out var snapshot))
                 {
                     _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
@@ -1011,17 +1014,26 @@ namespace Afjk.SceneSync.Editor
             if (go == null) return true;
 
             var temporaryRoot = FindTemporaryRoot();
-            if (temporaryRoot != null
-                && (go == temporaryRoot || go.transform.IsChildOf(temporaryRoot.transform)))
+            if (temporaryRoot != null && go == temporaryRoot)
+            {
                 return true;
+            }
 
             var identity = go.GetComponent<SceneSyncIdentity>();
             if (identity == null) return true;
-            if (identity.Origin != SceneSyncOrigin.Unity) return true;
-            if (identity.Temporary) return true;
             if (string.IsNullOrWhiteSpace(identity.ObjectId)) return true;
 
-            return false;
+            if (identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+            {
+                return false;
+            }
+
+            if (identity.Origin == SceneSyncOrigin.Remote && identity.Temporary)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private async System.Threading.Tasks.Task SendUnityTransformDelta(string objectId, GameObject go)
