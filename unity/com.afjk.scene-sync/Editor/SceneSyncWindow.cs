@@ -225,11 +225,6 @@ namespace Afjk.SceneSync.Editor
 
                 GUILayout.Space(8);
 
-                if (GUILayout.Button("Sync Meshes"))
-                {
-                    _ = SyncAllMeshes();
-                }
-
                 if (GUILayout.Button("Disconnect"))
                 {
                     ClearTemporaryObjects();
@@ -859,38 +854,6 @@ namespace Afjk.SceneSync.Editor
             return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
-        {
-            var pos = go.transform.position;
-            var rot = go.transform.rotation;
-            var scl = go.transform.localScale;
-
-            byte[] glb = null;
-            string path = null;
-            if (go.GetComponentInChildren<MeshFilter>() != null
-                || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
-            {
-                glb = await PresenceClient.ExportGameObjectAsGlb(go);
-                if (glb != null)
-                    path = PresenceClient.GenerateRandomPath();
-            }
-
-            // アップロードを先に完了させてから Broadcast する
-            if (glb != null && path != null)
-            {
-                _meshPaths[go.GetInstanceID().ToString()] = path;
-                await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
-            }
-
-            var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
-                ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
-                ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                meshPathJson + "}";
-            await _client.Broadcast(payload);
-        }
-
         private async void PublishSelectedObjects()
         {
             if (!_connected)
@@ -1249,33 +1212,6 @@ namespace Afjk.SceneSync.Editor
             else
             {
                 _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null);
-            }
-        }
-
-        private async System.Threading.Tasks.Task SyncAllMeshes()
-        {
-            var rootObjects = UnityEngine.SceneManagement.SceneManager
-                .GetActiveScene().GetRootGameObjects();
-
-            foreach (var go in rootObjects)
-            {
-                if (go.hideFlags != HideFlags.None) continue;
-                if (go.GetComponentInChildren<MeshFilter>() == null
-                    && go.GetComponentInChildren<SkinnedMeshRenderer>() == null)
-                    continue;
-
-                var glb = await PresenceClient.ExportGameObjectAsGlb(go);
-                if (glb == null) continue;
-
-                var objectId = go.GetInstanceID().ToString();
-
-                // blob store に POST（全クライアント共有）
-                var path = PresenceClient.GenerateRandomPath();
-                _meshPaths[objectId] = path;
-                await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
-
-                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
-                await _client.Broadcast(payload);
             }
         }
 
