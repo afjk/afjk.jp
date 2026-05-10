@@ -1,0 +1,156 @@
+using UnityEditor;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace Afjk.SceneSync.Editor
+{
+    [CustomEditor(typeof(SceneSyncIdentity))]
+    public class SceneSyncIdentityEditor : UnityEditor.Editor
+    {
+        public override void OnInspectorGUI()
+        {
+            var identity = (SceneSyncIdentity)target;
+
+            EditorGUILayout.LabelField("Scene Sync Identity", EditorStyles.boldLabel);
+            EditorGUILayout.Space(4);
+
+            EditorGUILayout.LabelField(
+                "Object ID",
+                string.IsNullOrWhiteSpace(identity.ObjectId) ? "(none)" : identity.ObjectId
+            );
+            EditorGUILayout.LabelField("Origin", identity.Origin.ToString());
+            EditorGUILayout.LabelField("Temporary", identity.Temporary ? "true" : "false");
+            EditorGUILayout.LabelField("State", identity.State.ToString());
+            EditorGUILayout.LabelField(
+                "Lock Owner",
+                string.IsNullOrWhiteSpace(identity.LockOwner) ? "(none)" : identity.LockOwner
+            );
+
+            EditorGUILayout.Space(8);
+
+            if (string.IsNullOrWhiteSpace(identity.ObjectId))
+            {
+                EditorGUILayout.HelpBox(
+                    "This object has SceneSyncIdentity but no ObjectId. If this is a Unity-managed object, use Ensure Identities from the Scene Sync window.",
+                    MessageType.Warning
+                );
+            }
+            else if (identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+            {
+                EditorGUILayout.HelpBox(
+                    "Unity-origin Scene Sync object. This object can be published and transformed from Unity.",
+                    MessageType.Info
+                );
+            }
+            else if (identity.Origin == SceneSyncOrigin.Remote && identity.Temporary)
+            {
+                EditorGUILayout.HelpBox(
+                    "Remote temporary Scene Sync object. This object came from Scene Sync and will be removed on manual disconnect. Move the root object, not its imported children.",
+                    MessageType.Info
+                );
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Scene Sync object with custom state.", MessageType.Info);
+            }
+        }
+    }
+
+    [InitializeOnLoad]
+    public static class SceneSyncIdentitySceneViewOverlay
+    {
+        static SceneSyncIdentitySceneViewOverlay()
+        {
+            SceneView.duringSceneGui += OnSceneGui;
+        }
+
+        private static void OnSceneGui(SceneView sceneView)
+        {
+            var activeScene = SceneManager.GetActiveScene();
+            var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>();
+
+            foreach (var identity in identities)
+            {
+                if (identity == null) continue;
+
+                var root = identity.gameObject;
+                if (!activeScene.IsValid() || root.scene != activeScene) continue;
+                if (!IsIdentityRoot(root)) continue;
+                if (!IsSelectedOrParentOfSelection(root)) continue;
+
+                var label = BuildLabel(identity);
+                if (IsChildSelection(root))
+                {
+                    label += "\nSelected child. Move root for sync.";
+                }
+
+                Handles.Label(GetLabelPosition(root), label);
+            }
+        }
+
+        private static bool IsIdentityRoot(GameObject go)
+        {
+            if (go == null) return false;
+            if (go.GetComponent<SceneSyncIdentity>() == null) return false;
+
+            var parent = go.transform.parent;
+            if (parent == null) return true;
+
+            return parent.GetComponentInParent<SceneSyncIdentity>() == null;
+        }
+
+        private static bool IsSelectedOrParentOfSelection(GameObject root)
+        {
+            foreach (var selected in Selection.gameObjects)
+            {
+                if (selected == null) continue;
+                if (selected == root) return true;
+                if (selected.transform.IsChildOf(root.transform)) return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsChildSelection(GameObject root)
+        {
+            foreach (var selected in Selection.gameObjects)
+            {
+                if (selected == null) continue;
+                if (selected != root && selected.transform.IsChildOf(root.transform)) return true;
+            }
+
+            return false;
+        }
+
+        private static string BuildLabel(SceneSyncIdentity identity)
+        {
+            var origin = identity.Origin.ToString();
+            var temp = identity.Temporary ? "Temporary" : "Persistent";
+            var id = ShortId(identity.ObjectId);
+            return "SceneSync\n" + origin + " / " + temp + "\n" + id;
+        }
+
+        private static string ShortId(string objectId)
+        {
+            if (string.IsNullOrWhiteSpace(objectId)) return "(no id)";
+            return objectId.Length <= 12 ? objectId : objectId.Substring(0, 12) + "...";
+        }
+
+        private static Vector3 GetLabelPosition(GameObject go)
+        {
+            var renderers = go.GetComponentsInChildren<Renderer>();
+            if (renderers.Length > 0)
+            {
+                var bounds = renderers[0].bounds;
+                for (var i = 1; i < renderers.Length; i++)
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+
+                return bounds.center + Vector3.up * (bounds.extents.y + 0.25f);
+            }
+
+            return go.transform.position + Vector3.up * 0.5f;
+        }
+    }
+}
