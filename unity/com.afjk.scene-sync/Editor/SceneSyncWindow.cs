@@ -68,6 +68,7 @@ namespace Afjk.SceneSync.Editor
         private bool _applyingRemoteTransform;
         private bool _showSetup = false;
         private bool _showQuickGuide = false;
+        private const bool DebugSceneSyncPublishLeak = true;
 
         private void OnEnable()
         {
@@ -75,8 +76,11 @@ namespace Afjk.SceneSync.Editor
             _client.OnConnected += () =>
             {
                 _connected = true;
+                DebugLeakLog("OnConnected: before ClearSceneSyncSessionState");
                 ClearSceneSyncSessionState();
+                DebugLeakLog("OnConnected: after ClearSceneSyncSessionState");
                 RebindPublishedUnityObjects();
+                DebugLeakLog("OnConnected: after RebindPublishedUnityObjects");
                 Repaint();
             };
             _client.OnDisconnected += () =>
@@ -112,6 +116,12 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.update -= EditorUpdate;
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             _client?.Disconnect();
+        }
+
+        private void DebugLeakLog(string message)
+        {
+            if (!DebugSceneSyncPublishLeak) return;
+            Debug.Log("[SceneSync LeakDebug] " + message);
         }
 
         private string GetBlobUrl()
@@ -539,6 +549,7 @@ namespace Afjk.SceneSync.Editor
         private void OnHierarchyChanged()
         {
             if (!_connected) return;
+            DebugLeakLog("OnHierarchyChanged START connected=" + _connected);
             var currentIds = new HashSet<string>();
             var currentInstanceIds = new HashSet<int>();
             var rootObjects = UnityEngine.SceneManagement.SceneManager
@@ -572,6 +583,7 @@ namespace Afjk.SceneSync.Editor
 
                 currentIds.Add(objectId);
                 currentInstanceIds.Add(go.GetInstanceID());
+                DebugLeakLog("OnHierarchyChanged tracked current: " + go.name + " objectId=" + objectId);
             }
 
             // Temporary root 配下の Web 由来オブジェクトも存在確認対象に含める
@@ -601,6 +613,7 @@ namespace Afjk.SceneSync.Editor
                         continue;
                     }
 
+                    DebugLeakLog("OnHierarchyChanged scene-remove: objectId=" + id);
                     _ = SendSceneRemove(id);
                     _meshPaths.Remove(id);
                     _locks.Remove(id);
@@ -618,6 +631,7 @@ namespace Afjk.SceneSync.Editor
                 _instanceToObjectId.Remove(key);
 
             _knownObjectIds = currentIds;
+            DebugLeakLog("OnHierarchyChanged END knownObjectIds=" + _knownObjectIds.Count);
         }
 
         private void ClearSceneSyncSessionState()
@@ -642,30 +656,49 @@ namespace Afjk.SceneSync.Editor
 
         private void RebindPublishedUnityObjects()
         {
+            DebugLeakLog("RebindPublishedUnityObjects: start");
             var manager = FindSceneSyncManager();
-            if (manager == null) return;
+            if (manager == null)
+            {
+                DebugLeakLog("RebindPublishedUnityObjects: no SceneSyncManager");
+                return;
+            }
 
             foreach (var go in manager.GetManagedUnityObjects())
             {
                 if (go == null) continue;
 
                 var identity = go.GetComponent<SceneSyncIdentity>();
+                DebugLeakLog(
+                    "Rebind candidate: " + go.name +
+                    " objectId=" + (identity != null ? identity.ObjectId : "(none)") +
+                    " meshPath=" + (identity != null ? identity.MeshPath : "(none)") +
+                    " origin=" + (identity != null ? identity.Origin.ToString() : "(none)") +
+                    " temporary=" + (identity != null ? identity.Temporary.ToString() : "(none)")
+                );
                 if (identity == null) continue;
                 if (identity.Origin != SceneSyncOrigin.Unity) continue;
                 if (identity.Temporary) continue;
                 if (string.IsNullOrWhiteSpace(identity.ObjectId)) continue;
                 // ObjectId only means the object has a stable Scene Sync identity.
                 // MeshPath is the marker that the Unity object was actually published before.
-                if (string.IsNullOrWhiteSpace(identity.MeshPath)) continue;
+                if (string.IsNullOrWhiteSpace(identity.MeshPath))
+                {
+                    DebugLeakLog("Rebind skip unpublished/no MeshPath: " + go.name + " objectId=" + identity.ObjectId);
+                    continue;
+                }
 
                 var objectId = identity.ObjectId;
                 _managedObjects[objectId] = go;
                 _instanceToObjectId[go.GetInstanceID()] = objectId;
                 _knownObjectIds.Add(objectId);
                 _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
+                DebugLeakLog("Rebind applied: " + go.name + " objectId=" + objectId);
 
                 Debug.Log("[SceneSync] Rebound Unity object: " + go.name + " (objectId=" + objectId + ")");
             }
+
+            DebugLeakLog("RebindPublishedUnityObjects: end managedObjects=" + _managedObjects.Count);
         }
 
         private bool IsBoundUnityOriginObject(string objectId)
@@ -689,6 +722,9 @@ namespace Afjk.SceneSync.Editor
         private void OnHandoff(string raw)
         {
             if (!raw.Contains("\"kind\"")) return;
+            var kindMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"kind\":\"([^\"]+)\"");
+            var kind = kindMatch.Success ? kindMatch.Groups[1].Value : "(unknown)";
+            DebugLeakLog("OnHandoff kind=" + kind);
 
             // from.id を抽出（handoff メッセージに含まれる）
             string fromId = null;
@@ -699,6 +735,7 @@ namespace Afjk.SceneSync.Editor
 
             if (raw.Contains("\"kind\":\"scene-request\""))
             {
+                DebugLeakLog("OnHandoff scene-request from=" + fromId);
                 if (fromId != null)
                     _ = HandleSceneRequest(fromId);
                 else
@@ -1024,6 +1061,11 @@ namespace Afjk.SceneSync.Editor
             if (go == null || identity == null) return;
             if (string.IsNullOrWhiteSpace(identity.ObjectId)) return;
             if (!_connected || _client == null) return;
+            DebugLeakLog(
+                "PublishUnityObject START: " + go.name +
+                " objectId=" + identity.ObjectId +
+                " meshPath(before)=" + identity.MeshPath
+            );
 
             if (go.GetComponentInChildren<MeshFilter>() == null
                 && go.GetComponentInChildren<SkinnedMeshRenderer>() == null)
@@ -1043,6 +1085,11 @@ namespace Afjk.SceneSync.Editor
             var path = PresenceClient.GenerateRandomPath();
             _meshPaths[objectId] = path;
             await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+            DebugLeakLog(
+                "PublishUnityObject uploaded: " + go.name +
+                " objectId=" + identity.ObjectId +
+                " meshPath=" + path
+            );
             identity.MeshPath = path;
             EditorUtility.SetDirty(identity);
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
@@ -1055,6 +1102,11 @@ namespace Afjk.SceneSync.Editor
                 ",\"rotation\":[" + FormatFloat(rot.x) + "," + FormatFloat(rot.y) + "," + FormatFloat(-rot.z) + "," + FormatFloat(-rot.w) + "]" +
                 ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
                 ",\"meshPath\":\"" + JsonEscape(path) + "\"}";
+            DebugLeakLog(
+                "PublishUnityObject scene-add: " + go.name +
+                " objectId=" + identity.ObjectId +
+                " meshPath=" + identity.MeshPath
+            );
             await _client.Broadcast(payload);
 
             _managedObjects[objectId] = go;
@@ -1063,6 +1115,7 @@ namespace Afjk.SceneSync.Editor
             _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
 
             Debug.Log("[SceneSync] Published Unity object: " + go.name);
+            DebugLeakLog("PublishUnityObject END: " + go.name + " objectId=" + identity.ObjectId);
         }
 
         private void DetectPublishedUnityObjectTransformChanges()
@@ -1123,6 +1176,10 @@ namespace Afjk.SceneSync.Editor
         {
             if (!_connected || _client == null) return;
             if (string.IsNullOrWhiteSpace(objectId) || go == null) return;
+            DebugLeakLog(
+                "SendUnityTransformDelta: " + go.name +
+                " objectId=" + objectId
+            );
 
             var pos = go.transform.position;
             var rot = go.transform.rotation;
@@ -1290,6 +1347,7 @@ namespace Afjk.SceneSync.Editor
 
         private async System.Threading.Tasks.Task HandleSceneRequest(string fromId)
         {
+            DebugLeakLog("HandleSceneRequest START targetPeerId=" + fromId);
             Debug.Log("[SceneSync] Responding to scene-request for: " + fromId);
 
             var rootObjects = UnityEngine.SceneManagement.SceneManager
@@ -1302,12 +1360,17 @@ namespace Afjk.SceneSync.Editor
 
             foreach (var go in rootObjects)
             {
-                if (!IsSyncTarget(go)) continue;
+                if (!IsSyncTarget(go))
+                {
+                    DebugLeakLog("HandleSceneRequest skip non-sync root: " + go.name);
+                    continue;
+                }
 
                 var objectId = go.GetInstanceID().ToString();
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
+                var identity = go.GetComponent<SceneSyncIdentity>();
 
                 // 保存済み meshPath を優先使用
                 string path = null;
@@ -1326,6 +1389,17 @@ namespace Afjk.SceneSync.Editor
                         _meshPaths[objectId] = path;
                     }
                 }
+                var debugMeshPath = _meshPaths.TryGetValue(objectId, out var trackedMeshPath)
+                    ? trackedMeshPath
+                    : "(none)";
+                DebugLeakLog(
+                    "HandleSceneRequest include candidate: " + go.name +
+                    " objectId=" + objectId +
+                    " identityOrigin=" + (identity != null ? identity.Origin.ToString() : "(none)") +
+                    " identityTemporary=" + (identity != null ? identity.Temporary.ToString() : "(none)") +
+                    " identityMeshPath=" + (identity != null ? identity.MeshPath : "(none)") +
+                    " meshPathDict=" + debugMeshPath
+                );
 
                 if (!first) objectsJson.Append(",");
                 first = false;
@@ -1335,12 +1409,17 @@ namespace Afjk.SceneSync.Editor
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + "}");
+                DebugLeakLog("HandleSceneRequest INCLUDED: " + go.name + " objectId=" + objectId);
             }
 
             // Web 由来のオブジェクトも含める
             foreach (var kvp in _managedObjects)
             {
-                if (int.TryParse(kvp.Key, out _)) continue; // Unity 由来はスキップ（上で処理済み）
+                if (int.TryParse(kvp.Key, out _))
+                {
+                    DebugLeakLog("HandleSceneRequest skip managed Unity key=" + kvp.Key);
+                    continue; // Unity 由来はスキップ（上で処理済み）
+                }
                 var go = kvp.Value;
                 if (go == null) continue;
 
@@ -1359,6 +1438,7 @@ namespace Afjk.SceneSync.Editor
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + "}");
+                DebugLeakLog("HandleSceneRequest INCLUDED: " + go.name + " objectId=" + kvp.Key);
             }
 
             objectsJson.Append("}");
@@ -1370,6 +1450,7 @@ namespace Afjk.SceneSync.Editor
             // handoff で 1対1 返信（broadcast ではない）
             var payload = "{\"kind\":\"scene-state\",\"objects\":" + objectsJson + "}";
             await _client.SendHandoff(fromId, payload);
+            DebugLeakLog("HandleSceneRequest END targetPeerId=" + fromId);
         }
 
         private void ApplyTransform(GameObject go, float[] position, float[] rotation, float[] scale)
