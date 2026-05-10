@@ -67,7 +67,7 @@ namespace Afjk.SceneSync.Editor
         private static void OnSceneGui(SceneView sceneView)
         {
             var activeScene = SceneManager.GetActiveScene();
-            var identities = Object.FindObjectsOfType<SceneSyncIdentity>();
+            var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>();
 
             foreach (var identity in identities)
             {
