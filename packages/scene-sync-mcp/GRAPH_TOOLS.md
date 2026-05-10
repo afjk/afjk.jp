@@ -84,7 +84,10 @@ Clear the room-level **Scene Behavior Graph**.
 - `sine`
 - `cosine`
 - `add`
+- `multiply`
+- `constant`
 - `sceneSetPosition`
+- `sceneOffsetPosition`
 - `sceneSetRotation`
 - `sceneSetScale`
 - `sceneSetColor`
