@@ -89,6 +89,7 @@ The Scene Sync client currently allows these Behavior Graph node types:
 - `add`
 - `multiply`
 - `sceneSetPosition`
+- `sceneOffsetPosition`
 - `sceneSetRotation`
 - `sceneSetScale`
 - `sceneSetColor`
@@ -106,6 +107,7 @@ Use these `.loom` sink calls for Scene Sync Behavior Graphs:
 
 ```loom
 scene.setPosition("sample-cube", x: 0, y: 1, z: 0)
+scene.offsetPosition("sample-cube", x: 0, y: 0.5, z: 0)
 scene.setRotation("sample-cube", x: 0, y: 1.57, z: 0)
 scene.setScale("sample-cube", x: 2, y: 2, z: 2)
 scene.setColor("sample-cube", r: 0, g: 1, b: 1)

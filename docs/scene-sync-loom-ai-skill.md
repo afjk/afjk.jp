@@ -98,7 +98,8 @@ SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. 
 - `cosine` — cosine wave oscillator
 - `add` — addition
 - `multiply` — multiplication
-- `sceneSetPosition` — set object position
+- `sceneSetPosition` — set object position (absolute coordinates)
+- `sceneOffsetPosition` — apply x/y/z offsets relative to the object position captured when the Behavior Graph starts evaluating. When the graph is cleared or replaced, Scene Sync restores the captured base position.
 - `sceneSetRotation` — set object rotation
 - `sceneSetScale` — set object scale
 - `sceneSetColor` — set object color (RGB)

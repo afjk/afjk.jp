@@ -20,6 +20,7 @@ const SCENESYNC_ALLOWED_NODE_TYPES = new Set([
   'multiply',
   'serverClock',
   'sceneSetPosition',
+  'sceneOffsetPosition',
   'sceneSetRotation',
   'sceneSetScale',
   'sceneSetColor',
@@ -48,8 +49,64 @@ export class LoomSceneSync {
     this._sceneGraphDefinition = null;
     this._objectGraphDefinitions = new Map();
 
+    // sceneOffsetPosition の base position 管理
+    this.behaviorBases = new Map();
+
     // ノード型登録（冪等性を保証）
     this._registerNodeTypes();
+  }
+
+  _createScopeKey(scope) {
+    if (scope === 'scene') return 'scene';
+    if (scope && typeof scope === 'object' && scope.object) {
+      return `object:${scope.object}`;
+    }
+    return 'unknown';
+  }
+
+  _createBehaviorBaseKey(scopeKey, target) {
+    return `${scopeKey}:${target}`;
+  }
+
+  _getOrCaptureBehaviorBase(scopeKey, target, obj) {
+    const key = this._createBehaviorBaseKey(scopeKey, target);
+
+    if (!this.behaviorBases.has(key)) {
+      if (obj && obj.position && typeof obj.position.clone === 'function') {
+        this.behaviorBases.set(key, {
+          scopeKey,
+          target,
+          position: obj.position.clone()
+        });
+      }
+    }
+
+    const base = this.behaviorBases.get(key);
+    return base ? base.position : null;
+  }
+
+  _restoreBehaviorBasesForScope(scope) {
+    const scopeKey = this._createScopeKey(scope);
+    const keysToDelete = [];
+
+    for (const [key, base] of this.behaviorBases.entries()) {
+      if (!key.startsWith(`${scopeKey}:`)) continue;
+
+      const obj = this.resolveTarget(base.target);
+      if (obj && obj.position && base.position) {
+        if (typeof obj.position.copy === 'function') {
+          obj.position.copy(base.position);
+        } else if (typeof obj.position.set === 'function') {
+          obj.position.set(base.position.x, base.position.y, base.position.z);
+        }
+      }
+
+      keysToDelete.push(key);
+    }
+
+    for (const key of keysToDelete) {
+      this.behaviorBases.delete(key);
+    }
   }
 
   _registerNodeTypes() {
@@ -92,6 +149,38 @@ export class LoomSceneSync {
         const obj = adapter.resolveTarget(params.target);
         if (obj && obj.position && typeof obj.position.set === "function") {
           obj.position.set(inputs.x, inputs.y, inputs.z);
+        }
+        return {};
+      }
+    });
+
+    // SceneSync sink ノード：offsetPosition
+    LoomClass.registerNodeType("sceneOffsetPosition", {
+      category: "sink",
+      inputs: [
+        { name: "x", type: "number", default: 0, kind: "behavior" },
+        { name: "y", type: "number", default: 0, kind: "behavior" },
+        { name: "z", type: "number", default: 0, kind: "behavior" }
+      ],
+      outputs: [],
+      params: [
+        { name: "target", type: "string", default: "" },
+        { name: "adapterId", type: "string", default: "" },
+        { name: "scopeKey", type: "string", default: "" }
+      ],
+      evaluate: (inputs, params) => {
+        const adapter = adapterRegistry.get(params.adapterId);
+        if (!adapter) return {};
+        const obj = adapter.resolveTarget(params.target);
+        if (!obj || !obj.position) return {};
+
+        const basePosition = adapter._getOrCaptureBehaviorBase(params.scopeKey, params.target, obj);
+        if (basePosition) {
+          obj.position.set(
+            basePosition.x + inputs.x,
+            basePosition.y + inputs.y,
+            basePosition.z + inputs.z
+          );
         }
         return {};
       }
@@ -271,7 +360,9 @@ export class LoomSceneSync {
     const sceneSetNodeTypes = new Set([
       "sceneSetPosition", "sceneSetRotation", "sceneSetScale", "sceneSetColor", "sceneSetVisible"
     ]);
+    const sceneOffsetNodeTypes = new Set(["sceneOffsetPosition"]);
     const objectScopeTarget = typeof scope === "object" && scope !== null ? scope.object : null;
+    const scopeKey = this._createScopeKey(scope);
 
     // グラフをコピー（元を破壊しない）
     const nodes = graph.nodes.map(node => {
@@ -279,8 +370,17 @@ export class LoomSceneSync {
       newNode.params = { ...(node.params || {}) };
 
       // adapterId を注入
-      if (["serverClock", "sceneSetPosition", "sceneSetRotation", "sceneSetScale", "sceneSetColor", "sceneSetVisible"].includes(node.type)) {
+      if (["serverClock", "sceneSetPosition", "sceneSetRotation", "sceneSetScale", "sceneSetColor", "sceneSetVisible", "sceneOffsetPosition"].includes(node.type)) {
         newNode.params.adapterId = this.adapterId;
+      }
+
+      // sceneOffsetPosition に scopeKey を注入
+      if (sceneOffsetNodeTypes.has(node.type)) {
+        newNode.params.scopeKey = scopeKey;
+        // object scope の場合、target を自動注入
+        if (objectScopeTarget && !newNode.params.target) {
+          newNode.params.target = objectScopeTarget;
+        }
       }
 
       // object scope の場合、SceneSync sink node の target を自動注入
@@ -309,6 +409,8 @@ export class LoomSceneSync {
     const injectedGraph = this._injectAdapterId(msg.graph, msg.scope);
 
     if (typeof msg.scope === "string" && msg.scope === "scene") {
+      // シーングラフの置き換え前に offset base を restore
+      this._restoreBehaviorBasesForScope(msg.scope);
       // シーングラフの置き換え
       this._sceneGraph.stop();
       this._sceneGraph = new this.LoomClass(injectedGraph);
@@ -317,6 +419,8 @@ export class LoomSceneSync {
         this._sceneGraph.start();
       }
     } else {
+      // オブジェクト単位グラフの置き換え前に offset base を restore
+      this._restoreBehaviorBasesForScope(msg.scope);
       // オブジェクト単位グラフ
       const targetId = msg.scope.object;
       if (this._objectGraphs.has(targetId)) {
@@ -333,6 +437,9 @@ export class LoomSceneSync {
 
   _handleGraphClear(msg) {
     this._validateScope(msg.scope);
+
+    // offset base を restore
+    this._restoreBehaviorBasesForScope(msg.scope);
 
     if (typeof msg.scope === "string" && msg.scope === "scene") {
       // シーングラフをクリア
@@ -394,6 +501,7 @@ export class LoomSceneSync {
     this._objectGraphs.clear();
     this._objectGraphDefinitions.clear();
     this._sceneGraphDefinition = null;
+    this.behaviorBases.clear();
     adapterRegistry.delete(this.adapterId);
   }
 

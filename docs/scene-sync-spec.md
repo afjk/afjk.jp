@@ -810,7 +810,7 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
   - `cosine`
   - `add`
   - `multiply`
-  - `sceneSetPosition`, `sceneSetRotation`, `sceneSetScale`, `sceneSetColor`, `sceneSetVisible`
+  - `sceneSetPosition`, `sceneOffsetPosition`, `sceneSetRotation`, `sceneSetScale`, `sceneSetColor`, `sceneSetVisible`
 - 以下の node type は禁止（リモート graph では実行不可）：
   - DOM 操作: `setText`, `setStyle`, `setAttr`, `log`
   - Input/Event: `pointerClick`, `pointerPosition`, `keyDown`, `keyUp`
@@ -825,6 +825,12 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 **オブジェクト スコープの自動注入**
 - `scope: { object: "cube1" }` を指定した場合、SceneSync sink node の `params.target` が未指定なら自動注入される
 - これにより、グラフ定義から target 指定を省略可能
+
+**sceneOffsetPosition — 相対位置オフセット**
+- `sceneSetPosition` は絶対座標を指定するのに対し、`sceneOffsetPosition` は Behavior Graph 適用時点のオブジェクト位置を base とし、そこに offset を加える
+- オブジェクトが現在位置から相対的に動く（例：その場で跳ねる、その場で円運動）
+- Graph を clear / replace すると base position に戻る
+- inputs: `x`, `y`, `z` (optional, default 0)
 
 **GLB / Group 対応**
 - `sceneSetColor` は root object が Group の場合も、子 Mesh の material に色を適用する
