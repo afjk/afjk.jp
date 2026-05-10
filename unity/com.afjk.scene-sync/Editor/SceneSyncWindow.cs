@@ -134,10 +134,19 @@ namespace Afjk.SceneSync.Editor
             if (selectionRoot != null)
             {
                 if (_instanceToObjectId.TryGetValue(selectionRoot.GetInstanceID(), out var origId))
+                {
                     selectionId = origId;
-                else if (IsSyncTarget(selectionRoot))
-                    selectionId = selectionRoot.GetInstanceID().ToString();
-                // メッシュなしの Unity オブジェクト（Camera 等）は selectionId = null のまま
+                }
+                else
+                {
+                    var identity = selectionRoot.GetComponent<SceneSyncIdentity>();
+                    if (identity != null
+                        && !string.IsNullOrWhiteSpace(identity.ObjectId)
+                        && _managedObjects.ContainsKey(identity.ObjectId))
+                    {
+                        selectionId = identity.ObjectId;
+                    }
+                }
             }
 
             // ロック状態の更新
@@ -526,17 +535,9 @@ namespace Afjk.SceneSync.Editor
                     continue;
                 }
 
-                // Unity 由来: メッシュを持たないオブジェクトはスキップ
-                if (!IsSyncTarget(go)) continue;
-
-                var id = instanceId.ToString();
-                currentIds.Add(id);
-
-                if (!_knownObjectIds.Contains(id))
-                {
-                    // 新規オブジェクト
-                    _ = SendSceneAdd(go);
-                }
+                // Unity-authored root objects should not be auto-published.
+                // Explicit publish registers tracked objects into _instanceToObjectId.
+                continue;
             }
 
             // Temporary root 配下の Web 由来オブジェクトも存在確認対象に含める
