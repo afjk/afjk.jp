@@ -1,16 +1,18 @@
 # Scene Sync × Loomlet DSL AI Authoring Notes
 
-This document explains how AI agents should author Loomlet behavior for Scene Sync.
+This document explains how AI agents should author Loomlet **Behavior Graphs** for Scene Sync.
 
 Scene Sync executes graph payloads, but AI assistants should usually generate **Loomlet DSL (`.loom`) first** and let the Loomlet compiler produce Scene Sync graph JSON.
+
+For terminology, see `docs/scene-sync-command-vs-behavior-graph.md`.
 
 ---
 
 ## Recommended flow
 
-1. User asks for behavior in natural language.
+1. User asks for continuous behavior in natural language.
 2. AI generates a small `.loom` program.
-3. Loomlet compiles the `.loom` source to a Scene Sync graph.
+3. Loomlet compiles the `.loom` source to a Scene Sync **Behavior Graph**.
 4. Scene Sync receives `scene-graph-set` or `scene-graph-clear`.
 5. Scene Sync executes the graph client-side.
 
@@ -20,7 +22,7 @@ Do not invent new behavior payloads such as `scene-behavior`, `animateObject`, o
 
 ## Authoring rule
 
-When an AI is asked to write behavior, prefer this output:
+When an AI is asked to write continuous behavior, prefer this output:
 
 ```loom
 import time
@@ -33,13 +35,13 @@ y = math.sine(t, freq: 0.6, amplitude: 0.4, offset: 1.2)
 scene.setPosition("sample-cube", x: 0, y: y, z: 0)
 ```
 
-The compiler/runtime bridge should convert that source into the graph payload Scene Sync understands.
+The compiler/runtime bridge should convert that source into the Behavior Graph payload Scene Sync understands.
 
 ---
 
-## Scene Sync graph protocol remains authoritative
+## Scene Sync Behavior Graph protocol remains authoritative
 
-Scene Sync still receives graph messages in this form:
+Scene Sync still receives Behavior Graph messages in this form:
 
 ```json
 {
@@ -65,9 +67,20 @@ The DSL is an authoring layer, not a replacement for the Scene Sync protocol.
 
 ---
 
+## Scene Command vs Behavior Graph
+
+Scene Sync has two different integration paths:
+
+- **Scene Command**: a one-shot operation that immediately changes scene state, usually through payloads such as `scene-delta`, `scene-add`, or `scene-remove`.
+- **Behavior Graph**: a persistent graph definition that is evaluated continuously by each client, managed through `scene-graph-set` and `scene-graph-clear`.
+
+Use Behavior Graphs for animation-like requests such as "bounce the cat", "spin the cube", or "pulse the color". Do not repeatedly broadcast per-frame Scene Commands for continuous animation.
+
+---
+
 ## Allowed Scene Sync runtime nodes
 
-The Scene Sync client currently allows these graph node types:
+The Scene Sync client currently allows these Behavior Graph node types:
 
 - `clock`
 - `constant`
@@ -87,7 +100,7 @@ Loomlet DSL authoring should map to those runtime nodes through the compiler/ada
 
 ## DSL scene sink mapping
 
-Use these `.loom` sink calls for Scene Sync behavior:
+Use these `.loom` sink calls for Scene Sync Behavior Graphs:
 
 ```loom
 scene.setPosition("sample-cube", x: 0, y: 1, z: 0)
@@ -97,13 +110,15 @@ scene.setColor("sample-cube", r: 0, g: 1, b: 1)
 scene.setVisible("sample-cube", visible: true)
 ```
 
-Important: `scene.setRotation` uses **Euler radians** in Scene Sync. Do not author quaternion `w` values for Scene Sync rotation.
+Important: `scene.setRotation` uses **Euler radians** in Scene Sync Behavior Graphs. Do not author quaternion `w` values for Scene Sync rotation.
 
 ---
 
-## Object scope behavior
+## Object Behavior Graph
 
-Scene Sync stores one Loom graph per object. Sending a new graph to the same object replaces the old one.
+An **Object Behavior Graph** is a Behavior Graph attached to a single Scene Sync object using `scope: { "object": "<objectId>" }`.
+
+Scene Sync stores one Object Behavior Graph per object. Sending a new graph to the same object replaces the old one.
 
 Therefore, combine related effects into one `.loom` program:
 
@@ -120,13 +135,13 @@ scene.setPosition("sample-cube", x: x, y: 0.5, z: 0)
 scene.setColor("sample-cube", r: 0, g: g, b: 1)
 ```
 
-Do not send movement and color as two separate object graphs unless replacing the previous behavior is intended.
+Do not send movement and color as two separate Object Behavior Graphs unless replacing the previous behavior is intended.
 
 ---
 
 ## Safety restrictions
 
-Remote Scene Sync graph execution is intentionally restricted.
+Remote Scene Sync Behavior Graph execution is intentionally restricted.
 
 Do not allow remote graphs to use:
 
@@ -142,6 +157,7 @@ For public AI-facing tools, keep the graph node whitelist narrow and reject unkn
 
 ## References
 
+- Scene Sync terminology: `docs/scene-sync-command-vs-behavior-graph.md`
 - Loomlet AI authoring guide: `afjk/loomlet/docs/AI_AUTHORING_GUIDE.md`
 - Existing graph-level skill: `docs/scene-sync-loom-ai-skill.md`
 - Scene Sync protocol spec: `docs/scene-sync-spec.md`

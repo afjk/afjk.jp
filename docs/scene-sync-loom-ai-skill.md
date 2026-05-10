@@ -2,11 +2,13 @@
 
 ## Purpose
 
-This skill explains how an AI agent should control SceneSync objects using Loom graphs.
+This skill explains how an AI agent should control SceneSync objects using **Behavior Graphs**.
+
+For terminology, see `docs/scene-sync-command-vs-behavior-graph.md`.
 
 - Do not add new SceneSync APIs for behaviors
-- Use existing `scene-graph-set` and `scene-graph-clear` payloads
-- The AI should generate valid Loom graph JSON and broadcast it to the SceneSync room
+- Use existing `scene-graph-set` and `scene-graph-clear` payloads for Behavior Graphs
+- The AI should generate valid Scene Sync Behavior Graph JSON and broadcast it to the SceneSync room
 - The goal is to avoid inventing ad-hoc payloads such as `scene-behavior`
 
 **Critical rule:**
@@ -17,9 +19,44 @@ Use only `scene-graph-set` and `scene-graph-clear` for Loom-powered object behav
 
 ---
 
+## Scene Command vs Behavior Graph
+
+Scene Sync has two different integration paths.
+
+### Scene Command
+
+A **Scene Command** is a one-shot operation that immediately changes scene state.
+
+Typical payloads:
+
+- `scene-add`
+- `scene-remove`
+- `scene-delta`
+- `scene-batch`
+- `scene-env`
+
+Use Scene Commands for one-time edits such as adding an object, moving an object once, deleting an object, or changing the environment.
+
+### Behavior Graph
+
+A **Behavior Graph** is a persistent graph definition that is evaluated continuously by each client.
+
+Typical payloads:
+
+- `scene-graph-set`
+- `scene-graph-clear`
+- `scene-graph-patch`
+- `scene-graph-input`
+
+Use Behavior Graphs for ongoing behavior such as bouncing, spinning, pulsing scale, blinking visibility, or cycling color.
+
+Do not broadcast per-frame `scene-delta` results from Loom animation. Send the Behavior Graph definition once and let clients evaluate it locally.
+
+---
+
 ## Allowed Payloads
 
-### Set object graph
+### Set Object Behavior Graph
 
 ```json
 {
@@ -32,7 +69,7 @@ Use only `scene-graph-set` and `scene-graph-clear` for Loom-powered object behav
 }
 ```
 
-### Clear object graph
+### Clear Object Behavior Graph
 
 ```json
 {
@@ -42,15 +79,16 @@ Use only `scene-graph-set` and `scene-graph-clear` for Loom-powered object behav
 ```
 
 **Explanation:**
+
 - `scope.object` is the target SceneSync object id.
-- For object scope graphs, the target object is automatically injected into SceneSync sink nodes.
+- For Object Behavior Graphs, the target object is automatically injected into SceneSync sink nodes.
 - Do not include `params.target` in `sceneSetPosition`, `sceneSetRotation`, `sceneSetScale`, `sceneSetColor`, or `sceneSetVisible` when using object scope.
 
 ---
 
 ## Allowed Node Types
 
-SceneSync graph execution supports a **whitelist** of Loom node types. Remote graph payloads can only use these types.
+SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. Remote graph payloads can only use these types.
 
 ### Allowed node types:
 
@@ -69,12 +107,14 @@ SceneSync graph execution supports a **whitelist** of Loom node types. Remote gr
 ### Forbidden node types:
 
 **DOM nodes (not allowed):**
+
 - `setText` — DOM text manipulation
 - `setStyle` — DOM style manipulation
 - `setAttr` — DOM attribute manipulation
 - `log` — console logging
 
 **Input/Event nodes (not allowed):**
+
 - `pointerClick` — pointer/click events
 - `pointerPosition` — pointer position tracking
 - `keyDown` — keyboard events
@@ -85,22 +125,22 @@ SceneSync graph execution supports a **whitelist** of Loom node types. Remote gr
 
 **Reason for restrictions:**
 
-Remote room messages must be safe. DOM and input nodes could introduce security vulnerabilities or break client isolation. SceneSync graph execution is intentionally restricted to transformation and visibility control only.
+Remote room messages must be safe. DOM and input nodes could introduce security vulnerabilities or break client isolation. SceneSync Behavior Graph execution is intentionally restricted to transformation and visibility control only.
 
 ---
 
-## Object Scope Rules
+## Object Behavior Graph Rules
 
-Always prefer object scope for object-specific behavior.
+Always prefer Object Behavior Graphs for object-specific behavior.
 
 ### Rules:
 
-- Use `scope: { "object": "<objectId>" }` for object-specific graphs
+- Use `scope: { "object": "<objectId>" }` for object-specific Behavior Graphs
 - Do not set `params.target` on SceneSync sink nodes when using object scope
 - The viewer automatically injects the object target from scope
-- Object scope graphs are exported into `loomGraphs.objects[objectId]`
+- Object Behavior Graphs are exported into `loomGraphs.objects[objectId]`
 - Late joiners restore these graphs from `scene-state`
-- When the object is removed via `scene-remove`, the object graph is cleaned up
+- When the object is removed via `scene-remove`, the Object Behavior Graph is cleaned up
 
 ### Good example:
 
@@ -162,41 +202,30 @@ Always prefer object scope for object-specific behavior.
 - Use small amplitudes first, usually `0.5` to `3.0`
 - Always set fixed values for axes that are not animated
 - For position animation:
-  - x and z default base should usually be `0`
-  - y default base should usually be `0.5` (assuming object origin at center)
+  - Inspect the object's current position first
+  - Use the current position as the baseline for fixed axes
+  - Do not blindly use `x: 0`, `y: 0.5`, `z: 0` for objects that should stay near their current location
 - For rotation animation:
   - values are Euler angles in radians
   - `sceneSetRotation` accepts `x`, `y`, and `z` (Euler angles, not quaternion)
   - Do not use quaternion `[x, y, z, w]` for `sceneSetRotation`
 - Do not broadcast per-frame `scene-delta` results from Loom animation
-- Send graph definitions once, not animation results repeatedly
+- Send Behavior Graph definitions once, not animation results repeatedly
+
+---
+
+## Graph Replacement Behavior
+
+SceneSync currently stores **one Object Behavior Graph per object**. When you send a new `scene-graph-set` with the same `scope.object`, it **replaces the previous graph** for that object.
+
+- If you send a movement graph, then a color graph separately, the movement will be replaced and stop.
+- **Solution:** Combine multiple effects into a single Behavior Graph instead of sending multiple separate `scene-graph-set` payloads.
 
 ---
 
 ## Recipes
 
-**Important notes before using recipes:**
-
-### Graph Replacement Behavior
-
-SceneSync currently stores **one Loom graph per object**. When you send a new `scene-graph-set` with the same `scope.object`, it **replaces the previous graph** for that object.
-
-- If you send a movement graph, then a color graph separately, the movement will be replaced and stop.
-- **Solution:** Combine multiple effects into a single graph instead of sending multiple separate `scene-graph-set` payloads.
-- See section "6.8 Combined example: movement + color" for a pattern.
-
-### Coordinate Assumptions
-
-The recipes below assume a test cube located around `[0, 0.5, 0]` (close to world origin). When applying recipes to arbitrary objects:
-
-1. **Inspect the object's current position** first (use `GET /api/room/{roomId}/scene` to check)
-2. **Use the object's current position as the baseline** for fixed axes
-3. **Do not blindly use `x: 0`, `y: 0.5`, `z: 0`** for objects that should stay near their current location
-4. If an object should stay in place while animating, use its current position values as the fixed axes in the sink node
-
----
-
-### 6.1 Move left and right
+### Move left and right
 
 Object `cube1` oscillates along the X axis with a sine wave.
 
@@ -233,44 +262,7 @@ Object `cube1` oscillates along the X axis with a sine wave.
 }
 ```
 
-### 6.2 Float up and down
-
-Object `cube1` oscillates along the Y axis.
-
-```json
-{
-  "type": "scene-graph-set",
-  "scope": { "object": "cube1" },
-  "graph": {
-    "nodes": [
-      { "id": "clock", "type": "serverClock" },
-      {
-        "id": "sine",
-        "type": "sine",
-        "params": {
-          "freq": 0.3,
-          "amplitude": 0.5,
-          "offset": 1.2
-        }
-      },
-      {
-        "id": "pos",
-        "type": "sceneSetPosition",
-        "params": {
-          "x": 0,
-          "z": 0
-        }
-      }
-    ],
-    "edges": [
-      { "from": "clock.t", "to": "sine.t" },
-      { "from": "sine.out", "to": "pos.y" }
-    ]
-  }
-}
-```
-
-### 6.3 Rotate around Y axis
+### Rotate around Y axis
 
 Object `cube1` continuously rotates around the Y axis.
 
@@ -305,106 +297,11 @@ Object `cube1` continuously rotates around the Y axis.
 }
 ```
 
-### 6.4 Pulse scale
-
-Object `cube1` pulses in and out by scaling uniformly.
-
-```json
-{
-  "type": "scene-graph-set",
-  "scope": { "object": "cube1" },
-  "graph": {
-    "nodes": [
-      { "id": "clock", "type": "serverClock" },
-      {
-        "id": "sine",
-        "type": "sine",
-        "params": {
-          "freq": 0.5,
-          "amplitude": 0.25,
-          "offset": 1
-        }
-      },
-      {
-        "id": "scale",
-        "type": "sceneSetScale",
-        "params": {}
-      }
-    ],
-    "edges": [
-      { "from": "clock.t", "to": "sine.t" },
-      { "from": "sine.out", "to": "scale.x" },
-      { "from": "sine.out", "to": "scale.y" },
-      { "from": "sine.out", "to": "scale.z" }
-    ]
-  }
-}
-```
-
-### 6.5 Set static color
-
-Object `cube1` is colored green with a static color sink (no animation).
-
-```json
-{
-  "type": "scene-graph-set",
-  "scope": { "object": "cube1" },
-  "graph": {
-    "nodes": [
-      {
-        "id": "color",
-        "type": "sceneSetColor",
-        "params": {
-          "r": 0,
-          "g": 1,
-          "b": 0
-        }
-      }
-    ],
-    "edges": []
-  }
-}
-```
-
-### 6.6 Hide object
-
-Object `cube1` is made invisible.
-
-```json
-{
-  "type": "scene-graph-set",
-  "scope": { "object": "cube1" },
-  "graph": {
-    "nodes": [
-      {
-        "id": "visible",
-        "type": "sceneSetVisible",
-        "params": {
-          "visible": false
-        }
-      }
-    ],
-    "edges": []
-  }
-}
-```
-
-### 6.7 Clear object behavior
-
-Remove all Loom graph behavior from object `cube1`.
-
-```json
-{
-  "type": "scene-graph-clear",
-  "scope": { "object": "cube1" }
-}
-```
-
-### 6.8 Combined example: movement + color
+### Combined example: movement + color
 
 Object `cube1` moves left-right while pulsing color from blue to cyan.
 
-This demonstrates how to **combine multiple effects in a single graph** to avoid replacement issues.
+This demonstrates how to **combine multiple effects in a single Object Behavior Graph** to avoid replacement issues.
 
 ```json
 {
@@ -457,17 +354,11 @@ This demonstrates how to **combine multiple effects in a single graph** to avoid
 }
 ```
 
-**Key points:**
-- Two independent sine waves in one graph (different frequencies and amplitudes)
-- Position sink receives `sine_pos` for X movement
-- Color sink receives `sine_color` for green channel pulse
-- Sending this single graph once maintains both effects without replacement
-
 ---
 
 ## Broadcast Examples
 
-Use the existing REST broadcast endpoint to send Loom graph payloads.
+Use the existing REST broadcast endpoint to send Behavior Graph payloads.
 
 ### Send left-right movement
 
@@ -480,23 +371,8 @@ curl -X POST "http://localhost:8787/api/room/loom-test/broadcast?name=AI" \
     "graph": {
       "nodes": [
         { "id": "clock", "type": "serverClock" },
-        {
-          "id": "sine",
-          "type": "sine",
-          "params": {
-            "freq": 0.2,
-            "amplitude": 2,
-            "offset": 0
-          }
-        },
-        {
-          "id": "pos",
-          "type": "sceneSetPosition",
-          "params": {
-            "y": 0.5,
-            "z": 0
-          }
-        }
+        { "id": "sine", "type": "sine", "params": { "freq": 0.2, "amplitude": 2, "offset": 0 } },
+        { "id": "pos", "type": "sceneSetPosition", "params": { "y": 0.5, "z": 0 } }
       ],
       "edges": [
         { "from": "clock.t", "to": "sine.t" },
@@ -521,7 +397,7 @@ curl -X POST "http://localhost:8787/api/room/loom-test/broadcast?name=AI" \
 
 ## Checklist Before Sending
 
-Before sending a Loom graph payload to the REST broadcast endpoint, verify:
+Before sending a Behavior Graph payload to the REST broadcast endpoint, verify:
 
 - The payload uses `type: "scene-graph-set"` or `type: "scene-graph-clear"`
 - Do not use `kind: "scene-behavior"` or any custom behavior payload
@@ -534,9 +410,9 @@ Before sending a Loom graph payload to the REST broadcast endpoint, verify:
 - Object scope sink nodes do not include `params.target`
 - Non-animated axes have fixed values in sink node `params`
 - Animation uses `serverClock` unless local-only timing is explicitly desired
-- Amplitude values are reasonable (not too large, typically 0.5 to 3.0)
-- Frequency values are appropriate for the effect (0.1 to 1.0 Hz for smooth effects)
-- Loom animation results are NOT sent as `scene-delta` (the graph is executed client-side)
+- Amplitude values are reasonable
+- Frequency values are appropriate for the effect
+- Loom animation results are NOT sent as `scene-delta`
 
 ---
 
@@ -576,8 +452,6 @@ Before sending a Loom graph payload to the REST broadcast endpoint, verify:
 
 **Lesson:** Always use `scene-graph-set` / `scene-graph-clear`, never invent new payload kinds.
 
----
-
 ### Mistake 2: Setting target manually in object scope
 
 **Bad:**
@@ -611,71 +485,20 @@ Before sending a Loom graph payload to the REST broadcast endpoint, verify:
 
 ---
 
-### Mistake 3: Using disallowed DOM or input nodes
-
-**Bad:**
-
-```json
-{
-  "id": "click",
-  "type": "pointerClick"
-}
-```
-
-**Good:**
-
-Use only the SceneSync allowed node whitelist (see section "Allowed Node Types").
-
-**Lesson:** Remote graph payloads are restricted to safe transformation and visibility nodes. DOM and input nodes are forbidden.
-
----
-
-### Mistake 4: Missing fixed axes in sink nodes
-
-**Bad:**
-
-```json
-{
-  "id": "pos",
-  "type": "sceneSetPosition",
-  "params": {
-    "x": 1
-  }
-}
-```
-
-**Good:**
-
-```json
-{
-  "id": "pos",
-  "type": "sceneSetPosition",
-  "params": {
-    "x": 1,
-    "y": 0.5,
-    "z": 0
-  }
-}
-```
-
-**Lesson:** Always explicitly set values for non-animated axes to prevent unexpected behavior from the previous state.
-
----
-
 ## Notes for MCP / GPT Actions
 
-- An MCP server or GPT Action does not need a dedicated behavior tool or API endpoint
-- It can use the existing SceneSync room broadcast tool (REST POST `/api/room/{roomId}/broadcast`)
+- An MCP server or GPT Action does not need a custom behavior payload
+- It can use the existing SceneSync room broadcast tool or a dedicated Behavior Graph tool
 - The tool should send a valid `scene-graph-set` or `scene-graph-clear` payload
 - Include this skill text in the AI system/developer instructions or tool description
 - The AI should not create new payload kinds unless the SceneSync protocol explicitly documents them
-- Always refer to the latest `docs/scene-sync-spec.md` for the authoritative protocol definition
+- Always refer to the latest `docs/scene-sync-spec.md` and `docs/scene-sync-command-vs-behavior-graph.md` for authoritative terminology
 
 ---
 
 ## References
 
+- **Scene Sync terminology:** `docs/scene-sync-command-vs-behavior-graph.md`
 - **SceneSync Core Protocol:** `docs/scene-sync-spec.md`
-- **Loom Graph Protocol:** See "Loom グラフプロトコル" section in `scene-sync-spec.md`
 - **REST API Endpoint:** `POST /api/room/{roomId}/broadcast?name={nickname}`
 - **Allowed node types and restrictions:** This document, section "Allowed Node Types"
