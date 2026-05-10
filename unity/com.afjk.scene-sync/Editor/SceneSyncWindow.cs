@@ -341,7 +341,7 @@ namespace Afjk.SceneSync.Editor
                         if (root == null) continue;
                         if (ShouldSkipPublishObject(root)) continue;
 
-                        EnsureUnityIdentityForPublish(manager, root, out var identityChanged);
+                        EnsureManagedUnityIdentity(manager, root, out var identityChanged);
                         if (identityChanged)
                         {
                             changed = true;
@@ -883,7 +883,7 @@ namespace Afjk.SceneSync.Editor
                 if (root == null || !seen.Add(root)) continue;
                 if (ShouldSkipPublishObject(root)) continue;
 
-                var identity = EnsureUnityIdentityForPublish(manager, root, out _);
+                var identity = EnsureManagedUnityIdentity(manager, root, out _);
                 if (identity == null) continue;
 
                 Debug.Log("[SceneSync] Publishing selected object: " + root.name + " (objectId=" + identity.ObjectId + ")");
@@ -912,7 +912,7 @@ namespace Afjk.SceneSync.Editor
                 if (go == null || !seen.Add(go)) continue;
                 if (ShouldSkipPublishObject(go)) continue;
 
-                var identity = EnsureUnityIdentityForPublish(manager, go, out _);
+                var identity = EnsureManagedUnityIdentity(manager, go, out _);
                 if (identity == null) continue;
 
                 Debug.Log("[SceneSync] Publishing managed object: " + go.name + " (objectId=" + identity.ObjectId + ")");
@@ -942,7 +942,9 @@ namespace Afjk.SceneSync.Editor
             return false;
         }
 
-        private SceneSyncIdentity EnsureUnityIdentityForPublish(SceneSyncManager manager, GameObject go, out bool changed)
+        // Ensures a Unity-authored object is registered as managed and has a stable Scene Sync identity.
+        // This does not publish or upload anything.
+        private SceneSyncIdentity EnsureManagedUnityIdentity(SceneSyncManager manager, GameObject go, out bool changed)
         {
             changed = false;
             if (manager == null || go == null) return null;
