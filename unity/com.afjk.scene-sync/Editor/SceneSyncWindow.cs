@@ -62,7 +62,12 @@ namespace Afjk.SceneSync.Editor
         private void OnEnable()
         {
             _client = new PresenceClient();
-            _client.OnConnected += () => { _connected = true; Repaint(); };
+            _client.OnConnected += () =>
+            {
+                _connected = true;
+                RebindPublishedUnityObjects();
+                Repaint();
+            };
             _client.OnDisconnected += () =>
             {
                 _connected = false;
@@ -526,17 +531,20 @@ namespace Afjk.SceneSync.Editor
                     continue;
                 }
 
-                // Unity 由来: メッシュを持たないオブジェクトはスキップ
-                if (!IsSyncTarget(go)) continue;
+                // Unity-authored root objects should not be auto-published.
+                // Explicit publish registers tracked objects into _instanceToObjectId.
+                continue;
+            }
 
-                var id = instanceId.ToString();
-                currentIds.Add(id);
+            foreach (var kvp in _managedObjects)
+            {
+                var objectId = kvp.Key;
+                var go = kvp.Value;
+                if (string.IsNullOrWhiteSpace(objectId)) continue;
+                if (go == null) continue;
 
-                if (!_knownObjectIds.Contains(id))
-                {
-                    // 新規オブジェクト
-                    _ = SendSceneAdd(go);
-                }
+                currentIds.Add(objectId);
+                currentInstanceIds.Add(go.GetInstanceID());
             }
 
             // Temporary root 配下の Web 由来オブジェクトも存在確認対象に含める
@@ -561,6 +569,11 @@ namespace Afjk.SceneSync.Editor
             {
                 if (!currentIds.Contains(id))
                 {
+                    if (IsKnownUnityOriginObjectId(id))
+                    {
+                        continue;
+                    }
+
                     _ = SendSceneRemove(id);
                     _meshPaths.Remove(id);
                     _locks.Remove(id);
@@ -578,6 +591,52 @@ namespace Afjk.SceneSync.Editor
                 _instanceToObjectId.Remove(key);
 
             _knownObjectIds = currentIds;
+        }
+
+        private void RebindPublishedUnityObjects()
+        {
+            var manager = FindSceneSyncManager();
+            if (manager == null) return;
+
+            foreach (var go in manager.GetManagedUnityObjects())
+            {
+                if (go == null) continue;
+
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity == null) continue;
+                if (identity.Origin != SceneSyncOrigin.Unity) continue;
+                if (identity.Temporary) continue;
+                if (string.IsNullOrWhiteSpace(identity.ObjectId)) continue;
+
+                var objectId = identity.ObjectId;
+                _managedObjects[objectId] = go;
+                _instanceToObjectId[go.GetInstanceID()] = objectId;
+                _knownObjectIds.Add(objectId);
+                _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
+
+                Debug.Log("[SceneSync] Rebound Unity object: " + go.name + " (objectId=" + objectId + ")");
+            }
+        }
+
+        private bool IsBoundUnityOriginObject(string objectId)
+        {
+            if (string.IsNullOrWhiteSpace(objectId)) return false;
+
+            if (!_managedObjects.TryGetValue(objectId, out var go) || go == null)
+            {
+                return false;
+            }
+
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            return identity != null
+                && identity.Origin == SceneSyncOrigin.Unity
+                && !identity.Temporary
+                && identity.ObjectId == objectId;
+        }
+
+        private bool IsKnownUnityOriginObjectId(string objectId)
+        {
+            return IsBoundUnityOriginObject(objectId);
         }
 
         private void OnHandoff(string raw)
@@ -1066,6 +1125,12 @@ namespace Afjk.SceneSync.Editor
                 raw, "\"objectId\":\"([^\"]+)\"");
             if (!objectIdMatch.Success) return;
             var objectId = objectIdMatch.Groups[1].Value;
+
+            if (IsBoundUnityOriginObject(objectId))
+            {
+                Debug.Log("[SceneSync] Skipping remote import for bound Unity object: " + objectId);
+                return;
+            }
 
             // 既に存在する場合はスキップ
             if (_managedObjects.ContainsKey(objectId)) return;
