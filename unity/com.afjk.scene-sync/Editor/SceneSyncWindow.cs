@@ -618,6 +618,7 @@ namespace Afjk.SceneSync.Editor
                 if (identity.Origin != SceneSyncOrigin.Unity) continue;
                 if (identity.Temporary) continue;
                 if (string.IsNullOrWhiteSpace(identity.ObjectId)) continue;
+                if (string.IsNullOrWhiteSpace(identity.MeshPath)) continue;
 
                 var objectId = identity.ObjectId;
                 _managedObjects[objectId] = go;
@@ -1007,6 +1008,12 @@ namespace Afjk.SceneSync.Editor
             var path = PresenceClient.GenerateRandomPath();
             _meshPaths[objectId] = path;
             await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+            if (identity.MeshPath != path)
+            {
+                identity.MeshPath = path;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            }
 
             var pos = go.transform.position;
             var rot = go.transform.rotation;
