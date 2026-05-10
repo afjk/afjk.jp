@@ -386,6 +386,11 @@ namespace Afjk.SceneSync.Editor
                     PublishManagedObjects();
                 }
             }
+
+            if (GUILayout.Button("Apply Picking Rules"))
+            {
+                ApplyPickingRules();
+            }
         }
 
         private static void MarkManagerDirty(SceneSyncManager manager)
@@ -1434,6 +1439,16 @@ namespace Afjk.SceneSync.Editor
         {
             var identity = EnsureSceneSyncIdentity(go);
             identity.ConfigureRemoteTemporary(objectId, meshPath);
+            SceneSyncPickingUtility.ApplyImportedChildPicking(identity);
+        }
+
+        private static void ApplyPickingRules()
+        {
+            var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>();
+            foreach (var identity in identities)
+            {
+                SceneSyncPickingUtility.ApplyImportedChildPicking(identity);
+            }
         }
 
         private Transform GetOrCreateTemporaryRoot()
