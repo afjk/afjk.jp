@@ -17,12 +17,17 @@ namespace Afjk.SceneSync.Editor
             var sceneVisibilityManager = SceneVisibilityManager.instance;
             if (sceneVisibilityManager == null) return;
 
+            // The Scene Sync root should remain selectable/pickable.
             sceneVisibilityManager.EnablePicking(root, false);
 
-            foreach (Transform child in root.transform)
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            foreach (var t in transforms)
             {
-                if (child == null) continue;
-                sceneVisibilityManager.DisablePicking(child.gameObject, true);
+                if (t == null) continue;
+                if (t.gameObject == root) continue;
+
+                // Apply to each descendant explicitly.
+                sceneVisibilityManager.DisablePicking(t.gameObject, false);
             }
         }
 
@@ -36,12 +41,17 @@ namespace Afjk.SceneSync.Editor
             var sceneVisibilityManager = SceneVisibilityManager.instance;
             if (sceneVisibilityManager == null) return;
 
-            foreach (Transform child in root.transform)
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            foreach (var t in transforms)
             {
-                if (child == null) continue;
-                sceneVisibilityManager.EnablePicking(child.gameObject, true);
+                if (t == null) continue;
+                if (t.gameObject == root) continue;
+
+                // Restore each descendant explicitly.
+                sceneVisibilityManager.EnablePicking(t.gameObject, false);
             }
 
+            // The Scene Sync root should remain selectable/pickable.
             sceneVisibilityManager.EnablePicking(root, false);
         }
     }
