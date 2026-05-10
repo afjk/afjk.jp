@@ -58,6 +58,7 @@ namespace Afjk.SceneSync.Editor
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private bool _applyingRemoteTransform;
+        private bool _showSetup = false;
         private bool _showQuickGuide = false;
 
         private void OnEnable()
@@ -184,7 +185,7 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Label("Scene Sync", EditorStyles.boldLabel);
             GUILayout.Space(4);
 
-            DrawSetupSection();
+            DrawConnectionSection();
             GUILayout.Space(8);
 
             DrawManagedUnityObjectsSection();
@@ -193,11 +194,20 @@ namespace Afjk.SceneSync.Editor
             DrawActionsSection();
             GUILayout.Space(8);
 
+            DrawSetupSection();
+            GUILayout.Space(8);
+
+            DrawQuickGuide();
+        }
+
+        private void DrawConnectionSection()
+        {
+            GUILayout.Label("Connection", EditorStyles.boldLabel);
+
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
             _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
             _room = EditorGUILayout.TextField("Room", _room);
             _nickname = EditorGUILayout.TextField("Nickname", _nickname);
-
             GUILayout.Space(8);
 
             if (!_connected)
@@ -232,9 +242,6 @@ namespace Afjk.SceneSync.Editor
                     _client.Disconnect();
                 }
             }
-
-            GUILayout.Space(8);
-            DrawQuickGuide();
         }
 
         private void DrawQuickGuide()
@@ -243,7 +250,7 @@ namespace Afjk.SceneSync.Editor
             if (!_showQuickGuide)
             {
                 EditorGUILayout.LabelField(
-                    "Unity: Add -> Identity -> Publish -> Move root. Remote: move root.",
+                    "Unity: Add → Identity → Publish → Move root. Remote: move root.",
                     EditorStyles.miniLabel
                 );
                 return;
@@ -434,8 +441,24 @@ namespace Afjk.SceneSync.Editor
         {
             var manager = FindSceneSyncManager();
             var temporaryRoot = FindTemporaryRoot();
+            var setupMissing = manager == null || temporaryRoot == null;
 
-            GUILayout.Label("Setup", EditorStyles.boldLabel);
+            if (setupMissing)
+            {
+                _showSetup = true;
+                EditorGUILayout.Foldout(true, "Setup", true);
+            }
+            else
+            {
+                _showSetup = EditorGUILayout.Foldout(_showSetup, "Setup", true);
+            }
+
+            if (!_showSetup)
+            {
+                EditorGUILayout.LabelField("Setup is ready.", EditorStyles.miniLabel);
+                return;
+            }
+
             GUILayout.Label("SceneSyncManager: " + (manager != null ? "Found" : "Missing"));
             GUILayout.Label("Temporary Root: " + (temporaryRoot != null ? "Found" : "Missing"));
 
