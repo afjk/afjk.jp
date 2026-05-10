@@ -15,6 +15,7 @@ const SCENESYNC_ALLOWED_NODE_TYPES = new Set([
   'clock',
   'constant',
   'sine',
+  'cosine',
   'add',
   'multiply',
   'serverClock',

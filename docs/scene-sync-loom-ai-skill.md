@@ -86,23 +86,25 @@ Do not broadcast per-frame `scene-delta` results from Loom animation. Send the B
 
 ---
 
-## Allowed Node Types
+## Scene Sync Behavior Graph Phase 1 node set
 
 SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. Remote graph payloads can only use these types.
 
 ### Allowed node types:
 
-- `clock` — local timing node
+- `serverClock` — synchronized server-driven clock (recommended for shared animations)
 - `constant` — constant value
 - `sine` — sine wave oscillator
+- `cosine` — cosine wave oscillator
 - `add` — addition
 - `multiply` — multiplication
-- `serverClock` — synchronized server-driven clock
 - `sceneSetPosition` — set object position
 - `sceneSetRotation` — set object rotation
 - `sceneSetScale` — set object scale
 - `sceneSetColor` — set object color (RGB)
 - `sceneSetVisible` — set object visibility
+
+Use `serverClock` for shared room animations. Avoid `clock` for AI-generated shared Scene Sync behaviors because local clocks can drift between clients.
 
 ### Forbidden node types:
 

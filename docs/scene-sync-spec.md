@@ -802,15 +802,20 @@ Phase 1 では予約扱い。現在は受信・中継のみで、サーバー側
 - `loom.js` は `afjk/loom` リポジトリの vendored copy として扱われ、upstream と同期可能
 - SceneSync 固有の制限・制御ロジックは `loom-scenesync.js` 側で処理
 
-**Node Type Whitelist**
+**Scene Sync Behavior Graph Phase 1 node set**
 - remote `scene-graph-*` payload から実行可能な Loom node type は以下に限定される：
-  - `clock`, `constant`, `sine`, `add`, `multiply`
   - `serverClock`
+  - `constant`
+  - `sine`
+  - `cosine`
+  - `add`
+  - `multiply`
   - `sceneSetPosition`, `sceneSetRotation`, `sceneSetScale`, `sceneSetColor`, `sceneSetVisible`
 - 以下の node type は禁止（リモート graph では実行不可）：
   - DOM 操作: `setText`, `setStyle`, `setAttr`, `log`
   - Input/Event: `pointerClick`, `pointerPosition`, `keyDown`, `keyUp`
   - 制御フロー: `filter`, `sample`, `merge` など
+- `clock` はローカル runtime では存在する。ただし、共有アニメーション（AI生成など）では `serverClock` を推奨する
 
 **手動操作との競合対策**
 - TransformControls で編集中のオブジェクトに対しては Loom sink を適用しない（ローカル viewer 内のみ）
