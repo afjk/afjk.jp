@@ -205,6 +205,9 @@ namespace Afjk.SceneSync.Editor
             DrawManagedUnityObjectsSection();
             GUILayout.Space(8);
 
+            DrawActionsSection();
+            GUILayout.Space(8);
+
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
             _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
             _room = EditorGUILayout.TextField("Room", _room);
@@ -384,6 +387,24 @@ namespace Afjk.SceneSync.Editor
                         }
                     }
                     EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+                }
+            }
+        }
+
+        private void DrawActionsSection()
+        {
+            GUILayout.Label("Actions", EditorStyles.boldLabel);
+
+            using (new EditorGUI.DisabledScope(!_connected))
+            {
+                if (GUILayout.Button("Publish Selected"))
+                {
+                    PublishSelectedObjects();
+                }
+
+                if (GUILayout.Button("Publish Managed Objects"))
+                {
+                    PublishManagedObjects();
                 }
             }
         }
@@ -775,6 +796,21 @@ namespace Afjk.SceneSync.Editor
             return "[" + string.Join(",", values) + "]";
         }
 
+        private static string JsonEscape(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\n", "\\n")
+                .Replace("\r", "\\r");
+        }
+
+        private static string FormatFloat(float value)
+        {
+            return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
         {
             var pos = go.transform.position;
@@ -805,6 +841,164 @@ namespace Afjk.SceneSync.Editor
                 ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                 meshPathJson + "}";
             await _client.Broadcast(payload);
+        }
+
+        private async void PublishSelectedObjects()
+        {
+            if (!_connected)
+            {
+                Debug.LogWarning("[SceneSync] Cannot publish selected objects: not connected.");
+                return;
+            }
+
+            var manager = FindSceneSyncManager();
+            if (manager == null)
+            {
+                Debug.LogWarning("[SceneSync] Cannot publish selected objects: SceneSyncManager not found.");
+                return;
+            }
+
+            var seen = new HashSet<GameObject>();
+            foreach (var selected in Selection.gameObjects)
+            {
+                var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
+                if (root == null || !seen.Add(root)) continue;
+                if (ShouldSkipPublishObject(root)) continue;
+
+                var identity = EnsureUnityIdentityForPublish(manager, root);
+                if (identity == null) continue;
+
+                Debug.Log("[SceneSync] Publishing selected object: " + root.name + " (objectId=" + identity.ObjectId + ")");
+                await PublishUnityObject(root, identity);
+            }
+        }
+
+        private async void PublishManagedObjects()
+        {
+            if (!_connected)
+            {
+                Debug.LogWarning("[SceneSync] Cannot publish managed objects: not connected.");
+                return;
+            }
+
+            var manager = FindSceneSyncManager();
+            if (manager == null)
+            {
+                Debug.LogWarning("[SceneSync] Cannot publish managed objects: SceneSyncManager not found.");
+                return;
+            }
+
+            var seen = new HashSet<GameObject>();
+            foreach (var go in manager.GetManagedUnityObjects())
+            {
+                if (go == null || !seen.Add(go)) continue;
+                if (ShouldSkipPublishObject(go)) continue;
+
+                var identity = EnsureUnityIdentityForPublish(manager, go);
+                if (identity == null) continue;
+
+                Debug.Log("[SceneSync] Publishing managed object: " + go.name + " (objectId=" + identity.ObjectId + ")");
+                await PublishUnityObject(go, identity);
+            }
+        }
+
+        private bool ShouldSkipPublishObject(GameObject go)
+        {
+            var temporaryRoot = FindTemporaryRoot();
+            if (temporaryRoot != null
+                && (go == temporaryRoot || go.transform.IsChildOf(temporaryRoot.transform)))
+            {
+                Debug.Log("[SceneSync] Skipping temporary object: " + go.name);
+                return true;
+            }
+
+            var identity = SceneSyncManager.FindSceneSyncIdentityInParents(go);
+            if (identity == null) return false;
+
+            if (identity.Temporary || identity.Origin == SceneSyncOrigin.Remote)
+            {
+                Debug.Log("[SceneSync] Skipping temporary object: " + identity.gameObject.name);
+                return true;
+            }
+
+            return false;
+        }
+
+        private SceneSyncIdentity EnsureUnityIdentityForPublish(SceneSyncManager manager, GameObject go)
+        {
+            if (manager == null || go == null) return null;
+
+            var existing = go.GetComponent<SceneSyncIdentity>();
+            var hadIdentity = existing != null;
+            var previousObjectId = existing != null ? existing.ObjectId : null;
+            var previousOrigin = existing != null ? existing.Origin : SceneSyncOrigin.Unknown;
+            var previousTemporary = existing != null && existing.Temporary;
+            var previousState = existing != null ? existing.State : SceneSyncState.Synced;
+
+            var identity = manager.EnsureUnityManagedIdentity(go);
+            if (identity == null)
+            {
+                Debug.LogWarning("[SceneSync] Skipping object without publishable identity: " + go.name);
+                return null;
+            }
+
+            var changed = !hadIdentity
+                || string.IsNullOrWhiteSpace(previousObjectId)
+                || previousOrigin != identity.Origin
+                || previousTemporary != identity.Temporary
+                || ((previousState == SceneSyncState.Disconnected || previousState == SceneSyncState.Error)
+                    && identity.State == SceneSyncState.Synced);
+
+            if (changed)
+            {
+                EditorUtility.SetDirty(manager);
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            }
+
+            return identity;
+        }
+
+        private async System.Threading.Tasks.Task PublishUnityObject(GameObject go, SceneSyncIdentity identity)
+        {
+            if (go == null || identity == null) return;
+            if (string.IsNullOrWhiteSpace(identity.ObjectId)) return;
+            if (!_connected || _client == null) return;
+
+            if (go.GetComponentInChildren<MeshFilter>() == null
+                && go.GetComponentInChildren<SkinnedMeshRenderer>() == null)
+            {
+                Debug.LogWarning("[SceneSync] Cannot publish object without mesh: " + go.name);
+                return;
+            }
+
+            var glb = await PresenceClient.ExportGameObjectAsGlb(go);
+            if (glb == null)
+            {
+                Debug.LogWarning("[SceneSync] Cannot publish object without mesh: " + go.name);
+                return;
+            }
+
+            var objectId = identity.ObjectId;
+            var path = PresenceClient.GenerateRandomPath();
+            _meshPaths[objectId] = path;
+            await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+
+            var pos = go.transform.position;
+            var rot = go.transform.rotation;
+            var scl = go.transform.localScale;
+            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + JsonEscape(objectId) + "\",\"name\":\"" + JsonEscape(go.name) + "\"" +
+                ",\"position\":[" + FormatFloat(pos.x) + "," + FormatFloat(pos.y) + "," + FormatFloat(-pos.z) + "]" +
+                ",\"rotation\":[" + FormatFloat(rot.x) + "," + FormatFloat(rot.y) + "," + FormatFloat(-rot.z) + "," + FormatFloat(-rot.w) + "]" +
+                ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
+                ",\"meshPath\":\"" + JsonEscape(path) + "\"}";
+            await _client.Broadcast(payload);
+
+            _managedObjects[objectId] = go;
+            _instanceToObjectId[go.GetInstanceID()] = objectId;
+            _knownObjectIds.Add(objectId);
+
+            Debug.Log("[SceneSync] Published Unity object: " + go.name);
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
