@@ -11,8 +11,8 @@ let nextAdapterId = 0;
 const registeredLoomClasses = new WeakSet();
 
 // Phase 1 で許可する SceneSync node type whitelist
+// Remote Behavior Graph では serverClock を使う（local clock は時刻ドリフトの原因になるため）
 const SCENESYNC_ALLOWED_NODE_TYPES = new Set([
-  'clock',
   'constant',
   'sine',
   'cosine',

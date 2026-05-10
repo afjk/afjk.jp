@@ -149,7 +149,7 @@ describe('LoomSceneSync - Graph Validation', () => {
     adapter = createAdapter();
 
     const allowedTypes = [
-      'clock', 'constant', 'sine', 'cosine', 'add', 'multiply',
+      'constant', 'sine', 'cosine', 'add', 'multiply',
       'serverClock', 'sceneSetPosition', 'sceneSetRotation',
       'sceneSetScale', 'sceneSetColor', 'sceneSetVisible'
     ];
@@ -170,6 +170,29 @@ describe('LoomSceneSync - Graph Validation', () => {
         adapter.handleMessage(msg);
       }, `${nodeType} should be allowed in Phase 1 node set`);
     }
+  });
+
+  it('should reject local clock in remote Scene Sync graphs', () => {
+    adapter = createAdapter();
+
+    const msg = {
+      type: 'scene-graph-set',
+      scope: { object: 'sample-cube' },
+      graph: {
+        nodes: [
+          { id: 'clock', type: 'clock', params: {} },
+          { id: 'pos', type: 'sceneSetPosition', params: { y: 0.5 } }
+        ],
+        edges: [
+          { from: 'clock.t', to: 'pos.x' }
+        ]
+      }
+    };
+
+    assert.throws(() => {
+      adapter.handleMessage(msg);
+    }, (err) => err.code === 'DISALLOWED_NODE_TYPE' && err.message.includes('clock'),
+    'local clock should be rejected in remote Scene Sync graphs');
   });
 });
 
