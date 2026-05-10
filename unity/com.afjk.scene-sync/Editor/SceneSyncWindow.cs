@@ -75,6 +75,7 @@ namespace Afjk.SceneSync.Editor
             _client.OnConnected += () =>
             {
                 _connected = true;
+                ClearSceneSyncSessionState();
                 RebindPublishedUnityObjects();
                 Repaint();
             };
@@ -619,6 +620,26 @@ namespace Afjk.SceneSync.Editor
             _knownObjectIds = currentIds;
         }
 
+        private void ClearSceneSyncSessionState()
+        {
+            _managedObjects.Clear();
+            _knownObjectIds.Clear();
+            _meshPaths.Clear();
+            _instanceToObjectId.Clear();
+            _lastSnapshots.Clear();
+            _locks.Clear();
+            _currentlyLockedObjectId = null;
+        }
+
+        private static bool IsPublishedUnityIdentity(SceneSyncIdentity identity)
+        {
+            return identity != null
+                && identity.Origin == SceneSyncOrigin.Unity
+                && !identity.Temporary
+                && !string.IsNullOrWhiteSpace(identity.ObjectId)
+                && !string.IsNullOrWhiteSpace(identity.MeshPath);
+        }
+
         private void RebindPublishedUnityObjects()
         {
             var manager = FindSceneSyncManager();
@@ -657,10 +678,7 @@ namespace Afjk.SceneSync.Editor
             }
 
             var identity = go.GetComponent<SceneSyncIdentity>();
-            return identity != null
-                && identity.Origin == SceneSyncOrigin.Unity
-                && !identity.Temporary
-                && identity.ObjectId == objectId;
+            return IsPublishedUnityIdentity(identity) && identity.ObjectId == objectId;
         }
 
         private bool IsKnownUnityOriginObjectId(string objectId)
