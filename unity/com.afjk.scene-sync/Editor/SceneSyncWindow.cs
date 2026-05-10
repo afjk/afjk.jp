@@ -57,6 +57,7 @@ namespace Afjk.SceneSync.Editor
         private bool _sceneReceived = false;
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
+        private bool _applyingRemoteTransform;
 
         private void OnEnable()
         {
@@ -156,42 +157,11 @@ namespace Afjk.SceneSync.Editor
                 }
             }
 
+            if (_applyingRemoteTransform) return;
+
             if (EditorApplication.timeSinceStartup - _lastSendTime < SEND_INTERVAL) return;
             _lastSendTime = EditorApplication.timeSinceStartup;
-
-            if (selection == null) return;
-
-            // メッシュを持たない && Web 由来でもないオブジェクトは同期しない
-            if (!_instanceToObjectId.ContainsKey(selection.GetInstanceID())
-                && !IsSyncTarget(selection))
-                return;
-
-            string id;
-            if (_instanceToObjectId.TryGetValue(selection.GetInstanceID(), out var origDeltaId))
-                id = origDeltaId;
-            else
-                id = selection.GetInstanceID().ToString();
-
-            var t = selection.transform;
-            var current = new TransformSnapshot(t.position, t.rotation, t.localScale);
-
-            if (_lastSnapshots.TryGetValue(id, out var last) && last.Equals(current))
-                return;
-
-            _lastSnapshots[id] = current;
-
-            var pos = t.position;
-            var rot = t.rotation;
-            var scl = t.localScale;
-
-            var payload = "{" +
-                "\"kind\":\"scene-delta\"," +
-                "\"objectId\":\"" + id + "\"," +
-                "\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]," +
-                "\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]," +
-                "\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                "}";
-            _ = _client.Broadcast(payload);
+            DetectPublishedUnityObjectTransformChanges();
         }
 
         private void OnGUI()
@@ -729,15 +699,25 @@ namespace Afjk.SceneSync.Editor
             // 現在選択されているオブジェクトなら無視（Last-Writer-Wins）
             if (SceneSyncManager.ResolveSceneSyncRoot(Selection.activeGameObject) == go) return;
 
-            // ワイヤー（Three.js 座標系）→ Unity 座標系に逆変換
-            if (position != null && position.Length >= 3)
-                go.transform.position = new Vector3(position[0], position[1], -position[2]);
+            _applyingRemoteTransform = true;
+            try
+            {
+                // ワイヤー（Three.js 座標系）→ Unity 座標系に逆変換
+                if (position != null && position.Length >= 3)
+                    go.transform.position = new Vector3(position[0], position[1], -position[2]);
 
-            if (rotation != null && rotation.Length >= 4)
-                go.transform.rotation = new Quaternion(rotation[0], rotation[1], -rotation[2], -rotation[3]);
+                if (rotation != null && rotation.Length >= 4)
+                    go.transform.rotation = new Quaternion(rotation[0], rotation[1], -rotation[2], -rotation[3]);
 
-            if (scale != null && scale.Length >= 3)
-                go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
+                if (scale != null && scale.Length >= 3)
+                    go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
+
+                _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
+            }
+            finally
+            {
+                _applyingRemoteTransform = false;
+            }
         }
 
         private GameObject FindManagedObject(string objectId)
@@ -997,8 +977,81 @@ namespace Afjk.SceneSync.Editor
             _managedObjects[objectId] = go;
             _instanceToObjectId[go.GetInstanceID()] = objectId;
             _knownObjectIds.Add(objectId);
+            _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
 
             Debug.Log("[SceneSync] Published Unity object: " + go.name);
+        }
+
+        private void DetectPublishedUnityObjectTransformChanges()
+        {
+            var publishedEntries = new List<KeyValuePair<string, GameObject>>(_managedObjects);
+            foreach (var kvp in publishedEntries)
+            {
+                var objectId = kvp.Key;
+                var go = kvp.Value;
+
+                if (go == null) continue;
+                if (ShouldSkipTransformSync(go)) continue;
+
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity == null || identity.ObjectId != objectId) continue;
+
+                if (!_lastSnapshots.TryGetValue(objectId, out var snapshot))
+                {
+                    _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
+                    continue;
+                }
+
+                if (!snapshot.IsDifferentFrom(go.transform)) continue;
+
+                _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
+                _ = SendUnityTransformDelta(objectId, go);
+            }
+        }
+
+        private bool ShouldSkipTransformSync(GameObject go)
+        {
+            if (go == null) return true;
+
+            var temporaryRoot = FindTemporaryRoot();
+            if (temporaryRoot != null && go == temporaryRoot)
+            {
+                return true;
+            }
+
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity == null) return true;
+            if (string.IsNullOrWhiteSpace(identity.ObjectId)) return true;
+
+            if (identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+            {
+                return false;
+            }
+
+            if (identity.Origin == SceneSyncOrigin.Remote && identity.Temporary)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private async System.Threading.Tasks.Task SendUnityTransformDelta(string objectId, GameObject go)
+        {
+            if (!_connected || _client == null) return;
+            if (string.IsNullOrWhiteSpace(objectId) || go == null) return;
+
+            var pos = go.transform.position;
+            var rot = go.transform.rotation;
+            var scl = go.transform.localScale;
+
+            var payload = "{\"kind\":\"scene-delta\",\"objectId\":\"" + JsonEscape(objectId) + "\"" +
+                ",\"position\":[" + FormatFloat(pos.x) + "," + FormatFloat(pos.y) + "," + FormatFloat(-pos.z) + "]" +
+                ",\"rotation\":[" + FormatFloat(rot.x) + "," + FormatFloat(rot.y) + "," + FormatFloat(-rot.z) + "," + FormatFloat(-rot.w) + "]" +
+                ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
+                "}";
+
+            await _client.Broadcast(payload);
         }
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
@@ -1438,6 +1491,13 @@ namespace Afjk.SceneSync.Editor
             public Quaternion rotation;
             public Vector3 scale;
 
+            public TransformSnapshot(Transform t)
+            {
+                position = t.position;
+                rotation = t.rotation;
+                scale = t.localScale;
+            }
+
             public TransformSnapshot(Vector3 p, Quaternion r, Vector3 s)
             {
                 position = p;
@@ -1450,6 +1510,13 @@ namespace Afjk.SceneSync.Editor
                 return position == other.position
                     && rotation == other.rotation
                     && scale == other.scale;
+            }
+
+            public bool IsDifferentFrom(Transform t)
+            {
+                return Vector3.Distance(position, t.position) > 0.0001f
+                    || Quaternion.Angle(rotation, t.rotation) > 0.01f
+                    || Vector3.Distance(scale, t.localScale) > 0.0001f;
             }
         }
     }
