@@ -186,6 +186,9 @@ namespace Afjk.SceneSync.Editor
             DrawSetupSection();
             GUILayout.Space(8);
 
+            DrawQuickGuide();
+            GUILayout.Space(8);
+
             DrawManagedUnityObjectsSection();
             GUILayout.Space(8);
 
@@ -231,6 +234,24 @@ namespace Afjk.SceneSync.Editor
                     _client.Disconnect();
                 }
             }
+        }
+
+        private void DrawQuickGuide()
+        {
+            GUILayout.Label("Quick Guide", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Unity objects:\n" +
+                "1. Select a GameObject.\n" +
+                "2. Click Add Selected.\n" +
+                "3. Click Ensure Identities.\n" +
+                "4. Click Publish Selected.\n" +
+                "5. Move the Scene Sync root to sync transforms.\n\n" +
+                "Remote objects:\n" +
+                "- Remote GLB objects are temporary.\n" +
+                "- Move the Scene Sync root, not imported children.\n" +
+                "- Temporary objects are removed on manual Disconnect.",
+                MessageType.Info
+            );
         }
 
         private void DrawManagedUnityObjectsSection()
