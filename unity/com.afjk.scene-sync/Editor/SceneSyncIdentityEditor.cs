@@ -88,6 +88,9 @@ namespace Afjk.SceneSync.Editor
     [InitializeOnLoad]
     public static class SceneSyncIdentitySceneViewOverlay
     {
+        private static readonly Color UnityManagedColor = new Color(0.2f, 0.8f, 1.0f, 0.85f);
+        private static readonly Color RemoteTemporaryColor = new Color(1.0f, 0.65f, 0.2f, 0.85f);
+
         static SceneSyncIdentitySceneViewOverlay()
         {
             SceneView.duringSceneGui += OnSceneGui;
@@ -97,6 +100,11 @@ namespace Afjk.SceneSync.Editor
         {
             var activeScene = SceneManager.GetActiveScene();
             var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>();
+
+            if (SceneSyncWindow.ShowSceneSyncGizmos)
+            {
+                DrawSceneSyncWireGizmos(activeScene, identities);
+            }
 
             foreach (var identity in identities)
             {
@@ -121,6 +129,80 @@ namespace Afjk.SceneSync.Editor
             {
                 DrawSelectRootButton(sceneView, childOwnerRoot);
             }
+        }
+
+        private static void DrawSceneSyncWireGizmos(Scene scene, SceneSyncIdentity[] identities)
+        {
+            foreach (var identity in identities)
+            {
+                if (!ShouldDrawWire(scene, identity)) continue;
+                DrawWireForIdentity(identity);
+            }
+        }
+
+        private static bool ShouldDrawWire(Scene scene, SceneSyncIdentity identity)
+        {
+            if (identity == null) return false;
+            if (identity.gameObject == null) return false;
+            if (!scene.IsValid() || identity.gameObject.scene != scene) return false;
+            if (!IsIdentityRoot(identity.gameObject)) return false;
+
+            return (identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+                || (identity.Origin == SceneSyncOrigin.Remote && identity.Temporary);
+        }
+
+        private static void DrawWireForIdentity(SceneSyncIdentity identity)
+        {
+            var root = identity.gameObject;
+            if (root == null) return;
+
+            var color = GetIdentityColor(identity);
+            using (new Handles.DrawingScope(color))
+            {
+                TryGetBounds(root, out var bounds);
+                Handles.DrawWireCube(bounds.center, bounds.size);
+            }
+        }
+
+        private static bool TryGetBounds(GameObject root, out Bounds bounds)
+        {
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+            bounds = default;
+
+            var hasBounds = false;
+            foreach (var renderer in renderers)
+            {
+                if (renderer == null) continue;
+                if (!hasBounds)
+                {
+                    bounds = renderer.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+
+            if (hasBounds) return true;
+
+            bounds = new Bounds(root.transform.position, Vector3.one * 0.5f);
+            return false;
+        }
+
+        private static Color GetIdentityColor(SceneSyncIdentity identity)
+        {
+            if (identity.Origin == SceneSyncOrigin.Remote && identity.Temporary)
+            {
+                return RemoteTemporaryColor;
+            }
+
+            if (identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+            {
+                return UnityManagedColor;
+            }
+
+            return Color.gray;
         }
 
         private static bool IsIdentityRoot(GameObject go)

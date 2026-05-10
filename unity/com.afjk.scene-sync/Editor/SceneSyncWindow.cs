@@ -11,6 +11,14 @@ namespace Afjk.SceneSync.Editor
 {
     public class SceneSyncWindow : EditorWindow
     {
+        private const string ShowSceneSyncGizmosPrefKey = "Afjk.SceneSync.ShowSceneSyncGizmos";
+
+        internal static bool ShowSceneSyncGizmos
+        {
+            get => EditorPrefs.GetBool(ShowSceneSyncGizmosPrefKey, true);
+            set => EditorPrefs.SetBool(ShowSceneSyncGizmosPrefKey, value);
+        }
+
         [MenuItem("Window/Scene Sync")]
         public static void ShowWindow()
         {
@@ -376,6 +384,13 @@ namespace Afjk.SceneSync.Editor
             if (GUILayout.Button("Apply Picking Rules"))
             {
                 ApplyPickingRules();
+            }
+
+            var showSceneSyncGizmos = EditorGUILayout.ToggleLeft("Show Scene Sync Gizmos", ShowSceneSyncGizmos);
+            if (showSceneSyncGizmos != ShowSceneSyncGizmos)
+            {
+                ShowSceneSyncGizmos = showSceneSyncGizmos;
+                SceneView.RepaintAll();
             }
         }
 
