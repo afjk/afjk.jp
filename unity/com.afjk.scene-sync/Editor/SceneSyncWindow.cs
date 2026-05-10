@@ -250,7 +250,7 @@ namespace Afjk.SceneSync.Editor
             if (!_showQuickGuide)
             {
                 EditorGUILayout.LabelField(
-                    "Unity: Add → Identity → Publish → Move root. Remote: move root.",
+                    "Unity: Add Selected → Publish Selected → Move root. Remote: move root.",
                     EditorStyles.miniLabel
                 );
                 return;
@@ -260,9 +260,8 @@ namespace Afjk.SceneSync.Editor
                 "Unity objects:\n" +
                 "1. Select a GameObject.\n" +
                 "2. Click Add Selected.\n" +
-                "3. Click Ensure Identities.\n" +
-                "4. Click Publish Selected.\n" +
-                "5. Move the Scene Sync root to sync transforms.\n\n" +
+                "3. Click Publish Selected.\n" +
+                "4. Move the Scene Sync root to sync transforms.\n\n" +
                 "Remote objects:\n" +
                 "- Remote GLB objects are temporary.\n" +
                 "- Move the Scene Sync root, not imported children.\n" +
@@ -298,7 +297,7 @@ namespace Afjk.SceneSync.Editor
 
             var managedUnityObjects = manager.GetManagedUnityObjects();
             var managedCount = managedUnityObjects.Count;
-            GUILayout.Label("Managed Unity Objects: " + managedCount);
+            GUILayout.Label("Managed: " + managedCount);
 
             var identifiedCount = 0;
             foreach (var go in managedUnityObjects)
@@ -309,7 +308,7 @@ namespace Afjk.SceneSync.Editor
                     identifiedCount++;
                 }
             }
-            GUILayout.Label($"Identified Unity Objects: {identifiedCount} / {managedCount}");
+            GUILayout.Label($"With Identity: {identifiedCount} / {managedCount}");
 
             GUILayout.Space(4);
             GUILayout.Label("Explicit Managed Objects:", EditorStyles.label);
@@ -339,26 +338,11 @@ namespace Afjk.SceneSync.Editor
                     foreach (var selected in Selection.gameObjects)
                     {
                         var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
-                        if (manager.AddManagedObject(root))
-                        {
-                            changed = true;
-                        }
-                    }
+                        if (root == null) continue;
+                        if (ShouldSkipPublishObject(root)) continue;
 
-                    if (changed)
-                    {
-                        manager.ValidateManagedObjects();
-                        MarkManagerDirty(manager);
-                    }
-                }
-
-                if (GUILayout.Button("Remove Selected"))
-                {
-                    var changed = false;
-                    foreach (var selected in Selection.gameObjects)
-                    {
-                        var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
-                        if (manager.RemoveManagedObject(root))
+                        EnsureManagedUnityIdentity(manager, root, out var identityChanged);
+                        if (identityChanged)
                         {
                             changed = true;
                         }
@@ -368,42 +352,6 @@ namespace Afjk.SceneSync.Editor
                     {
                         MarkManagerDirty(manager);
                     }
-                }
-            }
-
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("Remove Missing"))
-                {
-                    var before = manager.ManagedObjects.Count;
-                    manager.RemoveNullManagedObjects();
-                    if (manager.ManagedObjects.Count != before)
-                    {
-                        MarkManagerDirty(manager);
-                    }
-                }
-
-                if (GUILayout.Button("Select SceneSyncManager"))
-                {
-                    Selection.activeGameObject = manager.gameObject;
-                }
-            }
-
-            if (GUILayout.Button("Ensure Identities"))
-            {
-                var count = manager.EnsureManagedUnityObjectIdentities();
-                if (count > 0)
-                {
-                    EditorUtility.SetDirty(manager);
-                    foreach (var go in manager.GetManagedUnityObjects())
-                    {
-                        var identity = go != null ? go.GetComponent<SceneSyncIdentity>() : null;
-                        if (identity != null)
-                        {
-                            EditorUtility.SetDirty(identity);
-                        }
-                    }
-                    EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
                 }
             }
         }
@@ -935,7 +883,7 @@ namespace Afjk.SceneSync.Editor
                 if (root == null || !seen.Add(root)) continue;
                 if (ShouldSkipPublishObject(root)) continue;
 
-                var identity = EnsureUnityIdentityForPublish(manager, root);
+                var identity = EnsureManagedUnityIdentity(manager, root, out _);
                 if (identity == null) continue;
 
                 Debug.Log("[SceneSync] Publishing selected object: " + root.name + " (objectId=" + identity.ObjectId + ")");
@@ -964,7 +912,7 @@ namespace Afjk.SceneSync.Editor
                 if (go == null || !seen.Add(go)) continue;
                 if (ShouldSkipPublishObject(go)) continue;
 
-                var identity = EnsureUnityIdentityForPublish(manager, go);
+                var identity = EnsureManagedUnityIdentity(manager, go, out _);
                 if (identity == null) continue;
 
                 Debug.Log("[SceneSync] Publishing managed object: " + go.name + " (objectId=" + identity.ObjectId + ")");
@@ -994,10 +942,14 @@ namespace Afjk.SceneSync.Editor
             return false;
         }
 
-        private SceneSyncIdentity EnsureUnityIdentityForPublish(SceneSyncManager manager, GameObject go)
+        // Ensures a Unity-authored object is registered as managed and has a stable Scene Sync identity.
+        // This does not publish or upload anything.
+        private SceneSyncIdentity EnsureManagedUnityIdentity(SceneSyncManager manager, GameObject go, out bool changed)
         {
+            changed = false;
             if (manager == null || go == null) return null;
 
+            var addedToManaged = manager.AddManagedObject(go);
             var existing = go.GetComponent<SceneSyncIdentity>();
             var hadIdentity = existing != null;
             var previousObjectId = existing != null ? existing.ObjectId : null;
@@ -1012,7 +964,8 @@ namespace Afjk.SceneSync.Editor
                 return null;
             }
 
-            var changed = !hadIdentity
+            changed = addedToManaged
+                || !hadIdentity
                 || string.IsNullOrWhiteSpace(previousObjectId)
                 || previousOrigin != identity.Origin
                 || previousTemporary != identity.Temporary
@@ -1021,6 +974,7 @@ namespace Afjk.SceneSync.Editor
 
             if (changed)
             {
+                manager.ValidateManagedObjects();
                 EditorUtility.SetDirty(manager);
                 EditorUtility.SetDirty(identity);
                 EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
