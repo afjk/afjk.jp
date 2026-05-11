@@ -31,6 +31,10 @@ import { createHistoryManager, HistoryManager } from './history/history-manager.
 import { createUserManager } from './user/user-manager.js';
 import { createLinkManager } from './link/link-manager.js';
 import { createSceneSyncLoomIntegration } from './loom/loom-integration.js';
+import { computeAssetId } from './assets/asset-id.js';
+import { createSceneAssetCache } from './assets/asset-cache.js';
+import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
+import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
@@ -2322,6 +2326,17 @@ function handleHandoff(data) {
     return;
   }
 
+  // Handle Scene Sync asset recovery request
+  if (payload.kind === 'scene-asset-request') {
+    expiredGlbRecovery.handleSceneAssetRequest({ payload, from: data.from });
+    return;
+  }
+
+  // Handle generic file transfer (for recovered GLB delivery)
+  fileTransferAdapter.maybeHandleFileTransferHandoff({ payload, from: data.from }).catch(err => {
+    console.warn('[FileTransferAdapter] Error in handoff:', err);
+  });
+
   if (!payload.kind) return;
 
   // 操作が自分またはAIが代理している場合、履歴に追加するか判定
@@ -2952,31 +2967,99 @@ function loadMeshObject(objectId, info, meshPath, existing) {
 
   console.log('[SceneSync] load mesh', { objectId, meshPath });
 
-  glbLoader.loadFromUrl(url, initialPosition, scene, (model) => {
-    removeLoadingOverlay(objectId);
-    model.userData.objectId = objectId;
-    model.userData.name = info.name;
-    model.userData.meshPath = meshPath;
-    if (info.asset) model.userData.asset = structuredClone(info.asset);
+  (async () => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.warn('[SceneSync] Mesh blob expired (404):', meshPath);
+          removeLoadingOverlay(objectId);
 
-    if (existing) {
-      model.position.copy(existing.position);
-      model.quaternion.copy(existing.quaternion);
-      model.scale.copy(existing.scale);
-      if (transformCtrl.object === existing) transformCtrl.detach();
-      scene.remove(existing);
-    }
+          const assetId = info.asset?.assetId || null;
+          const expectedSize = null;
+          await expiredGlbRecovery.handleMissingGlb(
+            objectId,
+            meshPath,
+            expectedSize,
+            assetId
+          );
 
-    replaceManagedObject(objectId, model, info);
-  }).catch((err) => {
-    removeLoadingOverlay(objectId);
-    console.warn('Failed to load mesh for', objectId, ':', err);
-    if (!existing) {
-      replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-      return;
+          if (!existing) {
+            replaceManagedObject(
+              objectId,
+              buildDefaultBoxObject(objectId, info, 0xffaa44),
+              info
+            );
+          }
+          return;
+        }
+        throw new Error(`HTTP ${response.status} loading mesh`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      try {
+        glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
+          removeLoadingOverlay(objectId);
+          model.userData.objectId = objectId;
+          model.userData.name = info.name;
+          model.userData.meshPath = meshPath;
+          if (info.asset) model.userData.asset = structuredClone(info.asset);
+
+          if (existing) {
+            model.position.copy(existing.position);
+            model.quaternion.copy(existing.quaternion);
+            model.scale.copy(existing.scale);
+            if (transformCtrl.object === existing) transformCtrl.detach();
+            scene.remove(existing);
+          }
+
+          replaceManagedObject(objectId, model, info);
+
+          try {
+            let assetId = info.asset?.assetId;
+            if (!assetId) {
+              assetId = await computeAssetId(blob);
+            }
+            model.userData.assetId = assetId;
+
+            await assetCache.putAsset({
+              assetId,
+              meshPath,
+              blob,
+              source: 'carrier',
+            });
+            console.log('[SceneSync] Cached mesh:', { objectId, assetId, meshPath });
+
+            if (!info.asset?.assetId) {
+              await assetCache.rememberMeshPathAlias(assetId, meshPath);
+            }
+          } catch (cacheErr) {
+            console.warn('[SceneSync] Failed to cache mesh:', cacheErr);
+          }
+        }).catch((err) => {
+          removeLoadingOverlay(objectId);
+          console.warn('Failed to load mesh for', objectId, ':', err);
+          if (!existing) {
+            replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+            return;
+          }
+          notifySceneStateChanged('mesh-load-failed');
+        });
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch (err) {
+      removeLoadingOverlay(objectId);
+      console.warn('Failed to fetch mesh for', objectId, ':', err);
+      if (!existing) {
+        replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+        return;
+      }
+      notifySceneStateChanged('mesh-load-failed');
     }
-    notifySceneStateChanged('mesh-load-failed');
-  });
+  })();
 }
 
 function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
@@ -3372,6 +3455,84 @@ function broadcast(payload) {
   ws.send(JSON.stringify({ type: 'broadcast', payload }));
 }
 
+function sendHandoff({ targetId, payload }) {
+  const ws = presenceState.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'handoff', targetId, payload }));
+}
+
+// ── Asset modules initialization ────────────────────────
+
+const assetCache = createSceneAssetCache();
+
+const fileTransferAdapter = createSceneSyncFileTransferAdapter({
+  presenceState,
+  sendHandoff,
+  showToast,
+});
+
+function getObjectById(objectId) {
+  return managedObjects.get(objectId) || null;
+}
+
+async function loadGlbBlobForObject(objectId, blob) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) {
+    console.warn('[SceneSync] Object not found for loading recovered GLB:', objectId);
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const gltf = await new GLTFLoader().loadAsync(url);
+    const wrapper = new THREE.Group();
+    wrapper.add(gltf.scene);
+    wrapper.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(wrapper);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDimension = Math.max(size.x, size.y, size.z);
+
+    if (maxDimension > 10) {
+      wrapper.scale.setScalar(10 / maxDimension);
+      wrapper.updateMatrixWorld(true);
+    }
+
+    wrapper.position.copy(obj.position);
+    wrapper.quaternion.copy(obj.quaternion);
+    wrapper.scale.copy(obj.scale);
+
+    wrapper.userData.objectId = objectId;
+    wrapper.userData.name = obj.userData?.name || objectId;
+    wrapper.userData.meshPath = obj.userData?.meshPath;
+    wrapper.userData.asset = obj.userData?.asset ? structuredClone(obj.userData.asset) : null;
+
+    if (transformCtrl.object === obj) transformCtrl.detach();
+    scene.remove(obj);
+    scene.add(wrapper);
+    managedObjects.set(objectId, wrapper);
+
+    notifySceneStateChanged('mesh-recovered');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const expiredGlbRecovery = createExpiredGlbRecovery({
+  assetCache,
+  fileTransfer: fileTransferAdapter,
+  presenceState,
+  broadcast,
+  sendHandoff,
+  loadGlbBlobForObject,
+  getObjectById,
+  showToast,
+});
+
+fileTransferAdapter.onFileReceived((event) => {
+  expiredGlbRecovery.handleReceivedFile(event);
+});
+
 // ── 公開 API（scene.js 内から利用） ──────────────────────
 
 export { scene, camera, renderer, managedObjects, broadcast, presenceState };
@@ -3383,6 +3544,7 @@ function generateRandomPath() {
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
   const meshPath = generateRandomPath();
   let actualMeshPath = null;
+  let assetId = null;
 
   try {
     try {
@@ -3393,6 +3555,22 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       });
       actualMeshPath = meshPath;
       model.userData.meshPath = meshPath;
+
+      try {
+        assetId = await computeAssetId(arrayBuffer);
+        model.userData.assetId = assetId;
+
+        const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
+        await assetCache.putAsset({
+          assetId,
+          meshPath: actualMeshPath,
+          blob,
+          source: 'carrier',
+        });
+        console.log('[SceneSync] Cached uploaded mesh:', { objectId, assetId, meshPath: actualMeshPath });
+      } catch (cacheErr) {
+        console.warn('[SceneSync] Failed to cache uploaded mesh:', cacheErr);
+      }
     } catch (err) {
       console.warn('POST failed:', err);
       showToast('GLB アップロード失敗: ' + err.message);
@@ -3405,6 +3583,9 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       type: 'gltf',
       meshPath: actualMeshPath,
     };
+    if (assetId) {
+      asset.assetId = assetId;
+    }
     model.userData.asset = asset;
 
     const historyEntry = HistoryManager.createAddEntry(
@@ -3419,17 +3600,27 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     presenceState.historyManager.push(historyEntry);
     notifySceneStateChanged('object-uploaded');
 
-    console.log('[SceneSync] broadcast scene-add', { objectId, meshPath: actualMeshPath });
+    console.log('[SceneSync] broadcast scene-add', { objectId, meshPath: actualMeshPath, assetId });
 
-    broadcast({
+    const sceneAddPayload = {
       kind: 'scene-add',
       objectId,
       name,
       position: model.position.toArray(),
       rotation: model.quaternion.toArray(),
       scale: model.scale.toArray(),
+      asset: {
+        type: 'mesh',
+        source: 'carrier',
+        meshPath: actualMeshPath,
+      },
       meshPath: actualMeshPath,
-    });
+    };
+    if (assetId) {
+      sceneAddPayload.asset.assetId = assetId;
+    }
+
+    broadcast(sceneAddPayload);
   } finally {
     removeLoadingOverlay(objectId);
   }

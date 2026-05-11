@@ -386,6 +386,129 @@ Unity 側（Editor / Runtime）は GLTFast でエクスポートしてアップ�
 
 ---
 
+## 期限切れ Carrier GLB の自動復元（FileTransfer 経由）
+
+### 背景
+
+Blob Store の TTL が短いため（デフォルト 10 分）、新しく参加したクライアントが `scene-state` を受け取った後、`meshPath` の GLB を取得しようとすると 404 エラーになることがある。
+
+### 仕組み
+
+期限切れ GLB の復元は、既に GLB を読み込んだ参加者が、後から参加したクライアントに対して FileTransfer foundation を使って GLB を直接配信する。
+
+```
+遅参加者 B
+  ↓ scene-add 受信（meshPath 付き）
+  ↓ GLB 取得試行 → 404 エラー
+  ↓ scene-asset-request 送信
+  ↓
+既読み込み者 A
+  ↓ scene-asset-request 受信
+  ↓ ローカルキャッシュから GLB を検索
+  ↓ FileTransfer で B へ送信（`.glb` ファイル）
+  ↓
+遅参加者 B
+  ↓ 受信した GLB をメモリから直接ロード
+  ↓ ローカルキャッシュに保存
+  ↓ シーンに追加
+```
+
+### API & メッセージ
+
+#### `scene-asset-request`（要求側から回答者へ）
+
+```json
+{
+  "kind": "scene-asset-request",
+  "requestId": "unique-request-id",
+  "objectId": "obj-123",
+  "assetId": "sha256-abc...",
+  "meshPath": "blob-path",
+  "expectedSize": 1024000
+}
+```
+
+- `requestId`: 重複検出用（responder は同じ requestId を 30 秒以内に再受信した場合は無視）
+- `assetId`: 安定的なアセット識別子。存在すれば優先的に使用
+- `meshPath`: assetId がない場合の fallback
+- `expectedSize`: 受信ファイルのサイズ検証用（省略可）
+
+#### FileTransfer での GLB 配信
+
+既存の `kind: 'file'` handoff を使用。Presence Server が handoff を経由してファイルメタデータを配信し、 Piping Server または WebRTC P2P で実データを転送する。
+
+```json
+{
+  "type": "handoff",
+  "targetId": "requester-peer-id",
+  "payload": {
+    "kind": "file",
+    "path": "random-path",
+    "filename": "sha256-abc...glb",
+    "size": 1024000,
+    "mime": "model/gltf-binary",
+    "url": "https://afjk.jp/pipe/#path"
+  }
+}
+```
+
+### クライアント実装（Web）
+
+#### キャッシング
+
+- **IndexedDB ストア**: `scene-sync-assets` (DB) / `assets` (store)
+- **キー**: `assetId` (SHA-256 hash)
+- **レコード**: `{ assetId, meshPath, blob, size, mime, createdAt, lastUsedAt, source }`
+- **最大単体サイズ**: 50 MB
+- **ソース**: `'carrier'` | `'recovered'` | `'generated'`
+
+#### 計算
+
+- SHA-256(`arrayBuffer`) → `sha256-{hex}` 形式
+- 同じ meshPath でも assetId が異なる場合は別レコードとして保存
+- assetId がない場合は meshPath lookup にフォールバック
+
+#### 復元フロー
+
+1. GLB 404 → `handleMissingGlb(objectId, meshPath, expectedSize, assetId)`
+2. `scene-asset-request` を nearby peer へ送信（優先）、または broadcast
+3. Peer が `scene-asset-request` 受信 → ローカルキャッシュから GLB を検索
+4. GLB 見つかった → FileTransfer で requester へ送信
+5. Requester が file handoff 受信 → `maybeHandleFileTransferHandoff` で file fetch
+6. ファイル受信 → pending recovery とマッチング（assetId / size 検証）
+7. マッチ → `loadGlbBlobForObject` でシーンに追加
+8. キャッシュ保存 → `assetCache.putAsset(...)`
+
+### 制限・保証
+
+- **Re-upload なし（P0）**: 復元 GLB を blob store に再アップロードしない。`meshPath` は期限切れのままで、次回参加時の他者も同じリカバリを試みる
+- **Broadcast なし**: GLB バイナリは要求元へのみ転送。ルーム全体への一斉配信はしない
+- **Responder 保護**: 
+  - アクティブ送信は同時 1 件まで
+  - 同一 assetId/meshPath への応答は 30 秒クールダウン
+  - 要求重複は 30 秒以内の同じ requestId で検出・無視
+  - ファイルサイズ 50 MB 超過は無視
+- **Receiver 検証**:
+  - assetId が指定されていれば SHA-256 ハッシュで検証
+  - expectedSize が指定されていればサイズで検証
+  - pending recovery がない場合は受け取ったファイルを無視
+  - MIME が `model/gltf-binary` でない場合は無視
+- **タイムアウト**: 要求から 30 秒以内に応答がない場合は recovery を破棄
+
+### UX メッセージ
+
+- 要求時: `"GLBアセットの期限切れ。近くの参加者に問い合わせています..."`
+- 成功時: `"GLBアセットが別の参加者から復元されました。"`
+- タイムアウト: 無言で処理（UI に反映しない）
+
+### FileTransfer との分離
+
+- **FileTransfer**: `kind: 'file'` / `kind: 'files'` handoff を理解するジェネリック layer。Scene Sync のセマンティクスを持たない
+- **Scene Sync adapter**: FileTransfer の上に scene-asset-request routing を追加。但し request/response 自体は「アセットがほしい」「ファイル来た」という generic な概念のみ
+- **NoStar contamination**: `scene-asset-request`、`objectId`、`meshPath`、`assetId` は FileTransfer 層に出現しない
+
+---
+
 ## 座標系変換
 
 Unity（左手系 Y-up）と Three.js（右手系 Y-up）の変換。  
