@@ -87,6 +87,11 @@ export function createExpiredGlbRecovery({
       const peer = peers[peerIndex];
       peerIndex++;
 
+      const recovery = pendingRecoveries.get(requestId);
+      if (recovery) {
+        recovery.fromPeerId = peer.id;
+      }
+
       console.log('[ExpiredGlbRecovery] Sending request to peer', peerIndex - 1, ':', peer.id);
       sendHandoff({
         targetId: peer.id,
@@ -212,7 +217,11 @@ export function createExpiredGlbRecovery({
 
     let recovery = null;
     for (const [, rec] of pendingRecoveries) {
-      if (rec.fromPeerId && rec.fromPeerId !== fromPeerId) {
+      if (!rec.assetId) {
+        if (rec.fromPeerId !== fromPeerId) {
+          continue;
+        }
+      } else if (rec.fromPeerId && rec.fromPeerId !== fromPeerId) {
         continue;
       }
       recovery = rec;
@@ -220,7 +229,7 @@ export function createExpiredGlbRecovery({
     }
 
     if (!recovery) {
-      console.log('[ExpiredGlbRecovery] No pending recovery for this file');
+      console.log('[ExpiredGlbRecovery] No matching pending recovery for this file');
       return;
     }
 
@@ -262,9 +271,41 @@ export function createExpiredGlbRecovery({
     }
   }
 
+  function canAcceptFileHandoff({ fromPeerId, filename, size, mime }) {
+    if (!fromPeerId || !filename || !size || !mime) {
+      return false;
+    }
+
+    const isGlb = (mime === 'model/gltf-binary' || filename.endsWith('.glb'));
+    if (!isGlb) {
+      return false;
+    }
+
+    let recovery = null;
+    for (const [, rec] of pendingRecoveries) {
+      if (!rec.assetId) {
+        if (rec.fromPeerId !== fromPeerId) {
+          continue;
+        }
+      } else if (rec.fromPeerId && rec.fromPeerId !== fromPeerId) {
+        continue;
+      }
+
+      if (rec.expectedSize && rec.expectedSize !== size) {
+        continue;
+      }
+
+      recovery = rec;
+      break;
+    }
+
+    return recovery !== null;
+  }
+
   return {
     handleMissingGlb,
     handleSceneAssetRequest,
     handleReceivedFile,
+    canAcceptFileHandoff,
   };
 }

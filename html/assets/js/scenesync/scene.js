@@ -2334,9 +2334,20 @@ function handleHandoff(data) {
 
   // Handle generic file transfer (for recovered GLB delivery)
   if (payload.kind === 'file') {
-    fileTransferAdapter.maybeHandleFileTransferHandoff({ payload, from: data.from }).catch(err => {
-      console.warn('[FileTransferAdapter] Error in handoff:', err);
+    const canAccept = expiredGlbRecovery.canAcceptFileHandoff({
+      fromPeerId: data.from?.id,
+      filename: payload.filename,
+      size: payload.size,
+      mime: payload.mime,
     });
+
+    if (canAccept) {
+      fileTransferAdapter.maybeHandleFileTransferHandoff({ payload, from: data.from }).catch(err => {
+        console.warn('[FileTransferAdapter] Error in handoff:', err);
+      });
+    } else {
+      console.log('[SceneSync] File handoff rejected by GLB recovery filter');
+    }
     return;
   }
 
@@ -3518,8 +3529,6 @@ async function loadGlbBlobForObject(objectId, blob) {
     scene.remove(obj);
     scene.add(wrapper);
     managedObjects.set(objectId, wrapper);
-
-    notifySceneStateChanged('mesh-recovered');
   } finally {
     URL.revokeObjectURL(url);
   }
