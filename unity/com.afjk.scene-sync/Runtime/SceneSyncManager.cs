@@ -379,8 +379,14 @@ namespace Afjk.SceneSync
             return "https://pipe.afjk.jp";
         }
 
-        private async System.Threading.Tasks.Task SendGlbToPeer(string filename, byte[] glbData)
+        private async System.Threading.Tasks.Task SendGlbToPeer(string targetPeerId, string filename, byte[] glbData)
         {
+            if (string.IsNullOrEmpty(targetPeerId) || glbData == null || glbData.Length == 0)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Invalid arguments for SendGlbToPeer");
+                return;
+            }
+
             var path = PresenceClientRuntime.GenerateRandomPath();
             var pipingBase = GetPipingServerBase();
             var displayUrl = GetPipingDisplayUrl();
@@ -389,27 +395,7 @@ namespace Afjk.SceneSync
             var fileInfo = "{\"kind\":\"file\",\"path\":\"" + path + "\",\"filename\":\"" + filename +
                 "\",\"size\":" + glbData.Length + ",\"mime\":\"model/gltf-binary\",\"url\":\"" + displayUrl + "/#" + path + "\"}";
 
-            // Get the peer from current recovery
-            string targetPeerId = null;
-            if (!string.IsNullOrEmpty(_activeOutgoingTransferId))
-            {
-                foreach (var kvp in _pendingRecoveries)
-                {
-                    if (kvp.Value.requestId == _activeOutgoingTransferId && kvp.Value.requestedPeerIds.Count > 0)
-                    {
-                        targetPeerId = kvp.Value.requestedPeerIds.First();
-                        break;
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(targetPeerId))
-            {
-                Debug.LogWarning("[ExpiredGlbRecovery] No target peer found for file transfer");
-                return;
-            }
-
-            Debug.Log("[ExpiredGlbRecovery] Sending file handoff: path=" + path + ", target=" + targetPeerId);
+            Debug.Log("[ExpiredGlbRecovery] Sending file handoff: path=" + path + ", targetPeerId=" + targetPeerId);
             await _client.SendHandoff(targetPeerId, fileInfo);
 
             // Upload to Piping Server
@@ -441,16 +427,25 @@ namespace Afjk.SceneSync
         private string GetPipingDisplayUrl()
         {
             // Derive display URL from presence URL
-            var presenceUrl = _presenceUrl
-                .Replace("wss://", "https://")
-                .Replace("ws://", "http://");
+            try
+            {
+                var presenceUrl = _presenceUrl
+                    .Replace("wss://", "https://")
+                    .Replace("ws://", "http://");
 
-            if (presenceUrl.StartsWith("http://localhost"))
-                return "http://localhost";
+                var uri = new System.Uri(presenceUrl);
 
-            // For afjk.jp, use afjk.jp/pipe
-            var baseUrl = presenceUrl.Split('/')[0];
-            return "https://" + baseUrl + "/pipe";
+                if (uri.Host == "localhost" || uri.Host.StartsWith("localhost:"))
+                    return "http://localhost";
+
+                // For afjk.jp and other hosts, use https://<host>/pipe
+                return "https://" + uri.Host + "/pipe";
+            }
+            catch
+            {
+                Debug.LogWarning("[SceneSync] Failed to parse Piping display URL from: " + _presenceUrl);
+                return "https://pipe.afjk.jp";
+            }
         }
 
         private void Update()
@@ -729,7 +724,7 @@ namespace Afjk.SceneSync
             }
             else if (raw.Contains("\"kind\":\"scene-asset-request\""))
             {
-                _ = HandleAssetRequest(raw);
+                _ = HandleAssetRequest(raw, fromId);
             }
             else if (raw.Contains("\"kind\":\"scene-state\""))
             {
@@ -765,8 +760,14 @@ namespace Afjk.SceneSync
             }
         }
 
-        private async System.Threading.Tasks.Task HandleAssetRequest(string raw)
+        private async System.Threading.Tasks.Task HandleAssetRequest(string raw, string requesterPeerId)
         {
+            if (string.IsNullOrEmpty(requesterPeerId))
+            {
+                Debug.Log("[ExpiredGlbRecovery] scene-asset-request without requesterPeerId");
+                return;
+            }
+
             var requestIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"requestId\":\"([^\"]+)\"");
             var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
             if (!requestIdMatch.Success || !objectIdMatch.Success) return;
@@ -774,7 +775,8 @@ namespace Afjk.SceneSync
             var requestId = requestIdMatch.Groups[1].Value;
             var objectId = objectIdMatch.Groups[1].Value;
 
-            Debug.Log("[ExpiredGlbRecovery] Received asset request: requestId=" + requestId + ", objectId=" + objectId);
+            Debug.Log("[ExpiredGlbRecovery] Received asset request: requestId=" + requestId + ", objectId=" + objectId +
+                ", requesterPeerId=" + requesterPeerId);
 
             // Parse optional fields
             var assetIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"assetId\":\"([^\"]+)\"");
@@ -800,13 +802,13 @@ namespace Afjk.SceneSync
             }
 
             // Check cooldown
-            var cooldownKey = cacheKey + "-" + (_client?.Id ?? "unknown");
+            var cooldownKey = cacheKey + "-" + requesterPeerId;
             if (_responderCooldowns.TryGetValue(cooldownKey, out var lastCooldown))
             {
                 var timeSinceCooldown = (DateTime.UtcNow.Ticks / 10000.0) - lastCooldown;
                 if (timeSinceCooldown < COOLDOWN_MS)
                 {
-                    Debug.Log("[ExpiredGlbRecovery] Cooldown active for " + cacheKey);
+                    Debug.Log("[ExpiredGlbRecovery] Cooldown active for " + cacheKey + " from " + requesterPeerId);
                     return;
                 }
             }
@@ -843,9 +845,9 @@ namespace Afjk.SceneSync
             {
                 var fileName = !string.IsNullOrEmpty(assetId) ? assetId + ".glb" : objectId + ".glb";
                 Debug.Log("[ExpiredGlbRecovery] Sending GLB to peer: requestId=" + requestId +
-                    ", fileName=" + fileName + ", size=" + cachedGlb.Length);
+                    ", requesterPeerId=" + requesterPeerId + ", fileName=" + fileName + ", size=" + cachedGlb.Length);
 
-                await SendGlbToPeer(fileName, cachedGlb);
+                await SendGlbToPeer(requesterPeerId, fileName, cachedGlb);
             }
             catch (System.Exception err)
             {
