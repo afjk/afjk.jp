@@ -4,6 +4,7 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -305,6 +306,17 @@ namespace Afjk.SceneSync
                 .Replace("+", "").Replace("/", "").Replace("=", "")
                 .ToLower();
             return s.Substring(0, System.Math.Min(8, s.Length));
+        }
+
+        public static string ComputeAssetId(byte[] data)
+        {
+            if (data == null || data.Length == 0) return null;
+            using (var sha256 = SHA256.Create())
+            {
+                var hash = sha256.ComputeHash(data);
+                var hexString = System.BitConverter.ToString(hash).Replace("-", "").ToLower();
+                return "sha256-" + hexString;
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using GLTFast;
 using UnityEngine;
@@ -37,6 +38,29 @@ namespace Afjk.SceneSync
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private double _lastTime;
         private Material _runtimeFallbackImportMaterial;
+
+        // Expired GLB recovery caches
+        private Dictionary<string, byte[]> _assetIdCache = new Dictionary<string, byte[]>(); // assetId → glb bytes
+        private Dictionary<string, byte[]> _meshPathCache = new Dictionary<string, byte[]>(); // meshPath → glb bytes
+        private Dictionary<string, ExpiredGlbRecovery> _pendingRecoveries = new Dictionary<string, ExpiredGlbRecovery>();
+        private Dictionary<string, double> _responderCooldowns = new Dictionary<string, double>(); // cacheKey-peerId → timestamp
+        private string _activeOutgoingTransferId = null;
+
+        private const double RECOVERY_TIMEOUT_MS = 30000;
+        private const double PEER_RETRY_INTERVAL_MS = 4000;
+        private const double COOLDOWN_MS = 30000;
+        private const int MAX_GLB_SIZE = 50 * 1024 * 1024;
+
+        private class ExpiredGlbRecovery
+        {
+            public string requestId;
+            public string objectId;
+            public string assetId;
+            public string meshPath;
+            public int? expectedSize;
+            public double requestedAt;
+            public HashSet<string> requestedPeerIds = new HashSet<string>();
+        }
 
         public bool IsConnected => _connected;
         public string Room => _client?.Room;
@@ -311,10 +335,16 @@ namespace Afjk.SceneSync
 
                 // blob store に POST（全クライアント共有）
                 var path = PresenceClientRuntime.GenerateRandomPath();
+                var assetId = PresenceClientRuntime.ComputeAssetId(glb);
                 _meshPaths[objectId] = path;
+                if (assetId != null)
+                    _assetIdCache[assetId] = glb;
+                if (path != null)
+                    _meshPathCache[path] = glb;
                 await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
 
-                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"}";
+                var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
+                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"" + assetIdJson + "}";
                 await _client.Broadcast(payload);
             }
         }
@@ -330,6 +360,92 @@ namespace Afjk.SceneSync
                 .Replace("ws://", "http://");
             if (url.EndsWith("/")) url = url.TrimEnd('/');
             return url + "/blob";
+        }
+
+        private string GetPipingServerBase()
+        {
+            // Derive Piping Server from presence URL
+            // wss://afjk.jp/presence → https://pipe.afjk.jp
+            // ws://localhost:8787 → http://localhost:8080
+            var presenceScheme = _presenceUrl.StartsWith("wss://") ? "https://" : "http://";
+            var presenceHost = _presenceUrl
+                .Replace("wss://", "").Replace("ws://", "")
+                .Split('/')[0];
+
+            if (presenceHost == "localhost:8787" || presenceHost.StartsWith("localhost"))
+                return "http://localhost:8080";
+
+            // For afjk.jp, use pipe.afjk.jp
+            return "https://pipe.afjk.jp";
+        }
+
+        private async System.Threading.Tasks.Task SendGlbToPeer(string targetPeerId, string filename, byte[] glbData)
+        {
+            if (string.IsNullOrEmpty(targetPeerId) || glbData == null || glbData.Length == 0)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Invalid arguments for SendGlbToPeer");
+                return;
+            }
+
+            var path = PresenceClientRuntime.GenerateRandomPath();
+            var pipingBase = GetPipingServerBase();
+            var displayUrl = GetPipingDisplayUrl();
+
+            // Send file info via handoff
+            var fileInfo = "{\"kind\":\"file\",\"path\":\"" + path + "\",\"filename\":\"" + filename +
+                "\",\"size\":" + glbData.Length + ",\"mime\":\"model/gltf-binary\",\"url\":\"" + displayUrl + "/#" + path + "\"}";
+
+            Debug.Log("[ExpiredGlbRecovery] Sending file handoff: path=" + path + ", targetPeerId=" + targetPeerId);
+            await _client.SendHandoff(targetPeerId, fileInfo);
+
+            // Upload to Piping Server
+            try
+            {
+                var url = pipingBase + "/" + path;
+                Debug.Log("[ExpiredGlbRecovery] Uploading to Piping Server: " + url);
+
+                var http = new HttpClient();
+                var content = new ByteArrayContent(glbData);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("model/gltf-binary");
+
+                var response = await http.PostAsync(url, content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] Upload failed: status=" + (int)response.StatusCode);
+                    throw new System.Exception("HTTP " + (int)response.StatusCode);
+                }
+
+                Debug.Log("[ExpiredGlbRecovery] File upload complete: " + path);
+            }
+            catch (System.Exception err)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] File transfer failed: " + err);
+                throw err;
+            }
+        }
+
+        private string GetPipingDisplayUrl()
+        {
+            // Derive display URL from presence URL
+            try
+            {
+                var presenceUrl = _presenceUrl
+                    .Replace("wss://", "https://")
+                    .Replace("ws://", "http://");
+
+                var uri = new System.Uri(presenceUrl);
+
+                if (uri.Host == "localhost" || uri.Host.StartsWith("localhost:"))
+                    return "http://localhost";
+
+                // For afjk.jp and other hosts, use https://<host>/pipe
+                return "https://" + uri.Host + "/pipe";
+            }
+            catch
+            {
+                Debug.LogWarning("[SceneSync] Failed to parse Piping display URL from: " + _presenceUrl);
+                return "https://pipe.afjk.jp";
+            }
         }
 
         private void Update()
@@ -544,27 +660,37 @@ namespace Afjk.SceneSync
 
             byte[] glb = null;
             string path = null;
+            string assetId = null;
             if (go.GetComponentInChildren<MeshFilter>() != null
                 || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
             {
                 glb = await PresenceClientRuntime.ExportGameObjectAsGlb(go);
                 if (glb != null)
+                {
                     path = PresenceClientRuntime.GenerateRandomPath();
+                    assetId = PresenceClientRuntime.ComputeAssetId(glb);
+                }
             }
 
             // アップロードを先に完了させてから Broadcast する
             if (glb != null && path != null)
             {
-                _meshPaths[go.GetInstanceID().ToString()] = path;
+                var objectIdStr = go.GetInstanceID().ToString();
+                _meshPaths[objectIdStr] = path;
+                if (assetId != null)
+                    _assetIdCache[assetId] = glb;
+                if (path != null)
+                    _meshPathCache[path] = glb;
                 await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
             }
 
             var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+            var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
                 ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                 ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                 ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                meshPathJson + "}";
+                meshPathJson + assetIdJson + "}";
             await _client.Broadcast(payload);
 
             _knownObjectIds.Add(go.GetInstanceID().ToString());
@@ -596,6 +722,10 @@ namespace Afjk.SceneSync
                 else
                     Debug.LogWarning("[SceneSync] scene-request without from.id");
             }
+            else if (raw.Contains("\"kind\":\"scene-asset-request\""))
+            {
+                _ = HandleAssetRequest(raw, fromId);
+            }
             else if (raw.Contains("\"kind\":\"scene-state\""))
             {
                 HandleSceneState(raw);
@@ -623,6 +753,163 @@ namespace Afjk.SceneSync
             else if (raw.Contains("\"kind\":\"scene-unlock\""))
             {
                 HandleSceneUnlock(raw);
+            }
+            else if (raw.Contains("\"kind\":\"file\""))
+            {
+                _ = HandleFileHandoff(fromId, raw);
+            }
+        }
+
+        private async System.Threading.Tasks.Task HandleAssetRequest(string raw, string requesterPeerId)
+        {
+            if (string.IsNullOrEmpty(requesterPeerId))
+            {
+                Debug.Log("[ExpiredGlbRecovery] scene-asset-request without requesterPeerId");
+                return;
+            }
+
+            var requestIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"requestId\":\"([^\"]+)\"");
+            var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
+            if (!requestIdMatch.Success || !objectIdMatch.Success) return;
+
+            var requestId = requestIdMatch.Groups[1].Value;
+            var objectId = objectIdMatch.Groups[1].Value;
+
+            Debug.Log("[ExpiredGlbRecovery] Received asset request: requestId=" + requestId + ", objectId=" + objectId +
+                ", requesterPeerId=" + requesterPeerId);
+
+            // Parse optional fields
+            var assetIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"assetId\":\"([^\"]+)\"");
+            var meshPathMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"meshPath\":\"([^\"]+)\"");
+            var expectedSizeMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"expectedSize\":(\\d+)");
+
+            var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
+            var meshPath = meshPathMatch.Success ? meshPathMatch.Groups[1].Value : null;
+            int? expectedSize = expectedSizeMatch.Success ? int.Parse(expectedSizeMatch.Groups[1].Value) : null;
+
+            var go = FindManagedObject(objectId);
+            if (go == null)
+            {
+                Debug.Log("[ExpiredGlbRecovery] Object not found locally: " + objectId);
+                return;
+            }
+
+            var cacheKey = assetId ?? meshPath;
+            if (string.IsNullOrEmpty(cacheKey))
+            {
+                Debug.Log("[ExpiredGlbRecovery] No cacheKey for matching");
+                return;
+            }
+
+            // Check cooldown
+            var cooldownKey = cacheKey + "-" + requesterPeerId;
+            if (_responderCooldowns.TryGetValue(cooldownKey, out var lastCooldown))
+            {
+                var timeSinceCooldown = (DateTime.UtcNow.Ticks / 10000.0) - lastCooldown;
+                if (timeSinceCooldown < COOLDOWN_MS)
+                {
+                    Debug.Log("[ExpiredGlbRecovery] Cooldown active for " + cacheKey + " from " + requesterPeerId);
+                    return;
+                }
+            }
+
+            if (_activeOutgoingTransferId != null)
+            {
+                Debug.Log("[ExpiredGlbRecovery] Already transferring, skipping");
+                return;
+            }
+
+            // Check cache
+            byte[] cachedGlb = null;
+            if (!string.IsNullOrEmpty(assetId) && _assetIdCache.TryGetValue(assetId, out var glbByAssetId))
+                cachedGlb = glbByAssetId;
+            else if (!string.IsNullOrEmpty(meshPath) && _meshPathCache.TryGetValue(meshPath, out var glbByMeshPath))
+                cachedGlb = glbByMeshPath;
+
+            if (cachedGlb == null)
+            {
+                Debug.Log("[ExpiredGlbRecovery] Asset not in local cache: " + cacheKey);
+                return;
+            }
+
+            if (cachedGlb.Length > MAX_GLB_SIZE)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Cached GLB too large, skipping");
+                return;
+            }
+
+            _responderCooldowns[cooldownKey] = DateTime.UtcNow.Ticks / 10000.0;
+            _activeOutgoingTransferId = requestId;
+
+            try
+            {
+                var fileName = !string.IsNullOrEmpty(assetId) ? assetId + ".glb" : objectId + ".glb";
+                Debug.Log("[ExpiredGlbRecovery] Sending GLB to peer: requestId=" + requestId +
+                    ", requesterPeerId=" + requesterPeerId + ", fileName=" + fileName + ", size=" + cachedGlb.Length);
+
+                await SendGlbToPeer(requesterPeerId, fileName, cachedGlb);
+            }
+            catch (System.Exception err)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Failed to send GLB: " + err);
+            }
+            finally
+            {
+                _activeOutgoingTransferId = null;
+            }
+        }
+
+        private async System.Threading.Tasks.Task HandleFileHandoff(string fromPeerId, string raw)
+        {
+            // Parse file metadata
+            var pathMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"path\":\"([^\"]+)\"");
+            var filenameMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"filename\":\"([^\"]+)\"");
+            var sizeMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"size\":(\\d+)");
+            var mimeMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"mime\":\"([^\"]+)\"");
+
+            if (!pathMatch.Success || !filenameMatch.Success || !sizeMatch.Success || !mimeMatch.Success)
+                return;
+
+            var path = pathMatch.Groups[1].Value;
+            var filename = filenameMatch.Groups[1].Value;
+            var size = int.Parse(sizeMatch.Groups[1].Value);
+            var mime = mimeMatch.Groups[1].Value;
+
+            Debug.Log("[ExpiredGlbRecovery] Receiving file from peer: fromPeerId=" + fromPeerId +
+                ", filename=" + filename + ", size=" + size + ", mime=" + mime);
+
+            // Check if we can accept this file
+            if (!CanAcceptFileHandoff(fromPeerId, filename, size, mime))
+            {
+                Debug.Log("[ExpiredGlbRecovery] Not accepting file: no matching recovery");
+                return;
+            }
+
+            try
+            {
+                // Fetch the file from Piping Server
+                var pipingBase = GetPipingServerBase();
+                var url = pipingBase + "/" + path;
+
+                Debug.Log("[ExpiredGlbRecovery] Fetching file from Piping Server: " + url);
+                var http = new HttpClient();
+                var response = await http.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] Failed to fetch file: status=" +
+                        (int)response.StatusCode);
+                    return;
+                }
+
+                var data = await response.Content.ReadAsByteArrayAsync();
+                Debug.Log("[ExpiredGlbRecovery] File fetched: " + data.Length + " bytes");
+
+                await HandleReceivedFile(fromPeerId, filename, data, mime);
+            }
+            catch (System.Exception err)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Failed to receive file: " + err);
             }
         }
 
@@ -794,6 +1081,10 @@ namespace Afjk.SceneSync
                 raw, "\"meshPath\":\"([^\"]+)\"");
             var meshPath = meshPathMatch.Success ? meshPathMatch.Groups[1].Value : null;
 
+            var assetIdMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"assetId\":\"([^\"]+)\"");
+            var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
+
             // meshPath を保存
             if (!string.IsNullOrEmpty(meshPath))
             {
@@ -813,7 +1104,7 @@ namespace Afjk.SceneSync
                 _instanceToObjectId[placeholder.GetInstanceID()] = objectId;
 
                 // 非同期でダウンロード・インポート開始
-                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId);
             }
             else
             {
@@ -865,6 +1156,10 @@ namespace Afjk.SceneSync
             if (!meshPathMatch.Success) return;
             var meshPath = meshPathMatch.Groups[1].Value;
 
+            var assetIdMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"assetId\":\"([^\"]+)\"");
+            var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
+
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
 
@@ -883,11 +1178,12 @@ namespace Afjk.SceneSync
                 _ = DownloadAndCreateObject(objectId, name, meshPath,
                     new float[] { pos.x, pos.y, -pos.z },
                     new float[] { rot.x, rot.y, -rot.z, -rot.w },
-                    new float[] { scl.x, scl.y, scl.z });
+                    new float[] { scl.x, scl.y, scl.z },
+                    assetId);
             }
             else
             {
-                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId);
             }
         }
 
@@ -921,7 +1217,7 @@ namespace Afjk.SceneSync
             var objectsJson = new System.Text.StringBuilder();
             objectsJson.Append("{");
             bool first = true;
-            var pendingUploads = new List<(byte[] glb, string path)>();
+            var pendingUploads = new List<(byte[] glb, string path, string assetId)>();
 
             foreach (var go in rootObjects)
             {
@@ -934,9 +1230,16 @@ namespace Afjk.SceneSync
 
                 // 保存済み meshPath を優先使用
                 string path = null;
+                string assetId = null;
                 if (_meshPaths.TryGetValue(objectId, out var savedPath))
                 {
                     path = savedPath;
+                    // Try to find assetId if cached
+                    if (_meshPathCache.ContainsKey(path))
+                    {
+                        var glbData = _meshPathCache[path];
+                        assetId = PresenceClientRuntime.ComputeAssetId(glbData);
+                    }
                 }
                 else if (go.GetComponentInChildren<MeshFilter>() != null
                     || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
@@ -945,19 +1248,23 @@ namespace Afjk.SceneSync
                     if (glb != null)
                     {
                         path = PresenceClientRuntime.GenerateRandomPath();
-                        pendingUploads.Add((glb, path));
+                        assetId = PresenceClientRuntime.ComputeAssetId(glb);
+                        pendingUploads.Add((glb, path, assetId));
                         _meshPaths[objectId] = path;
+                        _assetIdCache[assetId] = glb;
+                        _meshPathCache[path] = glb;
                     }
                 }
 
                 if (!first) objectsJson.Append(",");
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+                var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
                 objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + "}");
+                    meshPathJson + assetIdJson + "}");
             }
 
             // Web 由来のオブジェクトも含める
@@ -974,20 +1281,27 @@ namespace Afjk.SceneSync
                 string path = null;
                 _meshPaths.TryGetValue(kvp.Key, out path);
 
+                string assetId = null;
+                if (path != null && _meshPathCache.TryGetValue(path, out var glbData))
+                {
+                    assetId = PresenceClientRuntime.ComputeAssetId(glbData);
+                }
+
                 if (!first) objectsJson.Append(",");
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+                var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
                 objectsJson.Append("\"" + kvp.Key + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + "}");
+                    meshPathJson + assetIdJson + "}");
             }
 
             objectsJson.Append("}");
 
             // アップロードを先に完了させる
-            foreach (var (glb, path) in pendingUploads)
+            foreach (var (glb, path, assetId) in pendingUploads)
                 await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
 
             // handoff で 1対1 返信（broadcast ではない）
@@ -1168,11 +1482,26 @@ namespace Afjk.SceneSync
 
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
-            float[] position, float[] rotation, float[] scale)
+            float[] position, float[] rotation, float[] scale, string assetId = null)
         {
             _knownObjectIds.Add(objectId);
 
-            try
+            byte[] glbBytes = null;
+
+            // Check cache first
+            if (!string.IsNullOrEmpty(assetId) && _assetIdCache.TryGetValue(assetId, out var cachedByAssetId))
+            {
+                Debug.Log("[SceneSync] Using cached GLB by assetId: " + assetId);
+                glbBytes = cachedByAssetId;
+            }
+            else if (!string.IsNullOrEmpty(meshPath) && _meshPathCache.TryGetValue(meshPath, out var cachedByMeshPath))
+            {
+                Debug.Log("[SceneSync] Using cached GLB by meshPath: " + meshPath);
+                glbBytes = cachedByMeshPath;
+            }
+
+            // Download if not in cache
+            if (glbBytes == null)
             {
                 var url = GetBlobUrl() + "/" + meshPath;
                 Debug.Log(
@@ -1201,12 +1530,30 @@ namespace Afjk.SceneSync
                         + ", objectId=" + objectId
                         + ", name=" + name
                         + ", meshPath=" + meshPath);
+
+                    // Trigger recovery on 404
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        Debug.Log("[SceneSync] Blob expired, attempting recovery");
+                        _ = HandleMissingGlb(objectId, meshPath, null, assetId);
+                    }
+
                     var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
 
-                var glbBytes = await response.Content.ReadAsByteArrayAsync();
+                glbBytes = await response.Content.ReadAsByteArrayAsync();
+
+                // Cache the downloaded GLB
+                if (!string.IsNullOrEmpty(assetId))
+                    _assetIdCache[assetId] = glbBytes;
+                if (!string.IsNullOrEmpty(meshPath))
+                    _meshPathCache[meshPath] = glbBytes;
+            }
+
+            try
+            {
                 var tempPath = System.IO.Path.Combine(
                     Application.temporaryCachePath, meshPath + ".glb");
                 System.IO.File.WriteAllBytes(tempPath, glbBytes);
@@ -1460,6 +1807,293 @@ namespace Afjk.SceneSync
                 {
                     DestroyImmediate(child);
                 }
+            }
+        }
+
+        private List<PeerInfo> GetOtherPeers()
+        {
+            var result = new List<PeerInfo>();
+            if (_peers == null) return result;
+            foreach (var peer in _peers)
+            {
+                if (peer.id != _client?.Id)
+                    result.Add(peer);
+            }
+            return result;
+        }
+
+        private async System.Threading.Tasks.Task HandleMissingGlb(string objectId, string meshPath, int? expectedSize, string assetId)
+        {
+            var requestId = DateTime.Now.Ticks.ToString() + "-" + UnityEngine.Random.Range(0, 1000000).ToString("D6");
+
+            Debug.Log("[ExpiredGlbRecovery] Missing GLB detected: objectId=" + objectId + ", meshPath=" + meshPath +
+                ", assetId=" + assetId + ", requestId=" + requestId);
+
+            var recovery = new ExpiredGlbRecovery
+            {
+                requestId = requestId,
+                objectId = objectId,
+                assetId = assetId,
+                meshPath = meshPath,
+                expectedSize = expectedSize,
+                requestedAt = DateTime.UtcNow.Ticks / 10000.0,
+                requestedPeerIds = new HashSet<string>()
+            };
+
+            _pendingRecoveries[requestId] = recovery;
+
+            var peers = GetOtherPeers();
+            if (peers.Count == 0)
+            {
+                Debug.Log("[ExpiredGlbRecovery] No other peers available");
+                _ = RemoveRecoveryAfterTimeout(requestId);
+                return;
+            }
+
+            var peerIndex = 0;
+            System.Action<System.Action> scheduleNextPeer = null;
+            scheduleNextPeer = (onComplete) =>
+            {
+                if (!_pendingRecoveries.ContainsKey(requestId))
+                {
+                    onComplete?.Invoke();
+                    return;
+                }
+
+                if (peerIndex >= peers.Count)
+                {
+                    Debug.Log("[ExpiredGlbRecovery] All peers exhausted for requestId: " + requestId);
+                    _pendingRecoveries.Remove(requestId);
+                    onComplete?.Invoke();
+                    return;
+                }
+
+                var peer = peers[peerIndex];
+                peerIndex++;
+
+                if (_pendingRecoveries.TryGetValue(requestId, out var rec))
+                    rec.requestedPeerIds.Add(peer.id);
+
+                Debug.Log("[ExpiredGlbRecovery] Sending request to peer " + (peerIndex - 1) + ": " + peer.id);
+                var request = "{\"kind\":\"scene-asset-request\",\"requestId\":\"" + requestId +
+                    "\",\"objectId\":\"" + objectId +
+                    "\",\"assetId\":" + (assetId != null ? "\"" + assetId + "\"" : "null") +
+                    ",\"meshPath\":" + (meshPath != null ? "\"" + meshPath + "\"" : "null") +
+                    ",\"expectedSize\":" + (expectedSize.HasValue ? expectedSize.Value.ToString() : "null") + "}";
+                _ = _client.SendHandoff(peer.id, request);
+
+                // Schedule next peer retry after PEER_RETRY_INTERVAL_MS
+                _ = System.Threading.Tasks.Task.Delay((int)PEER_RETRY_INTERVAL_MS).ContinueWith(_ =>
+                {
+                    scheduleNextPeer(onComplete);
+                });
+            };
+
+            scheduleNextPeer(null);
+
+            // Overall timeout
+            _ = RemoveRecoveryAfterTimeout(requestId);
+        }
+
+        private async System.Threading.Tasks.Task RemoveRecoveryAfterTimeout(string requestId)
+        {
+            await System.Threading.Tasks.Task.Delay((int)RECOVERY_TIMEOUT_MS);
+            if (_pendingRecoveries.ContainsKey(requestId))
+            {
+                Debug.Log("[ExpiredGlbRecovery] Recovery timeout for requestId: " + requestId);
+                _pendingRecoveries.Remove(requestId);
+            }
+        }
+
+        private bool CanAcceptFileHandoff(string fromPeerId, string filename, int size, string mime)
+        {
+            if (string.IsNullOrEmpty(fromPeerId) || string.IsNullOrEmpty(filename) || size <= 0 || string.IsNullOrEmpty(mime))
+                return false;
+
+            var isGlb = mime == "model/gltf-binary" || filename.ToLower().EndsWith(".glb");
+            if (!isGlb) return false;
+
+            // Find matching pending recovery
+            foreach (var kvp in _pendingRecoveries)
+            {
+                var rec = kvp.Value;
+                if (!rec.requestedPeerIds.Contains(fromPeerId))
+                    continue;
+
+                if (rec.expectedSize.HasValue && rec.expectedSize.Value != size)
+                    continue;
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private async System.Threading.Tasks.Task HandleReceivedFile(string fromPeerId, string filename, byte[] data, string mime)
+        {
+            if (data == null || data.Length == 0)
+            {
+                Debug.Log("[ExpiredGlbRecovery] File received but data is empty");
+                return;
+            }
+
+            Debug.Log("[ExpiredGlbRecovery] File received from peer: fromPeerId=" + fromPeerId +
+                ", filename=" + filename + ", size=" + data.Length);
+
+            if (data.Length > MAX_GLB_SIZE)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Received file too large, ignoring");
+                return;
+            }
+
+            var isGlb = mime == "model/gltf-binary" || filename.ToLower().EndsWith(".glb");
+            if (!isGlb)
+            {
+                Debug.Log("[ExpiredGlbRecovery] File is not GLB, ignoring");
+                return;
+            }
+
+            // Find matching pending recovery
+            ExpiredGlbRecovery recovery = null;
+            foreach (var kvp in _pendingRecoveries)
+            {
+                var rec = kvp.Value;
+                if (!rec.requestedPeerIds.Contains(fromPeerId))
+                    continue;
+
+                if (rec.expectedSize.HasValue && rec.expectedSize.Value != data.Length)
+                    continue;
+
+                recovery = rec;
+                break;
+            }
+
+            if (recovery == null)
+            {
+                Debug.Log("[ExpiredGlbRecovery] No matching pending recovery for this file from requestedPeerIds");
+                return;
+            }
+
+            Debug.Log("[ExpiredGlbRecovery] Matching recovered file to pending recovery: " + recovery.requestId);
+
+            string computedAssetId = null;
+            if (recovery.assetId != null)
+            {
+                try
+                {
+                    computedAssetId = PresenceClientRuntime.ComputeAssetId(data);
+                }
+                catch (Exception err)
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] Failed to compute asset ID: " + err);
+                }
+
+                if (string.IsNullOrEmpty(computedAssetId))
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] Expected assetId but computation failed, ignoring file");
+                    return;
+                }
+
+                if (recovery.assetId != computedAssetId)
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] Asset ID mismatch, ignoring file. Expected: " + recovery.assetId +
+                        ", got: " + computedAssetId);
+                    return;
+                }
+            }
+
+            _pendingRecoveries.Remove(recovery.requestId);
+
+            try
+            {
+                // Cache the GLB bytes
+                if (computedAssetId != null)
+                    _assetIdCache[computedAssetId] = data;
+                if (recovery.meshPath != null)
+                    _meshPathCache[recovery.meshPath] = data;
+
+                Debug.Log("[ExpiredGlbRecovery] Loading recovered GLB into object: " + recovery.objectId);
+                await LoadGlbFromBytes(recovery.objectId, data);
+                Debug.Log("[ExpiredGlbRecovery] Recovered GLB loaded successfully");
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Failed to load recovered GLB: " + err);
+            }
+        }
+
+        private async System.Threading.Tasks.Task LoadGlbFromBytes(string objectId, byte[] glbBytes)
+        {
+            var go = FindManagedObject(objectId);
+            if (go == null)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Object not found: " + objectId);
+                return;
+            }
+
+            var name = go.name;
+            var pos = go.transform.position;
+            var rot = go.transform.rotation;
+            var scl = go.transform.localScale;
+
+            // Save position/rotation/scale
+            var position = new float[] { pos.x, pos.y, -pos.z };
+            var rotation = new float[] { rot.x, rot.y, -rot.z, -rot.w };
+            var scale = new float[] { scl.x, scl.y, scl.z };
+
+            var meshPath = null as string;
+            if (_meshPaths.TryGetValue(objectId, out var mp))
+                meshPath = mp;
+
+            // Reuse the existing load logic but with bytes instead of download
+            var tempPath = System.IO.Path.Combine(Application.temporaryCachePath, objectId + ".glb");
+            System.IO.File.WriteAllBytes(tempPath, glbBytes);
+
+            try
+            {
+                var deferAgent = gameObject.AddComponent<TimeBudgetPerFrameDeferAgent>();
+                var importSettings = new ImportSettings
+                {
+                    AnimationMethod = AnimationMethod.None,
+                };
+                var gltf = new GltfImport(downloadProvider: null, deferAgent: deferAgent);
+                var success = await gltf.Load("file://" + tempPath, importSettings);
+
+                if (success)
+                {
+                    Destroy(go);
+                    _managedObjects.Remove(objectId);
+
+                    var newGo = new GameObject(name);
+                    ConfigureRemoteTemporaryIdentity(newGo, objectId, meshPath);
+                    newGo.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+
+                    var importedGlbRoot = new GameObject("ImportedGlbRoot");
+                    importedGlbRoot.transform.SetParent(newGo.transform, worldPositionStays: false);
+                    importedGlbRoot.transform.localPosition = Vector3.zero;
+                    importedGlbRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    importedGlbRoot.transform.localScale = Vector3.one;
+
+                    _instanceToObjectId[newGo.GetInstanceID()] = objectId;
+                    _managedObjects[objectId] = newGo;
+
+                    await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
+                    ApplyFallbackMaterialToRenderers(newGo, replaceAll: false, reason: "post-recovery import");
+                    ApplyTransform(newGo, position, rotation, scale);
+
+                    OnObjectAdded?.Invoke(objectId, newGo);
+                }
+                else
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] glTF import failed");
+                }
+
+                if (deferAgent != null)
+                    Destroy(deferAgent);
+            }
+            finally
+            {
+                try { System.IO.File.Delete(tempPath); } catch { }
             }
         }
 
