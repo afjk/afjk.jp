@@ -47,7 +47,7 @@ export function createExpiredGlbRecovery({
       meshPath: meshPath || null,
       expectedSize: expectedSize || null,
       requestedAt: Date.now(),
-      fromPeerId: null,
+      requestedPeerIds: new Set(),
     };
 
     pendingRecoveries.set(requestId, recovery);
@@ -209,7 +209,7 @@ export function createExpiredGlbRecovery({
       return;
     }
 
-    const isGlb = (file.type === 'model/gltf-binary' || file.name.endsWith('.glb'));
+    const isGlb = (file.type === 'model/gltf-binary' || file.name.toLowerCase().endsWith('.glb'));
     if (!isGlb) {
       console.log('[ExpiredGlbRecovery] File is not GLB, ignoring');
       return;
@@ -238,9 +238,15 @@ export function createExpiredGlbRecovery({
       console.warn('[ExpiredGlbRecovery] Failed to compute asset ID:', err);
     }
 
-    if (recovery.assetId && computedAssetId && recovery.assetId !== computedAssetId) {
-      console.warn('[ExpiredGlbRecovery] Asset ID mismatch, ignoring file');
-      return;
+    if (recovery.assetId) {
+      if (!computedAssetId) {
+        console.warn('[ExpiredGlbRecovery] Expected assetId but computation failed, ignoring file');
+        return;
+      }
+      if (recovery.assetId !== computedAssetId) {
+        console.warn('[ExpiredGlbRecovery] Asset ID mismatch, ignoring file');
+        return;
+      }
     }
 
     if (recovery.expectedSize && recovery.expectedSize !== file.size) {
@@ -272,7 +278,7 @@ export function createExpiredGlbRecovery({
       return false;
     }
 
-    const isGlb = (mime === 'model/gltf-binary' || filename.endsWith('.glb'));
+    const isGlb = (mime === 'model/gltf-binary' || filename.toLowerCase().endsWith('.glb'));
     if (!isGlb) {
       return false;
     }
