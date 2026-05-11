@@ -2918,9 +2918,36 @@ async function handleAiCommand(from, payload) {
 
 // ── シーン同期ヘルパー ───────────────────────────────────
 
+function normalizeSceneAsset(asset, payload = {}) {
+  const meshPath = payload.meshPath || asset?.meshPath;
+
+  if (meshPath && (asset?.type === 'gltf' || asset?.type === 'glb')) {
+    return {
+      ...asset,
+      type: 'mesh',
+      source: asset.source || 'carrier',
+      meshPath,
+      mime: asset.mime || 'model/gltf-binary',
+    };
+  }
+
+  if (!asset && meshPath) {
+    return {
+      type: 'mesh',
+      source: 'carrier',
+      meshPath,
+      assetId: payload.assetId || null,
+      mime: 'model/gltf-binary',
+    };
+  }
+
+  return asset;
+}
+
 function addOrUpdateObject(objectId, info, options = {}) {
   const existing = managedObjects.get(objectId);
-  const asset = info.asset;
+  let asset = info.asset;
+  asset = normalizeSceneAsset(asset, info);
 
   if (asset) {
     switch (asset.type) {
@@ -3593,16 +3620,17 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       return;
     }
 
-    // Always use fresh meshPath in asset for newly added local objects
+    // Use canonical asset metadata for creator and broadcast
     const asset = {
-      ...(model.userData.asset || {}),
-      type: 'gltf',
+      type: 'mesh',
+      source: 'carrier',
       meshPath: actualMeshPath,
     };
     if (assetId) {
       asset.assetId = assetId;
     }
-    model.userData.asset = asset;
+    model.userData.asset = { ...asset };
+    model.userData.meshPath = actualMeshPath;
 
     const historyEntry = HistoryManager.createAddEntry(
       objectId,
@@ -3625,16 +3653,9 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       position: model.position.toArray(),
       rotation: model.quaternion.toArray(),
       scale: model.scale.toArray(),
-      asset: {
-        type: 'mesh',
-        source: 'carrier',
-        meshPath: actualMeshPath,
-      },
+      asset: { ...asset },
       meshPath: actualMeshPath,
     };
-    if (assetId) {
-      sceneAddPayload.asset.assetId = assetId;
-    }
 
     broadcast(sceneAddPayload);
   } finally {
