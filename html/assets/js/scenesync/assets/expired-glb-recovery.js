@@ -89,7 +89,7 @@ export function createExpiredGlbRecovery({
 
       const recovery = pendingRecoveries.get(requestId);
       if (recovery) {
-        recovery.fromPeerId = peer.id;
+        recovery.requestedPeerIds.add(peer.id);
       }
 
       console.log('[ExpiredGlbRecovery] Sending request to peer', peerIndex - 1, ':', peer.id);
@@ -217,11 +217,7 @@ export function createExpiredGlbRecovery({
 
     let recovery = null;
     for (const [, rec] of pendingRecoveries) {
-      if (!rec.assetId) {
-        if (rec.fromPeerId !== fromPeerId) {
-          continue;
-        }
-      } else if (rec.fromPeerId && rec.fromPeerId !== fromPeerId) {
+      if (!rec.requestedPeerIds.has(fromPeerId)) {
         continue;
       }
       recovery = rec;
@@ -229,7 +225,7 @@ export function createExpiredGlbRecovery({
     }
 
     if (!recovery) {
-      console.log('[ExpiredGlbRecovery] No matching pending recovery for this file');
+      console.log('[ExpiredGlbRecovery] No matching pending recovery for this file from requestedPeerIds');
       return;
     }
 
@@ -283,11 +279,7 @@ export function createExpiredGlbRecovery({
 
     let recovery = null;
     for (const [, rec] of pendingRecoveries) {
-      if (!rec.assetId) {
-        if (rec.fromPeerId !== fromPeerId) {
-          continue;
-        }
-      } else if (rec.fromPeerId && rec.fromPeerId !== fromPeerId) {
+      if (!rec.requestedPeerIds.has(fromPeerId)) {
         continue;
       }
 

@@ -39,7 +39,7 @@ export function createSceneSyncFileTransferAdapter({
     });
 
     try {
-      await fetch(`${PIPING_BASE}/${path}`, {
+      const response = await fetch(`${PIPING_BASE}/${path}`, {
         method: 'POST',
         headers: {
           'Content-Type': file.type || 'application/octet-stream',
@@ -47,6 +47,9 @@ export function createSceneSyncFileTransferAdapter({
         },
         body: file,
       });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} uploading file`);
+      }
       console.log('[FileTransferAdapter] File transfer complete:', path);
     } catch (err) {
       console.warn('[FileTransferAdapter] File transfer failed:', err);

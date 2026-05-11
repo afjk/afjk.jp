@@ -39,7 +39,7 @@ export function createSceneAssetCache(options = {}) {
       return;
     }
 
-    if (blob.type && blob.type !== 'model/gltf-binary' && !blob.type.includes('gltf')) {
+    if (blob.type && blob.type !== 'model/gltf-binary' && blob.type !== 'application/octet-stream' && !blob.type.includes('gltf')) {
       console.warn(`[AssetCache] Unsupported MIME type: ${blob.type}, skipping cache`);
       return;
     }
