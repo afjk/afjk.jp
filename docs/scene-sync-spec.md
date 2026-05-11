@@ -435,7 +435,7 @@ Blob Store の TTL が短いため（デフォルト 10 分）、新しく参加
 
 #### FileTransfer での GLB 配信
 
-既存の `kind: 'file'` handoff を使用。Presence Server が handoff を経由してファイルメタデータを配信し、 Piping Server または WebRTC P2P で実データを転送する。
+既存の `kind: 'file'` handoff を使用。Presence Server が handoff を経由してファイルメタデータを配信し、Piping Server HTTP relay で実データを転送する（P0）。
 
 ```json
 {
@@ -451,6 +451,11 @@ Blob Store の TTL が短いため（デフォルト 10 分）、新しく参加
   }
 }
 ```
+
+**実データ転送エンドポイント**:
+- Production: `https://pipe.afjk.jp/{path}` (POST/GET)
+- Local dev: `http://localhost:8080/{path}` (POST/GET)
+- 表示 URL は `https://afjk.jp/pipe/#path` のままで互換性維持
 
 ### クライアント実装（Web）
 
@@ -471,10 +476,16 @@ Blob Store の TTL が短いため（デフォルト 10 分）、新しく参加
 #### 復元フロー
 
 1. GLB 404 → `handleMissingGlb(objectId, meshPath, expectedSize, assetId)`
-2. `scene-asset-request` を nearby peer へ送信（優先）、または broadcast
+2. `scene-asset-request` を peer へ sequential で送信：
+   - 最初の peer A へ送信
+   - 4 秒待機
+   - pending のままなら次の peer B へ送信
+   - さらに 4 秒待機
+   - pending のままなら次の peer C へ...
+   - 全体 timeout は 30 秒、または全 peer 試行済み
 3. Peer が `scene-asset-request` 受信 → ローカルキャッシュから GLB を検索
-4. GLB 見つかった → FileTransfer で requester へ送信
-5. Requester が file handoff 受信 → `maybeHandleFileTransferHandoff` で file fetch
+4. GLB 見つかった → FileTransfer で requester へのみ送信（broadcast しない）
+5. Requester が file handoff 受信 → Piping Server から GLB を fetch
 6. ファイル受信 → pending recovery とマッチング（assetId / size 検証）
 7. マッチ → `loadGlbBlobForObject` でシーンに追加
 8. キャッシュ保存 → `assetCache.putAsset(...)`

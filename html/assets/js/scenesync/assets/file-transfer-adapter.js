@@ -8,9 +8,10 @@ export function createSceneSyncFileTransferAdapter({
   showToast,
 }) {
   const fileReceivedCallbacks = [];
-  const PIPE_BASE = location.hostname === 'localhost'
-    ? 'http://localhost:8080/pipe'
-    : `${location.origin}/pipe`;
+  const PIPING_BASE = location.hostname === 'localhost'
+    ? 'http://localhost:8080'
+    : 'https://pipe.afjk.jp';
+  const PIPE_DISPLAY_URL = `${location.origin}/pipe`;
 
   async function sendFileToPeer(peerId, file) {
     if (!file || !peerId) {
@@ -23,7 +24,7 @@ export function createSceneSyncFileTransferAdapter({
       filename: file.name || 'file.glb',
       size: file.size,
       mime: file.type || 'application/octet-stream',
-      url: `${PIPE_BASE}/#${path}`,
+      url: `${PIPE_DISPLAY_URL}/#${path}`,
     };
 
     console.log('[FileTransferAdapter] Sending file to peer:', {
@@ -38,7 +39,7 @@ export function createSceneSyncFileTransferAdapter({
     });
 
     try {
-      await fetch(`${PIPE_BASE}/${path}`, {
+      await fetch(`${PIPING_BASE}/${path}`, {
         method: 'POST',
         headers: {
           'Content-Type': file.type || 'application/octet-stream',
@@ -86,7 +87,7 @@ export function createSceneSyncFileTransferAdapter({
     });
 
     try {
-      const response = await fetch(`${PIPE_BASE}/${payload.path}`);
+      const response = await fetch(`${PIPING_BASE}/${payload.path}`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} fetching file`);
       }

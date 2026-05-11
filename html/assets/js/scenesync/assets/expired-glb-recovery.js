@@ -1,9 +1,20 @@
 import { computeAssetId } from './asset-id.js';
 
 const RECOVERY_TIMEOUT_MS = 30000;
+const PEER_RETRY_INTERVAL_MS = 4000;
 const COOLDOWN_MS = 30000;
 const MAX_GLB_SIZE = 50 * 1024 * 1024;
 const MAX_ACTIVE_OUTGOING = 1;
+
+function getOtherPeers(presenceState) {
+  let peers = presenceState.peers;
+  if (peers instanceof Map) {
+    peers = Array.from(peers.values());
+  } else if (!Array.isArray(peers)) {
+    peers = [];
+  }
+  return peers.filter(p => p.id !== presenceState.id);
+}
 
 export function createExpiredGlbRecovery({
   assetCache,
@@ -43,7 +54,7 @@ export function createExpiredGlbRecovery({
 
     showToast('GLBアセットの期限切れ。近くの参加者に問い合わせています...');
 
-    const peers = presenceState.peers.filter(p => p.id !== presenceState.id);
+    const peers = getOtherPeers(presenceState);
     if (peers.length === 0) {
       console.log('[ExpiredGlbRecovery] No other peers available');
       setTimeout(() => {
@@ -61,17 +72,35 @@ export function createExpiredGlbRecovery({
       expectedSize: expectedSize || null,
     };
 
-    const preferredPeer = peers[0];
-    if (preferredPeer) {
+    let peerIndex = 0;
+    function tryNextPeer() {
+      if (!pendingRecoveries.has(requestId)) {
+        return;
+      }
+
+      if (peerIndex >= peers.length) {
+        console.log('[ExpiredGlbRecovery] All peers exhausted for requestId:', requestId);
+        pendingRecoveries.delete(requestId);
+        return;
+      }
+
+      const peer = peers[peerIndex];
+      peerIndex++;
+
+      console.log('[ExpiredGlbRecovery] Sending request to peer', peerIndex - 1, ':', peer.id);
       sendHandoff({
-        targetId: preferredPeer.id,
+        targetId: peer.id,
         payload: request,
       });
-      console.log('[ExpiredGlbRecovery] Sent request to preferred peer:', preferredPeer.id);
-    } else {
-      broadcast(request);
-      console.log('[ExpiredGlbRecovery] Broadcast request to all peers');
+
+      setTimeout(() => {
+        if (pendingRecoveries.has(requestId)) {
+          tryNextPeer();
+        }
+      }, PEER_RETRY_INTERVAL_MS);
     }
+
+    tryNextPeer();
 
     setTimeout(() => {
       if (pendingRecoveries.has(requestId)) {

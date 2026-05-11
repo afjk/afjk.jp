@@ -2333,9 +2333,12 @@ function handleHandoff(data) {
   }
 
   // Handle generic file transfer (for recovered GLB delivery)
-  fileTransferAdapter.maybeHandleFileTransferHandoff({ payload, from: data.from }).catch(err => {
-    console.warn('[FileTransferAdapter] Error in handoff:', err);
-  });
+  if (payload.kind === 'file') {
+    fileTransferAdapter.maybeHandleFileTransferHandoff({ payload, from: data.from }).catch(err => {
+      console.warn('[FileTransferAdapter] Error in handoff:', err);
+    });
+    return;
+  }
 
   if (!payload.kind) return;
 
@@ -2998,9 +3001,10 @@ function loadMeshObject(objectId, info, meshPath, existing) {
 
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
+      let loadCompleted = false;
 
-      try {
-        glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
+      glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
+        try {
           removeLoadingOverlay(objectId);
           model.userData.objectId = objectId;
           model.userData.name = info.name;
@@ -3038,26 +3042,29 @@ function loadMeshObject(objectId, info, meshPath, existing) {
           } catch (cacheErr) {
             console.warn('[SceneSync] Failed to cache mesh:', cacheErr);
           }
-        }).catch((err) => {
-          removeLoadingOverlay(objectId);
-          console.warn('Failed to load mesh for', objectId, ':', err);
-          if (!existing) {
-            replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-            return;
-          }
+        } finally {
+          loadCompleted = true;
+          URL.revokeObjectURL(objectUrl);
+        }
+      }).catch((err) => {
+        removeLoadingOverlay(objectId);
+        console.warn('Failed to load mesh for', objectId, ':', err);
+        if (!existing) {
+          replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+        } else {
           notifySceneStateChanged('mesh-load-failed');
-        });
-      } finally {
+        }
+        loadCompleted = true;
         URL.revokeObjectURL(objectUrl);
-      }
+      });
     } catch (err) {
       removeLoadingOverlay(objectId);
       console.warn('Failed to fetch mesh for', objectId, ':', err);
       if (!existing) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-        return;
+      } else {
+        notifySceneStateChanged('mesh-load-failed');
       }
-      notifySceneStateChanged('mesh-load-failed');
     }
   })();
 }
