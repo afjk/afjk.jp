@@ -4,7 +4,7 @@ import { generateTemporaryImageObjectId } from '../../../html/assets/js/scenesyn
 
 test('generateTemporaryImageObjectId returns temp-image prefixed id', () => {
   const objectId = generateTemporaryImageObjectId();
-  assert.match(objectId, /^temp-image-[a-z0-9]+-[a-z0-9]{6}$/);
+  assert.match(objectId, /^temp-image-[a-z0-9]+-[a-z0-9]{12}$/);
 });
 
 test('generateTemporaryImageObjectId is unique across calls', () => {

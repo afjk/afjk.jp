@@ -1332,6 +1332,7 @@ async function createTemporaryPlanePreview(objectId, file, position, entry) {
     mesh.userData.objectId = objectId;
     mesh.userData._temporary = true;
     mesh.userData._temporaryImagePreview = true;
+    // Temporary preview should not become selectable/inspectable.
     mesh.raycast = () => {};
 
     if (position?.copy) {
@@ -1396,6 +1397,7 @@ async function createTemporarySkyPreview(objectId, file, entry) {
     sphere.userData._temporary = true;
     sphere.userData._temporaryImagePreview = true;
     sphere.userData._temporarySkyPreview = true;
+    // Temporary preview should not become selectable/inspectable.
     sphere.raycast = () => {};
 
     scene.add(sphere);
