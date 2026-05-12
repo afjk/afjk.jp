@@ -1,6 +1,7 @@
 import { CoordinateTransformer } from '../utils/coordinate-utils.js';
 import { GLBFileLoader } from '../loaders/glb-file-loader.js';
 import { parseUriList, extractUrlFromText } from '../loaders/url-classifier.js';
+import { generateTemporaryImageObjectId } from '../loaders/image-preview.js';
 
 function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
@@ -294,18 +295,21 @@ export class DragDropManager {
     }
 
     if (this.imageImporter && isSupportedImageFile(file)) {
+      const objectId = generateTemporaryImageObjectId();
       const loadInfo = {
+        objectId,
         file,
         position: normalized.position,
         source: 'image',
         targetKind: normalized.targetKind,
+        temporary: true,
       };
 
       const toastMessage = normalized.targetKind === 'sky'
-        ? 'Skybox画像を読み込み中…'
-        : '画像を読み込み中…';
+        ? 'Skybox画像を準備中…'
+        : '画像を準備中…';
       this.showToast?.(toastMessage);
-      this.onLoadStart?.(loadInfo);
+      await this.onLoadStart?.(loadInfo);
 
       try {
         await this.imageImporter(file, normalized.position, {
@@ -313,12 +317,13 @@ export class DragDropManager {
           clientX: normalized.clientX,
           clientY: normalized.clientY,
           upness: normalized.upness,
+          tempObjectId: objectId,
         });
       } catch (error) {
         console.warn('[drag-drop] image import failed:', error);
-        this.showToast?.(error?.message || '画像の読み込みに失敗しました');
+        this.showToast?.(error?.message || '画像の追加に失敗しました');
       } finally {
-        this.onLoadEnd?.(loadInfo);
+        await this.onLoadEnd?.(loadInfo);
       }
       return null;
     }
