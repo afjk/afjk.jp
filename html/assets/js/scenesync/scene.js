@@ -4105,7 +4105,7 @@ function closeMobileRoomSheet() {
 dom.addBtn?.addEventListener('click', (event) => {
   if (!isMobileUi()) return;
   event.preventDefault();
-  event.stopImmediatePropagation();
+  event.stopPropagation();
   openMobileActionSheet();
 }, true);
 
