@@ -1302,7 +1302,7 @@ async function createTemporaryPlanePreview(objectId, file, position, entry) {
     });
 
     if (entry.cancelled) {
-      texture.dispose?.();
+      texture.dispose();
       return;
     }
 
@@ -1369,7 +1369,7 @@ async function createTemporarySkyPreview(objectId, file, entry) {
     });
 
     if (entry.cancelled) {
-      texture.dispose?.();
+      texture.dispose();
       return;
     }
 
@@ -1424,9 +1424,9 @@ function removeTemporaryImagePreview(objectId) {
     scene.remove(entry.object);
   }
 
-  entry.texture?.dispose?.();
-  entry.geometry?.dispose?.();
-  entry.material?.dispose?.();
+  entry.texture?.dispose();
+  entry.geometry?.dispose();
+  entry.material?.dispose();
 
   if (entry.objectUrl) {
     URL.revokeObjectURL(entry.objectUrl);
