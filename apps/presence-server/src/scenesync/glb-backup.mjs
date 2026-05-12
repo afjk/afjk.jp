@@ -35,7 +35,7 @@ function getFreeBytes(directory) {
     const stats = statfsSync(directory);
     return Number(stats.bavail) * Number(stats.bsize);
   } catch {
-    return Number.POSITIVE_INFINITY;
+    return null;
   }
 }
 
@@ -69,7 +69,13 @@ export function cleanupOldBackups({ backupDir, retentionDays = 7, now = Date.now
   return deleted;
 }
 
-export function createGlbBackupManager(config, logger) {
+export function createGlbBackupManager(config, logger, internals = {}) {
+  const getFreeBytesImpl = internals.getFreeBytes || getFreeBytes;
+  const calculateDirectorySizeBytesImpl = internals.calculateDirectorySizeBytes || calculateDirectorySizeBytes;
+  const estimatedMetadataBytes = Number.isFinite(internals.estimatedMetadataBytes)
+    ? internals.estimatedMetadataBytes
+    : 4096;
+
   return {
     saveAcceptedGlb({ buffer, roomId, actorId, filename = '', mimeType = '', source = 'upload', blobId = null }) {
       if (!config.glbBackupEnabled) {
@@ -80,13 +86,18 @@ export function createGlbBackupManager(config, logger) {
       try {
         mkdirSync(config.glbBackupDir, { recursive: true });
 
-        const totalSize = calculateDirectorySizeBytes(config.glbBackupDir);
-        if (totalSize >= config.glbBackupMaxTotalBytes) {
+        const totalSize = calculateDirectorySizeBytesImpl(config.glbBackupDir);
+        const projectedSize = totalSize + buffer.length + estimatedMetadataBytes;
+        if (projectedSize > config.glbBackupMaxTotalBytes) {
           logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'max_total_bytes_exceeded', totalSize });
           return { saved: false, reason: 'max_total_bytes_exceeded' };
         }
 
-        const freeBytes = getFreeBytes(config.glbBackupDir);
+        const freeBytes = getFreeBytesImpl(config.glbBackupDir);
+        if (freeBytes === null) {
+          logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'free_disk_unknown' });
+          return { saved: false, reason: 'free_disk_unknown' };
+        }
         if (freeBytes < config.glbBackupMinFreeBytes) {
           logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'insufficient_disk_free', freeBytes });
           return { saved: false, reason: 'insufficient_disk_free' };

@@ -114,6 +114,49 @@ describe('Scene Sync guard helpers', () => {
     });
     assert.equal(result.ok, false);
   });
+
+  it('accepts existing protocol control messages', () => {
+    assert.equal(validateSceneSyncPayload({ kind: 'scene-avatar', position: [0, 1, 2] }).ok, true);
+    assert.equal(validateSceneSyncPayload({ kind: 'scene-lock', objectId: 'obj-1' }).ok, true);
+    assert.equal(validateSceneSyncPayload({ kind: 'scene-unlock', objectId: 'obj-1' }).ok, true);
+    assert.equal(validateSceneSyncPayload({ kind: 'ai-link-established', linkId: 'l1' }).ok, true);
+    assert.equal(validateSceneSyncPayload({ kind: 'ai-link-revoked', linkId: 'l1' }).ok, true);
+  });
+
+  it('rejects scene-batch with NaN in nested op', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-batch',
+      ops: [{ kind: 'scene-delta', objectId: 'o1', position: [NaN, 0, 0] }],
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects scene-batch with Infinity in nested op', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-batch',
+      ops: [{ kind: 'scene-delta', objectId: 'o1', scale: [1, Infinity, 1] }],
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects scene-batch with unsupported nested kind', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-batch',
+      ops: [{ kind: 'scene-not-supported' }],
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('accepts valid scene-batch ops', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-batch',
+      ops: [
+        { kind: 'scene-add', objectId: 'o1', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        { kind: 'scene-delta', objectId: 'o1', position: [1, 0, 0] },
+      ],
+    });
+    assert.equal(result.ok, true);
+  });
 });
 
 describe('Scene Sync server guards', () => {
@@ -133,6 +176,33 @@ describe('Scene Sync server guards', () => {
       body: Buffer.from('hello'),
     });
     assert.equal(response.status, 415);
+  });
+
+  it('rejects application/octet-stream upload without extension', async () => {
+    const response = await fetch(`${baseUrl}/blob/noext`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'User-Agent': 'guard-octet-noext-test' },
+      body: Buffer.from('glTFpayload'),
+    });
+    assert.equal(response.status, 415);
+  });
+
+  it('accepts application/octet-stream GLB with valid magic', async () => {
+    const response = await fetch(`${baseUrl}/blob/octet-valid.glb`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'User-Agent': 'guard-octet-valid-test' },
+      body: Buffer.from('glTFpayload'),
+    });
+    assert.equal(response.status, 201);
+  });
+
+  it('rejects application/octet-stream GLB with invalid magic', async () => {
+    const response = await fetch(`${baseUrl}/blob/octet-invalid.glb`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'User-Agent': 'guard-octet-invalid-test' },
+      body: Buffer.from('BAD!payload'),
+    });
+    assert.equal(response.status, 400);
   });
 
   it('rejects invalid glb upload magic', async () => {
@@ -173,12 +243,71 @@ describe('Scene Sync server guards', () => {
     assert.equal(response.status, 413);
   });
 
+  it('accepts existing avatar/lock/unlock protocol messages', async () => {
+    const headers = { 'Content-Type': 'application/json' };
+    const avatar = await fetch(`${baseUrl}/api/room/protocol-compat/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'scene-avatar', position: [0, 1, 2], rotation: [0, 0, 0, 1] }),
+    });
+    const lock = await fetch(`${baseUrl}/api/room/protocol-compat/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'scene-lock', objectId: 'obj-1' }),
+    });
+    const unlock = await fetch(`${baseUrl}/api/room/protocol-compat/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'scene-unlock', objectId: 'obj-1' }),
+    });
+
+    assert.equal(avatar.status, 200);
+    assert.equal(lock.status, 200);
+    assert.equal(unlock.status, 200);
+  });
+
   it('enforces object count limit for scene-add', async () => {
     const headers = { 'Content-Type': 'application/json' };
     const add1 = await fetch(`${baseUrl}/api/room/object-limit/broadcast`, { method: 'POST', headers, body: JSON.stringify({ kind: 'scene-add', objectId: 'o1' }) });
     const add2 = await fetch(`${baseUrl}/api/room/object-limit/broadcast`, { method: 'POST', headers, body: JSON.stringify({ kind: 'scene-add', objectId: 'o2' }) });
     const add3 = await fetch(`${baseUrl}/api/room/object-limit/broadcast`, { method: 'POST', headers, body: JSON.stringify({ kind: 'scene-add', objectId: 'o3' }) });
     assert.equal(add1.status, 200);
+    assert.equal(add2.status, 200);
+    assert.equal(add3.status, 429);
+  });
+
+  it('keeps object count unchanged when rejecting invalid scene-batch', async () => {
+    const headers = { 'Content-Type': 'application/json' };
+    const add1 = await fetch(`${baseUrl}/api/room/object-limit-atomic/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'scene-add', objectId: 'o1' }),
+    });
+    assert.equal(add1.status, 200);
+
+    const rejectedBatch = await fetch(`${baseUrl}/api/room/object-limit-atomic/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        kind: 'scene-batch',
+        ops: [
+          { kind: 'scene-add', objectId: 'o2' },
+          { kind: 'scene-add', objectId: 'o3' },
+        ],
+      }),
+    });
+    assert.equal(rejectedBatch.status, 429);
+
+    const add2 = await fetch(`${baseUrl}/api/room/object-limit-atomic/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'scene-add', objectId: 'o2' }),
+    });
+    const add3 = await fetch(`${baseUrl}/api/room/object-limit-atomic/broadcast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'scene-add', objectId: 'o3' }),
+    });
     assert.equal(add2.status, 200);
     assert.equal(add3.status, 429);
   });
@@ -292,6 +421,57 @@ describe('Scene Sync logger and backup', () => {
 
     assert.equal(result.saved, false);
     assert.equal(result.reason, 'max_total_bytes_exceeded');
+  });
+
+  it('GLB backup skips when projected size would exceed max', () => {
+    const localBackup = path.join(tmpRoot, 'backup-projected-skip');
+    mkdirSync(localBackup, { recursive: true });
+    writeFileSync(path.join(localBackup, 'existing.bin'), Buffer.alloc(32));
+
+    const manager = createGlbBackupManager({
+      glbBackupEnabled: true,
+      glbBackupDir: localBackup,
+      glbBackupMaxTotalBytes: 50,
+      glbBackupMinFreeBytes: 0,
+    }, createSceneSyncLogger({ enabled: false }), {
+      estimatedMetadataBytes: 16,
+    });
+
+    const result = manager.saveAcceptedGlb({
+      buffer: Buffer.from('glTFpayload'),
+      roomId: 'room-c',
+      actorId: 'actor-c',
+      filename: 'model.glb',
+      mimeType: 'model/gltf-binary',
+    });
+
+    assert.equal(result.saved, false);
+    assert.equal(result.reason, 'max_total_bytes_exceeded');
+    const dayDir = path.join(localBackup, new Date().toISOString().slice(0, 10));
+    assert.equal(existsSync(dayDir), false);
+  });
+
+  it('GLB backup skips when free disk state is unknown', () => {
+    const localBackup = path.join(tmpRoot, 'backup-free-unknown');
+    const manager = createGlbBackupManager({
+      glbBackupEnabled: true,
+      glbBackupDir: localBackup,
+      glbBackupMaxTotalBytes: 1_000_000,
+      glbBackupMinFreeBytes: 0,
+    }, createSceneSyncLogger({ enabled: false }), {
+      getFreeBytes: () => null,
+    });
+
+    const result = manager.saveAcceptedGlb({
+      buffer: Buffer.from('glTFpayload'),
+      roomId: 'room-d',
+      actorId: 'actor-d',
+      filename: 'model.glb',
+      mimeType: 'model/gltf-binary',
+    });
+
+    assert.equal(result.saved, false);
+    assert.equal(result.reason, 'free_disk_unknown');
   });
 
   it('cleanup deletes old backups and keeps recent backups', () => {

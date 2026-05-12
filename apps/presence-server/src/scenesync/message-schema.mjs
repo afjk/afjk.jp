@@ -2,11 +2,19 @@ const KNOWN_KINDS = new Set([
   'scene-add',
   'scene-delta',
   'scene-remove',
+  'scene-mesh',
   'scene-env',
   'scene-state',
   'scene-request',
+  'scene-avatar',
+  'scene-lock',
+  'scene-unlock',
+  'scene-asset-request',
+  'scene-inspector',
   'scene-batch',
   'ai-command',
+  'ai-link-established',
+  'ai-link-revoked',
   'ai-result',
   'file',
 ]);
@@ -27,6 +35,8 @@ export function validateSceneSyncPayload(payload, options = {}) {
   const {
     maxStringLength = 128,
     batchLimit = 100,
+    depth = 0,
+    maxDepth = 3,
   } = options;
 
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -62,11 +72,28 @@ export function validateSceneSyncPayload(payload, options = {}) {
   }
 
   if (payload.kind === 'scene-batch') {
-    if (!Array.isArray(payload.ops)) {
-      return { ok: false, reason: 'batch ops must be an array' };
+    if (depth >= maxDepth) {
+      return { ok: false, reason: 'batch nesting depth exceeded' };
     }
-    if (payload.ops.length > batchLimit) {
+    const operations = Array.isArray(payload.ops)
+      ? payload.ops
+      : (Array.isArray(payload.actions) ? payload.actions : null);
+    if (!operations) {
+      return { ok: false, reason: 'batch ops/actions must be an array' };
+    }
+    if (operations.length > batchLimit) {
       return { ok: false, reason: `batch ops must be <= ${batchLimit}` };
+    }
+    for (const operation of operations) {
+      const nestedValidation = validateSceneSyncPayload(operation, {
+        maxStringLength,
+        batchLimit,
+        depth: depth + 1,
+        maxDepth,
+      });
+      if (!nestedValidation.ok) {
+        return { ok: false, reason: `invalid batch op: ${nestedValidation.reason}` };
+      }
     }
   }
 

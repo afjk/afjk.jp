@@ -39,6 +39,10 @@ export function validateUpload({ size, mimeType, filename = '', buffer = null, m
     return { ok: false, status: 415, code: 'unsupported_type', reason: 'unsupported mime or extension', message: 'このファイル形式には対応していません。' };
   }
 
+  if (mimeType === 'application/octet-stream' && extension !== '.glb') {
+    return { ok: false, status: 415, code: 'unsupported_type', reason: 'octet-stream requires .glb extension', message: 'このファイル形式には対応していません。' };
+  }
+
   if (isGlbLike({ filename, mimeType }) && !hasValidGlbMagic(buffer)) {
     return { ok: false, status: 400, code: 'invalid_glb', reason: 'invalid glb magic', message: 'GLBファイルの形式が正しくありません。' };
   }

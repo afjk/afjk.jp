@@ -552,12 +552,12 @@ function getOrCreateRoomObjectSet(roomId) {
   return next;
 }
 
-function applySceneObjectLimits(roomId, payload, actorId = '') {
-  const objectIds = getOrCreateRoomObjectSet(roomId);
+function simulateObjectLimitUpdate(objectIds, payload, roomId, actorId) {
+  let nextObjectIds = new Set(objectIds);
   if (!payload || typeof payload !== 'object') return { ok: true };
 
   if (payload.kind === 'scene-add' && typeof payload.objectId === 'string') {
-    if (!objectIds.has(payload.objectId) && objectIds.size >= sceneSyncConfig.maxObjectsPerRoom) {
+    if (!nextObjectIds.has(payload.objectId) && nextObjectIds.size >= sceneSyncConfig.maxObjectsPerRoom) {
       sceneSyncLogger.log('object_limit_reached', {
         roomId,
         actorId,
@@ -566,11 +566,11 @@ function applySceneObjectLimits(roomId, payload, actorId = '') {
       });
       return { ok: false, status: 429, error: 'object limit reached', message: '配置できるオブジェクト数の上限に達しました。' };
     }
-    objectIds.add(payload.objectId);
+    nextObjectIds.add(payload.objectId);
   }
 
   if (payload.kind === 'scene-remove' && typeof payload.objectId === 'string') {
-    objectIds.delete(payload.objectId);
+    nextObjectIds.delete(payload.objectId);
   }
 
   if (payload.kind === 'scene-state' && payload.objects && typeof payload.objects === 'object' && !Array.isArray(payload.objects)) {
@@ -584,16 +584,28 @@ function applySceneObjectLimits(roomId, payload, actorId = '') {
         reason: 'scene-state truncated to max object limit',
       });
     }
-    roomObjectIds.set(roomId, next);
+    nextObjectIds = next;
   }
 
-  if (payload.kind === 'scene-batch' && Array.isArray(payload.ops)) {
-    for (const op of payload.ops) {
-      const result = applySceneObjectLimits(roomId, op, actorId);
+  if (payload.kind === 'scene-batch') {
+    const operations = Array.isArray(payload.ops)
+      ? payload.ops
+      : (Array.isArray(payload.actions) ? payload.actions : []);
+    for (const op of operations) {
+      const result = simulateObjectLimitUpdate(nextObjectIds, op, roomId, actorId);
       if (!result.ok) return result;
+      nextObjectIds = result.nextObjectIds;
     }
   }
 
+  return { ok: true, nextObjectIds };
+}
+
+function applySceneObjectLimits(roomId, payload, actorId = '') {
+  const objectIds = getOrCreateRoomObjectSet(roomId);
+  const result = simulateObjectLimitUpdate(objectIds, payload, roomId, actorId);
+  if (!result.ok) return result;
+  roomObjectIds.set(roomId, result.nextObjectIds || objectIds);
   return { ok: true };
 }
 
