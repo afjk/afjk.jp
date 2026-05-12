@@ -153,6 +153,47 @@ glB ファイルをサーバー側に一時保存する HTTP エンドポイン�
 エンドポイント（本番）: `https://afjk.jp/presence/blob/<id>`  
 エンドポイント（ローカル）: `http://localhost:8787/blob/<id>`
 
+### 運用ガード（public release 最小構成）
+
+- Scene Sync はユーザー向けの永続ストレージ機能を提供しない。
+- GLB backup は private な一時 debug/ops 用バックアップであり、ユーザーには公開しない。
+- GLB backup のデフォルト保持期間は 7 日（`SCENE_SYNC_GLB_BACKUP_RETENTION_DAYS=7`）。
+- ログは private な運用ログ（NDJSON）であり、raw IP や raw payload を記録しない。
+- production では `SCENE_SYNC_ACTOR_HASH_SALT` を必ず設定する。
+- production ではログ/バックアップ先ディレクトリを明示設定する。
+
+例（production 環境変数）:
+
+```bash
+SCENE_SYNC_MAX_UPLOAD_BYTES=52428800
+SCENE_SYNC_MAX_JSON_BYTES=1048576
+SCENE_SYNC_MAX_ROOM_CONNECTIONS=20
+SCENE_SYNC_MAX_OBJECTS_PER_ROOM=200
+SCENE_SYNC_LOG_ENABLED=true
+SCENE_SYNC_LOG_DIR=/var/log/scene-sync
+SCENE_SYNC_LOG_MAX_LINE_BYTES=4096
+SCENE_SYNC_ACTOR_HASH_SALT=replace-with-secret
+SCENE_SYNC_GLB_BACKUP_ENABLED=true
+SCENE_SYNC_GLB_BACKUP_DIR=/var/lib/scene-sync/glb-backup
+SCENE_SYNC_GLB_BACKUP_RETENTION_DAYS=7
+SCENE_SYNC_GLB_BACKUP_MAX_TOTAL_BYTES=1073741824
+SCENE_SYNC_GLB_BACKUP_MIN_FREE_BYTES=1073741824
+SCENE_SYNC_UPLOADS_PER_ACTOR_PER_MINUTE=10
+```
+
+バックアップ掃除:
+
+```bash
+cd apps/presence-server
+npm run scenesync:cleanup-backups
+```
+
+cron 例:
+
+```cron
+15 3 * * * cd /path/to/afjk.jp/apps/presence-server && npm run scenesync:cleanup-backups >> /var/log/scene-sync-cleanup.log 2>&1
+```
+
 ---
 
 ## Handoff Kind 一覧（Scene Sync 用）

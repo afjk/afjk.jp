@@ -2166,6 +2166,9 @@ function connectPresence() {
       case 'handoff':
         handleHandoff(data);
         break;
+      case 'error':
+        showToast(data?.message || 'ファイルの読み込みに失敗しました。');
+        break;
     }
   };
 
@@ -2711,7 +2714,9 @@ async function uploadBlobToStore(blob, contentType = 'application/octet-stream',
     body: blob,
   });
   if (!res.ok) {
-    throw new Error(`blob upload failed: ${res.status}`);
+    let payload = null;
+    try { payload = await res.json(); } catch {}
+    throw new Error(payload?.message || 'ファイルの読み込みに失敗しました。');
   }
   return {
     path,
@@ -3591,11 +3596,16 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
 
   try {
     try {
-      await fetch(BLOB_BASE + '/' + meshPath, {
+      const uploadResponse = await fetch(BLOB_BASE + '/' + meshPath, {
         method: 'POST',
         headers: { 'Content-Type': 'model/gltf-binary' },
         body: arrayBuffer,
       });
+      if (!uploadResponse.ok) {
+        let payload = null;
+        try { payload = await uploadResponse.json(); } catch {}
+        throw new Error(payload?.message || 'ファイルの読み込みに失敗しました。');
+      }
       actualMeshPath = meshPath;
       model.userData.meshPath = meshPath;
 
@@ -3677,7 +3687,11 @@ async function uploadCarrierGlb(arrayBuffer) {
       body: arrayBuffer,
     });
     if (res.status === 201 || res.status === 200) return id;
-    if (res.status !== 409) throw new Error(`blob upload failed: ${res.status}`);
+    if (res.status !== 409) {
+      let payload = null;
+      try { payload = await res.json(); } catch {}
+      throw new Error(payload?.message || 'ファイルの読み込みに失敗しました。');
+    }
   }
   throw new Error('blob id collision - unable to generate unique ID');
 }

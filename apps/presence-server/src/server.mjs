@@ -4,11 +4,19 @@ import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 import { encodeSession, decodeSession } from './gpt-session.mjs';
+import { createSceneSyncConfig } from './scenesync/config.mjs';
+import { getActorIdFromRequest } from './scenesync/actor-id.mjs';
+import { createPerActorRateLimiter } from './scenesync/rate-limit.mjs';
+import { validateUpload, isGlbLike } from './scenesync/upload-guards.mjs';
+import { validateSceneSyncPayload } from './scenesync/message-schema.mjs';
+import { createSceneSyncLogger } from './scenesync/logger.mjs';
+import { createGlbBackupManager } from './scenesync/glb-backup.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const MAX_MESSAGE_SIZE = 131072; // 128 KB max WebSocket message
+const sceneSyncConfig = createSceneSyncConfig(process.env);
+const MAX_MESSAGE_SIZE = sceneSyncConfig.maxJsonBytes;
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
 
@@ -22,15 +30,23 @@ const SCENE_GRAPH_MESSAGE_TYPES = new Set([
 const SCENE_GRAPH_MAX_SIZE = 64 * 1024; // 64 KB for graph payloads
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
+const roomObjectIds = new Map(); // roomId -> Set<objectId>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
 
 // ── Blob Store ────────────────────────────────────────────────────────────────
-const BLOB_MAX_SIZE = 50 * 1024 * 1024; // 50MB
+const BLOB_MAX_SIZE = sceneSyncConfig.maxUploadBytes;
 const BLOB_MEMORY_THRESHOLD = 1 * 1024 * 1024; // 1MB
 const BLOB_TTL_MS = 10 * 60 * 1000; // 10分
 const BLOB_CLEANUP_INTERVAL = 60 * 1000; // 60秒
 const BLOB_DIR = process.env.BLOB_DIR || '/data/blobs';
+const sceneSyncLogger = createSceneSyncLogger({
+  enabled: sceneSyncConfig.logEnabled,
+  logDir: sceneSyncConfig.logDir,
+  maxLineBytes: sceneSyncConfig.logMaxLineBytes,
+});
+const glbBackupManager = createGlbBackupManager(sceneSyncConfig, sceneSyncLogger);
+const uploadRateLimiter = createPerActorRateLimiter(sceneSyncConfig.uploadsPerActorPerMinute);
 
 // id → { buffer: Buffer|null, file: string|null, size: number, createdAt: number }
 const blobs = new Map();
@@ -376,6 +392,7 @@ function removeClient(client) {
   room.delete(client.id);
   if (!room.size) {
     rooms.delete(client.roomId);
+    roomObjectIds.delete(client.roomId);
   }
 }
 
@@ -412,6 +429,7 @@ function safeSend(conn, message) {
     conn.send(message);
   } catch (err) {
     log('send fail', err.message);
+    sceneSyncLogger.log('error', { reason: err.message });
   }
 }
 
@@ -473,29 +491,101 @@ function sendJson(res, statusCode, payload, extraHeaders = {}) {
   }).end(JSON.stringify(payload));
 }
 
+function createHttpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function sendJsonBodyError(res, error) {
+  if (error?.status === 413) {
+    sendJson(res, 413, { error: 'payload_too_large', message: 'ファイルの読み込みに失敗しました。' });
+    return;
+  }
+  sendJson(res, 400, { error: 'invalid JSON body' });
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', chunk => chunks.push(chunk));
+    let totalBytes = 0;
+    let tooLarge = false;
+    req.on('data', chunk => {
+      if (tooLarge) return;
+      totalBytes += chunk.length;
+      if (totalBytes > sceneSyncConfig.maxJsonBytes) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => {
+      if (tooLarge) {
+        reject(createHttpError(413, 'JSON body too large'));
+        return;
+      }
       const raw = Buffer.concat(chunks).toString('utf8').trim();
       if (!raw) {
-        reject(new Error('invalid JSON body'));
+        reject(createHttpError(400, 'invalid JSON body'));
         return;
       }
       try {
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          reject(new Error('invalid JSON body'));
+          reject(createHttpError(400, 'invalid JSON body'));
           return;
         }
         resolve(parsed);
       } catch {
-        reject(new Error('invalid JSON body'));
+        reject(createHttpError(400, 'invalid JSON body'));
       }
     });
-    req.on('error', () => reject(new Error('invalid JSON body')));
+    req.on('error', () => reject(createHttpError(400, 'invalid JSON body')));
   });
+}
+
+function getOrCreateRoomObjectSet(roomId) {
+  const existing = roomObjectIds.get(roomId);
+  if (existing) return existing;
+  const next = new Set();
+  roomObjectIds.set(roomId, next);
+  return next;
+}
+
+function applySceneObjectLimits(roomId, payload, actorId = '') {
+  const objectIds = getOrCreateRoomObjectSet(roomId);
+  if (!payload || typeof payload !== 'object') return { ok: true };
+
+  if (payload.kind === 'scene-add' && typeof payload.objectId === 'string') {
+    if (!objectIds.has(payload.objectId) && objectIds.size >= sceneSyncConfig.maxObjectsPerRoom) {
+      sceneSyncLogger.log('object_limit_reached', {
+        roomId,
+        actorId,
+        kind: payload.kind,
+        reason: 'max objects reached',
+      });
+      return { ok: false, status: 429, error: 'object limit reached', message: '配置できるオブジェクト数の上限に達しました。' };
+    }
+    objectIds.add(payload.objectId);
+  }
+
+  if (payload.kind === 'scene-remove' && typeof payload.objectId === 'string') {
+    objectIds.delete(payload.objectId);
+  }
+
+  if (payload.kind === 'scene-state' && payload.objects && typeof payload.objects === 'object' && !Array.isArray(payload.objects)) {
+    const next = new Set(Object.keys(payload.objects).slice(0, sceneSyncConfig.maxObjectsPerRoom));
+    roomObjectIds.set(roomId, next);
+  }
+
+  if (payload.kind === 'scene-batch' && Array.isArray(payload.ops)) {
+    for (const op of payload.ops) {
+      const result = applySceneObjectLimits(roomId, op, actorId);
+      if (!result.ok) return result;
+    }
+  }
+
+  return { ok: true };
 }
 
 function handlePendingSceneState(data) {
@@ -658,7 +748,7 @@ async function runAiCommand({ roomId, onBehalfOfUserId, payload, sender = create
   };
 }
 
-async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, sender = createApiSender('AI') }) {
+async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, sender = createApiSender('AI'), actorId = '' }) {
   const peers = getRoomClients(roomId);
   let nextPayload = payload;
   if (onBehalfOfUserId) {
@@ -704,6 +794,29 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     return {
       status: 200,
       body: createBroadcastResponse(roomId, peers, userPresent),
+    };
+  }
+
+  const validation = validateSceneSyncPayload(nextPayload);
+  if (!validation.ok) {
+    sceneSyncLogger.log('schema_invalid', {
+      roomId,
+      actorId,
+      kind: nextPayload?.kind,
+      payloadSize: Buffer.byteLength(JSON.stringify(nextPayload || {}), 'utf8'),
+      reason: validation.reason,
+    });
+    return {
+      status: 400,
+      body: { error: 'invalid scene sync payload' },
+    };
+  }
+
+  const objectLimit = applySceneObjectLimits(roomId, nextPayload, actorId);
+  if (!objectLimit.ok) {
+    return {
+      status: objectLimit.status,
+      body: { error: objectLimit.error, message: objectLimit.message },
     };
   }
 
@@ -798,6 +911,12 @@ function recordTransfer(entry) {
 }
 
 function createPresenceServer() {
+  sceneSyncLogger.log('server_start', {
+    maxUploadBytes: sceneSyncConfig.maxUploadBytes,
+    maxJsonBytes: sceneSyncConfig.maxJsonBytes,
+    maxRoomConnections: sceneSyncConfig.maxRoomConnections,
+    maxObjectsPerRoom: sceneSyncConfig.maxObjectsPerRoom,
+  });
   const server = createServer(async (req, res) => {
     const path = req.url.split('?')[0].replace(/\/+/g, '/');
 
@@ -816,7 +935,9 @@ function createPresenceServer() {
   // POST /blob/:id
     if (req.method === 'POST' && path.startsWith('/blob/')) {
       setBlobCors(req, res);
-      const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      const originalName = decodeURIComponent(path.slice(6));
+      const id = originalName.replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
       if (!id) {
         res.writeHead(400, CORS).end('invalid id');
         return;
@@ -825,14 +946,29 @@ function createPresenceServer() {
         res.writeHead(409, CORS).end('conflict');
         return;
       }
+      if (!uploadRateLimiter.allow(actorId)) {
+        sceneSyncLogger.log('rate_limited', { actorId, roomId: sanitizeRoom(getRequestUrl(req).searchParams.get('room')), reason: 'uploads_per_actor_per_minute exceeded' });
+        sendJson(res, 429, { error: 'rate_limited', message: '短時間に多くのアップロードが行われました。少し待ってから再度お試しください。' });
+        return;
+      }
 
       const chunks = [];
       let totalSize = 0;
+      let rejected = false;
+      const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
+      sceneSyncLogger.log('upload_received', {
+        actorId,
+        fileSize: Number(req.headers['content-length'] || 0) || undefined,
+        mimeType: contentType,
+      });
 
       req.on('data', chunk => {
+        if (rejected) return;
         totalSize += chunk.length;
         if (totalSize > BLOB_MAX_SIZE) {
-          res.writeHead(413, CORS).end('too large');
+          rejected = true;
+          sceneSyncLogger.log('upload_rejected', { actorId, fileSize: totalSize, mimeType: contentType, reason: 'size limit exceeded' });
+          sendJson(res, 413, { error: 'file_too_large', message: 'ファイルサイズが大きすぎます。' });
           req.destroy();
           return;
         }
@@ -840,9 +976,26 @@ function createPresenceServer() {
       });
 
       req.on('end', () => {
-        if (res.writableEnded) return;
+        if (res.writableEnded || rejected) return;
         const buffer = Buffer.concat(chunks);
-        const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
+        const uploadValidation = validateUpload({
+          size: buffer.length,
+          mimeType: contentType,
+          filename: originalName,
+          buffer,
+          maxUploadBytes: sceneSyncConfig.maxUploadBytes,
+        });
+        if (!uploadValidation.ok) {
+          sceneSyncLogger.log('upload_rejected', {
+            actorId,
+            fileSize: buffer.length,
+            mimeType: contentType,
+            reason: uploadValidation.reason,
+          });
+          sendJson(res, uploadValidation.status, { error: uploadValidation.code, message: uploadValidation.message });
+          return;
+        }
+
         const entry = {
           size: buffer.length,
           createdAt: Date.now(),
@@ -861,6 +1014,7 @@ function createPresenceServer() {
             entry.file = filePath;
           } catch (err) {
             log('blob write error', err.message);
+            sceneSyncLogger.log('error', { reason: err.message, detail: 'blob_write_error' });
             res.writeHead(500, CORS).end('write error');
             return;
           }
@@ -868,6 +1022,18 @@ function createPresenceServer() {
 
         blobs.set(id, entry);
         log('blob stored', id, entry.size, entry.buffer ? 'memory' : 'disk');
+
+        if (isGlbLike({ filename: originalName, mimeType: contentType })) {
+          glbBackupManager.saveAcceptedGlb({
+            buffer,
+            roomId: sanitizeRoom(getRequestUrl(req).searchParams.get('room')) || '',
+            actorId,
+            filename: originalName,
+            mimeType: contentType,
+            source: 'upload',
+            blobId: id,
+          });
+        }
 
         res.writeHead(201, { 'content-type': 'application/json', ...CORS })
            .end(JSON.stringify({
@@ -882,9 +1048,11 @@ function createPresenceServer() {
   // GET /blob/:id
     if (req.method === 'GET' && path.startsWith('/blob/')) {
     setBlobCors(req, res);
+    const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     const entry = blobs.get(id);
     if (!entry) {
+      sceneSyncLogger.log('blob_404', { actorId, reason: 'blob not found' });
       res.writeHead(404).end('not found');
       return;
     }
@@ -902,6 +1070,7 @@ function createPresenceServer() {
     }
 
     if (entry.buffer) {
+      sceneSyncLogger.log('blob_served', { actorId, fileSize: entry.size, mimeType: entry.contentType });
       res.writeHead(200, {
         'content-type': entry.contentType || 'application/octet-stream',
         'content-length': entry.size,
@@ -909,6 +1078,7 @@ function createPresenceServer() {
         ...corsHeaders,
       }).end(entry.buffer);
     } else if (entry.file) {
+      sceneSyncLogger.log('blob_served', { actorId, fileSize: entry.size, mimeType: entry.contentType });
       const stream = createReadStream(entry.file);
       res.writeHead(200, {
         'content-type': entry.contentType || 'application/octet-stream',
@@ -919,6 +1089,7 @@ function createPresenceServer() {
       stream.pipe(res);
       stream.on('error', (err) => {
         log(`[blob] read error ${id}:`, err.message);
+        sceneSyncLogger.log('error', { reason: err.message, detail: 'blob_read_error' });
         if (!res.headersSent) res.writeHead(500);
         res.end();
       });
@@ -1021,8 +1192,8 @@ function createPresenceServer() {
     let body;
     try {
       body = await readJsonBody(req);
-    } catch {
-      sendJson(res, 400, { error: 'invalid JSON body' });
+    } catch (error) {
+      sendJsonBodyError(res, error);
       return;
     }
 
@@ -1048,8 +1219,8 @@ function createPresenceServer() {
     let body;
     try {
       body = await readJsonBody(req);
-    } catch {
-      sendJson(res, 400, { error: 'invalid JSON body' });
+    } catch (error) {
+      sendJsonBodyError(res, error);
       return;
     }
 
@@ -1077,8 +1248,8 @@ function createPresenceServer() {
     let body;
     try {
       body = await readJsonBody(req);
-    } catch {
-      sendJson(res, 400, { error: 'invalid JSON body' });
+    } catch (error) {
+      sendJsonBodyError(res, error);
       return;
     }
 
@@ -1201,6 +1372,7 @@ function createPresenceServer() {
         payload: body.payload,
         onBehalfOfUserId: session.payload.userId,
         sender: createApiSender('AI'),
+        actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt),
       });
       sendJson(res, result.status, result.body);
       return;
@@ -1246,8 +1418,8 @@ function createPresenceServer() {
         let payload;
         try {
           payload = await readJsonBody(req);
-        } catch {
-          sendJson(res, 400, { error: 'invalid JSON body' });
+        } catch (error) {
+          sendJsonBodyError(res, error);
           return;
         }
 
@@ -1279,6 +1451,7 @@ function createPresenceServer() {
           payload,
           onBehalfOfUserId,
           sender,
+          actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt),
         });
         sendJson(res, result.status, result.body);
         return;
@@ -1302,21 +1475,40 @@ function createPresenceServer() {
     }
     const roomOverride = sanitizeRoom(url.searchParams.get('room'));
     const roomId = roomOverride || inferRoomFromReq(req) || 'global';
+    const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
     const conn = acceptWebSocket(req, socket);
     if (!conn) return;
+    const currentRoom = rooms.get(roomId);
+    if ((currentRoom?.size || 0) >= sceneSyncConfig.maxRoomConnections) {
+      sceneSyncLogger.log('room_full', { roomId, actorId, reason: 'max connections reached' });
+      safeSend(conn, {
+        type: 'error',
+        error: 'room_full',
+        message: 'このルームは現在混み合っています。',
+      });
+      conn.close();
+      return;
+    }
 
     const client = makeClient(conn, roomId);
     log('client connected', client.id, 'room', roomId);
+    sceneSyncLogger.log('ws_connect', { roomId, actorId });
 
     conn.send({ type: 'welcome', id: client.id, room: roomId });
     broadcastPeers(roomId);
 
     conn.onMessage = raw => {
       client.lastSeen = Date.now();
+      if (Buffer.byteLength(raw, 'utf8') > sceneSyncConfig.maxJsonBytes) {
+        sceneSyncLogger.log('schema_invalid', { roomId, actorId, payloadSize: Buffer.byteLength(raw, 'utf8'), reason: 'ws message too large' });
+        safeSend(conn, { type: 'error', error: 'payload_too_large', message: 'ファイルの読み込みに失敗しました。' });
+        return;
+      }
       let data;
       try {
         data = JSON.parse(raw);
       } catch {
+        sceneSyncLogger.log('schema_invalid', { roomId, actorId, payloadSize: Buffer.byteLength(raw, 'utf8'), reason: 'invalid json' });
         return;
       }
 
@@ -1369,6 +1561,35 @@ function createPresenceServer() {
               logSceneGraphMessage(data.payload);
             }
 
+            if (!SCENE_GRAPH_MESSAGE_TYPES.has(data.payload.type)) {
+              const validation = validateSceneSyncPayload(data.payload);
+              if (!validation.ok) {
+                sceneSyncLogger.log('schema_invalid', {
+                  roomId,
+                  actorId,
+                  kind: data.payload?.kind,
+                  payloadSize: Buffer.byteLength(JSON.stringify(data.payload || {}), 'utf8'),
+                  reason: validation.reason,
+                });
+                safeSend(conn, {
+                  type: 'error',
+                  error: 'invalid_message',
+                  message: 'ファイルの読み込みに失敗しました。',
+                });
+                return;
+              }
+
+              const objectLimit = applySceneObjectLimits(roomId, data.payload, actorId);
+              if (!objectLimit.ok) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: objectLimit.error,
+                  message: objectLimit.message,
+                });
+                return;
+              }
+            }
+
             broadcastHandoff(client, data);
           }
           break;
@@ -1382,6 +1603,7 @@ function createPresenceServer() {
 
     conn.onClose = () => {
       log('client disconnected', client.id);
+      sceneSyncLogger.log('ws_disconnect', { roomId, actorId });
       removeClient(client);
       broadcastPeers(roomId);
     };
@@ -1414,6 +1636,7 @@ function createPresenceServer() {
     clearInterval(blobCleanupInterval);
     clearInterval(heartbeatInterval);
     rooms.clear();
+    roomObjectIds.clear();
     pendingSceneRequests.forEach(({ timer, resolve }) => {
       clearTimeout(timer);
       resolve({ objects: {} });

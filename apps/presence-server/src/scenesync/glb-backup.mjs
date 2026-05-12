@@ -1,0 +1,129 @@
+import { randomUUID, createHash } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+function todayDateString(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+function calculateDirectorySizeBytes(directory) {
+  let total = 0;
+  let entries;
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      total += calculateDirectorySizeBytes(fullPath);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    try {
+      total += statSync(fullPath).size;
+    } catch {}
+  }
+
+  return total;
+}
+
+function getFreeBytes(directory) {
+  try {
+    const stats = statfsSync(directory);
+    return Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+export function cleanupOldBackups({ backupDir, retentionDays = 7, now = Date.now(), log = () => {} }) {
+  let entries;
+  try {
+    entries = readdirSync(backupDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const threshold = now - retentionDays * 24 * 60 * 60 * 1000;
+  const deleted = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+
+    const fullPath = path.resolve(backupDir, entry.name);
+    if (!fullPath.startsWith(path.resolve(backupDir) + path.sep)) continue;
+
+    const timestamp = Date.parse(`${entry.name}T00:00:00.000Z`);
+    if (!Number.isFinite(timestamp) || timestamp >= threshold) continue;
+
+    rmSync(fullPath, { recursive: true, force: true });
+    deleted.push(entry.name);
+    log(`deleted backup directory: ${fullPath}`);
+  }
+
+  return deleted;
+}
+
+export function createGlbBackupManager(config, logger) {
+  return {
+    saveAcceptedGlb({ buffer, roomId, actorId, filename = '', mimeType = '', source = 'upload', blobId = null }) {
+      if (!config.glbBackupEnabled) {
+        logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'disabled' });
+        return { saved: false, reason: 'disabled' };
+      }
+
+      try {
+        mkdirSync(config.glbBackupDir, { recursive: true });
+
+        const totalSize = calculateDirectorySizeBytes(config.glbBackupDir);
+        if (totalSize >= config.glbBackupMaxTotalBytes) {
+          logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'max_total_bytes_exceeded', totalSize });
+          return { saved: false, reason: 'max_total_bytes_exceeded' };
+        }
+
+        const freeBytes = getFreeBytes(config.glbBackupDir);
+        if (freeBytes < config.glbBackupMinFreeBytes) {
+          logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'insufficient_disk_free', freeBytes });
+          return { saved: false, reason: 'insufficient_disk_free' };
+        }
+
+        const dateDir = path.join(config.glbBackupDir, todayDateString());
+        mkdirSync(dateDir, { recursive: true });
+
+        const backupId = `${Date.now()}-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+        const glbPath = path.join(dateDir, `${backupId}.glb`);
+        const metaPath = path.join(dateDir, `${backupId}.json`);
+        const sha256 = createHash('sha256').update(buffer).digest('hex');
+        const metadata = {
+          backupId,
+          timestamp: new Date().toISOString(),
+          roomId,
+          actorId,
+          filename,
+          mimeType,
+          sizeBytes: buffer.length,
+          source,
+          blobId,
+          sha256,
+        };
+
+        writeFileSync(glbPath, buffer);
+        writeFileSync(metaPath, JSON.stringify(metadata, null, 2), 'utf8');
+
+        logger?.log('glb_backup_saved', { roomId, actorId, backupId, fileSize: buffer.length, mimeType });
+        return { saved: true, backupId };
+      } catch (error) {
+        logger?.log('glb_backup_failed', { roomId, actorId, reason: error?.message || String(error), error: error?.stack || '' });
+        return { saved: false, reason: 'error' };
+      }
+    },
+  };
+}
+
+export function readBackupMetadata(filePath) {
+  return JSON.parse(readFileSync(filePath, 'utf8'));
+}
