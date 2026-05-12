@@ -309,7 +309,9 @@ export class DragDropManager {
         ? 'Skybox画像を準備中…'
         : '画像を準備中…';
       this.showToast?.(toastMessage);
-      await this.onLoadStart?.(loadInfo);
+      if (this.onLoadStart) {
+        await this.onLoadStart(loadInfo);
+      }
 
       try {
         await this.imageImporter(file, normalized.position, {
@@ -323,7 +325,9 @@ export class DragDropManager {
         console.warn('[drag-drop] image import failed:', error);
         this.showToast?.(error?.message || '画像の追加に失敗しました');
       } finally {
-        await this.onLoadEnd?.(loadInfo);
+        if (this.onLoadEnd) {
+          await this.onLoadEnd(loadInfo);
+        }
       }
       return null;
     }

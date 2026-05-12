@@ -1283,11 +1283,11 @@ function showTemporaryImagePreview(objectId, file, position, options = {}) {
   temporaryImagePreviews.set(objectId, entry);
 
   if (options.targetKind === 'sky') {
-    void createTemporarySkyPreview(objectId, file, entry);
+    createTemporarySkyPreview(objectId, file, entry);
     return;
   }
 
-  void createTemporaryPlanePreview(objectId, file, position, entry);
+  createTemporaryPlanePreview(objectId, file, position, entry);
 }
 
 async function createTemporaryPlanePreview(objectId, file, position, entry) {
