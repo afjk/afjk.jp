@@ -294,6 +294,19 @@ export class DragDropManager {
     }
 
     if (this.imageImporter && isSupportedImageFile(file)) {
+      const loadInfo = {
+        file,
+        position: normalized.position,
+        source: 'image',
+        targetKind: normalized.targetKind,
+      };
+
+      const toastMessage = normalized.targetKind === 'sky'
+        ? 'Skybox画像を読み込み中…'
+        : '画像を読み込み中…';
+      this.showToast?.(toastMessage);
+      this.onLoadStart?.(loadInfo);
+
       try {
         await this.imageImporter(file, normalized.position, {
           targetKind: normalized.targetKind,
@@ -304,6 +317,8 @@ export class DragDropManager {
       } catch (error) {
         console.warn('[drag-drop] image import failed:', error);
         this.showToast?.(error?.message || '画像の読み込みに失敗しました');
+      } finally {
+        this.onLoadEnd?.(loadInfo);
       }
       return null;
     }

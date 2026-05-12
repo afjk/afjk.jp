@@ -144,6 +144,10 @@ function updateEnvironmentMenuSkyboxControls() {
   }
 }
 
+function syncSceneUiState() {
+  updateEnvironmentMenuSkyboxControls();
+}
+
 dom.envSelect?.addEventListener('change', () => {
   notifySceneStateChanged('environment-select-change');
   updateEnvironmentMenuSkyboxControls();
@@ -2047,13 +2051,6 @@ function renderRoomSection() {
     copyBtn.addEventListener('click', copyRoomUrl);
     roomSectionEl.appendChild(copyBtn);
 
-    const pipeLink = document.createElement('a');
-    pipeLink.className = 'chip';
-    pipeLink.href = pipeUrlForRoom(activeRoomCode);
-    pipeLink.textContent = '📥 pipe';
-    pipeLink.title = '同じルームを pipe で開く';
-    roomSectionEl.appendChild(pipeLink);
-
     const leaveBtn = document.createElement('button');
     leaveBtn.type = 'button';
     leaveBtn.className = 'chip danger';
@@ -2073,13 +2070,6 @@ function renderRoomSection() {
     genBtn.title = '新しいルームを作成';
     genBtn.addEventListener('click', generateRoom);
     roomSectionEl.appendChild(genBtn);
-
-    const pipeLink = document.createElement('a');
-    pipeLink.className = 'chip';
-    pipeLink.href = pipeUrlForRoom(null);
-    pipeLink.textContent = '📥 pipe';
-    pipeLink.title = 'pipe を開く';
-    roomSectionEl.appendChild(pipeLink);
 
     const joinGroup = document.createElement('div');
     joinGroup.className = 'join-group';
@@ -3966,9 +3956,11 @@ const dragDropManager = new DragDropManager({
   getPlacementTargets: () => Array.from(managedObjects.values())
     .filter(obj => !isSkySphereThreeObject(obj) && obj.visible !== false),
   onLoadStart: async ({ objectId, file, position }) => {
+    if (!objectId) return;
     addLoadingOverlay(objectId, file.name, { position: position?.toArray?.() });
   },
   onLoadEnd: async ({ objectId }) => {
+    if (!objectId) return;
     removeLoadingOverlay(objectId);
   },
   onLoaded: async (model, file) => {
@@ -4040,10 +4032,13 @@ function closePasteSheet() {
   }
 }
 
-if (pasteBtn && pasteSheet) {
+if (pasteBtn) {
   pasteBtn.addEventListener('click', () => {
-    pasteSheet.removeAttribute('hidden');
-    setTimeout(() => clipboardPasteTarget?.focus(), 100);
+    showToast('クリップボードを読み込みます…');
+    clipboardImportManager.pasteFromNavigatorClipboard(getDefaultImportPosition())
+      .catch(() => {
+        showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
+      });
   });
 }
 
@@ -5101,6 +5096,7 @@ function notifyInspectorStateChanged(reason = 'unknown') {
 
 function notifySceneStateChanged(reason) {
   notifyInspectorStateChanged(`scene:${reason}`);
+  syncSceneUiState();
 }
 
 function notifySelectionChanged(reason) {
@@ -5327,6 +5323,7 @@ updateLinkButtonState();
 nicknameChip?.addEventListener('click', editNickname);
 updateNicknameLabel();
 renderRoomSection();
+syncSceneUiState();
 connectPresence();
 
 // Safari / iOS: バックグラウンドから復帰時に即再接続（3秒タイマーを待たない）
