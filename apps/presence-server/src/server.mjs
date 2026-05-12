@@ -574,7 +574,16 @@ function applySceneObjectLimits(roomId, payload, actorId = '') {
   }
 
   if (payload.kind === 'scene-state' && payload.objects && typeof payload.objects === 'object' && !Array.isArray(payload.objects)) {
-    const next = new Set(Object.keys(payload.objects).slice(0, sceneSyncConfig.maxObjectsPerRoom));
+    const objectKeys = Object.keys(payload.objects);
+    const next = new Set(objectKeys.slice(0, sceneSyncConfig.maxObjectsPerRoom));
+    if (objectKeys.length > sceneSyncConfig.maxObjectsPerRoom) {
+      sceneSyncLogger.log('object_limit_reached', {
+        roomId,
+        actorId,
+        kind: payload.kind,
+        reason: 'scene-state truncated to max object limit',
+      });
+    }
     roomObjectIds.set(roomId, next);
   }
 

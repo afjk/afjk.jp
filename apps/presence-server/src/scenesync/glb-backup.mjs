@@ -55,7 +55,8 @@ export function cleanupOldBackups({ backupDir, retentionDays = 7, now = Date.now
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
 
     const fullPath = path.resolve(backupDir, entry.name);
-    if (!fullPath.startsWith(path.resolve(backupDir) + path.sep)) continue;
+    const relative = path.relative(path.resolve(backupDir), fullPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
 
     const timestamp = Date.parse(`${entry.name}T00:00:00.000Z`);
     if (!Number.isFinite(timestamp) || timestamp >= threshold) continue;
