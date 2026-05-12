@@ -1342,8 +1342,6 @@ async function createTemporaryPlanePreview(objectId, file, position, entry) {
     }
 
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.userData._temporary = true;
-    mesh.userData._temporaryImagePreview = true;
     // Match generated GLB grounding (root at bottom, mesh lifted by half height).
     mesh.position.y = planeHeight / 2;
     mesh.raycast = () => {};
