@@ -1327,22 +1327,30 @@ async function createTemporaryPlanePreview(objectId, file, position, entry) {
     entry.geometry = geometry;
     entry.material = material;
 
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = 'temporary image preview';
-    mesh.userData.objectId = objectId;
-    mesh.userData._temporary = true;
-    mesh.userData._temporaryImagePreview = true;
+    const group = new THREE.Group();
+    group.name = 'temporary image preview';
+    group.userData.objectId = objectId;
+    group.userData._temporary = true;
+    group.userData._temporaryImagePreview = true;
     // Temporary preview should not become selectable/inspectable.
-    mesh.raycast = () => {};
+    group.raycast = () => {};
 
     if (position?.copy) {
-      mesh.position.copy(position);
+      group.position.copy(position);
     } else if (Array.isArray(position)) {
-      mesh.position.fromArray(position);
+      group.position.fromArray(position);
     }
 
-    scene.add(mesh);
-    entry.object = mesh;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData._temporary = true;
+    mesh.userData._temporaryImagePreview = true;
+    // Match generated GLB grounding (root at bottom, mesh lifted by half height).
+    mesh.position.y = planeHeight / 2;
+    mesh.raycast = () => {};
+    group.add(mesh);
+
+    scene.add(group);
+    entry.object = group;
 
     console.debug('[image-import] temporary preview shown', {
       tempObjectId: objectId,
@@ -1377,7 +1385,7 @@ async function createTemporarySkyPreview(objectId, file, entry) {
     texture.needsUpdate = true;
     entry.texture = texture;
 
-    const geometry = new THREE.SphereGeometry(50, 64, 32);
+    const geometry = new THREE.SphereGeometry(49, 64, 32);
     geometry.scale(-1, 1, 1);
     geometry.computeVertexNormals();
 
@@ -1386,6 +1394,7 @@ async function createTemporarySkyPreview(objectId, file, entry) {
       side: THREE.FrontSide,
       transparent: true,
       opacity: 0.75,
+      depthWrite: false,
     });
 
     entry.geometry = geometry;

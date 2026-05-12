@@ -310,7 +310,9 @@ export class DragDropManager {
         : '画像を準備中…';
       this.showToast?.(toastMessage);
       if (this.onLoadStart) {
-        await this.onLoadStart(loadInfo);
+        Promise.resolve(this.onLoadStart(loadInfo)).catch((error) => {
+          console.warn('[drag-drop] image onLoadStart failed:', error);
+        });
       }
 
       try {
