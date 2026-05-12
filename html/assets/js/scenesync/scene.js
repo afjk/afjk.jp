@@ -149,6 +149,9 @@ function syncSceneUiState() {
 }
 
 dom.envSelect?.addEventListener('change', () => {
+  if (mobileEnvSelect) {
+    mobileEnvSelect.value = dom.envSelect.value;
+  }
   notifySceneStateChanged('environment-select-change');
   updateEnvironmentMenuSkyboxControls();
 });
@@ -1716,6 +1719,7 @@ const dotEl = statusEl.querySelector('.dot');
 const nicknameLabel = document.getElementById('nickname-label');
 const nicknameChip = document.getElementById('nickname-chip');
 const roomSectionEl = document.getElementById('room-section');
+const peersPanelEl = dom.peersPanel;
 const sceneInspectorToggleBtn = document.getElementById('scene-inspector-toggle');
 const sceneInspectorPanel = document.getElementById('scene-inspector-panel');
 const sceneInspectorCloseBtn = document.getElementById('scene-inspector-close');
@@ -2032,6 +2036,79 @@ function copyRoomUrl() {
     .catch(() => showToast('コピーに失敗しました'));
 }
 
+function renderMobileRoomActions() {
+  const container = document.getElementById('mobile-room-actions');
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  if (activeRoomCode) {
+    const code = document.createElement('div');
+    code.className = 'chip';
+    code.textContent = `🏠 ${activeRoomCode}`;
+    container.appendChild(code);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'chip primary';
+    copyBtn.textContent = '共有URLをコピー';
+    copyBtn.addEventListener('click', () => {
+      copyRoomUrl();
+      closeMobileRoomSheet();
+    });
+    container.appendChild(copyBtn);
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.type = 'button';
+    leaveBtn.className = 'chip danger';
+    leaveBtn.textContent = 'ルームを離脱';
+    leaveBtn.addEventListener('click', () => {
+      clearRoom();
+      closeMobileRoomSheet();
+    });
+    container.appendChild(leaveBtn);
+
+    return;
+  }
+
+  const createBtn = document.createElement('button');
+  createBtn.type = 'button';
+  createBtn.className = 'chip primary';
+  createBtn.textContent = 'ルームを作成';
+  createBtn.addEventListener('click', () => {
+    generateRoom();
+    closeMobileRoomSheet();
+  });
+  container.appendChild(createBtn);
+
+  const joinGroup = document.createElement('div');
+  joinGroup.className = 'join-group';
+
+  const input = document.createElement('input');
+  input.className = 'room-input';
+  input.placeholder = 'コードを入力';
+  input.inputMode = 'text';
+  input.autocomplete = 'off';
+  input.maxLength = 24;
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    joinRoom(input.value);
+    closeMobileRoomSheet();
+  });
+
+  const joinBtn = document.createElement('button');
+  joinBtn.type = 'button';
+  joinBtn.className = 'chip';
+  joinBtn.textContent = '参加';
+  joinBtn.addEventListener('click', () => {
+    joinRoom(input.value);
+    closeMobileRoomSheet();
+  });
+
+  joinGroup.append(input, joinBtn);
+  container.appendChild(joinGroup);
+}
+
 function renderRoomSection() {
   if (!roomSectionEl) return;
   roomSectionEl.innerHTML = '';
@@ -2093,6 +2170,8 @@ function renderRoomSection() {
 
     roomSectionEl.appendChild(joinGroup);
   }
+
+  renderMobileRoomActions();
 }
 
 function connectPresence() {
@@ -3986,6 +4065,50 @@ window.__sceneSyncDebug = {
   dragDropManager,
 };
 
+function isMobileUi() {
+  return window.matchMedia('(max-width: 720px), (hover: none) and (pointer: coarse)').matches;
+}
+
+function isDevUiEnabled() {
+  return new URLSearchParams(location.search).get('dev') === '1';
+}
+
+function openSheet(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.hidden = false;
+}
+
+function closeSheet(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.hidden = true;
+}
+
+function openMobileActionSheet() {
+  openSheet('mobile-action-sheet');
+}
+
+function closeMobileActionSheet() {
+  closeSheet('mobile-action-sheet');
+}
+
+function openMobileRoomSheet() {
+  renderMobileRoomActions();
+  openSheet('mobile-room-sheet');
+}
+
+function closeMobileRoomSheet() {
+  closeSheet('mobile-room-sheet');
+}
+
+dom.addBtn?.addEventListener('click', (event) => {
+  if (!isMobileUi()) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  openMobileActionSheet();
+}, true);
+
 // ── クリップボード貼り付け ────────────────────────────────────────────
 
 function getDefaultImportPosition() {
@@ -4022,6 +4145,16 @@ const pasteBtn = document.getElementById('paste-btn');
 const pasteSheet = document.getElementById('paste-sheet');
 const clipboardPasteTarget = document.getElementById('clipboard-paste-target');
 const pasteSheetClose = document.getElementById('paste-sheet-close');
+const mobileActionSheetCloseBtn = document.getElementById('mobile-action-sheet-close');
+const mobileAddImageBtn = document.getElementById('mobile-add-image-btn');
+const mobilePasteBtn = document.getElementById('mobile-paste-btn');
+const mobileRoomOpenBtn = document.getElementById('mobile-room-open-btn');
+const mobileRoomSheetCloseBtn = document.getElementById('mobile-room-sheet-close');
+const mobileEnvOpenBtn = document.getElementById('mobile-env-open-btn');
+const mobileEnvSheetCloseBtn = document.getElementById('mobile-env-sheet-close');
+const mobileEnvSelect = document.getElementById('mobile-env-select');
+const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
+const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 
 function closePasteSheet() {
   if (pasteSheet) {
@@ -4032,15 +4165,62 @@ function closePasteSheet() {
   }
 }
 
-if (pasteBtn) {
-  pasteBtn.addEventListener('click', () => {
-    showToast('クリップボードを読み込みます…');
-    clipboardImportManager.pasteFromNavigatorClipboard(getDefaultImportPosition())
-      .catch(() => {
-        showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
-      });
-  });
+function pasteFromClipboardAtDefaultPosition() {
+  showToast('クリップボードを読み込みます…');
+  return clipboardImportManager.pasteFromNavigatorClipboard(getDefaultImportPosition())
+    .catch(() => {
+      showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
+    });
 }
+
+pasteBtn?.addEventListener('click', pasteFromClipboardAtDefaultPosition);
+mobileActionSheetCloseBtn?.addEventListener('click', closeMobileActionSheet);
+mobileAddImageBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  dom.fileInput?.click();
+});
+mobilePasteBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  pasteFromClipboardAtDefaultPosition();
+});
+mobileRoomOpenBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  openMobileRoomSheet();
+});
+mobileRoomSheetCloseBtn?.addEventListener('click', closeMobileRoomSheet);
+mobileEnvOpenBtn?.addEventListener('click', () => {
+  if (mobileEnvSelect && dom.envSelect) {
+    mobileEnvSelect.value = dom.envSelect.value;
+  }
+  closeMobileActionSheet();
+  openSheet('mobile-env-sheet');
+});
+mobileEnvSheetCloseBtn?.addEventListener('click', () => {
+  closeSheet('mobile-env-sheet');
+});
+mobileLinkOpenBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  linkBtn?.click();
+});
+mobileDevOpenBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  sceneInspectorToggleBtn?.click();
+});
+
+document.querySelectorAll('[data-mobile-sheet-close]').forEach((el) => {
+  el.addEventListener('click', () => {
+    const target = el.getAttribute('data-mobile-sheet-close');
+    if (target === 'action') closeMobileActionSheet();
+    if (target === 'room') closeMobileRoomSheet();
+    if (target === 'env') closeSheet('mobile-env-sheet');
+  });
+});
+
+mobileEnvSelect?.addEventListener('change', () => {
+  if (!dom.envSelect) return;
+  dom.envSelect.value = mobileEnvSelect.value;
+  dom.envSelect.dispatchEvent(new Event('change', { bubbles: true }));
+});
 
 if (pasteSheetClose && pasteSheet) {
   pasteSheetClose.addEventListener('click', () => {
@@ -5191,6 +5371,11 @@ function updateLinkButtonState() {
   }
 }
 
+function updateMobileDevVisibility() {
+  if (!mobileDevOpenBtn) return;
+  mobileDevOpenBtn.hidden = !isDevUiEnabled();
+}
+
 linkBtn?.addEventListener('click', () => {
   if (presenceState.linkManager.isLinked()) {
     showPairingDialogLinked(presenceState.linkManager.expiresAt);
@@ -5203,6 +5388,10 @@ btnCancelPairing?.addEventListener('click', cancelPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
 btnCopyPairingCode?.addEventListener('click', copyPairingCode);
 pairingCode?.addEventListener('click', copyPairingCode);
+statusEl?.addEventListener('click', () => {
+  if (!isMobileUi()) return;
+  peersPanelEl?.classList.toggle('mobile-open');
+});
 sceneInspectorToggleBtn?.addEventListener('click', () => {
   setSceneInspectorOpen(!sceneInspectorState.isOpen);
 });
@@ -5317,6 +5506,10 @@ if (sceneSyncOperatorLink) {
 
 // 初期状態を反映（DOM 参照と関数定義が揃った後で呼ぶ）
 updateLinkButtonState();
+updateMobileDevVisibility();
+if (mobileEnvSelect && dom.envSelect) {
+  mobileEnvSelect.value = dom.envSelect.value;
+}
 
 // ── 起動 ─────────────────────────────────────────────────
 
