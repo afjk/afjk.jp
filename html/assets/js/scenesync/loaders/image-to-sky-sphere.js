@@ -1,3 +1,5 @@
+import { createImageCanvasForScene } from './image-optimizer.js';
+
 export async function buildImageSkySphereGlb(fileOrBlob, options = {}) {
   const {
     THREE,
@@ -5,20 +7,19 @@ export async function buildImageSkySphereGlb(fileOrBlob, options = {}) {
     radius = 50,
     widthSegments = 64,
     heightSegments = 32,
+    maxPixel = 4096,
+    onOptimized,
   } = options;
 
   if (!THREE) throw new Error('THREE is required');
   if (!GLTFExporter) throw new Error('GLTFExporter is required');
 
-  const bitmap = await createImageBitmap(fileOrBlob);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Failed to get canvas context');
-  ctx.drawImage(bitmap, 0, 0);
+  const optimized = await createImageCanvasForScene(fileOrBlob, {
+    maxPixel,
+    label: 'sky-sphere',
+  });
+  const { canvas } = optimized;
+  onOptimized?.(optimized);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -60,11 +61,14 @@ export async function buildImageSkySphereGlb(fileOrBlob, options = {}) {
   texture.dispose?.();
   geometry.dispose?.();
   material.dispose?.();
-  bitmap.close?.();
 
   return {
     arrayBuffer,
-    width: canvas.width,
-    height: canvas.height,
+    width: optimized.textureWidth,
+    height: optimized.textureHeight,
+    originalWidth: optimized.originalWidth,
+    originalHeight: optimized.originalHeight,
+    optimized: optimized.resized,
+    maxPixel: optimized.maxPixel,
   };
 }

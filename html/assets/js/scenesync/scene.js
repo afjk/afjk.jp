@@ -36,6 +36,8 @@ import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 
+const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
+
 // ── Three.js 基本セットアップ ────────────────────────────
 
 const threeApp = createThreeApp();
@@ -3990,6 +3992,10 @@ function applySceneActionLocally(action) {
 
 async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', context = {}) {
   const safeName = sourceName || 'skybox';
+  let optimizationInfo = null;
+  const existingMetadata = (context.metadata && typeof context.metadata === 'object')
+    ? context.metadata
+    : {};
   const logContext = {
     tempObjectId: context.tempObjectId,
     fileName: context.fileName || safeName,
@@ -4006,10 +4012,23 @@ async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', co
     radius: 50,
     widthSegments: 64,
     heightSegments: 32,
+    maxPixel: 4096,
+    onOptimized: (info) => {
+      optimizationInfo = info;
+    },
   });
   console.debug('[image-import] build glb complete', {
     ...logContext,
     ms: Math.round(performance.now() - buildStart),
+  });
+  console.debug('[image-import] optimized', {
+    ...logContext,
+    originalWidth: optimizationInfo?.originalWidth,
+    originalHeight: optimizationInfo?.originalHeight,
+    textureWidth: optimizationInfo?.textureWidth,
+    textureHeight: optimizationInfo?.textureHeight,
+    resized: optimizationInfo?.resized,
+    optimizeMs: optimizationInfo?.durationMs,
   });
 
   const uploadStart = performance.now();
@@ -4036,9 +4055,19 @@ async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', co
     },
     meshPath,
     metadata: {
+      ...existingMetadata,
       role: 'sky-sphere',
       generatedFrom: 'image',
       sourceName: safeName,
+      image: {
+        originalWidth: optimizationInfo?.originalWidth,
+        originalHeight: optimizationInfo?.originalHeight,
+        textureWidth: optimizationInfo?.textureWidth ?? result.width,
+        textureHeight: optimizationInfo?.textureHeight ?? result.height,
+        originalBytes: optimizationInfo?.originalBytes ?? blob?.size ?? null,
+        maxPixel: optimizationInfo?.maxPixel ?? result.maxPixel,
+        optimized: !!(optimizationInfo?.resized ?? result.optimized),
+      },
     },
   };
 
@@ -4105,12 +4134,15 @@ async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context 
 }
 
 async function imageImporterCallback(file, position, context = {}) {
-  if (file.size > 10 * 1024 * 1024) {
-    throw new Error('画像が大きすぎます (最大10MB)');
+  if (file.size > ABSOLUTE_IMAGE_FILE_LIMIT_BYTES) {
+    throw new Error('この画像は非常に大きいため処理できません');
   }
 
   const { targetKind = 'scene', tempObjectId } = context;
   const isSkyTarget = targetKind === 'sky';
+  const existingMetadata = (context.metadata && typeof context.metadata === 'object')
+    ? context.metadata
+    : {};
   const t0 = performance.now();
   const logContext = {
     tempObjectId,
@@ -4134,11 +4166,28 @@ async function imageImporterCallback(file, position, context = {}) {
     }
 
     const buildStart = performance.now();
+    let optimizationInfo = null;
     console.debug('[image-import] build glb start', logContext);
-    const arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
+    const arrayBuffer = await buildPlaneGlbFromImage(file, {
+      THREE,
+      GLTFExporter,
+      maxPixel: 2048,
+      onOptimized: (info) => {
+        optimizationInfo = info;
+      },
+    });
     console.debug('[image-import] build glb complete', {
       ...logContext,
       ms: Math.round(performance.now() - buildStart),
+    });
+    console.debug('[image-import] optimized', {
+      ...logContext,
+      originalWidth: optimizationInfo?.originalWidth,
+      originalHeight: optimizationInfo?.originalHeight,
+      textureWidth: optimizationInfo?.textureWidth,
+      textureHeight: optimizationInfo?.textureHeight,
+      resized: optimizationInfo?.resized,
+      optimizeMs: optimizationInfo?.durationMs,
     });
 
     const uploadStart = performance.now();
@@ -4164,6 +4213,19 @@ async function imageImporterCallback(file, position, context = {}) {
       rotation: [0, 0, 0, 1],
       scale: [1, 1, 1],
       asset: { type: 'mesh', meshPath },
+      metadata: {
+        ...existingMetadata,
+        role: 'image-plane',
+        image: {
+          originalWidth: optimizationInfo?.originalWidth,
+          originalHeight: optimizationInfo?.originalHeight,
+          textureWidth: optimizationInfo?.textureWidth,
+          textureHeight: optimizationInfo?.textureHeight,
+          originalBytes: optimizationInfo?.originalBytes,
+          maxPixel: optimizationInfo?.maxPixel,
+          optimized: !!optimizationInfo?.resized,
+        },
+      },
     };
 
     broadcast(payload);
