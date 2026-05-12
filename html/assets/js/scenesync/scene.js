@@ -12,7 +12,7 @@ import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager } from './components/drag-drop-manager.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
-import { buildPlaneGlbFromImage } from './loaders/image-to-plane.js';
+import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
 import { buildImageSkySphereGlb } from './loaders/image-to-sky-sphere.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
@@ -1125,6 +1125,7 @@ function removeLockOverlay(objectId) {
 
 // objectId → { group, placeholder }
 const loadingOverlays = new Map();
+const temporaryImagePreviews = new Map();
 
 function createLoadingLabel(text) {
   const canvas = document.createElement('canvas');
@@ -1263,6 +1264,182 @@ function removeLoadingOverlay(objectId) {
   });
 
   loadingOverlays.delete(objectId);
+}
+
+function showTemporaryImagePreview(objectId, file, position, options = {}) {
+  if (!objectId || !file) return;
+
+  removeTemporaryImagePreview(objectId);
+
+  const entry = {
+    object: null,
+    cancelled: false,
+    objectUrl: null,
+    texture: null,
+    geometry: null,
+    material: null,
+  };
+
+  temporaryImagePreviews.set(objectId, entry);
+
+  if (options.targetKind === 'sky') {
+    createTemporarySkyPreview(objectId, file, entry);
+    return;
+  }
+
+  createTemporaryPlanePreview(objectId, file, position, entry);
+}
+
+async function createTemporaryPlanePreview(objectId, file, position, entry) {
+  const t0 = performance.now();
+
+  try {
+    const objectUrl = URL.createObjectURL(file);
+    entry.objectUrl = objectUrl;
+
+    const texture = await new Promise((resolve, reject) => {
+      new THREE.TextureLoader().load(objectUrl, resolve, undefined, reject);
+    });
+
+    if (entry.cancelled) {
+      texture.dispose();
+      return;
+    }
+
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    entry.texture = texture;
+
+    const image = texture.image;
+    const width = image?.naturalWidth || image?.width || 1;
+    const height = image?.naturalHeight || image?.height || 1;
+    const { width: planeWidth, height: planeHeight } = planeSizeFromImage(width, height, 2);
+
+    const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+      opacity: 0.75,
+    });
+
+    entry.geometry = geometry;
+    entry.material = material;
+
+    const group = new THREE.Group();
+    group.name = 'temporary image preview';
+    group.userData.objectId = objectId;
+    group.userData._temporary = true;
+    group.userData._temporaryImagePreview = true;
+    // Temporary preview should not become selectable/inspectable.
+    group.raycast = () => {};
+
+    if (position?.copy) {
+      group.position.copy(position);
+    } else if (Array.isArray(position)) {
+      group.position.fromArray(position);
+    }
+
+    const mesh = new THREE.Mesh(geometry, material);
+    // Match generated GLB grounding (root at bottom, mesh lifted by half height).
+    mesh.position.y = planeHeight / 2;
+    mesh.raycast = () => {};
+    group.add(mesh);
+
+    scene.add(group);
+    entry.object = group;
+
+    console.debug('[image-import] temporary preview shown', {
+      tempObjectId: objectId,
+      ms: Math.round(performance.now() - t0),
+      width,
+      height,
+    });
+  } catch (error) {
+    if (!entry.cancelled) {
+      console.warn('[image-import] temporary preview failed:', error);
+    }
+  }
+}
+
+async function createTemporarySkyPreview(objectId, file, entry) {
+  const t0 = performance.now();
+
+  try {
+    const objectUrl = URL.createObjectURL(file);
+    entry.objectUrl = objectUrl;
+
+    const texture = await new Promise((resolve, reject) => {
+      new THREE.TextureLoader().load(objectUrl, resolve, undefined, reject);
+    });
+
+    if (entry.cancelled) {
+      texture.dispose();
+      return;
+    }
+
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    entry.texture = texture;
+
+    const geometry = new THREE.SphereGeometry(49, 64, 32);
+    geometry.scale(-1, 1, 1);
+    geometry.computeVertexNormals();
+
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      side: THREE.FrontSide,
+      transparent: true,
+      opacity: 0.75,
+      depthWrite: false,
+    });
+
+    entry.geometry = geometry;
+    entry.material = material;
+
+    const sphere = new THREE.Mesh(geometry, material);
+    sphere.name = 'temporary skybox preview';
+    sphere.userData.objectId = objectId;
+    sphere.userData._temporary = true;
+    sphere.userData._temporaryImagePreview = true;
+    sphere.userData._temporarySkyPreview = true;
+    // Temporary preview should not become selectable/inspectable.
+    sphere.raycast = () => {};
+
+    scene.add(sphere);
+    entry.object = sphere;
+
+    console.debug('[image-import] temporary sky preview shown', {
+      tempObjectId: objectId,
+      ms: Math.round(performance.now() - t0),
+    });
+  } catch (error) {
+    if (!entry.cancelled) {
+      console.warn('[image-import] temporary sky preview failed:', error);
+    }
+  }
+}
+
+function removeTemporaryImagePreview(objectId) {
+  const entry = temporaryImagePreviews.get(objectId);
+  if (!entry) return;
+
+  entry.cancelled = true;
+
+  if (entry.object) {
+    scene.remove(entry.object);
+  }
+
+  entry.texture?.dispose();
+  entry.geometry?.dispose();
+  entry.material?.dispose();
+
+  if (entry.objectUrl) {
+    URL.revokeObjectURL(entry.objectUrl);
+  }
+
+  temporaryImagePreviews.delete(objectId);
 }
 
 // ── レイキャスト選択 ─────────────────────────────────────
@@ -1960,6 +2137,11 @@ function pipeUrlForRoom(code) {
 }
 
 function resetSceneState() {
+  for (const tempObjectId of [...temporaryImagePreviews.keys()]) {
+    removeTemporaryImagePreview(tempObjectId);
+    removeLoadingOverlay(tempObjectId);
+  }
+
   for (const [objectId, obj] of [...managedObjects]) {
     if (objectId === 'sample-cube') continue;
     removeLoadingOverlay(objectId);
@@ -3727,8 +3909,17 @@ function applySceneActionLocally(action) {
   }
 }
 
-async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox') {
+async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', context = {}) {
   const safeName = sourceName || 'skybox';
+  const logContext = {
+    tempObjectId: context.tempObjectId,
+    fileName: context.fileName || safeName,
+    fileSize: context.fileSize,
+    targetKind: context.targetKind || 'sky',
+  };
+
+  const buildStart = performance.now();
+  console.debug('[image-import] build glb start', logContext);
 
   const result = await buildImageSkySphereGlb(blob, {
     THREE,
@@ -3737,8 +3928,19 @@ async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox') {
     widthSegments: 64,
     heightSegments: 32,
   });
+  console.debug('[image-import] build glb complete', {
+    ...logContext,
+    ms: Math.round(performance.now() - buildStart),
+  });
 
+  const uploadStart = performance.now();
+  console.debug('[image-import] upload start', logContext);
   const meshPath = await uploadCarrierGlb(result.arrayBuffer);
+  console.debug('[image-import] upload complete', {
+    ...logContext,
+    ms: Math.round(performance.now() - uploadStart),
+    meshPath,
+  });
   const objectId = `sky-${meshPath.slice(0, 8)}`;
 
   const payload = {
@@ -3790,9 +3992,9 @@ function createReplaceSkyboxBatchEntry(oldSkyboxPayloads, newSkyboxPayload) {
   );
 }
 
-async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox') {
+async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context = {}) {
   const oldSkyboxPayloads = getSkySpherePayloads();
-  const newSkyboxPayload = await createSkyboxSpherePayloadFromBlob(blob, sourceName);
+  const newSkyboxPayload = await createSkyboxSpherePayloadFromBlob(blob, sourceName, context);
 
   const batchEntry = createReplaceSkyboxBatchEntry(
     oldSkyboxPayloads,
@@ -3828,34 +4030,87 @@ async function imageImporterCallback(file, position, context = {}) {
     throw new Error('画像が大きすぎます (最大10MB)');
   }
 
-  const { targetKind = 'scene' } = context;
+  const { targetKind = 'scene', tempObjectId } = context;
   const isSkyTarget = targetKind === 'sky';
-
-  if (isSkyTarget) {
-    return await replaceSkyboxSphereFromBlob(file, file.name || 'skybox');
-  }
-
-  const arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
-  const meshPath = await uploadCarrierGlb(arrayBuffer);
-
-  const objectId = `img-${meshPath.slice(0, 8)}`;
-  const displayName = `image: ${file.name}`.slice(0, 60);
-  const positionArray = (position && typeof position.toArray === 'function')
-    ? position.toArray()
-    : [0, 1, 0];
-
-  const payload = {
-    kind: 'scene-add',
-    objectId,
-    name: displayName,
-    position: positionArray,
-    rotation: [0, 0, 0, 1],
-    scale: [1, 1, 1],
-    asset: { type: 'mesh', meshPath },
+  const t0 = performance.now();
+  const logContext = {
+    tempObjectId,
+    fileName: file.name,
+    fileSize: file.size,
+    targetKind,
   };
 
-  broadcast(payload);
-  addOrUpdateObject(objectId, payload);
+  console.debug('[image-import] start', logContext);
+
+  try {
+    if (isSkyTarget) {
+      const result = await replaceSkyboxSphereFromBlob(file, file.name || 'skybox', {
+        ...logContext,
+      });
+      console.debug('[image-import] final object added', {
+        ...logContext,
+        objectId: result?.objectId,
+      });
+      return result;
+    }
+
+    const buildStart = performance.now();
+    console.debug('[image-import] build glb start', logContext);
+    const arrayBuffer = await buildPlaneGlbFromImage(file, { THREE, GLTFExporter });
+    console.debug('[image-import] build glb complete', {
+      ...logContext,
+      ms: Math.round(performance.now() - buildStart),
+    });
+
+    const uploadStart = performance.now();
+    console.debug('[image-import] upload start', logContext);
+    const meshPath = await uploadCarrierGlb(arrayBuffer);
+    console.debug('[image-import] upload complete', {
+      ...logContext,
+      ms: Math.round(performance.now() - uploadStart),
+      meshPath,
+    });
+
+    const objectId = `img-${meshPath.slice(0, 8)}`;
+    const displayName = `image: ${file.name}`.slice(0, 60);
+    const positionArray = (position && typeof position.toArray === 'function')
+      ? position.toArray()
+      : [0, 1, 0];
+
+    const payload = {
+      kind: 'scene-add',
+      objectId,
+      name: displayName,
+      position: positionArray,
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      asset: { type: 'mesh', meshPath },
+    };
+
+    broadcast(payload);
+    addOrUpdateObject(objectId, payload);
+    console.debug('[image-import] final object added', {
+      ...logContext,
+      objectId,
+    });
+    return { objectId, payload };
+  } catch (error) {
+    console.warn('[image-import] failed', {
+      ...logContext,
+      error,
+      totalMs: Math.round(performance.now() - t0),
+    });
+    throw error;
+  } finally {
+    if (tempObjectId) {
+      removeTemporaryImagePreview(tempObjectId);
+      removeLoadingOverlay(tempObjectId);
+    }
+    console.debug('[image-import] complete', {
+      ...logContext,
+      totalMs: Math.round(performance.now() - t0),
+    });
+  }
 }
 
 async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
@@ -3955,13 +4210,32 @@ const dragDropManager = new DragDropManager({
     .filter(obj => obj.userData?.dropRaycastTarget && obj.visible !== false),
   getPlacementTargets: () => Array.from(managedObjects.values())
     .filter(obj => !isSkySphereThreeObject(obj) && obj.visible !== false),
-  onLoadStart: async ({ objectId, file, position }) => {
+  onLoadStart: async ({
+    objectId,
+    file,
+    position,
+    source,
+    targetKind,
+  }) => {
     if (!objectId) return;
-    addLoadingOverlay(objectId, file.name, { position: position?.toArray?.() });
+    const label = source === 'image'
+      ? targetKind === 'sky'
+        ? 'Skybox画像を準備中…'
+        : '画像を準備中…'
+      : file?.name || '読み込み中…';
+
+    addLoadingOverlay(objectId, label, { position: position?.toArray?.() });
+
+    if (source === 'image') {
+      showTemporaryImagePreview(objectId, file, position, { targetKind });
+    }
   },
-  onLoadEnd: async ({ objectId }) => {
+  onLoadEnd: async ({ objectId, source }) => {
     if (!objectId) return;
     removeLoadingOverlay(objectId);
+    if (source === 'image') {
+      removeTemporaryImagePreview(objectId);
+    }
   },
   onLoaded: async (model, file) => {
     managedObjects.set(model.userData.objectId, model);
