@@ -554,7 +554,7 @@ function getOrCreateRoomObjectSet(roomId) {
 
 function simulateObjectLimitUpdate(objectIds, payload, roomId, actorId) {
   let nextObjectIds = new Set(objectIds);
-  if (!payload || typeof payload !== 'object') return { ok: true };
+  if (!payload || typeof payload !== 'object') return { ok: true, nextObjectIds };
 
   if (payload.kind === 'scene-add' && typeof payload.objectId === 'string') {
     if (!nextObjectIds.has(payload.objectId) && nextObjectIds.size >= sceneSyncConfig.maxObjectsPerRoom) {
@@ -605,7 +605,7 @@ function applySceneObjectLimits(roomId, payload, actorId = '') {
   const objectIds = getOrCreateRoomObjectSet(roomId);
   const result = simulateObjectLimitUpdate(objectIds, payload, roomId, actorId);
   if (!result.ok) return result;
-  roomObjectIds.set(roomId, result.nextObjectIds || objectIds);
+  roomObjectIds.set(roomId, result.nextObjectIds);
   return { ok: true };
 }
 
