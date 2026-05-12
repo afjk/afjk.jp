@@ -16,6 +16,7 @@ export function getSceneSyncDom() {
     nicknameLabel: document.getElementById('nickname-label'),
     nicknameChip: document.getElementById('nickname-chip'),
     roomSection: document.getElementById('room-section'),
+    peersPanel: document.getElementById('peers-panel'),
     peersList: document.getElementById('peers-list'),
     fileInput: document.getElementById('file-input'),
     dropOverlay: document.getElementById('drop-overlay'),
