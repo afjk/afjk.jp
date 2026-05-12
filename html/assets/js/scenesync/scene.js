@@ -4209,7 +4209,7 @@ mobileDevOpenBtn?.addEventListener('click', () => {
 
 document.querySelectorAll('[data-mobile-sheet-close]').forEach((el) => {
   el.addEventListener('click', () => {
-    const target = el.getAttribute('data-mobile-sheet-close');
+    const target = el.dataset.mobileSheetClose;
     if (target === 'action') closeMobileActionSheet();
     if (target === 'room') closeMobileRoomSheet();
     if (target === 'env') closeSheet('mobile-env-sheet');
