@@ -36,6 +36,8 @@ import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 
+const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
+
 // ── Three.js 基本セットアップ ────────────────────────────
 
 const threeApp = createThreeApp();
@@ -4053,7 +4055,6 @@ async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context 
 }
 
 async function imageImporterCallback(file, position, context = {}) {
-  const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
   if (file.size > ABSOLUTE_IMAGE_FILE_LIMIT_BYTES) {
     throw new Error('この画像は非常に大きいため処理できません');
   }
