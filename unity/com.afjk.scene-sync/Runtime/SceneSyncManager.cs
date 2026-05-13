@@ -1224,11 +1224,11 @@ namespace Afjk.SceneSync
             var objectId = objectIdMatch.Groups[1].Value;
 
             var go = FindManagedObject(objectId);
+            ForgetObject(objectId, go);
             if (go != null)
             {
                 Destroy(go);
             }
-            ForgetObject(objectId, go);
             OnObjectRemoved?.Invoke(objectId);
         }
 
@@ -1260,8 +1260,8 @@ namespace Afjk.SceneSync
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
-                Destroy(go);
                 ForgetObject(objectId, go);
+                Destroy(go);
 
                 _ = DownloadAndCreateObject(objectId, name, meshPath,
                     new float[] { pos.x, pos.y, -pos.z },
@@ -1574,6 +1574,11 @@ namespace Afjk.SceneSync
             float[] position, float[] rotation, float[] scale, string assetId = null)
         {
             _knownObjectIds.Add(objectId);
+
+            if (!string.IsNullOrEmpty(meshPath))
+            {
+                _meshPaths[objectId] = meshPath;
+            }
 
             byte[] glbBytes = null;
 
@@ -2150,8 +2155,8 @@ namespace Afjk.SceneSync
 
                 if (success)
                 {
-                    Destroy(go);
                     ForgetObject(objectId, go);
+                    Destroy(go);
 
                     var newGo = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(newGo, objectId, meshPath, assetId);

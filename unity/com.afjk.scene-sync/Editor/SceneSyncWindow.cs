@@ -1295,11 +1295,11 @@ namespace Afjk.SceneSync.Editor
             var objectId = objectIdMatch.Groups[1].Value;
 
             var go = FindManagedObject(objectId);
+            ForgetObject(objectId, go);
             if (go != null)
             {
                 DestroyImmediate(go);
             }
-            ForgetObject(objectId, go);
         }
 
         private void HandleSceneMesh(string raw)
@@ -1330,8 +1330,8 @@ namespace Afjk.SceneSync.Editor
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
-                DestroyImmediate(go);
                 ForgetObject(objectId, go);
+                DestroyImmediate(go);
 
                 _ = DownloadAndCreateObject(objectId, name, meshPath,
                     new float[] { pos.x, pos.y, -pos.z },
@@ -1469,6 +1469,11 @@ namespace Afjk.SceneSync.Editor
         {
             try
             {
+                if (!string.IsNullOrEmpty(meshPath))
+                {
+                    _meshPaths[objectId] = meshPath;
+                }
+
                 var url = GetBlobUrl() + "/" + meshPath;
                 Debug.Log("[SceneSync] Downloading mesh: " + url);
 
