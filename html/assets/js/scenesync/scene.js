@@ -1462,6 +1462,7 @@ function removeTemporaryImagePreview(objectId) {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let pointerSelectionStart = null;
+let lastPointerEventForPastePreview = null;
 
 function getSelectedObjects() {
   return Array.from(selectedObjectIds)
@@ -1679,6 +1680,12 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 });
 
 renderer.domElement.addEventListener('pointermove', (e) => {
+  if (Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+    lastPointerEventForPastePreview = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+    };
+  }
   if (!pastePreviewMode) return;
   updatePastePreviewFromPointer(e);
 });
@@ -1921,8 +1928,11 @@ async function createPastePreviewObject(clip) {
 }
 
 function getPointerPlacementFromEvent(event = null) {
+  if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+    return null;
+  }
   if (dragDropManager?.getPlacementFromPointerEvent) {
-    return dragDropManager.getPlacementFromPointerEvent(event || {});
+    return dragDropManager.getPlacementFromPointerEvent(event);
   }
   return null;
 }
@@ -1969,7 +1979,9 @@ async function startPastePreviewMode() {
 
   pastePreviewMode = true;
   scene.add(pastePreviewObject);
-  updatePastePreviewFromPointer();
+  if (lastPointerEventForPastePreview) {
+    updatePastePreviewFromPointer(lastPointerEventForPastePreview);
+  }
   showToast?.('配置位置を選んでください。Ctrl/Cmd+V またはクリックで配置、Escで終了');
   return true;
 }

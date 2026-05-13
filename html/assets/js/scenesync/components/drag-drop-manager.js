@@ -399,7 +399,10 @@ export class DragDropManager {
   }
 
   getPlacementFromPointerEvent(event) {
-    return this._dropPositionFromEvent(event || {});
+    if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+      return null;
+    }
+    return this._dropPositionFromEvent(event);
   }
 
   async _loadFile(file, position) {
