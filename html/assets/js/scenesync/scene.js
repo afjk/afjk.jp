@@ -3558,13 +3558,22 @@ function createAiUrlImportContext(params = {}, context = {}) {
     }),
     nameOverride: (typeof params.name === 'string' && params.name.trim()) ? params.name.trim() : null,
     position,
-    textImporter: (text, filename) => textImporterCallback(text, position, filename, {
-      ...context,
-      objectId: params.objectId,
-      name: params.name,
-      rotation,
-      scale,
-    }),
+    placementRotation: Array.isArray(context.placementRotation) ? context.placementRotation : null,
+    placementQuaternion: context.placementQuaternion || null,
+    surfaceKind: context.surfaceKind || null,
+    normalArray: context.normalArray || null,
+    rawNormalArray: context.rawNormalArray || null,
+    wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
+    placementPosition: context.placementPosition || null,
+    textImporter: (text, filename, importerContext = {}) =>
+      textImporterCallback(text, position, filename, {
+        ...context,
+        ...importerContext,
+        objectId: params.objectId,
+        name: params.name,
+        rotation,
+        scale,
+      }),
     THREE,
     GLTFLoader,
     targetKind: context?.targetKind || 'scene',
@@ -4885,7 +4894,12 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
     : [0, 1, 0];
-  const rotation = readQuaternionArray(context.placementRotation || context.rotation, [0, 0, 0, 1]);
+  const placementQuaternion = Array.isArray(context.placementRotation)
+    ? new THREE.Quaternion().fromArray(context.placementRotation)
+    : context.placementQuaternion || null;
+  const rotation = placementQuaternion
+    ? placementQuaternion.toArray()
+    : readQuaternionArray(context.rotation, [0, 0, 0, 1]);
   const scale = readVector3Array(context.scale, [1, 1, 1]);
 
   const payload = {
@@ -4945,8 +4959,18 @@ async function urlImporterCallback(url, position, context = {}) {
       scale: [1, 1, 1],
     }),
     position: positionArray,
-    textImporter: (text, filename) =>
-      textImporterCallback(text, position, filename, context),
+    placementRotation: context.placementRotation || null,
+    placementQuaternion: context.placementQuaternion || null,
+    surfaceKind: context.surfaceKind || null,
+    normalArray: context.normalArray || null,
+    rawNormalArray: context.rawNormalArray || null,
+    wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
+    placementPosition: context.placementPosition || null,
+    textImporter: (text, filename, importerContext = {}) =>
+      textImporterCallback(text, position, filename, {
+        ...context,
+        ...importerContext,
+      }),
     THREE,
     GLTFLoader,
     targetKind: context?.targetKind || 'scene',
