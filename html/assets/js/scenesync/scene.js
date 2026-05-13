@@ -1715,7 +1715,7 @@ renderer.domElement.addEventListener('click', (event) => {
   if (!pastePreviewMode) return;
   event.preventDefault();
   event.stopPropagation();
-  commitPastePreviewPlacement();
+  commitPastePreviewPlacement({ selectPlaced: false });
 });
 
 // ── タッチ操作（iOS Safari 対応） ───────────────────────
@@ -2159,7 +2159,7 @@ function pasteSceneObjectClipboard() {
   return true;
 }
 
-function commitPastePreviewPlacement({ selectPlaced = false } = {}) {
+function commitPastePreviewPlacement({ selectPlaced = true } = {}) {
   if (!pastePreviewMode || !sceneObjectClipboard || !pastePreviewPlacement) {
     return pasteSceneObjectClipboard();
   }
@@ -2471,7 +2471,7 @@ window.addEventListener('keydown', (e) => {
     if (!pastePreviewMode) {
       startPastePreviewMode();
     } else {
-      commitPastePreviewPlacement();
+      commitPastePreviewPlacement({ selectPlaced: false });
     }
     return;
   }
