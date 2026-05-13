@@ -35,6 +35,7 @@ import { computeAssetId } from './assets/asset-id.js';
 import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
+import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
@@ -2051,6 +2052,9 @@ let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
 let reconnectTimer = null;
+let saveRoomSnapshotTimer = null;
+let restoreSnapshotTimer = null;
+let isRestoringRoomSnapshot = false;
 const sceneInspectorState = {
   isOpen: false,
   isEditing: false,
@@ -2174,6 +2178,10 @@ function resetSceneState() {
 
 function reconnectPresence() {
   clearTimeout(reconnectTimer);
+  clearTimeout(saveRoomSnapshotTimer);
+  clearTimeout(restoreSnapshotTimer);
+  saveRoomSnapshotTimer = null;
+  restoreSnapshotTimer = null;
   reconnectTimer = null;
   if (presenceState.ws) {
     const old = presenceState.ws;
@@ -2387,6 +2395,7 @@ function connectPresence() {
         updateStatus(true);
         updatePeersList();
         notifyConnectionStateChanged('presence-welcome');
+        scheduleMaybeRestoreRoomSnapshot('presence-welcome');
         break;
 
       case 'peers': {
@@ -2413,6 +2422,10 @@ function connectPresence() {
           requestSceneFromPeer();
         }
         notifyConnectionStateChanged('peers-updated');
+        if (!hasOtherParticipants()) {
+          if (!sceneReceived) sceneReceived = true;
+          scheduleMaybeRestoreRoomSnapshot('peers-updated');
+        }
         break;
       }
 
@@ -2467,6 +2480,7 @@ function requestSceneFromPeer() {
   const peers = presenceState.peers.filter(p => p.id !== presenceState.id);
   if (peers.length === 0) {
     sceneReceived = true;
+    scheduleMaybeRestoreRoomSnapshot('scene-request-no-peers');
     return;
   }
 
@@ -3218,7 +3232,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
           return;
         }
         if (asset.meshPath) {
-          loadMeshObject(objectId, info, asset.meshPath, existing);
+          loadMeshObject(objectId, info, asset.meshPath, existing, options);
           return;
         }
         break;
@@ -3242,7 +3256,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
   }
 
   if (info.meshPath) {
-    loadMeshObject(objectId, info, info.meshPath, existing);
+    loadMeshObject(objectId, info, info.meshPath, existing, options);
     return;
   }
 
@@ -3257,9 +3271,11 @@ function addOrUpdateObject(objectId, info, options = {}) {
   notifySceneStateChanged('managed-object-updated');
 }
 
-function loadMeshObject(objectId, info, meshPath, existing) {
+function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const url = BLOB_BASE + '/' + meshPath;
+  const skipFallbackOnFailure = options.skipFallbackOnFailure === true;
+  const suppressSnapshotSaveOnFailure = options.suppressSnapshotSaveOnFailure === true;
   const initialPosition = info.position
     ? new THREE.Vector3().fromArray(info.position)
     : undefined;
@@ -3335,7 +3351,7 @@ function loadMeshObject(objectId, info, meshPath, existing) {
             assetId
           );
 
-          if (!existing) {
+          if (!existing && !skipFallbackOnFailure) {
             replaceManagedObject(
               objectId,
               buildDefaultBoxObject(objectId, info, 0xffaa44),
@@ -3397,9 +3413,9 @@ function loadMeshObject(objectId, info, meshPath, existing) {
       }).catch((err) => {
         removeLoadingOverlay(objectId);
         console.warn('Failed to load mesh for', objectId, ':', err);
-        if (!existing) {
+        if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-        } else {
+        } else if (!suppressSnapshotSaveOnFailure) {
           notifySceneStateChanged('mesh-load-failed');
         }
         loadCompleted = true;
@@ -3408,9 +3424,9 @@ function loadMeshObject(objectId, info, meshPath, existing) {
     } catch (err) {
       removeLoadingOverlay(objectId);
       console.warn('Failed to fetch mesh for', objectId, ':', err);
-      if (!existing) {
+      if (!existing && !skipFallbackOnFailure) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-      } else {
+      } else if (!suppressSnapshotSaveOnFailure) {
         notifySceneStateChanged('mesh-load-failed');
       }
     }
@@ -3819,6 +3835,7 @@ function sendHandoff({ targetId, payload }) {
 // ── Asset modules initialization ────────────────────────
 
 const assetCache = createSceneAssetCache();
+const roomSnapshotCache = createRoomSnapshotCache();
 
 const fileTransferAdapter = createSceneSyncFileTransferAdapter({
   presenceState,
@@ -3830,9 +3847,10 @@ function getObjectById(objectId) {
   return managedObjects.get(objectId) || null;
 }
 
-async function loadGlbBlobForObject(objectId, blob) {
+async function loadGlbBlobForObject(objectId, blob, options = {}) {
   const obj = managedObjects.get(objectId);
-  if (!obj) {
+  const info = options.info || null;
+  if (!obj && !info) {
     console.warn('[SceneSync] Object not found for loading recovered GLB:', objectId);
     return;
   }
@@ -3853,19 +3871,31 @@ async function loadGlbBlobForObject(objectId, blob) {
       wrapper.updateMatrixWorld(true);
     }
 
-    wrapper.position.copy(obj.position);
-    wrapper.quaternion.copy(obj.quaternion);
-    wrapper.scale.copy(obj.scale);
+    if (obj) {
+      wrapper.position.copy(obj.position);
+      wrapper.quaternion.copy(obj.quaternion);
+      wrapper.scale.copy(obj.scale);
+    } else {
+      applyTransform(wrapper, info);
+    }
 
     wrapper.userData.objectId = objectId;
-    wrapper.userData.name = obj.userData?.name || objectId;
-    wrapper.userData.meshPath = obj.userData?.meshPath;
-    wrapper.userData.asset = obj.userData?.asset ? structuredClone(obj.userData.asset) : null;
+    wrapper.userData.name = obj?.userData?.name || info?.name || objectId;
+    wrapper.userData.meshPath = obj?.userData?.meshPath || options.meshPath || info?.meshPath || null;
+    wrapper.userData.asset = obj?.userData?.asset
+      ? structuredClone(obj.userData.asset)
+      : (info?.asset ? structuredClone(info.asset) : null);
+    if (options.assetId) wrapper.userData.assetId = options.assetId;
+    applyObjectName(wrapper, wrapper.userData.name);
+    applyObjectVisibility(wrapper, info?.visible);
 
-    if (transformCtrl.object === obj) transformCtrl.detach();
-    scene.remove(obj);
+    if (obj) {
+      if (transformCtrl.object === obj) transformCtrl.detach();
+      scene.remove(obj);
+    }
     scene.add(wrapper);
     managedObjects.set(objectId, wrapper);
+    notifySceneStateChanged('glb-blob-loaded');
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -5672,9 +5702,255 @@ function notifyInspectorStateChanged(reason = 'unknown') {
   scheduleSceneInspectorRefresh();
 }
 
+function safeCloneJson(value) {
+  if (value == null) return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function isSnapshotExcludedObject(objectId, object) {
+  if (!object) return true;
+  if (objectId === 'sample-cube') return true;
+
+  const userData = object.userData || {};
+  if (userData._temporary) return true;
+  if (userData._isLockOverlay) return true;
+  if (userData.role === 'avatar') return true;
+  if (userData.role === 'helper') return true;
+  if (userData.isTransformHelper) return true;
+
+  return false;
+}
+
+function hasSnapshotRestorableObjects() {
+  for (const [objectId, object] of managedObjects.entries()) {
+    if (!isSnapshotExcludedObject(objectId, object)) return true;
+  }
+  return false;
+}
+
+function createCurrentSceneSnapshot() {
+  const objects = [];
+
+  for (const [objectId, object] of managedObjects.entries()) {
+    if (isSnapshotExcludedObject(objectId, object)) continue;
+
+    const asset = safeCloneJson(object.userData?.asset || null);
+    const metadata = safeCloneJson(object.userData?.metadata || null);
+
+    objects.push({
+      objectId,
+      name: object.userData?.name || object.name || objectId,
+      position: object.position.toArray(),
+      rotation: object.quaternion.toArray(),
+      scale: object.scale.toArray(),
+      visible: object.visible !== false,
+      asset,
+      meshPath: object.userData?.meshPath || asset?.meshPath || null,
+      metadata,
+    });
+  }
+
+  return {
+    schemaVersion: 1,
+    savedAt: Date.now(),
+    envId: environmentManager.getCurrentEnvId?.() || dom.envSelect?.value || null,
+    objects,
+  };
+}
+
+function getCurrentRoomId() {
+  return activeRoomCode || presenceState?.room || null;
+}
+
+function scheduleSaveRoomSnapshot(reason = 'unknown') {
+  const roomId = getCurrentRoomId();
+  if (!roomId) return;
+
+  if (isRestoringRoomSnapshot && !hasSnapshotRestorableObjects()) {
+    console.debug('[scene-snapshot] skip save during restore before objects are ready', {
+      roomId,
+      reason,
+    });
+    return;
+  }
+
+  clearTimeout(saveRoomSnapshotTimer);
+  saveRoomSnapshotTimer = setTimeout(() => {
+    saveRoomSnapshotTimer = null;
+    saveCurrentRoomSnapshot(reason, roomId).catch((err) => {
+      console.warn('[scene-snapshot] save failed:', err);
+    });
+  }, 500);
+}
+
+async function saveCurrentRoomSnapshot(reason = 'unknown', explicitRoomId = null) {
+  const roomId = explicitRoomId || getCurrentRoomId();
+  if (!roomId) return;
+
+  const snapshot = createCurrentSceneSnapshot();
+  await roomSnapshotCache.saveSnapshot(roomId, snapshot);
+
+  console.debug('[scene-snapshot] saved', {
+    roomId,
+    objectCount: snapshot.objects.length,
+    reason,
+    savedAt: snapshot.savedAt,
+  });
+}
+
+function hasOtherParticipants() {
+  return presenceState.peers.some(peer => peer.id !== presenceState.id);
+}
+
+function scheduleMaybeRestoreRoomSnapshot(reason = 'unknown') {
+  clearTimeout(restoreSnapshotTimer);
+  restoreSnapshotTimer = setTimeout(() => {
+    restoreSnapshotTimer = null;
+    maybeRestoreRoomSnapshot(reason).catch((err) => {
+      console.warn('[scene-snapshot] restore failed:', err);
+    });
+  }, 1200);
+}
+
+async function maybeRestoreRoomSnapshot(reason = 'unknown') {
+  const roomId = getCurrentRoomId();
+  if (!roomId) return;
+
+  if (hasSnapshotRestorableObjects()) {
+    console.debug('[scene-snapshot] skip restore: scene already has objects', {
+      roomId,
+      objectCount: managedObjects.size,
+      reason,
+    });
+    return;
+  }
+
+  if (hasOtherParticipants()) {
+    console.debug('[scene-snapshot] skip restore: other participants exist', {
+      roomId,
+      reason,
+    });
+    return;
+  }
+
+  if (!sceneReceived) {
+    console.debug('[scene-snapshot] skip restore: scene state still pending', {
+      roomId,
+      reason,
+    });
+    return;
+  }
+
+  const record = await roomSnapshotCache.getSnapshot(roomId);
+  const snapshot = record?.snapshot;
+  if (!snapshot?.objects?.length) {
+    console.debug('[scene-snapshot] no snapshot to restore', { roomId, reason });
+    return;
+  }
+
+  console.info('[scene-snapshot] restoring local snapshot', {
+    roomId,
+    objectCount: snapshot.objects.length,
+    savedAt: record.savedAt,
+    reason,
+  });
+
+  await applyRoomSnapshot(snapshot, {
+    roomId,
+    source: 'indexeddb-room-snapshot',
+  });
+}
+
+async function applyRoomSnapshot(snapshot, options = {}) {
+  let restored = 0;
+  let failed = 0;
+
+  isRestoringRoomSnapshot = true;
+
+  try {
+    if (snapshot.envId) {
+      if (dom.envSelect) dom.envSelect.value = snapshot.envId;
+      if (mobileEnvSelect) mobileEnvSelect.value = snapshot.envId;
+      environmentManager.loadEnvironment(snapshot.envId, {
+        source: options.source || 'indexeddb-room-snapshot',
+        broadcastChange: false,
+      });
+    }
+
+    for (const entry of snapshot.objects || []) {
+      try {
+        restoreSnapshotObject(entry, options);
+        restored++;
+      } catch (err) {
+        failed++;
+        console.warn('[scene-snapshot] object restore failed', {
+          objectId: entry?.objectId,
+          name: entry?.name,
+          err,
+        });
+      }
+    }
+  } finally {
+    isRestoringRoomSnapshot = false;
+  }
+
+  console.info('[scene-snapshot] restore complete', {
+    restored,
+    failed,
+  });
+
+  if (restored > 0) {
+    showToast?.(`前回のシーンの復元を開始しました（${restored}件）`);
+    if (hasSnapshotRestorableObjects()) {
+      notifySceneStateChanged('snapshot-restore');
+    }
+  }
+}
+
+function restoreSnapshotObject(entry, options = {}) {
+  if (!entry || typeof entry !== 'object') {
+    throw new Error('invalid snapshot object');
+  }
+
+  const asset = safeCloneJson(entry.asset || null);
+  const metadata = safeCloneJson(entry.metadata || null) || {};
+  const meshPath = entry.meshPath || asset?.meshPath || null;
+  const objectId = entry.objectId && !managedObjects.has(entry.objectId)
+    ? entry.objectId
+    : generateObjectId('restore');
+
+  const payload = {
+    kind: 'scene-add',
+    objectId,
+    name: entry.name || 'Restored Object',
+    position: Array.isArray(entry.position) ? entry.position : [0, 0, 0],
+    rotation: Array.isArray(entry.rotation) ? entry.rotation : [0, 0, 0, 1],
+    scale: Array.isArray(entry.scale) ? entry.scale : [1, 1, 1],
+    visible: typeof entry.visible === 'boolean' ? entry.visible : true,
+    asset,
+    meshPath,
+    metadata: {
+      ...metadata,
+      restoredFromSnapshot: true,
+      restoredAt: Date.now(),
+      restoreSource: options.source || 'indexeddb-room-snapshot',
+    },
+  };
+
+  addOrUpdateObject(objectId, payload, {
+    skipFallbackOnFailure: true,
+    suppressSnapshotSaveOnFailure: true,
+  });
+}
+
 function notifySceneStateChanged(reason) {
   notifyInspectorStateChanged(`scene:${reason}`);
   syncSceneUiState();
+  scheduleSaveRoomSnapshot(reason);
 }
 
 function notifySelectionChanged(reason) {
