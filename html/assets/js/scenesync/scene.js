@@ -2054,6 +2054,7 @@ let sceneRequestAttempt = 0;
 let reconnectTimer = null;
 let saveRoomSnapshotTimer = null;
 let restoreSnapshotTimer = null;
+let isRestoringRoomSnapshot = false;
 const sceneInspectorState = {
   isOpen: false,
   isEditing: false,
@@ -3274,6 +3275,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const url = BLOB_BASE + '/' + meshPath;
   const skipFallbackOnFailure = options.skipFallbackOnFailure === true;
+  const suppressSnapshotSaveOnFailure = options.suppressSnapshotSaveOnFailure === true;
   const initialPosition = info.position
     ? new THREE.Vector3().fromArray(info.position)
     : undefined;
@@ -3413,7 +3415,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         console.warn('Failed to load mesh for', objectId, ':', err);
         if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-        } else {
+        } else if (!suppressSnapshotSaveOnFailure) {
           notifySceneStateChanged('mesh-load-failed');
         }
         loadCompleted = true;
@@ -3424,7 +3426,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       console.warn('Failed to fetch mesh for', objectId, ':', err);
       if (!existing && !skipFallbackOnFailure) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
-      } else {
+      } else if (!suppressSnapshotSaveOnFailure) {
         notifySceneStateChanged('mesh-load-failed');
       }
     }
@@ -5768,6 +5770,14 @@ function scheduleSaveRoomSnapshot(reason = 'unknown') {
   const roomId = getCurrentRoomId();
   if (!roomId) return;
 
+  if (isRestoringRoomSnapshot && !hasSnapshotRestorableObjects()) {
+    console.debug('[scene-snapshot] skip save during restore before objects are ready', {
+      roomId,
+      reason,
+    });
+    return;
+  }
+
   clearTimeout(saveRoomSnapshotTimer);
   saveRoomSnapshotTimer = setTimeout(() => {
     saveRoomSnapshotTimer = null;
@@ -5859,27 +5869,33 @@ async function applyRoomSnapshot(snapshot, options = {}) {
   let restored = 0;
   let failed = 0;
 
-  if (snapshot.envId) {
-    if (dom.envSelect) dom.envSelect.value = snapshot.envId;
-    if (mobileEnvSelect) mobileEnvSelect.value = snapshot.envId;
-    environmentManager.loadEnvironment(snapshot.envId, {
-      source: options.source || 'indexeddb-room-snapshot',
-      broadcastChange: false,
-    });
-  }
+  isRestoringRoomSnapshot = true;
 
-  for (const entry of snapshot.objects || []) {
-    try {
-      restoreSnapshotObject(entry, options);
-      restored++;
-    } catch (err) {
-      failed++;
-      console.warn('[scene-snapshot] object restore failed', {
-        objectId: entry?.objectId,
-        name: entry?.name,
-        err,
+  try {
+    if (snapshot.envId) {
+      if (dom.envSelect) dom.envSelect.value = snapshot.envId;
+      if (mobileEnvSelect) mobileEnvSelect.value = snapshot.envId;
+      environmentManager.loadEnvironment(snapshot.envId, {
+        source: options.source || 'indexeddb-room-snapshot',
+        broadcastChange: false,
       });
     }
+
+    for (const entry of snapshot.objects || []) {
+      try {
+        restoreSnapshotObject(entry, options);
+        restored++;
+      } catch (err) {
+        failed++;
+        console.warn('[scene-snapshot] object restore failed', {
+          objectId: entry?.objectId,
+          name: entry?.name,
+          err,
+        });
+      }
+    }
+  } finally {
+    isRestoringRoomSnapshot = false;
   }
 
   console.info('[scene-snapshot] restore complete', {
@@ -5888,8 +5904,10 @@ async function applyRoomSnapshot(snapshot, options = {}) {
   });
 
   if (restored > 0) {
-    showToast?.(`前回のシーンを復元しました（${restored}件）`);
-    notifySceneStateChanged('snapshot-restore');
+    showToast?.(`前回のシーンの復元を開始しました（${restored}件）`);
+    if (hasSnapshotRestorableObjects()) {
+      notifySceneStateChanged('snapshot-restore');
+    }
   }
 }
 
@@ -5925,6 +5943,7 @@ function restoreSnapshotObject(entry, options = {}) {
 
   addOrUpdateObject(objectId, payload, {
     skipFallbackOnFailure: true,
+    suppressSnapshotSaveOnFailure: true,
   });
 }
 
