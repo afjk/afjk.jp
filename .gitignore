@@ -10,7 +10,6 @@ https-portal-certs/
 verdaccio/
 
 node_modules/
-apps/presence-server/logs/
 plans/
 !docs/plans/
 !docs/plans/**/

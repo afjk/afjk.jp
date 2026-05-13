@@ -1961,6 +1961,7 @@ function updatePastePreviewFromPointer(event = null) {
   pastePreviewObject.quaternion.fromArray(pastePreviewPlacement.rotation);
   pastePreviewObject.scale.fromArray(pastePreviewPlacement.scale);
   pastePreviewObject.updateMatrixWorld(true);
+  pastePreviewObject.visible = true;
 }
 
 async function startPastePreviewMode() {
@@ -1981,6 +1982,8 @@ async function startPastePreviewMode() {
   scene.add(pastePreviewObject);
   if (lastPointerEventForPastePreview) {
     updatePastePreviewFromPointer(lastPointerEventForPastePreview);
+  } else {
+    pastePreviewObject.visible = false;
   }
   showToast?.('配置位置を選んでください。Ctrl/Cmd+V またはクリックで配置、Escで終了');
   return true;
@@ -2156,7 +2159,7 @@ function pasteSceneObjectClipboard() {
   return true;
 }
 
-function commitPastePreviewPlacement() {
+function commitPastePreviewPlacement({ selectPlaced = false } = {}) {
   if (!pastePreviewMode || !sceneObjectClipboard || !pastePreviewPlacement) {
     return pasteSceneObjectClipboard();
   }
@@ -2210,7 +2213,9 @@ function commitPastePreviewPlacement() {
 
   broadcast(payload);
   notifySceneStateChanged('clipboard-stamp');
-  selectDuplicatedObjectWhenReady(newObjectId);
+  if (selectPlaced) {
+    selectDuplicatedObjectWhenReady(newObjectId);
+  }
   showToast?.('配置しました');
   return true;
 }
