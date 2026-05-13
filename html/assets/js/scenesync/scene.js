@@ -2066,7 +2066,7 @@ function deleteObjectById(objectId, options = {}) {
 
   // 履歴に追加
   if (pushHistory) {
-    presenceState.historyManager.push(
+    presenceState.historyManager?.push(
       HistoryManager.createRemoveEntry(objectId, name, asset, position, rotation, scale)
     );
   }
