@@ -1462,6 +1462,7 @@ function removeTemporaryImagePreview(objectId) {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let pointerSelectionStart = null;
+let lastPointerEventForPastePreview = null;
 
 function getSelectedObjects() {
   return Array.from(selectedObjectIds)
@@ -1495,11 +1496,17 @@ function showSelectionHelper(object) {
   selectionHelpers.set(objectId, helper);
 }
 
+function isPastePreviewUserData(userData) {
+  if (!userData) return false;
+  return userData.isPastePreview || userData.role === 'paste-preview';
+}
+
 function isSelectableObject(object) {
   if (!object) return false;
 
   const userData = object.userData || {};
   if (userData._temporary) return false;
+  if (isPastePreviewUserData(userData)) return false;
   if (userData._isLoadingOverlay) return false;
   if (userData._isLockOverlay) return false;
   if (userData.role === 'avatar') return false;
@@ -1660,6 +1667,10 @@ function selectObjectAt(clientX, clientY, event = null) {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (pastePreviewMode) {
+    pointerSelectionStart = null;
+    return;
+  }
   if (e.pointerType === 'touch') return;
   pointerSelectionStart = {
     x: e.clientX,
@@ -1668,7 +1679,22 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   };
 });
 
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+    lastPointerEventForPastePreview = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+    };
+  }
+  if (!pastePreviewMode) return;
+  updatePastePreviewFromPointer(e);
+});
+
 renderer.domElement.addEventListener('pointerup', (e) => {
+  if (pastePreviewMode) {
+    pointerSelectionStart = null;
+    return;
+  }
   if (e.pointerType === 'touch') return;
   if (isDragging || !pointerSelectionStart) return;
   if (pointerSelectionStart.button !== 0 || e.button !== 0) return;
@@ -1683,6 +1709,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
 renderer.domElement.addEventListener('pointercancel', () => {
   pointerSelectionStart = null;
+});
+
+renderer.domElement.addEventListener('click', (event) => {
+  if (!pastePreviewMode) return;
+  event.preventDefault();
+  event.stopPropagation();
+  commitPastePreviewPlacement({ selectPlaced: false });
 });
 
 // ── タッチ操作（iOS Safari 対応） ───────────────────────
@@ -1821,6 +1854,141 @@ function getClipboardPasteOffset(count = 1) {
   return offset;
 }
 
+function disposePastePreviewObject(root) {
+  if (!root) return;
+  root.traverse((obj) => {
+    if (!obj?.isMesh || !obj.material) return;
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const mat of materials) {
+      mat?.dispose?.();
+    }
+  });
+}
+
+function cleanupPastePreview() {
+  pastePreviewMode = false;
+  pastePreviewPlacement = null;
+
+  if (!pastePreviewObject) return;
+  scene.remove(pastePreviewObject);
+  disposePastePreviewObject(pastePreviewObject);
+  pastePreviewObject = null;
+}
+
+function makeObjectTransparentPreview(root) {
+  root.traverse((obj) => {
+    if (!obj?.isMesh || !obj.material) return;
+
+    const original = obj.material;
+    const materials = Array.isArray(original) ? original : [original];
+    const previewMaterials = materials.map((mat) => {
+      const cloned = mat.clone();
+      cloned.transparent = true;
+      cloned.opacity = Math.min(
+        typeof cloned.opacity === 'number' ? cloned.opacity : 1,
+        0.35
+      );
+      cloned.depthWrite = false;
+      return cloned;
+    });
+
+    obj.material = Array.isArray(original) ? previewMaterials : previewMaterials[0];
+  });
+}
+
+function disableObjectRaycast(root) {
+  root.traverse((obj) => {
+    obj.userData = {
+      ...(obj.userData || {}),
+      _temporary: true,
+      role: 'paste-preview',
+      isPastePreview: true,
+    };
+    if (obj.isMesh) {
+      obj.raycast = () => {};
+    }
+  });
+}
+
+async function createPastePreviewObject(clip) {
+  const source = managedObjects.get(clip?.sourceObjectId);
+  if (!source) return null;
+
+  const preview = source.clone(true);
+  preview.userData = {
+    ...(preview.userData || {}),
+    role: 'paste-preview',
+    _temporary: true,
+    isPastePreview: true,
+  };
+
+  makeObjectTransparentPreview(preview);
+  disableObjectRaycast(preview);
+  return preview;
+}
+
+function getPointerPlacementFromEvent(event = null) {
+  if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+    return null;
+  }
+  if (dragDropManager?.getPlacementFromPointerEvent) {
+    return dragDropManager.getPlacementFromPointerEvent(event);
+  }
+  return null;
+}
+
+function updatePastePreviewFromPointer(event = null) {
+  if (!pastePreviewMode || !pastePreviewObject) return;
+  const placement = getPointerPlacementFromEvent(event);
+  if (!placement?.position) return;
+
+  const clip = sceneObjectClipboard;
+  const positionArray = placement.position.toArray
+    ? placement.position.toArray()
+    : (Array.isArray(placement.position) ? placement.position : null);
+  if (!positionArray) return;
+
+  pastePreviewPlacement = {
+    position: positionArray,
+    rotation: Array.isArray(clip?.rotation) ? clip.rotation : [0, 0, 0, 1],
+    scale: Array.isArray(clip?.scale) ? clip.scale : [1, 1, 1],
+    targetKind: placement.targetKind || null,
+    surfaceKind: placement.surfaceKind || null,
+    normalArray: placement.normalArray || null,
+  };
+
+  pastePreviewObject.position.fromArray(pastePreviewPlacement.position);
+  pastePreviewObject.quaternion.fromArray(pastePreviewPlacement.rotation);
+  pastePreviewObject.scale.fromArray(pastePreviewPlacement.scale);
+  pastePreviewObject.updateMatrixWorld(true);
+  pastePreviewObject.visible = true;
+}
+
+async function startPastePreviewMode() {
+  if (!sceneObjectClipboard) {
+    showToast?.('ペーストするオブジェクトがありません');
+    return false;
+  }
+
+  cleanupPastePreview();
+
+  pastePreviewObject = await createPastePreviewObject(sceneObjectClipboard);
+  if (!pastePreviewObject) {
+    showToast?.('プレビューを作成できませんでした');
+    return false;
+  }
+
+  pastePreviewMode = true;
+  scene.add(pastePreviewObject);
+  if (lastPointerEventForPastePreview) {
+    updatePastePreviewFromPointer(lastPointerEventForPastePreview);
+  } else {
+    pastePreviewObject.visible = false;
+  }
+  showToast?.('配置位置を選んでください。Ctrl/Cmd+V またはクリックで配置、Escで終了');
+  return true;
+}
+
 function selectDuplicatedObjectWhenReady(objectId, attempt = 0) {
   const duplicated = managedObjects.get(objectId);
   if (duplicated) {
@@ -1910,6 +2078,7 @@ function copySelectedObjectToSceneClipboard() {
     scale: source.scale.toArray(),
   };
   sceneObjectPasteCount = 0;
+  cleanupPastePreview();
 
   showToast?.('オブジェクトをコピーしました');
   console.debug('[scene-clipboard] copied object', {
@@ -1987,6 +2156,67 @@ function pasteSceneObjectClipboard() {
     meshPath: payload.meshPath || null,
   });
 
+  return true;
+}
+
+function commitPastePreviewPlacement({ selectPlaced = true } = {}) {
+  if (!pastePreviewMode || !sceneObjectClipboard || !pastePreviewPlacement) {
+    return pasteSceneObjectClipboard();
+  }
+
+  const clip = sceneObjectClipboard;
+  const newObjectId = generateObjectId('paste');
+  sceneObjectPasteCount += 1;
+
+  const asset = cloneJsonSafe(clip.asset);
+  const metadata = cloneJsonSafe(clip.metadata) || {};
+  const meshPath = clip.meshPath || asset?.meshPath || null;
+  const name = `${clip.name || 'Object'} Copy`;
+
+  const payload = {
+    kind: 'scene-add',
+    objectId: newObjectId,
+    name,
+    position: pastePreviewPlacement.position,
+    rotation: pastePreviewPlacement.rotation,
+    scale: pastePreviewPlacement.scale,
+    asset,
+    meshPath,
+    metadata: {
+      ...metadata,
+      copiedFrom: clip.sourceObjectId,
+      pastedFromClipboard: true,
+      pastedAt: Date.now(),
+      pastePlacement: {
+        targetKind: pastePreviewPlacement.targetKind || null,
+        surfaceKind: pastePreviewPlacement.surfaceKind || null,
+        normal: pastePreviewPlacement.normalArray || null,
+      },
+    },
+  };
+
+  addOrUpdateObject(newObjectId, payload, {
+    source: 'local-clipboard-stamp',
+  });
+
+  presenceState.historyManager?.push(
+    HistoryManager.createAddEntry(
+      newObjectId,
+      asset || {},
+      payload.position,
+      payload.rotation,
+      payload.scale,
+      name,
+      meshPath
+    )
+  );
+
+  broadcast(payload);
+  notifySceneStateChanged('clipboard-stamp');
+  if (selectPlaced) {
+    selectDuplicatedObjectWhenReady(newObjectId);
+  }
+  showToast?.('配置しました');
   return true;
 }
 
@@ -2233,9 +2463,15 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (isMod && !e.altKey && key === 'v') {
-    if (sceneObjectClipboard && pasteSceneObjectClipboard()) {
-      e.preventDefault();
-      e.stopPropagation();
+    if (!sceneObjectClipboard) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!pastePreviewMode) {
+      startPastePreviewMode();
+    } else {
+      commitPastePreviewPlacement({ selectPlaced: false });
     }
     return;
   }
@@ -2259,6 +2495,12 @@ window.addEventListener('keydown', (e) => {
     case 'e': transformCtrl.setMode('rotate'); break;
     case 'r': transformCtrl.setMode('scale'); break;
     case 'escape':
+      if (pastePreviewMode) {
+        e.preventDefault();
+        cleanupPastePreview();
+        showToast?.('配置モードを終了しました');
+        break;
+      }
       if (transformCtrl.object) {
         broadcast({
           kind: 'scene-unlock',
@@ -2551,6 +2793,9 @@ let restoreSnapshotTimer = null;
 let isRestoringRoomSnapshot = false;
 let sceneObjectClipboard = null;
 let sceneObjectPasteCount = 0;
+let pastePreviewMode = false;
+let pastePreviewObject = null;
+let pastePreviewPlacement = null;
 const sceneInspectorState = {
   isOpen: false,
   isEditing: false,
@@ -5013,7 +5258,10 @@ const dragDropManager = new DragDropManager({
       }
     }
     scene.traverse((obj) => {
-      if (obj.userData?.isPlacementTarget && obj.visible !== false) {
+      if (obj.userData?.isPlacementTarget
+        && obj.visible !== false
+        && !obj.userData?._temporary
+        && !isPastePreviewUserData(obj.userData)) {
         targets.push(obj);
       }
     });
