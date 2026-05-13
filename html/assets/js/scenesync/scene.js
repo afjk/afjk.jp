@@ -3565,13 +3565,15 @@ function createAiUrlImportContext(params = {}, context = {}) {
     rawNormalArray: context.rawNormalArray || null,
     wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
     placementPosition: context.placementPosition || null,
-    textImporter: (text, filename) => textImporterCallback(text, position, filename, {
-      ...context,
-      objectId: params.objectId,
-      name: params.name,
-      rotation,
-      scale,
-    }),
+    textImporter: (text, filename, importerContext = {}) =>
+      textImporterCallback(text, position, filename, {
+        ...context,
+        ...importerContext,
+        objectId: params.objectId,
+        name: params.name,
+        rotation,
+        scale,
+      }),
     THREE,
     GLTFLoader,
     targetKind: context?.targetKind || 'scene',
@@ -4964,9 +4966,10 @@ async function urlImporterCallback(url, position, context = {}) {
     rawNormalArray: context.rawNormalArray || null,
     wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
     placementPosition: context.placementPosition || null,
-    textImporter: (text, filename) =>
+    textImporter: (text, filename, importerContext = {}) =>
       textImporterCallback(text, position, filename, {
         ...context,
+        ...importerContext,
       }),
     THREE,
     GLTFLoader,
