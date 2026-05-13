@@ -715,6 +715,13 @@ namespace Afjk.SceneSync
             if (fromIdMatch.Success)
                 fromId = fromIdMatch.Groups[1].Value;
 
+            DispatchSceneMessage(raw, fromId);
+        }
+
+        private void DispatchSceneMessage(string raw, string fromId = null)
+        {
+            if (string.IsNullOrEmpty(raw)) return;
+
             if (raw.Contains("\"kind\":\"scene-request\""))
             {
                 if (fromId != null)
@@ -730,6 +737,10 @@ namespace Afjk.SceneSync
             {
                 HandleSceneState(raw);
             }
+            else if (raw.Contains("\"kind\":\"scene-batch\""))
+            {
+                HandleSceneBatch(raw, fromId);
+            }
             else if (raw.Contains("\"kind\":\"scene-delta\""))
             {
                 HandleSceneDelta(raw);
@@ -738,7 +749,7 @@ namespace Afjk.SceneSync
             {
                 HandleSceneAdd(raw);
             }
-            else if (raw.Contains("\"kind\":\"scene-remove\""))
+            else if (raw.Contains("\"kind\":\"scene-remove\"") || raw.Contains("\"kind\":\"scene-delete\""))
             {
                 HandleSceneRemove(raw);
             }
@@ -758,6 +769,87 @@ namespace Afjk.SceneSync
             {
                 _ = HandleFileHandoff(fromId, raw);
             }
+        }
+
+        private void HandleSceneBatch(string raw, string fromId = null)
+        {
+            foreach (var op in ExtractTopLevelObjectsFromArray(raw, "ops"))
+            {
+                DispatchSceneMessage(op, fromId);
+            }
+
+            foreach (var action in ExtractTopLevelObjectsFromArray(raw, "actions"))
+            {
+                DispatchSceneMessage(action, fromId);
+            }
+        }
+
+        private static List<string> ExtractTopLevelObjectsFromArray(string raw, string fieldName)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrEmpty(raw) || string.IsNullOrEmpty(fieldName)) return result;
+
+            var token = "\"" + fieldName + "\"";
+            var fieldIndex = raw.IndexOf(token, StringComparison.Ordinal);
+            if (fieldIndex < 0) return result;
+
+            var arrayStart = raw.IndexOf('[', fieldIndex);
+            if (arrayStart < 0) return result;
+
+            var depth = 0;
+            var objectStart = -1;
+            var inString = false;
+            var escape = false;
+
+            for (var i = arrayStart + 1; i < raw.Length; i++)
+            {
+                var ch = raw[i];
+
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inString = !inString;
+                    continue;
+                }
+
+                if (inString) continue;
+
+                if (ch == '{')
+                {
+                    if (depth == 0) objectStart = i;
+                    depth++;
+                    continue;
+                }
+
+                if (ch == '}')
+                {
+                    depth--;
+                    if (depth == 0 && objectStart >= 0)
+                    {
+                        result.Add(raw.Substring(objectStart, i - objectStart + 1));
+                        objectStart = -1;
+                    }
+                    continue;
+                }
+
+                if (ch == ']' && depth == 0)
+                {
+                    break;
+                }
+            }
+
+            return result;
         }
 
         private async System.Threading.Tasks.Task HandleAssetRequest(string raw, string requesterPeerId)
@@ -1111,7 +1203,7 @@ namespace Afjk.SceneSync
                 // メッシュなしの場合は Cube を作成
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
-                ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
+                ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
                 go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                 _managedObjects[objectId] = go;
@@ -1132,15 +1224,11 @@ namespace Afjk.SceneSync
             var objectId = objectIdMatch.Groups[1].Value;
 
             var go = FindManagedObject(objectId);
+            ForgetObject(objectId, go);
             if (go != null)
             {
-                _instanceToObjectId.Remove(go.GetInstanceID());
                 Destroy(go);
-                _managedObjects.Remove(objectId);
-                _knownObjectIds.Remove(objectId);
             }
-            _meshPaths.Remove(objectId);
-            _locks.Remove(objectId);
             OnObjectRemoved?.Invoke(objectId);
         }
 
@@ -1172,8 +1260,8 @@ namespace Afjk.SceneSync
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
+                ForgetObject(objectId, go);
                 Destroy(go);
-                _managedObjects.Remove(objectId);
 
                 _ = DownloadAndCreateObject(objectId, name, meshPath,
                     new float[] { pos.x, pos.y, -pos.z },
@@ -1455,14 +1543,15 @@ namespace Afjk.SceneSync
             string meshPath,
             float[] position,
             float[] rotation,
-            float[] scale)
+            float[] scale,
+            string assetId = null)
         {
             var placeholder = _managedObjects[objectId];
             var placeholderInstanceId = placeholder.GetInstanceID();
 
             var fallback = GameObject.CreatePrimitive(PrimitiveType.Cube);
             fallback.name = name;
-            ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath);
+            ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
             fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
             var fallbackMaterial = GetFallbackImportMaterial();
@@ -1485,6 +1574,11 @@ namespace Afjk.SceneSync
             float[] position, float[] rotation, float[] scale, string assetId = null)
         {
             _knownObjectIds.Add(objectId);
+
+            if (!string.IsNullOrEmpty(meshPath))
+            {
+                _meshPaths[objectId] = meshPath;
+            }
 
             byte[] glbBytes = null;
 
@@ -1538,7 +1632,7 @@ namespace Afjk.SceneSync
                         _ = HandleMissingGlb(objectId, meshPath, null, assetId);
                     }
 
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -1597,7 +1691,7 @@ namespace Afjk.SceneSync
                     var placeholderInstanceId = placeholder.GetInstanceID();
 
                     var go = new GameObject(name);
-                    ConfigureRemoteTemporaryIdentity(go, objectId, meshPath);
+                    ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
                     go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
@@ -1644,7 +1738,7 @@ namespace Afjk.SceneSync
                         + ", loadingError=" + gltf.LoadingError
                         + ", sceneCount=" + gltf.SceneCount
                         + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId);
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
 
@@ -1683,7 +1777,7 @@ namespace Afjk.SceneSync
 
                 if (_managedObjects.ContainsKey(objectId))
                 {
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -1704,10 +1798,10 @@ namespace Afjk.SceneSync
             return identity;
         }
 
-        private static void ConfigureRemoteTemporaryIdentity(GameObject go, string objectId, string meshPath)
+        private static void ConfigureRemoteTemporaryIdentity(GameObject go, string objectId, string meshPath, string assetId = null)
         {
             var identity = EnsureSceneSyncIdentity(go);
-            identity.ConfigureRemoteTemporary(objectId, meshPath);
+            identity.ConfigureRemoteTemporary(objectId, meshPath, assetId);
         }
 
         private void EnsureManagedObjectsList()
@@ -2013,7 +2107,7 @@ namespace Afjk.SceneSync
                     _meshPathCache[recovery.meshPath] = data;
 
                 Debug.Log("[ExpiredGlbRecovery] Loading recovered GLB into object: " + recovery.objectId);
-                await LoadGlbFromBytes(recovery.objectId, data);
+                await LoadGlbFromBytes(recovery.objectId, data, computedAssetId ?? recovery.assetId);
                 Debug.Log("[ExpiredGlbRecovery] Recovered GLB loaded successfully");
             }
             catch (Exception err)
@@ -2022,7 +2116,7 @@ namespace Afjk.SceneSync
             }
         }
 
-        private async System.Threading.Tasks.Task LoadGlbFromBytes(string objectId, byte[] glbBytes)
+        private async System.Threading.Tasks.Task LoadGlbFromBytes(string objectId, byte[] glbBytes, string assetId = null)
         {
             var go = FindManagedObject(objectId);
             if (go == null)
@@ -2061,11 +2155,11 @@ namespace Afjk.SceneSync
 
                 if (success)
                 {
+                    ForgetObject(objectId, go);
                     Destroy(go);
-                    _managedObjects.Remove(objectId);
 
                     var newGo = new GameObject(name);
-                    ConfigureRemoteTemporaryIdentity(newGo, objectId, meshPath);
+                    ConfigureRemoteTemporaryIdentity(newGo, objectId, meshPath, assetId);
                     newGo.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
@@ -2105,17 +2199,39 @@ namespace Afjk.SceneSync
                 return;
             }
 
-            var objectId = identity.ObjectId;
+            ForgetObject(identity.ObjectId, go);
+        }
+
+        private void ForgetObject(string objectId, GameObject go = null)
+        {
+            if (string.IsNullOrWhiteSpace(objectId)) return;
+
             _managedObjects.Remove(objectId);
             _knownObjectIds.Remove(objectId);
             _lastSnapshots.Remove(objectId);
             _meshPaths.Remove(objectId);
             _locks.Remove(objectId);
 
-            var transforms = go.GetComponentsInChildren<Transform>(true);
-            foreach (var t in transforms)
+            if (go != null)
             {
-                _instanceToObjectId.Remove(t.gameObject.GetInstanceID());
+                _instanceToObjectId.Remove(go.GetInstanceID());
+                foreach (var t in go.GetComponentsInChildren<Transform>(true))
+                {
+                    _instanceToObjectId.Remove(t.gameObject.GetInstanceID());
+                }
+                return;
+            }
+
+            var stale = new List<int>();
+            foreach (var kvp in _instanceToObjectId)
+            {
+                if (kvp.Value == objectId)
+                    stale.Add(kvp.Key);
+            }
+
+            foreach (var key in stale)
+            {
+                _instanceToObjectId.Remove(key);
             }
         }
 
