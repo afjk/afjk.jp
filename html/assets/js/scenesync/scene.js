@@ -3269,28 +3269,36 @@ function loadMeshObject(objectId, info, meshPath, existing) {
   (async () => {
     try {
       const incomingAssetId = info.asset?.assetId || info.assetId || null;
-      const cachedByAssetId = incomingAssetId
-        ? await assetCache.getByAssetId(incomingAssetId)
-        : null;
-      const cachedByMeshPath = !cachedByAssetId && meshPath
-        ? await assetCache.getByMeshPath(meshPath)
-        : null;
-      const cachedRecord = cachedByAssetId || cachedByMeshPath || null;
-      if (cachedRecord?.blob) {
-        console.debug('[asset-cache] hit for scene-add mesh', {
-          objectId,
-          assetId: cachedRecord.assetId || incomingAssetId || null,
-          meshPath: cachedRecord.meshPath || meshPath,
-          source: cachedByAssetId ? 'indexeddb-asset-id' : 'indexeddb-mesh-path',
-        });
-        await loadGlbBlobForObject(objectId, cachedRecord.blob, {
-          info,
-          existing,
-          meshPath,
-          assetId: cachedRecord.assetId || incomingAssetId || null,
-        });
-        removeLoadingOverlay(objectId);
-        return;
+      let cachedRecord = null;
+
+      try {
+        const cachedByAssetId = incomingAssetId
+          ? await assetCache.getByAssetId(incomingAssetId)
+          : null;
+        const cachedByMeshPath = !cachedByAssetId && meshPath
+          ? await assetCache.getByMeshPath(meshPath)
+          : null;
+
+        cachedRecord = cachedByAssetId || cachedByMeshPath || null;
+
+        if (cachedRecord?.blob) {
+          console.debug('[asset-cache] hit for scene-add mesh', {
+            objectId,
+            assetId: cachedRecord.assetId || incomingAssetId || null,
+            meshPath: cachedRecord.meshPath || meshPath,
+            source: cachedByAssetId ? 'indexeddb-asset-id' : 'indexeddb-mesh-path',
+          });
+          await loadGlbBlobForObject(objectId, cachedRecord.blob, {
+            info,
+            existing,
+            meshPath,
+            assetId: cachedRecord.assetId || incomingAssetId || null,
+          });
+          removeLoadingOverlay(objectId);
+          return;
+        }
+      } catch (cacheErr) {
+        console.warn('[asset-cache] lookup failed, falling back to network fetch:', cacheErr);
       }
 
       const response = await fetch(url);
@@ -3301,9 +3309,16 @@ function loadMeshObject(objectId, info, meshPath, existing) {
 
           const assetId = incomingAssetId;
           const expectedSize = null;
-          const cachedBeforeRecovery = assetId
-            ? await assetCache.getByAssetId(assetId)
-            : await assetCache.getByMeshPath(meshPath);
+          let cachedBeforeRecovery = null;
+
+          try {
+            cachedBeforeRecovery = assetId
+              ? await assetCache.getByAssetId(assetId)
+              : await assetCache.getByMeshPath(meshPath);
+          } catch (cacheErr) {
+            console.warn('[asset-cache] recovery pre-check failed:', cacheErr);
+          }
+
           if (cachedBeforeRecovery?.blob) {
             await loadGlbBlobForObject(objectId, cachedBeforeRecovery.blob, {
               info,
