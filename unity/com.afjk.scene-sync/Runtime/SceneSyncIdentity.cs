@@ -24,6 +24,7 @@ namespace Afjk.SceneSync
     {
         [SerializeField] private string objectId;
         [SerializeField] private string meshPath;
+        [SerializeField] private string assetId;
         [SerializeField] private SceneSyncOrigin origin = SceneSyncOrigin.Unknown;
         [SerializeField] private bool temporary;
         [SerializeField] private SceneSyncState state = SceneSyncState.Synced;
@@ -39,6 +40,12 @@ namespace Afjk.SceneSync
         {
             get => meshPath;
             set => meshPath = value;
+        }
+
+        public string AssetId
+        {
+            get => assetId;
+            set => assetId = value;
         }
 
         public SceneSyncOrigin Origin
@@ -65,10 +72,11 @@ namespace Afjk.SceneSync
             set => lockOwner = value;
         }
 
-        public void ConfigureRemoteTemporary(string newObjectId, string newMeshPath)
+        public void ConfigureRemoteTemporary(string newObjectId, string newMeshPath, string newAssetId = null)
         {
             objectId = newObjectId;
             meshPath = newMeshPath;
+            assetId = newAssetId;
             origin = SceneSyncOrigin.Remote;
             temporary = true;
             state = SceneSyncState.Synced;
@@ -78,6 +86,7 @@ namespace Afjk.SceneSync
         public void ConfigureUnityManaged(string newObjectId)
         {
             objectId = newObjectId;
+            assetId = null;
             origin = SceneSyncOrigin.Unity;
             temporary = false;
             state = SceneSyncState.Synced;
