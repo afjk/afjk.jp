@@ -9,7 +9,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
-import { DragDropManager } from './components/drag-drop-manager.js';
+import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
@@ -4954,7 +4954,7 @@ async function urlImporterCallback(url, position, context = {}) {
   const urlSkybox =
     isImageUrl &&
     context.upness !== undefined &&
-    context.upness > 0.35;
+    context.upness > SKY_DROP_UPNESS_THRESHOLD;
   const effectiveTargetKind = urlSkybox ? 'sky' : (context?.targetKind || 'scene');
   const effectiveSurfaceKind = urlSkybox ? 'skybox' : (context.surfaceKind || null);
   const effectivePlacementRotation = urlSkybox ? null : (context.placementRotation || null);

@@ -80,7 +80,8 @@ function normalizePositionContext(input, fallbackPosition) {
   };
 }
 
-const SKY_DROP_UPNESS_THRESHOLD = 0.35;
+export const SKY_DROP_UPNESS_THRESHOLD = 0.35;
+const MAX_GROUND_PLANE_DISTANCE = 10;
 
 export class DragDropManager {
   constructor(options) {
@@ -290,7 +291,7 @@ export class DragDropManager {
       const cameraPos = new this.THREE.Vector3();
       this.camera.getWorldPosition(cameraPos);
 
-      if (point.distanceTo(cameraPos) <= 10) {
+      if (point.distanceTo(cameraPos) <= MAX_GROUND_PLANE_DISTANCE) {
         return point;
       }
     }
@@ -474,7 +475,7 @@ export class DragDropManager {
       const effectiveTargetKind = imageSkybox ? 'sky' : normalized.targetKind;
       const effectiveSurfaceKind = imageSkybox ? 'skybox' : surfaceKind;
       const effectiveSurfaceQuaternion = imageSkybox ? null : surfaceQuaternion;
-      const effectivePlacementRotation = effectiveSurfaceQuaternion?.toArray?.() || null;
+      const effectivePlacementRotationArray = effectiveSurfaceQuaternion?.toArray?.() || null;
       const loadInfo = {
         objectId,
         file,
@@ -485,7 +486,7 @@ export class DragDropManager {
         normal: normalized.normal,
         normalArray: normalized.normalArray,
         surfaceKind: effectiveSurfaceKind,
-        placementRotation: effectivePlacementRotation,
+        placementRotation: effectivePlacementRotationArray,
         placementQuaternion: effectiveSurfaceQuaternion,
       };
 
@@ -497,7 +498,7 @@ export class DragDropManager {
         targetKind: effectiveTargetKind,
         normal: normalized.normalArray,
         surfaceKind: effectiveSurfaceKind,
-        placementRotation: effectivePlacementRotation,
+        placementRotation: effectivePlacementRotationArray,
         skyboxOverride: imageSkybox,
       });
       if (this.onLoadStart) {
@@ -517,7 +518,7 @@ export class DragDropManager {
           hitObjectId: normalized.hitObjectId,
           surfaceKind: effectiveSurfaceKind,
           placementQuaternion: effectiveSurfaceQuaternion,
-          placementRotation: effectivePlacementRotation,
+          placementRotation: effectivePlacementRotationArray,
           tempObjectId: objectId,
         });
       } catch (error) {
