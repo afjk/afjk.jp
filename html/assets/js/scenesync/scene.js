@@ -1467,6 +1467,7 @@ function selectManagedObject(obj) {
   broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
   showToolbar();
   updateToolbarActive(transformCtrl.mode);
+  updateCopyButtonState();
   updatePeersList();
   notifySelectionChanged('object-selected');
 }
@@ -1584,6 +1585,126 @@ renderer.domElement.addEventListener('touchend', (e) => {
 
 // ── 削除ロジック（共通） ──────────────────────────────────
 
+function cloneJsonSafe(value) {
+  if (value == null) return null;
+
+  try {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(value);
+    }
+  } catch {}
+
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function canDuplicateObject(object) {
+  if (!object) return false;
+
+  const userData = object.userData || {};
+  if (userData._temporary) return false;
+  if (userData._isLoadingOverlay) return false;
+  if (userData._isLockOverlay) return false;
+  if (userData.role === 'avatar') return false;
+  if (userData.role === 'helper') return false;
+  if (userData.role === 'lock-overlay') return false;
+  if (userData.role === 'sky-sphere') return false;
+  if (userData.metadata?.role === 'sky-sphere') return false;
+  if (userData.isTransformHelper) return false;
+  if (isSkySphereThreeObject(object)) return false;
+
+  const objectId = userData.objectId;
+  if (!objectId) return false;
+  if (!managedObjects.has(objectId)) return false;
+
+  return true;
+}
+
+function getDuplicateOffset() {
+  const offset = new THREE.Vector3(0.35, 0, 0);
+
+  if (camera) {
+    offset.applyQuaternion(camera.quaternion);
+    offset.y = 0;
+
+    if (offset.lengthSq() > 1e-6) {
+      return offset.normalize().multiplyScalar(0.35);
+    }
+  }
+
+  return new THREE.Vector3(0.35, 0, 0.35);
+}
+
+function selectDuplicatedObjectWhenReady(objectId, attempt = 0) {
+  const duplicated = managedObjects.get(objectId);
+  if (duplicated) {
+    selectManagedObject(duplicated);
+    return;
+  }
+
+  if (attempt >= 80) return;
+  setTimeout(() => selectDuplicatedObjectWhenReady(objectId, attempt + 1), 50);
+}
+
+function duplicateSelectedObject() {
+  const source = transformCtrl.object;
+
+  if (!canDuplicateObject(source)) {
+    showToast?.('コピーできるオブジェクトを選択してください');
+    return;
+  }
+
+  const sourceObjectId = source.userData.objectId;
+  const newObjectId = generateObjectId('copy');
+  const position = source.position.clone().add(getDuplicateOffset());
+  const quaternion = source.quaternion.clone();
+  const scale = source.scale.clone();
+  const asset = cloneJsonSafe(source.userData?.asset || null);
+  const metadata = cloneJsonSafe(source.userData?.metadata || null) || {};
+  const meshPath = asset?.meshPath || source.userData?.meshPath || null;
+  const name = `${source.userData?.name || source.name || 'Object'} Copy`;
+
+  const payload = {
+    kind: 'scene-add',
+    objectId: newObjectId,
+    name,
+    position: position.toArray(),
+    rotation: quaternion.toArray(),
+    scale: scale.toArray(),
+    asset,
+    meshPath,
+    metadata: {
+      ...metadata,
+      copiedFrom: sourceObjectId,
+      copiedAt: Date.now(),
+    },
+  };
+
+  addOrUpdateObject(newObjectId, payload, {
+    source: 'local-copy',
+  });
+
+  presenceState.historyManager?.push(
+    HistoryManager.createAddEntry(
+      newObjectId,
+      asset || {},
+      payload.position,
+      payload.rotation,
+      payload.scale,
+      name,
+      meshPath
+    )
+  );
+
+  broadcast(payload);
+  notifySceneStateChanged('object-copy');
+  selectDuplicatedObjectWhenReady(newObjectId);
+  showToast?.('オブジェクトをコピーしました');
+}
+
 function deleteObjectById(objectId) {
   const attached = managedObjects.get(objectId);
   if (!attached) return;
@@ -1665,15 +1786,23 @@ const btnRedo = document.getElementById('btn-redo');
 const btnMove = document.getElementById('btn-move');
 const btnRotate = document.getElementById('btn-rotate');
 const btnScale = document.getElementById('btn-scale');
+const btnCopy = document.getElementById('btn-copy');
 const btnDelete = document.getElementById('btn-delete');
 const btnDeselect = document.getElementById('btn-deselect');
 
 function showToolbar() {
   if (toolbar) toolbar.style.display = 'flex';
+  updateCopyButtonState();
 }
 
 function hideToolbar() {
   if (toolbar) toolbar.style.display = 'none';
+  updateCopyButtonState();
+}
+
+function updateCopyButtonState() {
+  if (!btnCopy) return;
+  btnCopy.disabled = !canDuplicateObject(transformCtrl.object);
 }
 
 function updateToolbarActive(mode) {
@@ -1696,6 +1825,10 @@ btnRotate?.addEventListener('click', () => {
 btnScale?.addEventListener('click', () => {
   transformCtrl.setMode('scale');
   updateToolbarActive('scale');
+});
+
+btnCopy?.addEventListener('click', () => {
+  duplicateSelectedObject();
 });
 
 btnDeselect?.addEventListener('click', () => {
