@@ -80,7 +80,8 @@ function normalizePositionContext(input, fallbackPosition) {
   };
 }
 
-const SKY_DROP_UPNESS_THRESHOLD = 0.35;
+export const SKY_DROP_UPNESS_THRESHOLD = 0.35;
+const MAX_GROUND_PLANE_DISTANCE = 10;
 
 export class DragDropManager {
   constructor(options) {
@@ -272,6 +273,32 @@ export class DragDropManager {
     return oriented;
   }
 
+  _nearCameraFallbackPosition(distance = 1.5) {
+    const pos = new this.THREE.Vector3();
+    const dir = new this.THREE.Vector3();
+
+    this.camera.getWorldPosition(pos);
+    this.camera.getWorldDirection(dir);
+
+    return pos.addScaledVector(dir, distance);
+  }
+
+  _groundPlanePositionFromRay(ray) {
+    const groundPlane = new this.THREE.Plane(new this.THREE.Vector3(0, 1, 0), 0);
+    const point = new this.THREE.Vector3();
+
+    if (ray.intersectPlane(groundPlane, point)) {
+      const cameraPos = new this.THREE.Vector3();
+      this.camera.getWorldPosition(cameraPos);
+
+      if (point.distanceTo(cameraPos) <= MAX_GROUND_PLANE_DISTANCE) {
+        return point;
+      }
+    }
+
+    return null;
+  }
+
   _dropPositionFromEvent(event) {
     if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
       return {
@@ -302,11 +329,7 @@ export class DragDropManager {
         : hit.point.clone())
       : null;
 
-    const debugTargetKind = hit
-      ? 'scene-hit'
-      : rayInfo.upness > SKY_DROP_UPNESS_THRESHOLD
-        ? 'sky'
-        : 'scene-fallback';
+    const debugTargetKind = hit ? 'scene-hit' : 'scene-fallback';
 
     this.lastDropDetection = {
       ...this.lastDropDetection,
@@ -350,22 +373,28 @@ export class DragDropManager {
       };
     }
 
-    if (rayInfo.upness > SKY_DROP_UPNESS_THRESHOLD) {
-      return {
-        position: this._defaultDropPosition(),
-        targetKind: 'sky',
-        clientX: event.clientX,
-        clientY: event.clientY,
-        upness: rayInfo.upness,
-      };
-    }
+    const groundPoint = this._groundPlanePositionFromRay(rayInfo.ray);
+    const fallbackPosition = groundPoint || this._nearCameraFallbackPosition(1.5);
+
+    this.lastDropDetection = {
+      ...this.lastDropDetection,
+      hit: false,
+      targetKind: 'scene-fallback',
+      fallbackKind: groundPoint ? 'ground-plane' : 'camera-near',
+      fallbackDistance: groundPoint ? null : 1.5,
+      placementPosition: fallbackPosition.toArray(),
+      upness: rayInfo.upness,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
 
     return {
-      position: this._fallbackScenePositionFromEvent(event),
+      position: fallbackPosition,
       targetKind: 'scene',
       clientX: event.clientX,
       clientY: event.clientY,
       upness: rayInfo.upness,
+      fallbackKind: groundPoint ? 'ground-plane' : 'camera-near',
     };
   }
 
@@ -413,29 +442,38 @@ export class DragDropManager {
 
     if (this.imageImporter && isSupportedImageFile(file)) {
       const objectId = generateTemporaryImageObjectId();
+      // Skybox intent takes priority for images when looking up.
+      const imageSkybox =
+        normalized.upness !== undefined &&
+        normalized.upness > SKY_DROP_UPNESS_THRESHOLD;
+      const effectiveTargetKind = imageSkybox ? 'sky' : normalized.targetKind;
+      const effectiveSurfaceKind = imageSkybox ? 'skybox' : surfaceKind;
+      const effectiveSurfaceQuaternion = imageSkybox ? null : surfaceQuaternion;
+      const effectivePlacementRotation = effectiveSurfaceQuaternion?.toArray?.() || null;
       const loadInfo = {
         objectId,
         file,
         position: normalized.position,
         source: 'image',
-        targetKind: normalized.targetKind,
+        targetKind: effectiveTargetKind,
         temporary: true,
         normal: normalized.normal,
         normalArray: normalized.normalArray,
-        surfaceKind,
-        placementRotation,
-        placementQuaternion: surfaceQuaternion,
+        surfaceKind: effectiveSurfaceKind,
+        placementRotation: effectivePlacementRotation,
+        placementQuaternion: effectiveSurfaceQuaternion,
       };
 
-      const toastMessage = normalized.targetKind === 'sky'
+      const toastMessage = effectiveTargetKind === 'sky'
         ? 'Skybox画像を準備中…'
         : '画像を準備中…';
       this.showToast?.(toastMessage);
       console.debug('[drag-drop] image placement', {
-        targetKind: normalized.targetKind,
+        targetKind: effectiveTargetKind,
         normal: normalized.normalArray,
-        surfaceKind,
-        placementRotation,
+        surfaceKind: effectiveSurfaceKind,
+        placementRotation: effectivePlacementRotation,
+        skyboxOverride: imageSkybox,
       });
       if (this.onLoadStart) {
         Promise.resolve(this.onLoadStart(loadInfo)).catch((error) => {
@@ -445,16 +483,16 @@ export class DragDropManager {
 
       try {
         await this.imageImporter(file, normalized.position, {
-          targetKind: normalized.targetKind,
+          targetKind: effectiveTargetKind,
           clientX: normalized.clientX,
           clientY: normalized.clientY,
           upness: normalized.upness,
           normal: normalized.normal,
           normalArray: normalized.normalArray,
           hitObjectId: normalized.hitObjectId,
-          surfaceKind,
-          placementQuaternion: surfaceQuaternion,
-          placementRotation,
+          surfaceKind: effectiveSurfaceKind,
+          placementQuaternion: effectiveSurfaceQuaternion,
+          placementRotation: effectivePlacementRotation,
           tempObjectId: objectId,
         });
       } catch (error) {

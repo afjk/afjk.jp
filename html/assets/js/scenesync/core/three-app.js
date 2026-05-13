@@ -32,7 +32,26 @@ export function createThreeApp() {
   dirLight.position.set(5, 10, 7);
   scene.add(dirLight);
 
-  scene.add(new THREE.GridHelper(20, 20, 0x888888, 0x666666));
+  const grid = new THREE.GridHelper(20, 20, 0x888888, 0x666666);
+  grid.userData.role = 'grid-helper';
+  scene.add(grid);
+
+  const placementFloor = new THREE.Mesh(
+    new THREE.PlaneGeometry(20, 20),
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    })
+  );
+  placementFloor.name = 'Placement Floor';
+  placementFloor.rotation.x = -Math.PI / 2;
+  placementFloor.position.y = 0;
+  placementFloor.visible = true;
+  placementFloor.userData.role = 'placement-floor';
+  placementFloor.userData.isPlacementTarget = true;
+  placementFloor.userData.nonSerializable = true;
+  scene.add(placementFloor);
 
   function handleResize() {
     camera.aspect = window.innerWidth / window.innerHeight;

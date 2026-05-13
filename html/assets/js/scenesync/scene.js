@@ -9,7 +9,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
-import { DragDropManager } from './components/drag-drop-manager.js';
+import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
@@ -4948,6 +4948,18 @@ async function urlImporterCallback(url, position, context = {}) {
     ? position.toArray()
     : [0, 1, 0];
 
+  // Skybox intent takes priority for image URLs when looking up.
+  const urlKind = classifyUrl(resolved.resolvedUrl)?.kind;
+  const isImageUrl = urlKind === URL_KIND.IMAGE;
+  const urlSkybox =
+    isImageUrl &&
+    context.upness !== undefined &&
+    context.upness > SKY_DROP_UPNESS_THRESHOLD;
+  const effectiveTargetKind = urlSkybox ? 'sky' : (context?.targetKind || 'scene');
+  const effectiveSurfaceKind = urlSkybox ? 'skybox' : (context.surfaceKind || null);
+  const effectivePlacementRotation = urlSkybox ? null : (context.placementRotation || null);
+  const effectivePlacementQuaternion = urlSkybox ? null : (context.placementQuaternion || null);
+
   const ctx = {
     addOrUpdateObject,
     broadcastSceneAdd: broadcast,
@@ -4959,9 +4971,9 @@ async function urlImporterCallback(url, position, context = {}) {
       scale: [1, 1, 1],
     }),
     position: positionArray,
-    placementRotation: context.placementRotation || null,
-    placementQuaternion: context.placementQuaternion || null,
-    surfaceKind: context.surfaceKind || null,
+    placementRotation: effectivePlacementRotation,
+    placementQuaternion: effectivePlacementQuaternion,
+    surfaceKind: effectiveSurfaceKind,
     normalArray: context.normalArray || null,
     rawNormalArray: context.rawNormalArray || null,
     wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
@@ -4973,7 +4985,7 @@ async function urlImporterCallback(url, position, context = {}) {
       }),
     THREE,
     GLTFLoader,
-    targetKind: context?.targetKind || 'scene',
+    targetKind: effectiveTargetKind,
     replaceSkyboxSphereFromBlob,
   };
 
@@ -4993,8 +5005,20 @@ const dragDropManager = new DragDropManager({
   THREE,
   getRaycastTargets: () => Array.from(managedObjects.values())
     .filter(obj => obj.userData?.dropRaycastTarget && obj.visible !== false),
-  getPlacementTargets: () => Array.from(managedObjects.values())
-    .filter(obj => !isSkySphereThreeObject(obj) && obj.visible !== false),
+  getPlacementTargets: () => {
+    const targets = [];
+    for (const obj of managedObjects.values()) {
+      if (!isSkySphereThreeObject(obj) && obj.visible !== false) {
+        targets.push(obj);
+      }
+    }
+    scene.traverse((obj) => {
+      if (obj.userData?.isPlacementTarget && obj.visible !== false) {
+        targets.push(obj);
+      }
+    });
+    return targets;
+  },
   onLoadStart: async ({
     objectId,
     file,
