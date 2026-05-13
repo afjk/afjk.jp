@@ -5724,9 +5724,27 @@ btnCancelPairing?.addEventListener('click', cancelPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
 btnCopyPairingCode?.addEventListener('click', copyPairingCode);
 pairingCode?.addEventListener('click', copyPairingCode);
+function setMobilePeersOpen(open) {
+  peersPanelEl?.classList.toggle('mobile-open', open);
+  statusEl?.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 statusEl?.addEventListener('click', () => {
   if (!isMobileUi()) return;
-  peersPanelEl?.classList.toggle('mobile-open');
+  const next = !peersPanelEl?.classList.contains('mobile-open');
+  setMobilePeersOpen(Boolean(next));
+});
+
+document.addEventListener('click', (event) => {
+  if (!isMobileUi()) return;
+  if (!peersPanelEl?.classList.contains('mobile-open')) return;
+
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (peersPanelEl.contains(target)) return;
+  if (statusEl?.contains(target)) return;
+
+  setMobilePeersOpen(false);
 });
 sceneInspectorToggleBtn?.addEventListener('click', () => {
   setSceneInspectorOpen(!sceneInspectorState.isOpen);
