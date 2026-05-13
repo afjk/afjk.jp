@@ -30,6 +30,9 @@ function normalizePositionContext(input, fallbackPosition) {
       clientX: input.clientX,
       clientY: input.clientY,
       upness: input.upness,
+      normal: input.normal || null,
+      normalArray: input.normalArray || input.normal?.toArray?.() || null,
+      hitObjectId: input.hitObjectId || null,
     };
   }
 
@@ -41,6 +44,9 @@ function normalizePositionContext(input, fallbackPosition) {
       clientX: undefined,
       clientY: undefined,
       upness: undefined,
+      normal: null,
+      normalArray: null,
+      hitObjectId: null,
     };
   }
 
@@ -50,6 +56,9 @@ function normalizePositionContext(input, fallbackPosition) {
     clientX: undefined,
     clientY: undefined,
     upness: undefined,
+    normal: null,
+    normalArray: null,
+    hitObjectId: null,
   };
 }
 
@@ -196,6 +205,33 @@ export class DragDropManager {
     return hits[0] || null;
   }
 
+  _getWorldNormalFromHit(hit) {
+    if (!hit?.face?.normal || !hit.object || !this.THREE?.Matrix3) return null;
+
+    const normalMatrix = new this.THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+    return hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+  }
+
+  _getSurfaceKind(normal) {
+    if (!normal) return 'unknown';
+
+    const worldUp = new this.THREE.Vector3(0, 1, 0);
+    const dotUp = normal.clone().normalize().dot(worldUp);
+
+    if (dotUp > 0.75) return 'floor';
+    if (dotUp < -0.75) return 'ceiling';
+    return 'wall';
+  }
+
+  _createSurfaceQuaternion(normal) {
+    if (!normal) return null;
+
+    const n = normal.clone().normalize();
+    const localForward = new this.THREE.Vector3(0, 0, 1);
+
+    return new this.THREE.Quaternion().setFromUnitVectors(localForward, n);
+  }
+
   _dropPositionFromEvent(event) {
     if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
       return {
@@ -220,6 +256,7 @@ export class DragDropManager {
       hit: !!hit,
       hitObject: hit?.object?.name || null,
       hitObjectType: hit?.object?.type || null,
+      hitObjectId: hit?.object?.userData?.objectId || null,
       hitDistance: hit?.distance ?? null,
       upness: rayInfo.upness,
       threshold: SKY_DROP_UPNESS_THRESHOLD,
@@ -231,9 +268,14 @@ export class DragDropManager {
     console.debug('[drag-drop] drop detection', this.lastDropDetection);
 
     if (hit) {
+      const hitNormal = this._getWorldNormalFromHit(hit);
+
       return {
         position: hit.point.clone(),
+        normal: hitNormal,
+        normalArray: hitNormal?.toArray?.() || null,
         targetKind: 'scene',
+        hitObjectId: hit.object?.userData?.objectId || null,
         clientX: event.clientX,
         clientY: event.clientY,
         upness: rayInfo.upness,
@@ -289,6 +331,11 @@ export class DragDropManager {
       positionContext,
       this._defaultDropPosition()
     );
+    const surfaceKind = this._getSurfaceKind(normalized.normal);
+    const surfaceQuaternion = surfaceKind === 'wall'
+      ? this._createSurfaceQuaternion(normalized.normal)
+      : null;
+    const placementRotation = surfaceQuaternion?.toArray?.() || null;
 
     if (isGlbFile(file)) {
       return this._loadFile(file, normalized.position);
@@ -303,6 +350,10 @@ export class DragDropManager {
         source: 'image',
         targetKind: normalized.targetKind,
         temporary: true,
+        normal: normalized.normal,
+        normalArray: normalized.normalArray,
+        surfaceKind,
+        placementRotation,
       };
 
       const toastMessage = normalized.targetKind === 'sky'
@@ -321,6 +372,12 @@ export class DragDropManager {
           clientX: normalized.clientX,
           clientY: normalized.clientY,
           upness: normalized.upness,
+          normal: normalized.normal,
+          normalArray: normalized.normalArray,
+          hitObjectId: normalized.hitObjectId,
+          surfaceKind,
+          placementQuaternion: surfaceQuaternion,
+          placementRotation,
           tempObjectId: objectId,
         });
       } catch (error) {
@@ -342,6 +399,12 @@ export class DragDropManager {
           clientX: normalized.clientX,
           clientY: normalized.clientY,
           upness: normalized.upness,
+          normal: normalized.normal,
+          normalArray: normalized.normalArray,
+          hitObjectId: normalized.hitObjectId,
+          surfaceKind,
+          placementQuaternion: surfaceQuaternion,
+          placementRotation,
         });
       } catch (error) {
         console.warn('[drag-drop] text import failed:', error);
