@@ -280,7 +280,7 @@ export class DragDropManager {
     this.camera.getWorldPosition(pos);
     this.camera.getWorldDirection(dir);
 
-    return pos.addScaledVector(dir.normalize(), distance);
+    return pos.addScaledVector(dir, distance);
   }
 
   _groundPlanePositionFromRay(ray) {
@@ -475,7 +475,7 @@ export class DragDropManager {
       const effectiveTargetKind = imageSkybox ? 'sky' : normalized.targetKind;
       const effectiveSurfaceKind = imageSkybox ? 'skybox' : surfaceKind;
       const effectiveSurfaceQuaternion = imageSkybox ? null : surfaceQuaternion;
-      const effectivePlacementRotationArray = effectiveSurfaceQuaternion?.toArray?.() || null;
+      const effectivePlacementRotation = effectiveSurfaceQuaternion?.toArray?.() || null;
       const loadInfo = {
         objectId,
         file,
@@ -486,7 +486,7 @@ export class DragDropManager {
         normal: normalized.normal,
         normalArray: normalized.normalArray,
         surfaceKind: effectiveSurfaceKind,
-        placementRotation: effectivePlacementRotationArray,
+        placementRotation: effectivePlacementRotation,
         placementQuaternion: effectiveSurfaceQuaternion,
       };
 
@@ -498,7 +498,7 @@ export class DragDropManager {
         targetKind: effectiveTargetKind,
         normal: normalized.normalArray,
         surfaceKind: effectiveSurfaceKind,
-        placementRotation: effectivePlacementRotationArray,
+        placementRotation: effectivePlacementRotation,
         skyboxOverride: imageSkybox,
       });
       if (this.onLoadStart) {
@@ -518,7 +518,7 @@ export class DragDropManager {
           hitObjectId: normalized.hitObjectId,
           surfaceKind: effectiveSurfaceKind,
           placementQuaternion: effectiveSurfaceQuaternion,
-          placementRotation: effectivePlacementRotationArray,
+          placementRotation: effectivePlacementRotation,
           tempObjectId: objectId,
         });
       } catch (error) {
