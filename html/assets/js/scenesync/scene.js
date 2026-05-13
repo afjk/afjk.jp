@@ -961,6 +961,8 @@ scene.add(sampleCube);
 // objectId → THREE.Object3D
 const managedObjects = new Map();
 managedObjects.set('sample-cube', sampleCube);
+const selectedObjectIds = new Set();
+const selectionHelpers = new Map();
 
 // objectId → lockOwnerId
 const locks = new Map();
@@ -1452,27 +1454,176 @@ function removeTemporaryImagePreview(objectId) {
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
+let pointerSelectionStart = null;
 
-function selectManagedObject(obj) {
-  if (!obj || !obj.userData.objectId) return;
-
-  if (transformCtrl.object && transformCtrl.object !== obj) {
-    broadcast({
-      kind: 'scene-unlock',
-      objectId: transformCtrl.object.userData.objectId,
-    });
-  }
-
-  transformCtrl.attach(obj);
-  broadcast({ kind: 'scene-lock', objectId: obj.userData.objectId });
-  showToolbar();
-  updateToolbarActive(transformCtrl.mode);
-  updateCopyButtonState();
-  updatePeersList();
-  notifySelectionChanged('object-selected');
+function getSelectedObjects() {
+  return Array.from(selectedObjectIds)
+    .map((objectId) => managedObjects.get(objectId))
+    .filter(Boolean);
 }
 
-function selectObjectAt(clientX, clientY) {
+function removeSelectionHelper(objectId) {
+  const helper = selectionHelpers.get(objectId);
+  if (!helper) return;
+  scene.remove(helper);
+  helper.geometry?.dispose?.();
+  helper.material?.dispose?.();
+  selectionHelpers.delete(objectId);
+}
+
+function clearSelectionHelpers() {
+  for (const objectId of Array.from(selectionHelpers.keys())) {
+    removeSelectionHelper(objectId);
+  }
+}
+
+function showSelectionHelper(object) {
+  const objectId = object.userData?.objectId;
+  if (!objectId || selectionHelpers.has(objectId)) return;
+
+  const helper = new THREE.BoxHelper(object, 0xffff00);
+  helper.userData.role = 'selection-helper';
+  helper.raycast = () => {};
+  scene.add(helper);
+  selectionHelpers.set(objectId, helper);
+}
+
+function isSelectableObject(object) {
+  if (!object) return false;
+
+  const userData = object.userData || {};
+  if (userData._temporary) return false;
+  if (userData._isLoadingOverlay) return false;
+  if (userData._isLockOverlay) return false;
+  if (userData.role === 'avatar') return false;
+  if (userData.role === 'helper') return false;
+  if (userData.role === 'lock-overlay') return false;
+  if (userData.isTransformHelper) return false;
+  if (isSkySphereThreeObject(object)) return false;
+
+  const objectId = userData.objectId;
+  if (!objectId) return false;
+  if (!managedObjects.has(objectId)) return false;
+
+  return true;
+}
+
+function broadcastUnlockForObjectId(objectId) {
+  if (!objectId) return;
+  broadcast({
+    kind: 'scene-unlock',
+    objectId,
+  });
+}
+
+function updateSelectionToolbar() {
+  const count = selectedObjectIds.size;
+
+  if (btnMove) btnMove.disabled = count !== 1;
+  if (btnRotate) btnRotate.disabled = count !== 1;
+  if (btnScale) btnScale.disabled = count !== 1;
+  if (btnCopy) btnCopy.disabled = count !== 1;
+  if (btnDelete) btnDelete.disabled = count === 0;
+}
+
+function updateSelectionState(options = {}) {
+  const {
+    reason = 'selection-updated',
+    broadcastUnlock = true,
+    broadcastLock = true,
+  } = options;
+
+  for (const objectId of Array.from(selectedObjectIds)) {
+    if (!managedObjects.has(objectId)) {
+      selectedObjectIds.delete(objectId);
+    }
+  }
+
+  const selectedObjects = getSelectedObjects();
+  const attachedObject = transformCtrl.object;
+  const attachedObjectId = attachedObject?.userData?.objectId || null;
+  const nextSingleObject = selectedObjects.length === 1 ? selectedObjects[0] : null;
+  const nextSingleObjectId = nextSingleObject?.userData?.objectId || null;
+
+  clearSelectionHelpers();
+  selectedObjects.forEach(showSelectionHelper);
+
+  if (attachedObjectId && attachedObjectId !== nextSingleObjectId && broadcastUnlock) {
+    broadcastUnlockForObjectId(attachedObjectId);
+  }
+
+  if (selectedObjects.length === 0) {
+    if (transformCtrl.object) transformCtrl.detach();
+    hideToolbar();
+    updateSelectionToolbar();
+    updatePeersList();
+    notifySelectionChanged(reason);
+    return;
+  }
+
+  if (nextSingleObject) {
+    if (transformCtrl.object !== nextSingleObject) {
+      transformCtrl.attach(nextSingleObject);
+    }
+    if (broadcastLock && nextSingleObjectId && attachedObjectId !== nextSingleObjectId) {
+      broadcast({ kind: 'scene-lock', objectId: nextSingleObjectId });
+    }
+    showToolbar();
+    updateToolbarActive(transformCtrl.mode);
+  } else {
+    if (transformCtrl.object) transformCtrl.detach();
+    showToolbar();
+  }
+
+  updateSelectionToolbar();
+  updatePeersList();
+  notifySelectionChanged(reason);
+}
+
+function setSingleSelection(objectId, options = {}) {
+  selectedObjectIds.clear();
+  if (objectId) selectedObjectIds.add(objectId);
+  updateSelectionState(options);
+}
+
+function toggleObjectSelection(objectId, options = {}) {
+  if (!objectId) return;
+  if (selectedObjectIds.has(objectId)) {
+    selectedObjectIds.delete(objectId);
+  } else {
+    selectedObjectIds.add(objectId);
+  }
+  updateSelectionState(options);
+}
+
+function clearSelection(options = {}) {
+  selectedObjectIds.clear();
+  updateSelectionState(options);
+}
+
+function handleObjectSelection(object, event = null) {
+  if (!isSelectableObject(object)) {
+    clearSelection({ reason: 'selection-cleared-invalid' });
+    return;
+  }
+
+  const objectId = object.userData.objectId;
+  const multiToggle = event?.shiftKey || event?.metaKey || event?.ctrlKey;
+
+  if (multiToggle) {
+    toggleObjectSelection(objectId, { reason: 'object-selection-toggled' });
+  } else {
+    setSingleSelection(objectId, { reason: 'object-selected' });
+  }
+}
+
+function selectManagedObject(obj, options = {}) {
+  if (!isSelectableObject(obj)) return;
+  const reason = options.reason || 'object-selected';
+  setSingleSelection(obj.userData.objectId, { reason });
+}
+
+function selectObjectAt(clientX, clientY, event = null) {
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
@@ -1494,24 +1645,37 @@ function selectObjectAt(clientX, clientY) {
         showToast(`${who} が編集中です`);
         return;
       }
-      selectManagedObject(obj);
+      handleObjectSelection(obj, event);
     }
   } else {
-    if (transformCtrl.object) {
-      broadcast({
-        kind: 'scene-unlock',
-        objectId: transformCtrl.object.userData.objectId
-      });
-    }
-    transformCtrl.detach();
-    hideToolbar();
-    updatePeersList();
-    notifySelectionChanged('selection-cleared-raycast');
+    clearSelection({ reason: 'selection-cleared-raycast' });
   }
 }
 
-renderer.domElement.addEventListener('dblclick', (e) => {
-  selectObjectAt(e.clientX, e.clientY);
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch') return;
+  pointerSelectionStart = {
+    x: e.clientX,
+    y: e.clientY,
+    button: e.button,
+  };
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.pointerType === 'touch') return;
+  if (isDragging || !pointerSelectionStart) return;
+  if (pointerSelectionStart.button !== 0 || e.button !== 0) return;
+
+  const dx = e.clientX - pointerSelectionStart.x;
+  const dy = e.clientY - pointerSelectionStart.y;
+  pointerSelectionStart = null;
+
+  if ((dx * dx + dy * dy) > 25) return;
+  selectObjectAt(e.clientX, e.clientY, e);
+});
+
+renderer.domElement.addEventListener('pointercancel', () => {
+  pointerSelectionStart = null;
 });
 
 // ── タッチ操作（iOS Safari 対応） ───────────────────────
@@ -1562,7 +1726,7 @@ renderer.domElement.addEventListener('touchend', (e) => {
     const tapX = touch.clientX;
     const tapY = touch.clientY;
     singleTapTimer = setTimeout(() => {
-      if (!touchMoved && transformCtrl.object) {
+      if (!touchMoved && (transformCtrl.object || selectedObjectIds.size > 0)) {
         const rect = renderer.domElement.getBoundingClientRect();
         pointer.x = ((tapX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((tapY - rect.top) / rect.height) * 2 + 1;
@@ -1571,12 +1735,7 @@ renderer.domElement.addEventListener('touchend', (e) => {
           .filter(obj => !isSkySphereThreeObject(obj));
         const hits = raycaster.intersectObjects(targets, true);
         if (hits.length === 0) {
-          broadcast({
-            kind: 'scene-unlock',
-            objectId: transformCtrl.object.userData.objectId,
-          });
-          transformCtrl.detach();
-          hideToolbar();
+          clearSelection({ reason: 'selection-cleared-touch' });
         }
       }
     }, DOUBLE_TAP_DELAY + 50);
@@ -1842,13 +2001,29 @@ function shouldIgnoreSceneShortcut(event) {
   return false;
 }
 
-function deleteObjectById(objectId) {
+function deleteObjectById(objectId, options = {}) {
+  const {
+    broadcastDelete = true,
+    pushHistory = true,
+    notifyScene = true,
+    updateSelection = true,
+  } = options;
   const attached = managedObjects.get(objectId);
-  if (!attached) return;
+  if (!attached) {
+    selectedObjectIds.delete(objectId);
+    removeSelectionHelper(objectId);
+    if (updateSelection) {
+      updateSelectionState({
+        reason: 'selected-object-removed',
+        broadcastUnlock: false,
+        broadcastLock: false,
+      });
+    }
+    return false;
+  }
 
   if (transformCtrl.object === attached) {
     transformCtrl.detach();
-    hideToolbar();
   }
 
   if (locks.has(objectId)) {
@@ -1856,10 +2031,12 @@ function deleteObjectById(objectId) {
     const lockOwnerId = lockInfo?.id;
     if (lockOwnerId && lockOwnerId !== presenceState.id) {
       showToast('他のユーザーが編集中です');
-      return;
+      return false;
     }
     // 自分のロックなら unlock をブロードキャストして解除
-    broadcast({ kind: 'scene-unlock', objectId });
+    if (broadcastDelete) {
+      broadcastUnlockForObjectId(objectId);
+    }
   }
 
   removeLockOverlay(objectId);
@@ -1884,35 +2061,63 @@ function deleteObjectById(objectId) {
     }
   });
   managedObjects.delete(objectId);
+  selectedObjectIds.delete(objectId);
+  removeSelectionHelper(objectId);
 
   // 履歴に追加
-  presenceState.historyManager.push(
-    HistoryManager.createRemoveEntry(objectId, name, asset, position, rotation, scale)
-  );
-
-  broadcast({ kind: 'scene-remove', objectId });
-  updateEnvironmentMenuSkyboxControls();
-}
-
-function deleteSelectedObject() {
-  const attached = transformCtrl.object;
-  if (!attached) return;
-
-  let deleteId = null;
-  for (const [id, obj] of managedObjects) {
-    if (obj === attached) {
-      deleteId = id;
-      break;
-    }
+  if (pushHistory) {
+    presenceState.historyManager.push(
+      HistoryManager.createRemoveEntry(objectId, name, asset, position, rotation, scale)
+    );
   }
 
-  transformCtrl.detach();
-  hideToolbar();
-
-  if (deleteId) {
-    deleteObjectById(deleteId);
+  if (broadcastDelete) {
+    broadcast({ kind: 'scene-remove', objectId });
+  }
+  if (updateSelection) {
+    updateSelectionState({
+      reason: 'selected-object-removed',
+      broadcastUnlock: false,
+      broadcastLock: false,
+    });
+  }
+  if (notifyScene) {
     notifySceneStateChanged('selected-object-deleted');
   }
+  updateEnvironmentMenuSkyboxControls();
+  return true;
+}
+
+function deleteSelectedObjects() {
+  const ids = Array.from(selectedObjectIds);
+
+  if (ids.length === 0) {
+    const singleObjectId = transformCtrl?.object?.userData?.objectId || null;
+    if (singleObjectId) ids.push(singleObjectId);
+  }
+
+  if (ids.length === 0) return;
+
+  let deletedCount = 0;
+  ids.forEach((objectId) => {
+    const deleted = deleteObjectById(objectId, {
+      broadcastDelete: true,
+      pushHistory: true,
+      notifyScene: false,
+      updateSelection: false,
+    });
+    if (deleted) deletedCount += 1;
+  });
+
+  updateSelectionState({
+    reason: 'bulk-delete-updated',
+    broadcastUnlock: false,
+    broadcastLock: false,
+  });
+  if (deletedCount === 0) return;
+
+  notifySceneStateChanged(deletedCount > 1 ? 'bulk-delete' : 'selected-object-deleted');
+  showToast?.(`${deletedCount}件のオブジェクトを削除しました`);
 }
 
 // ── モバイルツールバー ──────────────────────────────────
@@ -1929,17 +2134,10 @@ const btnDeselect = document.getElementById('btn-deselect');
 
 function showToolbar() {
   if (toolbar) toolbar.style.display = 'flex';
-  updateCopyButtonState();
 }
 
 function hideToolbar() {
   if (toolbar) toolbar.style.display = 'none';
-  updateCopyButtonState();
-}
-
-function updateCopyButtonState() {
-  if (!btnCopy) return;
-  btnCopy.disabled = !canDuplicateObject(transformCtrl.object);
 }
 
 function updateToolbarActive(mode) {
@@ -1969,20 +2167,14 @@ btnCopy?.addEventListener('click', () => {
 });
 
 btnDeselect?.addEventListener('click', () => {
-  if (transformCtrl.object) {
-    broadcast({
-      kind: 'scene-unlock',
-      objectId: transformCtrl.object.userData.objectId,
-    });
-  }
-  transformCtrl.detach();
-  hideToolbar();
-  notifySelectionChanged('selection-cleared-button');
+  clearSelection({ reason: 'selection-cleared-button' });
 });
 
 btnDelete?.addEventListener('click', () => {
-  deleteSelectedObject();
+  deleteSelectedObjects();
 });
+
+updateSelectionToolbar();
 
 // ── Undo/Redo ボタン ──────────────────────────────────────
 
@@ -2023,6 +2215,7 @@ window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
 
   if (isMod && !e.altKey && key === 'c') {
+    if (selectedObjectIds.size !== 1) return;
     if (!transformCtrl?.object) return;
 
     if (copySelectedObjectToSceneClipboard()) {
@@ -2071,7 +2264,7 @@ window.addEventListener('keydown', (e) => {
     case 'delete':
     case 'backspace': {
       e.preventDefault();
-      deleteSelectedObject();
+      deleteSelectedObjects();
       break;
     }
   }
@@ -2169,6 +2362,10 @@ renderer.setAnimationLoop((time, frame) => {
     if (entry.placeholder) {
       entry.placeholder.rotation.y += 0.02;
     }
+  }
+
+  for (const helper of selectionHelpers.values()) {
+    helper.update?.();
   }
 
   if (xrState.active) {
@@ -2439,6 +2636,8 @@ function pipeUrlForRoom(code) {
 }
 
 function resetSceneState() {
+  clearSelectionHelpers();
+  selectedObjectIds.clear();
   for (const tempObjectId of [...temporaryImagePreviews.keys()]) {
     removeTemporaryImagePreview(tempObjectId);
     removeLoadingOverlay(tempObjectId);
@@ -2466,6 +2665,7 @@ function resetSceneState() {
   sceneRequestAttempt = 0;
   clearTimeout(sceneRequestTimer);
   updatePeersList();
+  updateSelectionToolbar();
 }
 
 function reconnectPresence() {
@@ -3017,23 +3217,11 @@ function handleHandoff(data) {
         );
         presenceState.historyManager.push(historyEntry);
       }
-      removeLockOverlay(objectId);
-      locks.delete(objectId);
-      if (obj) {
-        if (transformCtrl.object === obj) { transformCtrl.detach(); hideToolbar(); }
-        // Clean up video objects
-        if (obj.userData?.video) {
-          obj.userData.video.pause();
-          obj.userData.video.src = '';
-          obj.userData.video.load();
-        }
-        // Clean up image/texture objects
-        if (obj.userData?.disposable) {
-          obj.userData.disposable();
-        }
-        scene.remove(obj);
-        managedObjects.delete(objectId);
-      }
+      deleteObjectById(objectId, {
+        broadcastDelete: false,
+        pushHistory: false,
+        notifyScene: false,
+      });
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(objectId);
       notifySceneStateChanged('scene-remove-handoff');
@@ -3913,6 +4101,13 @@ function replaceManagedObject(objectId, nextObject, info) {
   applyObjectVisibility(nextObject, info.visible);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
+  if (selectedObjectIds.has(objectId)) {
+    updateSelectionState({
+      reason: 'managed-object-replaced-selection',
+      broadcastUnlock: false,
+      broadcastLock: false,
+    });
+  }
   notifySceneStateChanged('managed-object-replaced');
   updateEnvironmentMenuSkyboxControls();
 }
@@ -4060,21 +4255,11 @@ function applyOperationToScene(operation) {
       break;
     }
     case 'scene-remove': {
-      const obj = managedObjects.get(operation.objectId);
-      if (obj) {
-        if (transformCtrl.object === obj) {
-          transformCtrl.detach();
-          hideToolbar();
-        }
-        // Clean up video objects
-        if (obj.userData?.video) {
-          obj.userData.video.pause();
-          obj.userData.video.src = '';
-          obj.userData.video.load();
-        }
-        scene.remove(obj);
-        managedObjects.delete(operation.objectId);
-      }
+      deleteObjectById(operation.objectId, {
+        broadcastDelete: false,
+        pushHistory: false,
+        notifyScene: false,
+      });
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(operation.objectId);
       notifySceneStateChanged('undo-redo-scene-remove');
@@ -4344,22 +4529,11 @@ function applySceneActionLocally(action) {
   }
 
   if (action.kind === 'scene-remove') {
-    const obj = managedObjects.get(action.objectId);
-    if (!obj) return;
-
-    if (transformCtrl.object === obj) {
-      transformCtrl.detach();
-      hideToolbar();
-    }
-
-    if (obj.userData?.video) {
-      obj.userData.video.pause();
-      obj.userData.video.src = '';
-      obj.userData.video.load();
-    }
-
-    scene.remove(obj);
-    managedObjects.delete(action.objectId);
+    deleteObjectById(action.objectId, {
+      broadcastDelete: false,
+      pushHistory: false,
+      notifyScene: false,
+    });
     loomIntegration.clearObjectGraph(action.objectId);
     updateEnvironmentMenuSkyboxControls();
     notifySceneStateChanged('local-scene-remove');
