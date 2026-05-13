@@ -2023,6 +2023,8 @@ window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
 
   if (isMod && !e.altKey && key === 'c') {
+    if (!transformCtrl?.object) return;
+
     if (copySelectedObjectToSceneClipboard()) {
       e.preventDefault();
       e.stopPropagation();
