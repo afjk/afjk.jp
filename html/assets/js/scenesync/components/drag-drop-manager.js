@@ -33,6 +33,8 @@ function normalizePositionContext(input, fallbackPosition) {
       normal: input.normal || null,
       normalArray: input.normalArray || input.normal?.toArray?.() || null,
       hitObjectId: input.hitObjectId || null,
+      surfaceKind: input.surfaceKind || null,
+      placementRotation: input.placementRotation || null,
     };
   }
 
@@ -47,6 +49,8 @@ function normalizePositionContext(input, fallbackPosition) {
       normal: null,
       normalArray: null,
       hitObjectId: null,
+      surfaceKind: null,
+      placementRotation: null,
     };
   }
 
@@ -59,6 +63,8 @@ function normalizePositionContext(input, fallbackPosition) {
     normal: null,
     normalArray: null,
     hitObjectId: null,
+    surfaceKind: null,
+    placementRotation: null,
   };
 }
 
@@ -346,10 +352,12 @@ export class DragDropManager {
       positionContext,
       this._defaultDropPosition()
     );
-    const surfaceKind = this._getSurfaceKind(normalized.normal);
-    const surfaceQuaternion = surfaceKind === 'wall'
-      ? this._createSurfaceQuaternion(normalized.normal)
-      : null;
+    const surfaceKind = normalized.surfaceKind || this._getSurfaceKind(normalized.normal);
+    const surfaceQuaternion = normalized.placementRotation
+      ? new this.THREE.Quaternion().fromArray(normalized.placementRotation)
+      : (surfaceKind === 'wall'
+        ? this._createSurfaceQuaternion(normalized.normal)
+        : null);
     const placementRotation = surfaceQuaternion?.toArray?.() || null;
 
     if (isGlbFile(file)) {
