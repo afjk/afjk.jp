@@ -398,6 +398,10 @@ export class DragDropManager {
     };
   }
 
+  getPlacementFromPointerEvent(event) {
+    return this._dropPositionFromEvent(event || {});
+  }
+
   async _loadFile(file, position) {
     const objectId = `web-${Math.random().toString(36).slice(2, 10)}`;
     const loadInfo = { objectId, file, position, source: 'file' };
