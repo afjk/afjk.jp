@@ -143,16 +143,41 @@ export async function importImageUrl(url, ctx) {
     const filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'image');
     const displayName = (ctx.nameOverride || filename).slice(0, 60) || 'image';
     const spawnTransform = ctx.getSpawnTransform();
+    const existingMetadata = (ctx.metadata && typeof ctx.metadata === 'object')
+      ? ctx.metadata
+      : {};
+    const placementRotation = Array.isArray(ctx.placementRotation) && ctx.placementRotation.length >= 4
+      ? ctx.placementRotation
+      : spawnTransform.rotation;
 
     const payload = {
       kind: 'scene-add',
       objectId,
       name: displayName,
       position: spawnTransform.position,
-      rotation: spawnTransform.rotation,
+      rotation: placementRotation,
       scale: spawnTransform.scale,
       asset: { type: 'image', source: 'url', url },
+      metadata: {
+        ...existingMetadata,
+        placement: {
+          surfaceKind: ctx.surfaceKind || null,
+          normal: ctx.normalArray || null,
+          rawNormal: ctx.rawNormalArray || null,
+          wallSurfaceOffset: ctx.wallSurfaceOffset ?? 0,
+        },
+      },
     };
+
+    console.debug('[url-image-import] scene-add transform', {
+      objectId,
+      position: payload.position,
+      rotation: payload.rotation,
+      scale: payload.scale,
+      surfaceKind: ctx.surfaceKind || null,
+      normal: ctx.normalArray || null,
+      wallSurfaceOffset: ctx.wallSurfaceOffset ?? 0,
+    });
 
     ctx.broadcastSceneAdd(payload);
 

@@ -32,9 +32,13 @@ function normalizePositionContext(input, fallbackPosition) {
       upness: input.upness,
       normal: input.normal || null,
       normalArray: input.normalArray || input.normal?.toArray?.() || null,
+      rawNormalArray: input.rawNormalArray || null,
       hitObjectId: input.hitObjectId || null,
       surfaceKind: input.surfaceKind || null,
       placementRotation: input.placementRotation || null,
+      wallSurfaceOffset: input.wallSurfaceOffset ?? 0,
+      hitPoint: input.hitPoint || null,
+      placementPosition: input.placementPosition || null,
     };
   }
 
@@ -48,9 +52,13 @@ function normalizePositionContext(input, fallbackPosition) {
       upness: undefined,
       normal: null,
       normalArray: null,
+      rawNormalArray: null,
       hitObjectId: null,
       surfaceKind: null,
       placementRotation: null,
+      wallSurfaceOffset: 0,
+      hitPoint: null,
+      placementPosition: null,
     };
   }
 
@@ -62,9 +70,13 @@ function normalizePositionContext(input, fallbackPosition) {
     upness: undefined,
     normal: null,
     normalArray: null,
+    rawNormalArray: null,
     hitObjectId: null,
     surfaceKind: null,
     placementRotation: null,
+    wallSurfaceOffset: 0,
+    hitPoint: null,
+    placementPosition: null,
   };
 }
 
@@ -92,6 +104,7 @@ export class DragDropManager {
       imageImporter,
       textImporter,
       urlImporter,
+      wallSurfaceOffset = 0.01,
       THREE: ThreeModule,
     } = options || {};
 
@@ -113,6 +126,7 @@ export class DragDropManager {
     this.imageImporter = imageImporter;
     this.textImporter = textImporter;
     this.urlImporter = urlImporter;
+    this.wallSurfaceOffset = wallSurfaceOffset;
     this.getPlacementTargets = getPlacementTargets;
     this.THREE = ThreeModule || (globalThis.THREE || {});
     this.coordinateTransformer = new CoordinateTransformer(camera, renderer, scene, {
@@ -244,6 +258,20 @@ export class DragDropManager {
     return new this.THREE.Quaternion().setFromUnitVectors(localForward, n);
   }
 
+  _orientNormalTowardRay(normal, rayDirection = null) {
+    if (!normal) return null;
+
+    const oriented = normal.clone().normalize();
+    if (rayDirection && typeof rayDirection.clone === 'function') {
+      const ray = rayDirection.clone().normalize();
+      if (oriented.dot(ray) > 0) {
+        oriented.multiplyScalar(-1);
+      }
+    }
+
+    return oriented;
+  }
+
   _dropPositionFromEvent(event) {
     if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
       return {
@@ -259,8 +287,19 @@ export class DragDropManager {
     const hit = this._findPlacementHit(rayInfo.raycaster);
     const hitNormal = hit ? this._getWorldNormalFromHit(hit) : null;
     const surfaceKind = this._getSurfaceKind(hitNormal);
+    const orientedNormal = surfaceKind === 'wall'
+      ? this._orientNormalTowardRay(hitNormal, rayInfo.ray.direction)
+      : hitNormal;
     const surfaceQuaternion = surfaceKind === 'wall'
-      ? this._createSurfaceQuaternion(hitNormal, rayInfo.ray.direction)
+      ? this._createSurfaceQuaternion(orientedNormal)
+      : null;
+    const wallSurfaceOffset = surfaceKind === 'wall' && orientedNormal
+      ? this.wallSurfaceOffset
+      : 0;
+    const placementPosition = hit
+      ? (wallSurfaceOffset > 0
+        ? hit.point.clone().addScaledVector(orientedNormal, wallSurfaceOffset)
+        : hit.point.clone())
       : null;
 
     const debugTargetKind = hit
@@ -281,20 +320,28 @@ export class DragDropManager {
       targetKind: debugTargetKind,
       clientX: event.clientX,
       clientY: event.clientY,
-      normal: hitNormal?.toArray?.() || null,
+      normal: orientedNormal?.toArray?.() || null,
+      rawNormal: hitNormal?.toArray?.() || null,
       surfaceKind,
       placementRotation: surfaceQuaternion?.toArray?.() || null,
+      wallSurfaceOffset,
+      hitPoint: hit?.point?.toArray?.() || null,
+      placementPosition: placementPosition?.toArray?.() || null,
     };
 
     console.debug('[drag-drop] drop detection', this.lastDropDetection);
 
     if (hit) {
       return {
-        position: hit.point.clone(),
-        normal: hitNormal,
-        normalArray: hitNormal?.toArray?.() || null,
+        position: placementPosition || hit.point.clone(),
+        normal: orientedNormal,
+        normalArray: orientedNormal?.toArray?.() || null,
+        rawNormalArray: hitNormal?.toArray?.() || null,
         surfaceKind,
         placementRotation: surfaceQuaternion?.toArray?.() || null,
+        wallSurfaceOffset,
+        hitPoint: hit.point.toArray(),
+        placementPosition: (placementPosition || hit.point).toArray(),
         targetKind: 'scene',
         hitObjectId: hit.object?.userData?.objectId || null,
         clientX: event.clientX,
