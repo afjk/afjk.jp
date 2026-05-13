@@ -1495,18 +1495,22 @@ function showSelectionHelper(object) {
   selectionHelpers.set(objectId, helper);
 }
 
+function isPastePreviewUserData(userData) {
+  if (!userData) return false;
+  return userData.isPastePreview || userData.role === 'paste-preview';
+}
+
 function isSelectableObject(object) {
   if (!object) return false;
 
   const userData = object.userData || {};
   if (userData._temporary) return false;
-  if (userData.isPastePreview) return false;
+  if (isPastePreviewUserData(userData)) return false;
   if (userData._isLoadingOverlay) return false;
   if (userData._isLockOverlay) return false;
   if (userData.role === 'avatar') return false;
   if (userData.role === 'helper') return false;
   if (userData.role === 'lock-overlay') return false;
-  if (userData.role === 'paste-preview') return false;
   if (userData.isTransformHelper) return false;
   if (isSkySphereThreeObject(object)) return false;
 
@@ -1925,17 +1929,7 @@ function getPointerPlacementFromEvent(event = null) {
 
 function updatePastePreviewFromPointer(event = null) {
   if (!pastePreviewMode || !pastePreviewObject) return;
-
-  let pointerEvent = event;
-  if (!pointerEvent || !Number.isFinite(pointerEvent.clientX) || !Number.isFinite(pointerEvent.clientY)) {
-    const rect = renderer.domElement.getBoundingClientRect();
-    pointerEvent = {
-      clientX: rect.left + (rect.width / 2),
-      clientY: rect.top + (rect.height / 2),
-    };
-  }
-
-  const placement = getPointerPlacementFromEvent(pointerEvent);
+  const placement = getPointerPlacementFromEvent(event);
   if (!placement?.position) return;
 
   const clip = sceneObjectClipboard;
@@ -1976,7 +1970,7 @@ async function startPastePreviewMode() {
   pastePreviewMode = true;
   scene.add(pastePreviewObject);
   updatePastePreviewFromPointer();
-  showToast?.('配置位置を選んでください。Ctrl+V またはクリックで配置、Escで終了');
+  showToast?.('配置位置を選んでください。Ctrl/Cmd+V またはクリックで配置、Escで終了');
   return true;
 }
 
@@ -5250,8 +5244,7 @@ const dragDropManager = new DragDropManager({
       if (obj.userData?.isPlacementTarget
         && obj.visible !== false
         && !obj.userData?._temporary
-        && !obj.userData?.isPastePreview
-        && obj.userData?.role !== 'paste-preview') {
+        && !isPastePreviewUserData(obj.userData)) {
         targets.push(obj);
       }
     });
