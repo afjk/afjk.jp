@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 
+const GRID_SIZE = 20;
+const GRID_DIVISIONS = 20;
+const PLACEMENT_FLOOR_SIZE = 100;
+
 export function createThreeApp() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x222222);
@@ -32,12 +36,12 @@ export function createThreeApp() {
   dirLight.position.set(5, 10, 7);
   scene.add(dirLight);
 
-  const grid = new THREE.GridHelper(20, 20, 0x888888, 0x666666);
+  const grid = new THREE.GridHelper(GRID_SIZE, GRID_DIVISIONS, 0x888888, 0x666666);
   grid.userData.role = 'grid-helper';
   scene.add(grid);
 
   const placementFloor = new THREE.Mesh(
-    new THREE.PlaneGeometry(20, 20),
+    new THREE.PlaneGeometry(PLACEMENT_FLOOR_SIZE, PLACEMENT_FLOOR_SIZE),
     new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: 0,
