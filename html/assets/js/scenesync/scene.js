@@ -4101,13 +4101,28 @@ function replaceManagedObject(objectId, nextObject, info) {
     scene.remove(current);
   }
 
+  console.debug('[scene-add] incoming transform', {
+    objectId,
+    position: info?.position || null,
+    rotation: info?.rotation || info?.quaternion || null,
+    scale: info?.scale || null,
+    asset: info?.asset || null,
+    meshPath: info?.meshPath || null,
+  });
+
   nextObject.userData.objectId = objectId;
   nextObject.userData.metadata = info.metadata;
   applyObjectName(nextObject, info.name);
-  applyTransform(nextObject, info);
+  applySceneTransform(nextObject, info);
   applyObjectVisibility(nextObject, info.visible);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
+  console.debug('[scene-add] applied transform', {
+    objectId: nextObject.userData?.objectId || null,
+    position: nextObject.position.toArray(),
+    rotation: nextObject.quaternion.toArray(),
+    scale: nextObject.scale.toArray(),
+  });
   if (selectedObjectIds.has(objectId)) {
     updateSelectionState({
       reason: 'managed-object-replaced-selection',
@@ -4181,6 +4196,26 @@ function applyTransform(obj, info) {
   if (info.position) obj.position.fromArray(info.position);
   if (info.rotation) obj.quaternion.fromArray(info.rotation);
   if (info.scale) obj.scale.fromArray(info.scale);
+}
+
+function applySceneTransform(obj, info = {}) {
+  if (!obj) return;
+
+  if (Array.isArray(info.position) && info.position.length >= 3) {
+    obj.position.fromArray(info.position);
+  }
+
+  if (Array.isArray(info.rotation) && info.rotation.length >= 4) {
+    obj.quaternion.fromArray(info.rotation);
+  } else if (Array.isArray(info.quaternion) && info.quaternion.length >= 4) {
+    obj.quaternion.fromArray(info.quaternion);
+  }
+
+  if (Array.isArray(info.scale) && info.scale.length >= 3) {
+    obj.scale.fromArray(info.scale);
+  }
+
+  obj.updateMatrixWorld(true);
 }
 
 function applyObjectName(obj, name) {
@@ -4360,7 +4395,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       wrapper.quaternion.copy(obj.quaternion);
       wrapper.scale.copy(obj.scale);
     } else {
-      applyTransform(wrapper, info);
+      applySceneTransform(wrapper, info);
     }
 
     wrapper.userData.objectId = objectId;
