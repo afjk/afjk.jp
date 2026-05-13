@@ -3268,14 +3268,51 @@ function loadMeshObject(objectId, info, meshPath, existing) {
 
   (async () => {
     try {
+      const incomingAssetId = info.asset?.assetId || info.assetId || null;
+      const cachedByAssetId = incomingAssetId
+        ? await assetCache.getByAssetId(incomingAssetId)
+        : null;
+      const cachedByMeshPath = !cachedByAssetId && meshPath
+        ? await assetCache.getByMeshPath(meshPath)
+        : null;
+      const cachedRecord = cachedByAssetId || cachedByMeshPath || null;
+      if (cachedRecord?.blob) {
+        console.debug('[asset-cache] hit for scene-add mesh', {
+          objectId,
+          assetId: cachedRecord.assetId || incomingAssetId || null,
+          meshPath: cachedRecord.meshPath || meshPath,
+          source: cachedByAssetId ? 'indexeddb-asset-id' : 'indexeddb-mesh-path',
+        });
+        await loadGlbBlobForObject(objectId, cachedRecord.blob, {
+          info,
+          existing,
+          meshPath,
+          assetId: cachedRecord.assetId || incomingAssetId || null,
+        });
+        removeLoadingOverlay(objectId);
+        return;
+      }
+
       const response = await fetch(url);
       if (!response.ok) {
         if (response.status === 404) {
           console.warn('[SceneSync] Mesh blob expired (404):', meshPath);
           removeLoadingOverlay(objectId);
 
-          const assetId = info.asset?.assetId || null;
+          const assetId = incomingAssetId;
           const expectedSize = null;
+          const cachedBeforeRecovery = assetId
+            ? await assetCache.getByAssetId(assetId)
+            : await assetCache.getByMeshPath(meshPath);
+          if (cachedBeforeRecovery?.blob) {
+            await loadGlbBlobForObject(objectId, cachedBeforeRecovery.blob, {
+              info,
+              existing,
+              meshPath,
+              assetId: cachedBeforeRecovery.assetId || assetId || null,
+            });
+            return;
+          }
           await expiredGlbRecovery.handleMissingGlb(
             objectId,
             meshPath,
@@ -3318,7 +3355,7 @@ function loadMeshObject(objectId, info, meshPath, existing) {
           replaceManagedObject(objectId, model, info);
 
           try {
-            let assetId = info.asset?.assetId;
+            let assetId = incomingAssetId;
             if (!assetId) {
               assetId = await computeAssetId(blob);
             }
@@ -3843,11 +3880,25 @@ function generateRandomPath() {
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
+  const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const meshPath = generateRandomPath();
   let actualMeshPath = null;
   let assetId = null;
 
   try {
+    try {
+      assetId = await computeAssetId(arrayBuffer);
+      model.userData.assetId = assetId;
+      await assetCache.putAsset({
+        assetId,
+        meshPath: null,
+        blob: uploadBlob,
+        source: 'local-file',
+      });
+    } catch (cacheErr) {
+      console.warn('[SceneSync] Failed to pre-cache uploaded mesh:', cacheErr);
+    }
+
     try {
       const uploadResponse = await fetch(BLOB_BASE + '/' + meshPath, {
         method: 'POST',
@@ -3863,17 +3914,12 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       model.userData.meshPath = meshPath;
 
       try {
-        assetId = await computeAssetId(arrayBuffer);
-        model.userData.assetId = assetId;
-
-        const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
-        await assetCache.putAsset({
-          assetId,
-          meshPath: actualMeshPath,
-          blob,
-          source: 'carrier',
-        });
-        console.log('[SceneSync] Cached uploaded mesh:', { objectId, assetId, meshPath: actualMeshPath });
+        if (!assetId) {
+          assetId = await computeAssetId(arrayBuffer);
+          model.userData.assetId = assetId;
+        }
+        await assetCache.rememberMeshPathAlias(assetId, actualMeshPath);
+        console.log('[SceneSync] Remembered uploaded mesh alias:', { objectId, assetId, meshPath: actualMeshPath });
       } catch (cacheErr) {
         console.warn('[SceneSync] Failed to cache uploaded mesh:', cacheErr);
       }
@@ -3887,11 +3933,12 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     const asset = {
       type: 'mesh',
       source: 'carrier',
+      assetId: assetId || null,
       meshPath: actualMeshPath,
+      size: uploadBlob.size,
+      mime: 'model/gltf-binary',
+      originalName: name || null,
     };
-    if (assetId) {
-      asset.assetId = assetId;
-    }
     model.userData.asset = { ...asset };
     model.userData.meshPath = actualMeshPath;
 
