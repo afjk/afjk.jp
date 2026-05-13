@@ -1638,6 +1638,23 @@ function getDuplicateOffset() {
   return new THREE.Vector3(0.35, 0, 0.35);
 }
 
+function getClipboardPasteOffset(count = 1) {
+  const step = 0.35;
+  const distance = step * Math.max(1, count);
+  const offset = new THREE.Vector3(distance, 0, distance);
+
+  if (camera) {
+    const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    cameraRight.y = 0;
+
+    if (cameraRight.lengthSq() > 1e-6) {
+      return cameraRight.normalize().multiplyScalar(distance);
+    }
+  }
+
+  return offset;
+}
+
 function selectDuplicatedObjectWhenReady(objectId, attempt = 0) {
   const duplicated = managedObjects.get(objectId);
   if (duplicated) {
@@ -1703,6 +1720,126 @@ function duplicateSelectedObject() {
   notifySceneStateChanged('object-copy');
   selectDuplicatedObjectWhenReady(newObjectId);
   showToast?.('オブジェクトをコピーしました');
+}
+
+function copySelectedObjectToSceneClipboard() {
+  const source = transformCtrl?.object || null;
+
+  if (!canDuplicateObject(source)) {
+    showToast?.('コピーできるオブジェクトを選択してください');
+    return false;
+  }
+
+  const sourceObjectId = source.userData.objectId;
+  sceneObjectClipboard = {
+    schemaVersion: 1,
+    copiedAt: Date.now(),
+    sourceObjectId,
+    name: source.userData?.name || source.name || 'Object',
+    asset: cloneJsonSafe(source.userData?.asset || null),
+    meshPath: source.userData?.meshPath || source.userData?.asset?.meshPath || null,
+    metadata: cloneJsonSafe(source.userData?.metadata || null),
+    position: source.position.toArray(),
+    rotation: source.quaternion.toArray(),
+    scale: source.scale.toArray(),
+  };
+  sceneObjectPasteCount = 0;
+
+  showToast?.('オブジェクトをコピーしました');
+  console.debug('[scene-clipboard] copied object', {
+    sourceObjectId,
+    assetId: sceneObjectClipboard.asset?.assetId || null,
+    meshPath: sceneObjectClipboard.meshPath || null,
+  });
+
+  return true;
+}
+
+function pasteSceneObjectClipboard() {
+  if (!sceneObjectClipboard) {
+    showToast?.('ペーストするオブジェクトがありません');
+    return false;
+  }
+
+  const clip = sceneObjectClipboard;
+  const newObjectId = generateObjectId('paste');
+  sceneObjectPasteCount += 1;
+
+  const basePosition = new THREE.Vector3().fromArray(
+    Array.isArray(clip.position) ? clip.position : [0, 0, 0]
+  );
+  const position = basePosition.add(getClipboardPasteOffset(sceneObjectPasteCount));
+  const rotation = Array.isArray(clip.rotation) ? clip.rotation : [0, 0, 0, 1];
+  const scale = Array.isArray(clip.scale) ? clip.scale : [1, 1, 1];
+  const asset = cloneJsonSafe(clip.asset);
+  const metadata = cloneJsonSafe(clip.metadata) || {};
+  const meshPath = clip.meshPath || asset?.meshPath || null;
+  const name = `${clip.name || 'Object'} Copy`;
+
+  const payload = {
+    kind: 'scene-add',
+    objectId: newObjectId,
+    name,
+    position: position.toArray(),
+    rotation,
+    scale,
+    asset,
+    meshPath,
+    metadata: {
+      ...metadata,
+      copiedFrom: clip.sourceObjectId,
+      pastedFromClipboard: true,
+      pastedAt: Date.now(),
+    },
+  };
+
+  addOrUpdateObject(newObjectId, payload, {
+    source: 'local-clipboard-paste',
+  });
+
+  presenceState.historyManager?.push(
+    HistoryManager.createAddEntry(
+      newObjectId,
+      asset || {},
+      payload.position,
+      payload.rotation,
+      payload.scale,
+      name,
+      meshPath
+    )
+  );
+
+  broadcast(payload);
+  notifySceneStateChanged('clipboard-paste');
+  selectDuplicatedObjectWhenReady(newObjectId);
+  showToast?.('オブジェクトをペーストしました');
+  console.debug('[scene-clipboard] pasted object', {
+    sourceObjectId: clip.sourceObjectId,
+    objectId: newObjectId,
+    pasteCount: sceneObjectPasteCount,
+    assetId: asset?.assetId || null,
+    meshPath: payload.meshPath || null,
+  });
+
+  return true;
+}
+
+function shouldIgnoreSceneShortcut(event) {
+  const target = event.target;
+  if (!target) return false;
+
+  const tagName = target.tagName?.toLowerCase?.();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+    return true;
+  }
+
+  if (target.isContentEditable) return true;
+
+  if (target.closest?.('[contenteditable="true"], .cm-editor, .monaco-editor')) {
+    return true;
+  }
+
+  return false;
 }
 
 function deleteObjectById(objectId) {
@@ -1872,8 +2009,7 @@ btnRedo?.addEventListener('click', () => {
 // ── キーボードショートカット ──────────────────────────────
 
 window.addEventListener('keydown', (e) => {
-  // テキスト入力中は無視
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (shouldIgnoreSceneShortcut(e)) return;
 
   // ドラッグ中は Undo/Redo を無効化
   if (isDragging) {
@@ -1883,21 +2019,42 @@ window.addEventListener('keydown', (e) => {
     }
   }
 
+  const isMod = e.ctrlKey || e.metaKey;
+  const key = e.key.toLowerCase();
+
+  if (isMod && !e.altKey && key === 'c') {
+    if (!transformCtrl?.object) return;
+
+    if (copySelectedObjectToSceneClipboard()) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    return;
+  }
+
+  if (isMod && !e.altKey && key === 'v') {
+    if (sceneObjectClipboard && pasteSceneObjectClipboard()) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    return;
+  }
+
   // Undo: Ctrl+Z (Cmd+Z on Mac)
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+  if (isMod && key === 'z' && !e.shiftKey) {
     e.preventDefault();
     performUndo();
     return;
   }
 
   // Redo: Ctrl+Y or Ctrl+Shift+Z (Cmd+Shift+Z on Mac)
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+  if (isMod && (key === 'y' || (key === 'z' && e.shiftKey))) {
     e.preventDefault();
     performRedo();
     return;
   }
 
-  switch (e.key.toLowerCase()) {
+  switch (key) {
     case 'w': transformCtrl.setMode('translate'); break;
     case 'e': transformCtrl.setMode('rotate'); break;
     case 'r': transformCtrl.setMode('scale'); break;
@@ -2188,6 +2345,8 @@ let reconnectTimer = null;
 let saveRoomSnapshotTimer = null;
 let restoreSnapshotTimer = null;
 let isRestoringRoomSnapshot = false;
+let sceneObjectClipboard = null;
+let sceneObjectPasteCount = 0;
 const sceneInspectorState = {
   isOpen: false,
   isEditing: false,
