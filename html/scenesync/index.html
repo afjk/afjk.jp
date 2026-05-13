@@ -292,7 +292,7 @@
       top: 96px;
       right: 12px;
       width: min(420px, calc(100vw - 24px));
-      max-height: calc(100vh - 120px);
+      max-height: calc(100dvh - 108px);
       display: none;
       flex-direction: column;
       gap: 10px;
@@ -305,11 +305,13 @@
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
       font: 12px/1.5 monospace;
+      overflow: hidden;
     }
     #scene-inspector-panel.open {
       display: flex;
     }
     .scene-inspector-header {
+      flex: 0 0 auto;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
@@ -460,6 +462,22 @@
     .scene-inspector-object-actions .chip {
       justify-content: center;
     }
+    .scene-inspector-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .scene-inspector-scene-json {
+      max-height: min(28dvh, 300px);
+    }
+    .scene-inspector-selected-json {
+      max-height: min(36dvh, 360px);
+    }
     #scene-inspector-output,
     #scene-inspector-object-output {
       margin: 0;
@@ -472,14 +490,16 @@
       white-space: pre;
       word-break: normal;
       min-height: 180px;
-      flex: 1;
+      max-width: 100%;
     }
     @media (max-width: 720px) {
       #scene-inspector-panel {
-        top: auto;
-        bottom: 84px;
+        left: 12px;
         right: 12px;
-        max-height: min(52vh, 420px);
+        top: max(72px, env(safe-area-inset-top));
+        bottom: max(12px, env(safe-area-inset-bottom));
+        width: auto;
+        max-height: none;
       }
     }
 
@@ -923,54 +943,56 @@
       </div>
       <button id="scene-inspector-close" class="chip" type="button" title="閉じる">✕</button>
     </div>
-    <p id="scene-inspector-summary" class="scene-inspector-summary">Scene state is not loaded yet.</p>
-    <div id="scene-inspector-mode" class="scene-inspector-mode" hidden></div>
-    <div class="scene-inspector-actions">
-      <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
-      <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
-      <button id="scene-inspector-edit" class="chip primary" type="button">Edit JSON</button>
-      <button id="scene-inspector-format" class="chip" type="button" hidden>Format JSON</button>
-      <button id="scene-inspector-reset" class="chip" type="button" hidden>Reset to Current</button>
-      <button id="scene-inspector-validate" class="chip" type="button" hidden>Validate</button>
-      <button id="scene-inspector-apply" class="chip primary" type="button" hidden>Broadcast Changes</button>
-      <button id="scene-inspector-cancel" class="chip" type="button" hidden>Cancel</button>
-      <a class="chip" href="/scenesync/dev-tool/">Payload Tester</a>
-    </div>
-    <p id="scene-inspector-edit-note" class="scene-inspector-note" hidden>
-      Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, and primitive `asset.color` changes are broadcast. Root metadata, object add/remove, locks, and non-editable fields are ignored and shown in the preview below.
-    </p>
-    <div id="scene-inspector-edit-meta" class="scene-inspector-edit-meta" hidden></div>
-    <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>
-    <div id="scene-inspector-diff" class="scene-inspector-diff" hidden></div>
-    <textarea id="scene-inspector-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
-    <pre id="scene-inspector-output">{
+    <div class="scene-inspector-body">
+      <p id="scene-inspector-summary" class="scene-inspector-summary">Scene state is not loaded yet.</p>
+      <div id="scene-inspector-mode" class="scene-inspector-mode" hidden></div>
+      <div class="scene-inspector-actions">
+        <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
+        <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
+        <button id="scene-inspector-edit" class="chip primary" type="button">Edit JSON</button>
+        <button id="scene-inspector-format" class="chip" type="button" hidden>Format JSON</button>
+        <button id="scene-inspector-reset" class="chip" type="button" hidden>Reset to Current</button>
+        <button id="scene-inspector-validate" class="chip" type="button" hidden>Validate</button>
+        <button id="scene-inspector-apply" class="chip primary" type="button" hidden>Broadcast Changes</button>
+        <button id="scene-inspector-cancel" class="chip" type="button" hidden>Cancel</button>
+        <a class="chip" href="/scenesync/dev-tool/">Payload Tester</a>
+      </div>
+      <p id="scene-inspector-edit-note" class="scene-inspector-note" hidden>
+        Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, and primitive `asset.color` changes are broadcast. Root metadata, object add/remove, locks, and non-editable fields are ignored and shown in the preview below.
+      </p>
+      <div id="scene-inspector-edit-meta" class="scene-inspector-edit-meta" hidden></div>
+      <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>
+      <div id="scene-inspector-diff" class="scene-inspector-diff" hidden></div>
+      <textarea id="scene-inspector-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
+      <pre id="scene-inspector-output" class="scene-inspector-scene-json">{
   "status": "waiting-for-scene"
 }</pre>
-    <section id="scene-inspector-object-section" class="scene-inspector-section">
-      <div class="scene-inspector-section-header">
-        <div class="scene-inspector-section-title">Selected Object JSON</div>
-        <div id="scene-inspector-object-meta" class="scene-inspector-section-meta">No object selected</div>
-      </div>
-      <div id="scene-inspector-object-empty" class="scene-inspector-empty">Select an object in the scene to edit its JSON block as text.</div>
-      <div id="scene-inspector-object-head" class="scene-inspector-object-head" hidden></div>
-      <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
-        <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
-        <button id="scene-inspector-object-format" class="chip" type="button" hidden>Format JSON</button>
-        <button id="scene-inspector-object-reset" class="chip" type="button" hidden>Reset to Current</button>
-        <button id="scene-inspector-object-validate" class="chip" type="button" hidden>Validate / Preview</button>
-        <button id="scene-inspector-object-apply" class="chip primary" type="button" hidden>Broadcast Object Changes</button>
-        <button id="scene-inspector-object-cancel" class="chip" type="button" hidden>Cancel</button>
-      </div>
-      <p id="scene-inspector-object-note" class="scene-inspector-note" hidden>
-        Object block editing uses the same safe delta policy as scene JSON edit mode. Non-editable fields stay ignored even if they appear in the block.
-      </p>
-      <div id="scene-inspector-object-validation" class="scene-inspector-validation" hidden></div>
-      <div id="scene-inspector-object-diff" class="scene-inspector-diff" hidden></div>
-      <textarea id="scene-inspector-object-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
-      <pre id="scene-inspector-object-output" hidden>{
+      <section id="scene-inspector-object-section" class="scene-inspector-section">
+        <div class="scene-inspector-section-header">
+          <div class="scene-inspector-section-title">Selected Object JSON</div>
+          <div id="scene-inspector-object-meta" class="scene-inspector-section-meta">No object selected</div>
+        </div>
+        <div id="scene-inspector-object-empty" class="scene-inspector-empty">Select an object in the scene to edit its JSON block as text.</div>
+        <div id="scene-inspector-object-head" class="scene-inspector-object-head" hidden></div>
+        <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
+          <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
+          <button id="scene-inspector-object-format" class="chip" type="button" hidden>Format JSON</button>
+          <button id="scene-inspector-object-reset" class="chip" type="button" hidden>Reset to Current</button>
+          <button id="scene-inspector-object-validate" class="chip" type="button" hidden>Validate / Preview</button>
+          <button id="scene-inspector-object-apply" class="chip primary" type="button" hidden>Broadcast Object Changes</button>
+          <button id="scene-inspector-object-cancel" class="chip" type="button" hidden>Cancel</button>
+        </div>
+        <p id="scene-inspector-object-note" class="scene-inspector-note" hidden>
+          Object block editing uses the same safe delta policy as scene JSON edit mode. Non-editable fields stay ignored even if they appear in the block.
+        </p>
+        <div id="scene-inspector-object-validation" class="scene-inspector-validation" hidden></div>
+        <div id="scene-inspector-object-diff" class="scene-inspector-diff" hidden></div>
+        <textarea id="scene-inspector-object-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
+        <pre id="scene-inspector-object-output" class="scene-inspector-selected-json" hidden>{
   "status": "no-selection"
 }</pre>
-    </section>
+      </section>
+    </div>
   </aside>
   <button id="add-btn" title="GLB/画像を追加">＋</button>
   <button id="paste-btn" title="クリップボードから追加">📋</button>
