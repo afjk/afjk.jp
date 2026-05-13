@@ -1687,7 +1687,7 @@ function duplicateSelectedObject() {
     source: 'local-copy',
   });
 
-  presenceState.historyManager.push(
+  presenceState.historyManager?.push(
     HistoryManager.createAddEntry(
       newObjectId,
       asset || {},
