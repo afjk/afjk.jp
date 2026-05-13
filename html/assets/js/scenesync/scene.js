@@ -1295,10 +1295,10 @@ function showTemporaryImagePreview(objectId, file, position, options = {}) {
     return;
   }
 
-  createTemporaryPlanePreview(objectId, file, position, entry);
+  createTemporaryPlanePreview(objectId, file, position, entry, options);
 }
 
-async function createTemporaryPlanePreview(objectId, file, position, entry) {
+async function createTemporaryPlanePreview(objectId, file, position, entry, options = {}) {
   const t0 = performance.now();
 
   try {
@@ -1347,6 +1347,11 @@ async function createTemporaryPlanePreview(objectId, file, position, entry) {
       group.position.copy(position);
     } else if (Array.isArray(position)) {
       group.position.fromArray(position);
+    }
+
+    const placementRotation = readQuaternionArray(options.placementRotation, null);
+    if (placementRotation) {
+      group.quaternion.fromArray(placementRotation);
     }
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -4762,13 +4767,14 @@ async function imageImporterCallback(file, position, context = {}) {
     const positionArray = (position && typeof position.toArray === 'function')
       ? position.toArray()
       : [0, 1, 0];
+    const rotation = readQuaternionArray(context.placementRotation, [0, 0, 0, 1]);
 
     const payload = {
       kind: 'scene-add',
       objectId,
       name: displayName,
       position: positionArray,
-      rotation: [0, 0, 0, 1],
+      rotation,
       scale: [1, 1, 1],
       asset: { type: 'mesh', meshPath },
       metadata: {
@@ -4782,6 +4788,10 @@ async function imageImporterCallback(file, position, context = {}) {
           originalBytes: optimizationInfo?.originalBytes,
           maxPixel: optimizationInfo?.maxPixel,
           optimized: !!optimizationInfo?.resized,
+        },
+        placement: {
+          surfaceKind: context.surfaceKind || 'unknown',
+          normal: context.normalArray || null,
         },
       },
     };
@@ -4813,6 +4823,9 @@ async function imageImporterCallback(file, position, context = {}) {
 }
 
 async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
+  const existingMetadata = (context.metadata && typeof context.metadata === 'object')
+    ? context.metadata
+    : {};
   const { arrayBuffer } = await buildTextPlaneGlb(text, {
     THREE,
     GLTFExporter,
@@ -4830,7 +4843,7 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
     : [0, 1, 0];
-  const rotation = readQuaternionArray(context.rotation, [0, 0, 0, 1]);
+  const rotation = readQuaternionArray(context.placementRotation || context.rotation, [0, 0, 0, 1]);
   const scale = readVector3Array(context.scale, [1, 1, 1]);
 
   const payload = {
@@ -4841,6 +4854,13 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     rotation,
     scale,
     asset: { type: 'mesh', meshPath },
+    metadata: {
+      ...existingMetadata,
+      placement: {
+        surfaceKind: context.surfaceKind || 'unknown',
+        normal: context.normalArray || null,
+      },
+    },
   };
 
   broadcast(payload);
@@ -4915,6 +4935,7 @@ const dragDropManager = new DragDropManager({
     position,
     source,
     targetKind,
+    placementRotation,
   }) => {
     if (!objectId) return;
     const label = source === 'image'
@@ -4926,7 +4947,10 @@ const dragDropManager = new DragDropManager({
     addLoadingOverlay(objectId, label, { position: position?.toArray?.() });
 
     if (source === 'image') {
-      showTemporaryImagePreview(objectId, file, position, { targetKind });
+      showTemporaryImagePreview(objectId, file, position, {
+        targetKind,
+        placementRotation,
+      });
     }
   },
   onLoadEnd: async ({ objectId, source }) => {
