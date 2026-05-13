@@ -1349,9 +1349,11 @@ async function createTemporaryPlanePreview(objectId, file, position, entry, opti
       group.position.fromArray(position);
     }
 
-    const placementRotation = readQuaternionArray(options.placementRotation, null);
-    if (placementRotation) {
-      group.quaternion.fromArray(placementRotation);
+    const placementQuaternion = Array.isArray(options.placementRotation)
+      ? new THREE.Quaternion().fromArray(options.placementRotation)
+      : options.placementQuaternion || null;
+    if (placementQuaternion) {
+      group.quaternion.copy(placementQuaternion);
     }
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -4767,7 +4769,12 @@ async function imageImporterCallback(file, position, context = {}) {
     const positionArray = (position && typeof position.toArray === 'function')
       ? position.toArray()
       : [0, 1, 0];
-    const rotation = readQuaternionArray(context.placementRotation, [0, 0, 0, 1]);
+    const placementQuaternion = Array.isArray(context.placementRotation)
+      ? new THREE.Quaternion().fromArray(context.placementRotation)
+      : context.placementQuaternion || null;
+    const rotation = placementQuaternion
+      ? placementQuaternion.toArray()
+      : [0, 0, 0, 1];
 
     const payload = {
       kind: 'scene-add',
@@ -4935,6 +4942,7 @@ const dragDropManager = new DragDropManager({
     position,
     source,
     targetKind,
+    placementQuaternion,
     placementRotation,
   }) => {
     if (!objectId) return;
@@ -4949,6 +4957,7 @@ const dragDropManager = new DragDropManager({
     if (source === 'image') {
       showTemporaryImagePreview(objectId, file, position, {
         targetKind,
+        placementQuaternion,
         placementRotation,
       });
     }

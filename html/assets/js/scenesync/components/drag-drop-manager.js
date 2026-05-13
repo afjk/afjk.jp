@@ -223,10 +223,16 @@ export class DragDropManager {
     return 'wall';
   }
 
-  _createSurfaceQuaternion(normal) {
+  _createSurfaceQuaternion(normal, rayDirection = null) {
     if (!normal) return null;
 
     const n = normal.clone().normalize();
+    if (rayDirection && typeof rayDirection.clone === 'function') {
+      const ray = rayDirection.clone().normalize();
+      if (n.dot(ray) > 0) {
+        n.multiplyScalar(-1);
+      }
+    }
     const localForward = new this.THREE.Vector3(0, 0, 1);
 
     return new this.THREE.Quaternion().setFromUnitVectors(localForward, n);
@@ -245,6 +251,11 @@ export class DragDropManager {
 
     const rayInfo = this._createDropRay(event);
     const hit = this._findPlacementHit(rayInfo.raycaster);
+    const hitNormal = hit ? this._getWorldNormalFromHit(hit) : null;
+    const surfaceKind = this._getSurfaceKind(hitNormal);
+    const surfaceQuaternion = surfaceKind === 'wall'
+      ? this._createSurfaceQuaternion(hitNormal, rayInfo.ray.direction)
+      : null;
 
     const debugTargetKind = hit
       ? 'scene-hit'
@@ -253,6 +264,7 @@ export class DragDropManager {
         : 'scene-fallback';
 
     this.lastDropDetection = {
+      ...this.lastDropDetection,
       hit: !!hit,
       hitObject: hit?.object?.name || null,
       hitObjectType: hit?.object?.type || null,
@@ -263,17 +275,20 @@ export class DragDropManager {
       targetKind: debugTargetKind,
       clientX: event.clientX,
       clientY: event.clientY,
+      normal: hitNormal?.toArray?.() || null,
+      surfaceKind,
+      placementRotation: surfaceQuaternion?.toArray?.() || null,
     };
 
     console.debug('[drag-drop] drop detection', this.lastDropDetection);
 
     if (hit) {
-      const hitNormal = this._getWorldNormalFromHit(hit);
-
       return {
         position: hit.point.clone(),
         normal: hitNormal,
         normalArray: hitNormal?.toArray?.() || null,
+        surfaceKind,
+        placementRotation: surfaceQuaternion?.toArray?.() || null,
         targetKind: 'scene',
         hitObjectId: hit.object?.userData?.objectId || null,
         clientX: event.clientX,
@@ -354,12 +369,19 @@ export class DragDropManager {
         normalArray: normalized.normalArray,
         surfaceKind,
         placementRotation,
+        placementQuaternion: surfaceQuaternion,
       };
 
       const toastMessage = normalized.targetKind === 'sky'
         ? 'Skybox画像を準備中…'
         : '画像を準備中…';
       this.showToast?.(toastMessage);
+      console.debug('[drag-drop] image placement', {
+        targetKind: normalized.targetKind,
+        normal: normalized.normalArray,
+        surfaceKind,
+        placementRotation,
+      });
       if (this.onLoadStart) {
         Promise.resolve(this.onLoadStart(loadInfo)).catch((error) => {
           console.warn('[drag-drop] image onLoadStart failed:', error);
