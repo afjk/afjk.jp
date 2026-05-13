@@ -329,11 +329,7 @@ export class DragDropManager {
         : hit.point.clone())
       : null;
 
-    const debugTargetKind = hit
-      ? 'scene-hit'
-      : rayInfo.upness > SKY_DROP_UPNESS_THRESHOLD
-        ? 'sky'
-        : 'scene-fallback';
+    const debugTargetKind = hit ? 'scene-hit' : 'scene-fallback';
 
     this.lastDropDetection = {
       ...this.lastDropDetection,
@@ -371,28 +367,6 @@ export class DragDropManager {
         placementPosition: (placementPosition || hit.point).toArray(),
         targetKind: 'scene',
         hitObjectId: hit.object?.userData?.objectId || null,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        upness: rayInfo.upness,
-      };
-    }
-
-    if (rayInfo.upness > SKY_DROP_UPNESS_THRESHOLD) {
-      this.lastDropDetection = {
-        ...this.lastDropDetection,
-        hit: false,
-        targetKind: 'skybox',
-        surfaceKind: 'skybox',
-        fallbackKind: null,
-        skybox: true,
-        skyboxReason: 'look-up',
-        upness: rayInfo.upness,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      };
-      return {
-        position: this._defaultDropPosition(),
-        targetKind: 'sky',
         clientX: event.clientX,
         clientY: event.clientY,
         upness: rayInfo.upness,
