@@ -1128,7 +1128,7 @@ function updateMultiMoveFromPivot() {
 
   multiTransformLastPivotPosition.copy(current);
   updateSelectionHelpers();
-  // Keep only the latest transform snapshot within the throttle window.
+  // Replace pending ops with the latest transform snapshot in the throttle window.
   multiMovePendingOps = ops;
   ensureMultiMoveBroadcastInterval();
 }
