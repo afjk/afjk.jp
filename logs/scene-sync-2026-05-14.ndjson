@@ -1,3 +1,0 @@
-{"event":"server_start","timestamp":"2026-05-14T13:00:45.774Z","maxUploadBytes":52428800,"maxJsonBytes":1048576,"maxRoomConnections":20,"maxObjectsPerRoom":200}
-{"event":"schema_invalid","timestamp":"2026-05-14T13:00:45.814Z","roomId":"test-room","actorId":"baf024347f302c95ead514f5","kind":"scene-delta","payloadSize":91,"reason":"position must be finite [x,y,z]"}
-{"event":"ai_broadcast_failed","timestamp":"2026-05-14T13:00:45.814Z","roomId":"test-room","status":400,"error":"invalid scene sync payload","reason":"position must be finite [x,y,z]","kind":"scene-delta","opCount":null,"hasSessionId":true}
