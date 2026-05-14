@@ -1434,4 +1434,104 @@ describe('presence AI wrapper alias API', () => {
       await closeClient(ws);
     }
   });
+
+  it('returns diagnostic reason for invalid position in /api/ai broadcast', async () => {
+    const userId = 'usr-ai-invalid-pos';
+    const { code } = await initiateLink('ai-invalid-pos-room', userId);
+    const redeemResponse = await fetch(`${baseUrl}/api/ai/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const redeemBody = await redeemResponse.json();
+
+    const response = await fetch(`${baseUrl}/api/ai/room/ai-invalid-pos-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: redeemBody.sessionId,
+        payload: {
+          kind: 'scene-delta',
+          objectId: 'invalid-obj',
+          position: [0, null, 0],
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, 'invalid scene sync payload');
+    assert.match(body.reason, /position must be finite/);
+    assert.equal(body.kind, 'scene-delta');
+  });
+
+  it('returns diagnostic reason for invalid batch op in /api/ai broadcast', async () => {
+    const userId = 'usr-ai-invalid-batch';
+    const { code } = await initiateLink('ai-invalid-batch-room', userId);
+    const redeemResponse = await fetch(`${baseUrl}/api/ai/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const redeemBody = await redeemResponse.json();
+
+    const response = await fetch(`${baseUrl}/api/ai/room/ai-invalid-batch-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: redeemBody.sessionId,
+        payload: {
+          kind: 'scene-batch',
+          ops: [
+            {
+              kind: 'scene-delta',
+              objectId: 'a',
+              position: [0, 0, 0],
+            },
+            {
+              kind: 'scene-delta',
+              objectId: 'b',
+              position: [1, Infinity, 0],
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, 'invalid scene sync payload');
+    assert.match(body.reason, /invalid batch op.*position must be finite/);
+    assert.equal(body.kind, 'scene-batch');
+  });
+
+  it('returns diagnostic reason for invalid position in /api/gpt broadcast', async () => {
+    const userId = 'usr-gpt-invalid-pos';
+    const { code } = await initiateLink('gpt-invalid-pos-room', userId);
+    const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const redeemBody = await redeemResponse.json();
+
+    const response = await fetch(`${baseUrl}/api/gpt/room/gpt-invalid-pos-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: redeemBody.sessionId,
+        payload: {
+          kind: 'scene-add',
+          objectId: 'invalid-add',
+          position: [NaN, 0, 0],
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, 'invalid scene sync payload');
+    assert.match(body.reason, /position must be finite/);
+    assert.equal(body.kind, 'scene-add');
+  });
 });

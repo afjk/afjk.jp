@@ -14,3 +14,7 @@ plans/
 !docs/plans/
 !docs/plans/**/
 !docs/plans/**/*.md
+
+# Runtime/test logs
+logs/
+apps/presence-server/logs/

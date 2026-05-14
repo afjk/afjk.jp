@@ -829,7 +829,11 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     });
     return {
       status: 400,
-      body: { error: 'invalid scene sync payload' },
+      body: {
+        error: 'invalid scene sync payload',
+        reason: validation.reason,
+        kind: nextPayload?.kind || null,
+      },
     };
   }
 
@@ -1395,6 +1399,21 @@ function createPresenceServer() {
         sender: createApiSender('AI'),
         actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt),
       });
+
+      if (result.status >= 400) {
+        sceneSyncLogger.log('ai_broadcast_failed', {
+          roomId,
+          status: result.status,
+          error: result.body?.error,
+          reason: result.body?.reason,
+          kind: body?.payload?.kind,
+          opCount: Array.isArray(body?.payload?.ops)
+            ? body.payload.ops.length
+            : null,
+          hasSessionId: typeof body?.sessionId === 'string',
+        });
+      }
+
       sendJson(res, result.status, result.body);
       return;
     }
