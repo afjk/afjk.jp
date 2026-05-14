@@ -1,7 +1,0 @@
-{"event":"server_start","timestamp":"2026-05-14T03:32:42.023Z","maxUploadBytes":52428800,"maxJsonBytes":1048576,"maxRoomConnections":20,"maxObjectsPerRoom":200}
-{"event":"ws_connect","timestamp":"2026-05-14T03:32:42.096Z","roomId":"ai-alias-room","actorId":"7f4bfde096364f9e6301dfd0"}
-{"event":"ws_connect","timestamp":"2026-05-14T03:32:42.114Z","roomId":"ai-delta-room","actorId":"7f4bfde096364f9e6301dfd0"}
-{"event":"ws_connect","timestamp":"2026-05-14T03:32:42.124Z","roomId":"ai-batch-room","actorId":"7f4bfde096364f9e6301dfd0"}
-{"event":"ws_disconnect","timestamp":"2026-05-14T03:32:42.135Z","roomId":"ai-batch-room","actorId":"7f4bfde096364f9e6301dfd0"}
-{"event":"ws_disconnect","timestamp":"2026-05-14T03:32:42.135Z","roomId":"ai-delta-room","actorId":"7f4bfde096364f9e6301dfd0"}
-{"event":"ws_disconnect","timestamp":"2026-05-14T03:32:42.135Z","roomId":"ai-alias-room","actorId":"7f4bfde096364f9e6301dfd0"}
