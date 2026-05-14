@@ -1146,6 +1146,128 @@ describe('presence GPT wrapper API', () => {
     assert.equal(gptResponse.status, 401);
     assert.deepEqual(await gptResponse.json(), { error: 'token revoked' });
   });
+
+  it('routes scene-delta through GPT broadcast and delivers inner payload to peers', async () => {
+    const userId = 'usr-gpt-delta';
+    const ws = await connectClient('gpt-delta-room', 'Linked User', userId);
+    try {
+      const { code } = await initiateLink('gpt-delta-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-delta');
+
+      const response = await fetch(`${baseUrl}/api/gpt/room/gpt-delta-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          payload: {
+            kind: 'scene-delta',
+            objectId: 'astronaut-copy-2',
+            position: [1, 3, -3],
+          },
+        }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(message.payload.kind, 'scene-delta');
+      assert.equal(message.payload.objectId, 'astronaut-copy-2');
+      assert.deepEqual(message.payload.position, [1, 3, -3]);
+      assert.equal(message.payload.onBehalfOf, userId);
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('routes scene-batch through GPT broadcast to peers', async () => {
+    const userId = 'usr-gpt-batch';
+    const ws = await connectClient('gpt-batch-room', 'Linked User', userId);
+    try {
+      const { code } = await initiateLink('gpt-batch-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const response = await fetch(`${baseUrl}/api/gpt/room/gpt-batch-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          payload: {
+            kind: 'scene-batch',
+            ops: [
+              { kind: 'scene-delta', objectId: 'a', position: [0, 0, 0] },
+              { kind: 'scene-delta', objectId: 'b', position: [0, 1, 0] },
+            ],
+          },
+        }),
+      });
+
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('rejects GPT broadcast when payload is missing', async () => {
+    const userId = 'usr-gpt-no-payload';
+    const { code } = await initiateLink('gpt-no-payload-room', userId);
+    const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const redeemBody = await redeemResponse.json();
+
+    const response = await fetch(`${baseUrl}/api/gpt/room/gpt-no-payload-room/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: redeemBody.sessionId }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'payload is required' });
+  });
+
+  it('rejects GPT broadcast when session room mismatches path room', async () => {
+    const userId = 'usr-gpt-broadcast-mismatch';
+    const { code } = await initiateLink('gpt-broadcast-room-a', userId);
+    const redeemResponse = await fetch(`${baseUrl}/api/gpt/link/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const redeemBody = await redeemResponse.json();
+
+    const response = await fetch(`${baseUrl}/api/gpt/room/gpt-broadcast-room-b/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: redeemBody.sessionId,
+        payload: { kind: 'scene-delta', objectId: 'x', position: [0, 0, 0] },
+      }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'roomId mismatch' });
+  });
 });
 
 describe('presence AI wrapper alias API', () => {
