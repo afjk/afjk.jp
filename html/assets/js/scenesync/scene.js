@@ -870,9 +870,12 @@ let dragIntervalId = null;
 let dragStartState = null;
 let multiTransformPivot = null;
 let multiTransformActive = false;
-let multiTransformStartPivotPosition = null;
 let multiTransformLastPivotPosition = null;
 let multiTransformStartSnapshots = new Map();
+let multiMoveBroadcastIntervalId = null;
+let multiMovePendingOps = [];
+const multiTransformLockedObjectIds = new Set();
+const MULTI_MOVE_SYNC_INTERVAL_MS = 50;
 
 transformCtrl.addEventListener('objectChange', () => {
   if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
@@ -887,8 +890,13 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
   if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
     if (isDragging) {
       beginMultiMoveHistory();
+      lockMultiSelectedObjects();
+      ensureMultiMoveBroadcastInterval();
     } else {
+      flushMultiMoveBroadcast({ force: true });
+      stopMultiMoveBroadcastInterval();
       endMultiMoveHistory();
+      unlockMultiSelectedObjects();
     }
     return;
   }
@@ -992,6 +1000,10 @@ function ensureMultiTransformPivot() {
 }
 
 function cleanupMultiTransformPivot() {
+  flushMultiMoveBroadcast({ force: true });
+  stopMultiMoveBroadcastInterval();
+  unlockMultiSelectedObjects();
+
   if (transformCtrl?.object === multiTransformPivot) {
     transformCtrl.detach();
   }
@@ -1002,9 +1014,9 @@ function cleanupMultiTransformPivot() {
   }
 
   multiTransformActive = false;
-  multiTransformStartPivotPosition = null;
   multiTransformLastPivotPosition = null;
   multiTransformStartSnapshots.clear();
+  multiMovePendingOps = [];
 }
 
 function updateSelectionHelpers() {
@@ -1031,6 +1043,46 @@ function broadcastSceneBatchOrDeltas(ops, reason = 'batch') {
   });
 }
 
+function lockMultiSelectedObjects() {
+  for (const objectId of selectedObjectIds) {
+    if (!managedObjects.has(objectId) || multiTransformLockedObjectIds.has(objectId)) continue;
+    multiTransformLockedObjectIds.add(objectId);
+    broadcast({ kind: 'scene-lock', objectId });
+  }
+}
+
+function unlockMultiSelectedObjects() {
+  for (const objectId of Array.from(multiTransformLockedObjectIds)) {
+    broadcast({ kind: 'scene-unlock', objectId });
+  }
+  multiTransformLockedObjectIds.clear();
+}
+
+function flushMultiMoveBroadcast({ force = false } = {}) {
+  const ops = multiMovePendingOps;
+  if (!ops.length && !force) return;
+
+  if (ops.length) {
+    broadcastSceneBatchOrDeltas(ops, 'multi-move');
+    notifySceneStateChanged('multi-move');
+  }
+
+  multiMovePendingOps = [];
+}
+
+function ensureMultiMoveBroadcastInterval() {
+  if (multiMoveBroadcastIntervalId) return;
+  multiMoveBroadcastIntervalId = setInterval(() => {
+    flushMultiMoveBroadcast();
+  }, MULTI_MOVE_SYNC_INTERVAL_MS);
+}
+
+function stopMultiMoveBroadcastInterval() {
+  if (!multiMoveBroadcastIntervalId) return;
+  clearInterval(multiMoveBroadcastIntervalId);
+  multiMoveBroadcastIntervalId = null;
+}
+
 function startMultiMoveMode() {
   const objects = getSelectedObjects();
   if (objects.length < 2) {
@@ -1044,7 +1096,6 @@ function startMultiMoveMode() {
   pivot.scale.set(1, 1, 1);
   pivot.updateMatrixWorld(true);
 
-  multiTransformStartPivotPosition = pivot.position.clone();
   multiTransformLastPivotPosition = pivot.position.clone();
   multiTransformStartSnapshots = new Map();
   multiTransformActive = true;
@@ -1079,8 +1130,8 @@ function updateMultiMoveFromPivot() {
 
   multiTransformLastPivotPosition.copy(current);
   updateSelectionHelpers();
-  broadcastSceneBatchOrDeltas(ops, 'multi-move');
-  notifySceneStateChanged('multi-move');
+  multiMovePendingOps = ops;
+  ensureMultiMoveBroadcastInterval();
 }
 
 function beginMultiMoveHistory() {
