@@ -349,9 +349,6 @@ server.registerTool(
         ok: true
       })
     } catch (e) {
-      if (e instanceof ValidationError) {
-        return errorResult(e)
-      }
       return errorResult(e)
     }
   }
