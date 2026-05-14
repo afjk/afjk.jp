@@ -3695,6 +3695,25 @@ function handleHandoff(data) {
   const isOnBehalfOf = payload.onBehalfOf === presenceState.userId;
   const shouldTrackHistory = isOwn || isOnBehalfOf;
 
+  if (
+    payload.kind === 'scene-batch' ||
+    payload.kind === 'scene-delta' ||
+    payload.kind === 'scene-add' ||
+    payload.kind === 'scene-remove'
+  ) {
+    console.debug('[handoff] scene mutation received', {
+      kind: payload.kind,
+      objectId: payload.objectId || null,
+      fromId: data.from?.id || null,
+      selfPeerId: presenceState.id || null,
+      onBehalfOf: payload.onBehalfOf || null,
+      selfUserId: presenceState.userId || null,
+      isOwn,
+      isOnBehalfOf,
+      shouldTrackHistory,
+    });
+  }
+
   switch (payload.kind) {
     case 'scene-state': {
       sceneReceived = true;
@@ -3727,9 +3746,25 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-delta': {
-      if (isOwn) break; // 自分の echo は無視
+      if (isOwn) {
+        console.debug('[scene-delta] skipped own echo', {
+          objectId: payload.objectId || null,
+          fromId: data.from?.id || null,
+          selfPeerId: presenceState.id || null,
+          onBehalfOf: payload.onBehalfOf || null,
+          selfUserId: presenceState.userId || null,
+          isOnBehalfOf,
+        });
+        break;
+      }
       const obj = managedObjects.get(payload.objectId);
-      if (!obj) break;
+      if (!obj) {
+        console.warn('[scene-delta] target object not found', {
+          objectId: payload.objectId || null,
+          knownObjectIds: Array.from(managedObjects.keys()).slice(0, 20),
+        });
+        break;
+      }
       const beforePos = obj.position.toArray();
       const beforeRot = obj.quaternion.toArray();
       const beforeScl = obj.scale.toArray();
@@ -3741,6 +3776,12 @@ function handleHandoff(data) {
       if (payload.asset) {
         applyAssetDelta(obj, payload.asset);
       }
+      console.debug('[scene-delta] applied', {
+        objectId: payload.objectId,
+        position: obj.position.toArray(),
+        rotation: obj.quaternion.toArray(),
+        scale: obj.scale.toArray(),
+      });
       if (shouldTrackHistory && isOnBehalfOf) {
         const afterPos = obj.position.toArray();
         const afterRot = obj.quaternion.toArray();
@@ -3899,9 +3940,13 @@ function handleHandoff(data) {
         onBehalfOf: payload.onBehalfOf || null,
       });
       // TODO: refactor to apply all ops then notify/save once to avoid per-op overhead
-      for (const op of batchOps) {
+      for (const [index, op] of batchOps.entries()) {
+        if (!op || typeof op !== 'object') {
+          console.warn('[scene-batch] skipped invalid op', { index, op });
+          continue;
+        }
         if (op.kind === 'scene-batch') {
-          console.warn('[scene-batch] nested scene-batch is not supported', op);
+          console.warn('[scene-batch] nested scene-batch is not supported', { index, op });
           continue;
         }
         if (!op.kind) {
@@ -3911,6 +3956,15 @@ function handleHandoff(data) {
         const child = !op.onBehalfOf && payload.onBehalfOf
           ? { ...op, onBehalfOf: payload.onBehalfOf }
           : op;
+        console.debug('[scene-batch] applying child op', {
+          index,
+          kind: child.kind || null,
+          objectId: child.objectId || null,
+          hasPosition: Array.isArray(child.position),
+          hasRotation: Array.isArray(child.rotation),
+          hasScale: Array.isArray(child.scale),
+          onBehalfOf: child.onBehalfOf || null,
+        });
         handleHandoff({ ...data, payload: child });
       }
       notifySceneStateChanged('scene-batch-handoff');
