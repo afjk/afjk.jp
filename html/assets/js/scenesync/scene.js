@@ -4174,6 +4174,60 @@ async function runAiUrlImport(action, params = {}, context = {}) {
   };
 }
 
+function serializeSceneObjectForExternalUse(objectId, obj) {
+  if (!obj) return null;
+
+  if (obj.userData?.nonSerializable) return null;
+  if (obj.userData?._temporary) return null;
+  if (obj.userData?.role === 'multi-transform-pivot') return null;
+  if (obj.userData?.role === 'paste-preview') return null;
+  if (obj.userData?.role === 'placement-floor') return null;
+
+  return {
+    objectId,
+    name: obj.userData?.name || obj.name || objectId,
+    position: obj.position.toArray(),
+    rotation: obj.quaternion.toArray(),
+    scale: obj.scale.toArray(),
+    asset: obj.userData?.asset || null,
+    metadata: obj.userData?.metadata || null,
+    meshPath: obj.userData?.meshPath || obj.userData?.asset?.meshPath || null,
+  };
+}
+
+function getCurrentSelectionPayload() {
+  const selectedIds = Array.from(selectedObjectIds || []);
+  const selectedObjects = [];
+  const missingObjectIds = [];
+  const skippedObjectIds = [];
+
+  for (const objectId of selectedIds) {
+    const obj = managedObjects.get(objectId);
+
+    if (!obj) {
+      missingObjectIds.push(objectId);
+      continue;
+    }
+
+    const serialized = serializeSceneObjectForExternalUse(objectId, obj);
+
+    if (!serialized) {
+      skippedObjectIds.push(objectId);
+      continue;
+    }
+
+    selectedObjects.push(serialized);
+  }
+
+  return {
+    selectedObjectIds: selectedObjects.map((obj) => obj.objectId),
+    selectedObjects,
+    selectedCount: selectedObjects.length,
+    missingObjectIds,
+    skippedObjectIds,
+  };
+}
+
 async function handleAiCommand(from, payload) {
   const requestId = payload.requestId || `req-${Date.now()}`;
 
@@ -4237,6 +4291,13 @@ async function handleAiCommand(from, payload) {
           allowedKinds: [URL_KIND.IMAGE],
           targetKind: 'sky',
         });
+        break;
+      case 'getSelection':
+        result = {
+          ok: true,
+          action: 'getSelection',
+          ...getCurrentSelectionPayload(),
+        };
         break;
       default:
         result = { ok: false, error: `unsupported ai-command action: ${payload.action}` };
@@ -5645,6 +5706,7 @@ const dragDropManager = new DragDropManager({
 window.__sceneSyncDebug = {
   ...(window.__sceneSyncDebug || {}),
   dragDropManager,
+  getSelection: getCurrentSelectionPayload,
 };
 
 function isMobileUi() {

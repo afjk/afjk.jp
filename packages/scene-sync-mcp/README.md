@@ -169,6 +169,10 @@ Check current link status and expiration time.
 ### scene_sync_get_scene
 Get the current scene state (objects and environment). May take up to 5 seconds.
 
+Input: `{}` (default) or `{ "selectedOnly": true }` to return only currently selected objects.
+
+When `selectedOnly: true`, the browser is queried for the current selection instead of fetching the full scene snapshot.
+
 ### scene_sync_add_box
 Add a box to the scene. High-level tool; use directly for requests like "add a red cube".
 
@@ -336,6 +340,22 @@ Input:
 
 Returns the last N history entries from the browser.
 
+### scene_sync_get_selection
+
+Returns the objects currently selected in the linked Scene Sync browser.
+
+This is a generic current-selection API for external tools. Selection is browser-local/session-local state and is not persisted into the shared scene.
+
+Input: `{}`
+
+Use cases:
+
+- align selected objects
+- distribute selected objects
+- randomize selected rotation or scale
+- apply a Loomlet graph to selected objects
+- run scoped edits from AI or CLI tools
+
 ### scene_sync_undo
 Undo the last operation recorded in the Scene Sync history.
 
@@ -422,6 +442,7 @@ Browser AI commands in `html/assets/js/scenesync/scene.js` should stay in sync w
 | `getHistory` | `scene_sync_get_history` | supported |
 | `undo` | `scene_sync_undo` | supported |
 | `redo` | `scene_sync_redo` | supported |
+| `getSelection` | `scene_sync_get_selection` | supported |
 
 When adding a new browser AI command:
 

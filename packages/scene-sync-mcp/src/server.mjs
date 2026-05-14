@@ -318,10 +318,28 @@ server.registerTool(
   {
     title: 'Get Scene Sync scene state',
     description: 'Get the current scene state (objects and environment settings). Returns a summary if objects exceed 50 items. May take up to 5 seconds.',
-    inputSchema: z.object({})
+    inputSchema: z.object({
+      selectedOnly: z.boolean().optional().describe(
+        'If true, return only currently selected objects from the linked browser.'
+      )
+    })
   },
-  async () => {
+  async ({ selectedOnly } = {}) => {
     try {
+      if (selectedOnly) {
+        const response = await runAiCommand(
+          'getSelection',
+          {},
+          { timeout: 10000 }
+        )
+
+        return jsonResult({
+          ...response,
+          ok: response?.ok !== false,
+          selectedOnly: true
+        })
+      }
+
       const session = getSession()
       const response = await client.getScene(session.roomId, session.sessionId)
       const summarized = summarizeScene(response)
@@ -334,6 +352,39 @@ server.registerTool(
       if (e instanceof ValidationError) {
         return errorResult(e)
       }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_get_selection
+server.registerTool(
+  'scene_sync_get_selection',
+  {
+    title: 'Get current Scene Sync selection',
+    description: 'Get the objects currently selected in the linked Scene Sync browser. This is a generic current-selection API for external tools, not AI-specific. Use this before scoped operations such as aligning, distributing, randomizing, transforming, or applying Loomlet graphs to selected objects.',
+    inputSchema: z.object({}),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async () => {
+    try {
+      const response = await runAiCommand(
+        'getSelection',
+        {},
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ...response,
+        ok: response?.ok !== false,
+        action: 'getSelection'
+      })
+    } catch (e) {
       return errorResult(e)
     }
   }
