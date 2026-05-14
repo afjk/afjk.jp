@@ -1060,13 +1060,12 @@ function unlockMultiSelectedObjects() {
 }
 
 function flushMultiMoveBroadcast() {
-  const ops = multiMovePendingOps;
+  const ops = multiMovePendingOps.slice();
+  multiMovePendingOps = [];
   if (!ops.length) return;
 
   broadcastSceneBatchOrDeltas(ops, 'multi-move');
   notifySceneStateChanged('multi-move');
-
-  multiMovePendingOps = [];
 }
 
 function ensureMultiMoveBroadcastInterval() {
@@ -1129,6 +1128,7 @@ function updateMultiMoveFromPivot() {
 
   multiTransformLastPivotPosition.copy(current);
   updateSelectionHelpers();
+  // Keep only the latest transform snapshot within the throttle window.
   multiMovePendingOps = ops;
   ensureMultiMoveBroadcastInterval();
 }
