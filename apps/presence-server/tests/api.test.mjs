@@ -1403,6 +1403,9 @@ describe('presence AI wrapper alias API', () => {
       });
       const redeemBody = await redeemResponse.json();
 
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+
       const response = await fetch(`${baseUrl}/api/ai/room/ai-batch-room/broadcast`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1418,9 +1421,15 @@ describe('presence AI wrapper alias API', () => {
         }),
       });
 
-      const body = await response.json();
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
       assert.equal(response.status, 200);
       assert.equal(body.ok, true);
+      assert.equal(message.payload.kind, 'scene-batch');
+      assert.equal(message.payload.onBehalfOf, userId);
     } finally {
       await closeClient(ws);
     }
