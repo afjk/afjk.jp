@@ -14,6 +14,3 @@ plans/
 !docs/plans/
 !docs/plans/**/
 !docs/plans/**/*.md
-
-# Server logs
-apps/presence-server/logs/

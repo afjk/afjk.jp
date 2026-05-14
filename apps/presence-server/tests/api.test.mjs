@@ -1346,4 +1346,83 @@ describe('presence AI wrapper alias API', () => {
       await closeClient(ws);
     }
   });
+
+  it('routes scene-delta through /api/ai broadcast and delivers inner payload to peers', async () => {
+    const userId = 'usr-ai-delta';
+    const ws = await connectClient('ai-delta-room', 'Linked User', userId);
+    try {
+      const { code } = await initiateLink('ai-delta-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/ai/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const messagePromise = waitForMessage(ws, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-delta');
+
+      const response = await fetch(`${baseUrl}/api/ai/room/ai-delta-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          payload: {
+            kind: 'scene-delta',
+            objectId: 'astronaut-copy-2',
+            position: [1, 3, -3],
+          },
+        }),
+      });
+
+      const [body, message] = await Promise.all([
+        response.json(),
+        messagePromise,
+      ]);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(message.payload.kind, 'scene-delta');
+      assert.equal(message.payload.objectId, 'astronaut-copy-2');
+      assert.deepEqual(message.payload.position, [1, 3, -3]);
+      assert.equal(message.payload.onBehalfOf, userId);
+    } finally {
+      await closeClient(ws);
+    }
+  });
+
+  it('routes scene-batch through /api/ai broadcast to peers', async () => {
+    const userId = 'usr-ai-batch';
+    const ws = await connectClient('ai-batch-room', 'Linked User', userId);
+    try {
+      const { code } = await initiateLink('ai-batch-room', userId);
+      const redeemResponse = await fetch(`${baseUrl}/api/ai/link/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const redeemBody = await redeemResponse.json();
+
+      const response = await fetch(`${baseUrl}/api/ai/room/ai-batch-room/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: redeemBody.sessionId,
+          payload: {
+            kind: 'scene-batch',
+            ops: [
+              { kind: 'scene-delta', objectId: 'a', position: [0, 0, 0] },
+              { kind: 'scene-delta', objectId: 'b', position: [0, 1, 0] },
+            ],
+          },
+        }),
+      });
+
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+    } finally {
+      await closeClient(ws);
+    }
+  });
 });
