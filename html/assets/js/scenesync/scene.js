@@ -893,7 +893,7 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
       lockMultiSelectedObjects();
       ensureMultiMoveBroadcastInterval();
     } else {
-      flushMultiMoveBroadcast({ force: true });
+      flushMultiMoveBroadcast();
       stopMultiMoveBroadcastInterval();
       endMultiMoveHistory();
       unlockMultiSelectedObjects();
@@ -1000,7 +1000,7 @@ function ensureMultiTransformPivot() {
 }
 
 function cleanupMultiTransformPivot() {
-  flushMultiMoveBroadcast({ force: true });
+  flushMultiMoveBroadcast();
   stopMultiMoveBroadcastInterval();
   unlockMultiSelectedObjects();
 
@@ -1045,7 +1045,8 @@ function broadcastSceneBatchOrDeltas(ops, reason = 'batch') {
 
 function lockMultiSelectedObjects() {
   for (const objectId of selectedObjectIds) {
-    if (!managedObjects.has(objectId) || multiTransformLockedObjectIds.has(objectId)) continue;
+    if (!managedObjects.has(objectId)) continue;
+    if (multiTransformLockedObjectIds.has(objectId)) continue;
     multiTransformLockedObjectIds.add(objectId);
     broadcast({ kind: 'scene-lock', objectId });
   }
@@ -1058,14 +1059,12 @@ function unlockMultiSelectedObjects() {
   multiTransformLockedObjectIds.clear();
 }
 
-function flushMultiMoveBroadcast({ force = false } = {}) {
+function flushMultiMoveBroadcast() {
   const ops = multiMovePendingOps;
-  if (!ops.length && !force) return;
+  if (!ops.length) return;
 
-  if (ops.length) {
-    broadcastSceneBatchOrDeltas(ops, 'multi-move');
-    notifySceneStateChanged('multi-move');
-  }
+  broadcastSceneBatchOrDeltas(ops, 'multi-move');
+  notifySceneStateChanged('multi-move');
 
   multiMovePendingOps = [];
 }
