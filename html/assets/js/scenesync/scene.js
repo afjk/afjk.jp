@@ -3888,9 +3888,29 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-batch': {
-      payload.actions?.forEach(action => {
-        handleHandoff({ ...data, payload: action });
+      const batchOps = payload.ops ?? payload.actions;
+      if (!Array.isArray(batchOps)) {
+        console.warn('[scene-batch] invalid ops', payload);
+        notifySceneStateChanged('scene-batch-handoff');
+        break;
+      }
+      console.debug('[scene-batch] incoming', {
+        opCount: batchOps.length,
+        onBehalfOf: payload.onBehalfOf || null,
       });
+      // TODO: refactor to apply all ops then notify/save once to avoid per-op overhead
+      for (const op of batchOps) {
+        if (op.kind === 'scene-batch') {
+          console.warn('[scene-batch] nested scene-batch is not supported', op);
+          continue;
+        }
+        if (!op.kind) {
+          console.warn('[scene-batch] skipped unsupported op', op);
+          continue;
+        }
+        const child = op.onBehalfOf ? op : { ...op, onBehalfOf: payload.onBehalfOf };
+        handleHandoff({ ...data, payload: child });
+      }
       notifySceneStateChanged('scene-batch-handoff');
       break;
     }
@@ -4968,7 +4988,8 @@ function applyOperationToScene(operation) {
       break;
     }
     case 'scene-batch': {
-      operation.actions?.forEach(action => applyOperationToScene(action));
+      const batchOps = operation.ops ?? operation.actions;
+      batchOps?.forEach(action => applyOperationToScene(action));
       notifySceneStateChanged('undo-redo-scene-batch');
       break;
     }
