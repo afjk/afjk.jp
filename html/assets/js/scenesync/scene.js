@@ -1052,7 +1052,7 @@ function lockMultiSelectedObjects() {
 }
 
 function unlockMultiSelectedObjects() {
-  for (const objectId of Array.from(multiTransformLockedObjectIds)) {
+  for (const objectId of multiTransformLockedObjectIds) {
     broadcast({ kind: 'scene-unlock', objectId });
   }
   multiTransformLockedObjectIds.clear();
