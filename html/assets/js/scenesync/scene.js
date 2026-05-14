@@ -870,7 +870,9 @@ let dragIntervalId = null;
 let dragStartState = null;
 let multiTransformPivot = null;
 let multiTransformActive = false;
-let multiTransformLastPivotPosition = null;
+let multiTransformMode = null;
+let multiTransformStartPivotMatrix = null;
+const multiTransformStartObjectMatrices = new Map();
 let multiTransformStartSnapshots = new Map();
 let multiMoveBroadcastIntervalId = null;
 let multiMovePendingOps = [];
@@ -879,7 +881,7 @@ const MULTI_MOVE_SYNC_INTERVAL_MS = 50;
 
 transformCtrl.addEventListener('objectChange', () => {
   if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
-    updateMultiMoveFromPivot();
+    updateMultiTransformFromPivot();
   }
 });
 
@@ -889,13 +891,13 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
 
   if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
     if (isDragging) {
-      beginMultiMoveHistory();
+      beginMultiTransformHistory();
       lockMultiSelectedObjects();
       ensureMultiMoveBroadcastInterval();
     } else {
       flushMultiMoveBroadcast();
       stopMultiMoveBroadcastInterval();
-      endMultiMoveHistory();
+      endMultiTransformHistory();
       unlockMultiSelectedObjects();
     }
     return;
@@ -1014,7 +1016,9 @@ function cleanupMultiTransformPivot() {
   }
 
   multiTransformActive = false;
-  multiTransformLastPivotPosition = null;
+  multiTransformMode = null;
+  multiTransformStartPivotMatrix = null;
+  multiTransformStartObjectMatrices.clear();
   multiTransformStartSnapshots.clear();
   multiMovePendingOps = [];
 }
@@ -1081,7 +1085,7 @@ function stopMultiMoveBroadcastInterval() {
   multiMoveBroadcastIntervalId = null;
 }
 
-function startMultiMoveMode() {
+function startMultiTransformMode(mode) {
   const objects = getSelectedObjects();
   if (objects.length < 2) {
     cleanupMultiTransformPivot();
@@ -1090,50 +1094,82 @@ function startMultiMoveMode() {
 
   const pivot = ensureMultiTransformPivot();
   pivot.position.copy(computeSelectionCenter(objects));
-  pivot.rotation.set(0, 0, 0);
+  pivot.quaternion.identity();
   pivot.scale.set(1, 1, 1);
   pivot.updateMatrixWorld(true);
 
-  multiTransformLastPivotPosition = pivot.position.clone();
-  multiTransformStartSnapshots = new Map();
+  multiTransformMode = mode;
   multiTransformActive = true;
+  multiTransformStartPivotMatrix = pivot.matrixWorld.clone();
+  multiTransformStartObjectMatrices.clear();
+  multiTransformStartSnapshots.clear();
 
-  transformCtrl.setMode('translate');
+  for (const obj of objects) {
+    const objectId = obj.userData?.objectId;
+    if (!objectId) continue;
+    obj.updateMatrixWorld(true);
+    multiTransformStartObjectMatrices.set(objectId, obj.matrixWorld.clone());
+  }
+
+  transformCtrl.setMode(mode);
   transformCtrl.attach(pivot);
   updateSelectionHelpers();
 }
 
-function updateMultiMoveFromPivot() {
-  if (!multiTransformPivot || !multiTransformLastPivotPosition) return;
+function updateMultiTransformFromPivot() {
+  if (!multiTransformActive || !multiTransformPivot || !multiTransformStartPivotMatrix) return;
 
-  const current = multiTransformPivot.position.clone();
-  const delta = current.clone().sub(multiTransformLastPivotPosition);
-  if (delta.lengthSq() === 0) return;
+  multiTransformPivot.updateMatrixWorld(true);
+
+  // Multi-selection scale: enforce uniform scale on the pivot to avoid shear
+  // when selected objects have non-identity rotations. Non-uniform scale applied
+  // to a rotated object via matrix multiplication produces shear, which
+  // Matrix4.decompose() cannot represent faithfully.
+  if (multiTransformMode === 'scale') {
+    const s = multiTransformPivot.scale;
+    const uniform = Math.cbrt(Math.abs(s.x * s.y * s.z)) || 1;
+    s.set(uniform, uniform, uniform);
+    multiTransformPivot.updateMatrixWorld(true);
+  }
+
+  const inverseStartPivot = multiTransformStartPivotMatrix.clone().invert();
+  const deltaMatrix = multiTransformPivot.matrixWorld.clone().multiply(inverseStartPivot);
+
+  const newPosition = new THREE.Vector3();
+  const newQuaternion = new THREE.Quaternion();
+  const newScale = new THREE.Vector3();
 
   const ops = [];
-  for (const objectId of selectedObjectIds) {
-    const object = managedObjects.get(objectId);
-    if (!object) continue;
 
-    object.position.add(delta);
-    object.updateMatrixWorld(true);
+  for (const objectId of selectedObjectIds) {
+    const obj = managedObjects.get(objectId);
+    const startMatrix = multiTransformStartObjectMatrices.get(objectId);
+    if (!obj || !startMatrix) continue;
+
+    const nextMatrix = deltaMatrix.clone().multiply(startMatrix);
+    nextMatrix.decompose(newPosition, newQuaternion, newScale);
+
+    obj.position.copy(newPosition);
+    obj.quaternion.copy(newQuaternion);
+    obj.scale.copy(newScale);
+    obj.updateMatrixWorld(true);
+
     ops.push({
       kind: 'scene-delta',
       objectId,
-      position: object.position.toArray(),
-      rotation: object.quaternion.toArray(),
-      scale: object.scale.toArray(),
+      position: obj.position.toArray(),
+      rotation: obj.quaternion.toArray(),
+      scale: obj.scale.toArray(),
     });
   }
 
-  multiTransformLastPivotPosition.copy(current);
   updateSelectionHelpers();
   // Replace pending ops with the latest transform snapshot in the throttle window.
   multiMovePendingOps = ops;
   ensureMultiMoveBroadcastInterval();
 }
 
-function beginMultiMoveHistory() {
+function beginMultiTransformHistory() {
   multiTransformStartSnapshots.clear();
 
   for (const object of getSelectedObjects()) {
@@ -1147,7 +1183,7 @@ function beginMultiMoveHistory() {
   }
 }
 
-function pushMultiTransformHistory(entries) {
+function pushMultiTransformHistory(entries, label = 'Transformed') {
   const forwardActions = [];
   const backwardActions = [];
 
@@ -1174,12 +1210,12 @@ function pushMultiTransformHistory(entries) {
     HistoryManager.createBatchEntry(
       forwardActions,
       backwardActions,
-      `Moved ${forwardActions.length} objects`
+      `${label} ${forwardActions.length} objects`
     )
   );
 }
 
-function endMultiMoveHistory() {
+function endMultiTransformHistory() {
   const entries = [];
 
   for (const [objectId, before] of multiTransformStartSnapshots.entries()) {
@@ -1192,7 +1228,9 @@ function endMultiMoveHistory() {
       scale: object.scale.toArray(),
     };
 
-    if (arraysEqual(before.position, after.position)) {
+    if (arraysEqual(before.position, after.position) &&
+        arraysEqual(before.rotation, after.rotation) &&
+        arraysEqual(before.scale, after.scale)) {
       continue;
     }
 
@@ -1200,8 +1238,10 @@ function endMultiMoveHistory() {
   }
 
   if (entries.length > 0) {
-    pushMultiTransformHistory(entries);
-    notifySceneStateChanged('multi-move-end');
+    const modeLabel = multiTransformMode === 'rotate' ? 'Rotated' :
+      multiTransformMode === 'scale' ? 'Scaled' : 'Moved';
+    pushMultiTransformHistory(entries, modeLabel);
+    notifySceneStateChanged(`multi-${multiTransformMode || 'transform'}-end`);
   }
 }
 
@@ -1791,12 +1831,11 @@ function broadcastUnlockForObjectId(objectId) {
 
 function updateSelectionToolbar() {
   const count = selectedObjectIds.size;
-  const isMultiSelection = count > 1;
 
   if (btnMove) btnMove.disabled = count === 0;
-  if (btnRotate) btnRotate.disabled = isMultiSelection || count === 0;
-  if (btnScale) btnScale.disabled = isMultiSelection || count === 0;
-  if (btnCopy) btnCopy.disabled = isMultiSelection || count === 0;
+  if (btnRotate) btnRotate.disabled = count === 0;
+  if (btnScale) btnScale.disabled = count === 0;
+  if (btnCopy) btnCopy.disabled = count !== 1;
   if (btnDelete) btnDelete.disabled = count === 0;
 }
 
@@ -1814,7 +1853,7 @@ function updateSelectionState(options = {}) {
   }
 
   const selectedObjects = getSelectedObjects();
-  const shouldCleanupMultiPivot = selectedObjects.length <= 1 || transformCtrl.mode !== 'translate';
+  const shouldCleanupMultiPivot = selectedObjects.length <= 1 || !['translate', 'rotate', 'scale'].includes(transformCtrl.mode);
   if (shouldCleanupMultiPivot) {
     cleanupMultiTransformPivot();
   }
@@ -1850,8 +1889,8 @@ function updateSelectionState(options = {}) {
     showToolbar();
     updateToolbarActive(transformCtrl.mode);
   } else {
-    if (transformCtrl.mode === 'translate') {
-      startMultiMoveMode();
+    if (['translate', 'rotate', 'scale'].includes(transformCtrl.mode)) {
+      startMultiTransformMode(transformCtrl.mode);
     } else if (transformCtrl.object) {
       transformCtrl.detach();
     }
@@ -2656,15 +2695,9 @@ function updateToolbarActive(mode) {
 }
 
 function setTransformMode(mode) {
-  const isMultiSelection = selectedObjectIds.size > 1;
-
-  if (isMultiSelection && mode !== 'translate') {
-    return;
-  }
-
-  if (mode === 'translate' && isMultiSelection) {
-    startMultiMoveMode();
-    updateToolbarActive('translate');
+  if (selectedObjectIds.size > 1 && ['translate', 'rotate', 'scale'].includes(mode)) {
+    startMultiTransformMode(mode);
+    updateToolbarActive(mode);
     return;
   }
 
