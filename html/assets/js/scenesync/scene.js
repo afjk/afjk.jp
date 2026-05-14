@@ -1121,6 +1121,17 @@ function updateMultiTransformFromPivot() {
 
   multiTransformPivot.updateMatrixWorld(true);
 
+  // Multi-selection scale: enforce uniform scale on the pivot to avoid shear
+  // when selected objects have non-identity rotations. Non-uniform scale applied
+  // to a rotated object via matrix multiplication produces shear, which
+  // Matrix4.decompose() cannot represent faithfully.
+  if (multiTransformMode === 'scale') {
+    const s = multiTransformPivot.scale;
+    const uniform = Math.cbrt(Math.abs(s.x * s.y * s.z)) || 1;
+    s.set(uniform, uniform, uniform);
+    multiTransformPivot.updateMatrixWorld(true);
+  }
+
   const inverseStartPivot = multiTransformStartPivotMatrix.clone().invert();
   const deltaMatrix = multiTransformPivot.matrixWorld.clone().multiply(inverseStartPivot);
 
