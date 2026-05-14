@@ -1024,6 +1024,7 @@ function broadcastSceneBatchOrDeltas(ops, reason = 'batch') {
   broadcast({
     kind: 'scene-batch',
     ops,
+    // `actions` is consumed by existing Scene Sync handlers; `ops` keeps parity with newer payloads.
     actions: ops,
     reason,
     sentAt: Date.now(),
@@ -1141,11 +1142,7 @@ function endMultiMoveHistory() {
       scale: object.scale.toArray(),
     };
 
-    if (
-      arraysEqual(before.position, after.position)
-      && arraysEqual(before.rotation, after.rotation)
-      && arraysEqual(before.scale, after.scale)
-    ) {
+    if (arraysEqual(before.position, after.position)) {
       continue;
     }
 
