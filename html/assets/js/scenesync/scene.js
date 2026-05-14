@@ -868,10 +868,30 @@ scene.add(transformCtrl.getHelper());
 let isDragging = false;
 let dragIntervalId = null;
 let dragStartState = null;
+let multiTransformPivot = null;
+let multiTransformActive = false;
+let multiTransformStartPivotPosition = null;
+let multiTransformLastPivotPosition = null;
+let multiTransformStartSnapshots = new Map();
+
+transformCtrl.addEventListener('objectChange', () => {
+  if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
+    updateMultiMoveFromPivot();
+  }
+});
 
 transformCtrl.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
   isDragging = e.value;
+
+  if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
+    if (isDragging) {
+      beginMultiMoveHistory();
+    } else {
+      endMultiMoveHistory();
+    }
+    return;
+  }
 
   if (isDragging) {
     const obj = transformCtrl.object;
@@ -945,6 +965,197 @@ function sendSelectedDelta() {
     scale: scl,
   });
   notifySceneStateChanged('selected-transform-sent');
+}
+
+function computeSelectionCenter(objects) {
+  const center = new THREE.Vector3();
+  if (!objects.length) return center;
+
+  for (const object of objects) {
+    center.add(object.position);
+  }
+
+  center.multiplyScalar(1 / objects.length);
+  return center;
+}
+
+function ensureMultiTransformPivot() {
+  if (multiTransformPivot) return multiTransformPivot;
+
+  multiTransformPivot = new THREE.Object3D();
+  multiTransformPivot.name = 'Multi Selection Pivot';
+  multiTransformPivot.userData.role = 'multi-transform-pivot';
+  multiTransformPivot.userData._temporary = true;
+  multiTransformPivot.userData.nonSerializable = true;
+  scene.add(multiTransformPivot);
+  return multiTransformPivot;
+}
+
+function cleanupMultiTransformPivot() {
+  if (transformCtrl?.object === multiTransformPivot) {
+    transformCtrl.detach();
+  }
+
+  if (multiTransformPivot) {
+    scene.remove(multiTransformPivot);
+    multiTransformPivot = null;
+  }
+
+  multiTransformActive = false;
+  multiTransformStartPivotPosition = null;
+  multiTransformLastPivotPosition = null;
+  multiTransformStartSnapshots.clear();
+}
+
+function updateSelectionHelpers() {
+  for (const helper of selectionHelpers.values()) {
+    helper.update?.();
+  }
+}
+
+function broadcastSceneBatchOrDeltas(ops, reason = 'batch') {
+  if (!ops?.length) return;
+
+  if (ops.length === 1) {
+    broadcast(ops[0]);
+    return;
+  }
+
+  broadcast({
+    kind: 'scene-batch',
+    ops,
+    actions: ops,
+    reason,
+    sentAt: Date.now(),
+  });
+}
+
+function startMultiMoveMode() {
+  const objects = getSelectedObjects();
+  if (objects.length < 2) {
+    cleanupMultiTransformPivot();
+    return;
+  }
+
+  const pivot = ensureMultiTransformPivot();
+  pivot.position.copy(computeSelectionCenter(objects));
+  pivot.rotation.identity();
+  pivot.scale.set(1, 1, 1);
+  pivot.updateMatrixWorld(true);
+
+  multiTransformStartPivotPosition = pivot.position.clone();
+  multiTransformLastPivotPosition = pivot.position.clone();
+  multiTransformStartSnapshots = new Map();
+  multiTransformActive = true;
+
+  transformCtrl.setMode('translate');
+  transformCtrl.attach(pivot);
+  updateSelectionHelpers();
+}
+
+function updateMultiMoveFromPivot() {
+  if (!multiTransformPivot || !multiTransformLastPivotPosition) return;
+
+  const current = multiTransformPivot.position.clone();
+  const delta = current.clone().sub(multiTransformLastPivotPosition);
+  if (delta.lengthSq() === 0) return;
+
+  const ops = [];
+  for (const objectId of selectedObjectIds) {
+    const object = managedObjects.get(objectId);
+    if (!object) continue;
+
+    object.position.add(delta);
+    object.updateMatrixWorld(true);
+    ops.push({
+      kind: 'scene-delta',
+      objectId,
+      position: object.position.toArray(),
+      rotation: object.quaternion.toArray(),
+      scale: object.scale.toArray(),
+    });
+  }
+
+  multiTransformLastPivotPosition.copy(current);
+  updateSelectionHelpers();
+  broadcastSceneBatchOrDeltas(ops, 'multi-move');
+  notifySceneStateChanged('multi-move');
+}
+
+function beginMultiMoveHistory() {
+  multiTransformStartSnapshots.clear();
+
+  for (const object of getSelectedObjects()) {
+    const objectId = object.userData?.objectId;
+    if (!objectId) continue;
+    multiTransformStartSnapshots.set(objectId, {
+      position: object.position.toArray(),
+      rotation: object.quaternion.toArray(),
+      scale: object.scale.toArray(),
+    });
+  }
+}
+
+function pushMultiTransformHistory(entries) {
+  const forwardActions = [];
+  const backwardActions = [];
+
+  for (const entry of entries) {
+    forwardActions.push({
+      kind: 'scene-delta',
+      objectId: entry.objectId,
+      position: entry.after.position,
+      rotation: entry.after.rotation,
+      scale: entry.after.scale,
+    });
+    backwardActions.push({
+      kind: 'scene-delta',
+      objectId: entry.objectId,
+      position: entry.before.position,
+      rotation: entry.before.rotation,
+      scale: entry.before.scale,
+    });
+  }
+
+  if (!forwardActions.length) return;
+
+  presenceState.historyManager?.push(
+    HistoryManager.createBatchEntry(
+      forwardActions,
+      backwardActions,
+      `Moved ${forwardActions.length} objects`
+    )
+  );
+}
+
+function endMultiMoveHistory() {
+  const entries = [];
+
+  for (const [objectId, before] of multiTransformStartSnapshots.entries()) {
+    const object = managedObjects.get(objectId);
+    if (!object) continue;
+
+    const after = {
+      position: object.position.toArray(),
+      rotation: object.quaternion.toArray(),
+      scale: object.scale.toArray(),
+    };
+
+    if (
+      arraysEqual(before.position, after.position)
+      && arraysEqual(before.rotation, after.rotation)
+      && arraysEqual(before.scale, after.scale)
+    ) {
+      continue;
+    }
+
+    entries.push({ objectId, before, after });
+  }
+
+  if (entries.length > 0) {
+    pushMultiTransformHistory(entries);
+    notifySceneStateChanged('multi-move-end');
+  }
 }
 
 // ── サンプルオブジェクト ──────────────────────────────────
@@ -1505,6 +1716,7 @@ function isSelectableObject(object) {
   if (!object) return false;
 
   const userData = object.userData || {};
+  if (userData.role === 'multi-transform-pivot') return false;
   if (userData._temporary) return false;
   if (isPastePreviewUserData(userData)) return false;
   if (userData._isLoadingOverlay) return false;
@@ -1532,11 +1744,12 @@ function broadcastUnlockForObjectId(objectId) {
 
 function updateSelectionToolbar() {
   const count = selectedObjectIds.size;
+  const isMultiSelection = count > 1;
 
-  if (btnMove) btnMove.disabled = count !== 1;
-  if (btnRotate) btnRotate.disabled = count !== 1;
-  if (btnScale) btnScale.disabled = count !== 1;
-  if (btnCopy) btnCopy.disabled = count !== 1;
+  if (btnMove) btnMove.disabled = count === 0;
+  if (btnRotate) btnRotate.disabled = isMultiSelection || count === 0;
+  if (btnScale) btnScale.disabled = isMultiSelection || count === 0;
+  if (btnCopy) btnCopy.disabled = isMultiSelection || count === 0;
   if (btnDelete) btnDelete.disabled = count === 0;
 }
 
@@ -1554,6 +1767,11 @@ function updateSelectionState(options = {}) {
   }
 
   const selectedObjects = getSelectedObjects();
+  const shouldCleanupMultiPivot = selectedObjects.length <= 1 || transformCtrl.mode !== 'translate';
+  if (shouldCleanupMultiPivot) {
+    cleanupMultiTransformPivot();
+  }
+
   const attachedObject = transformCtrl.object;
   const attachedObjectId = attachedObject?.userData?.objectId || null;
   const nextSingleObject = selectedObjects.length === 1 ? selectedObjects[0] : null;
@@ -1585,7 +1803,11 @@ function updateSelectionState(options = {}) {
     showToolbar();
     updateToolbarActive(transformCtrl.mode);
   } else {
-    if (transformCtrl.object) transformCtrl.detach();
+    if (transformCtrl.mode === 'translate') {
+      startMultiMoveMode();
+    } else if (transformCtrl.object) {
+      transformCtrl.detach();
+    }
     showToolbar();
   }
 
@@ -2326,6 +2548,8 @@ function deleteObjectById(objectId, options = {}) {
 }
 
 function deleteSelectedObjects() {
+  cleanupMultiTransformPivot();
+
   const ids = Array.from(selectedObjectIds);
 
   if (ids.length === 0) {
@@ -2384,19 +2608,34 @@ function updateToolbarActive(mode) {
   if (mode === 'scale') btnScale?.classList.add('active');
 }
 
+function setTransformMode(mode) {
+  const isMultiSelection = selectedObjectIds.size > 1;
+
+  if (isMultiSelection && mode !== 'translate') {
+    return;
+  }
+
+  if (mode === 'translate' && isMultiSelection) {
+    startMultiMoveMode();
+    updateToolbarActive('translate');
+    return;
+  }
+
+  cleanupMultiTransformPivot();
+  transformCtrl.setMode(mode);
+  updateToolbarActive(mode);
+}
+
 btnMove?.addEventListener('click', () => {
-  transformCtrl.setMode('translate');
-  updateToolbarActive('translate');
+  setTransformMode('translate');
 });
 
 btnRotate?.addEventListener('click', () => {
-  transformCtrl.setMode('rotate');
-  updateToolbarActive('rotate');
+  setTransformMode('rotate');
 });
 
 btnScale?.addEventListener('click', () => {
-  transformCtrl.setMode('scale');
-  updateToolbarActive('scale');
+  setTransformMode('scale');
 });
 
 btnCopy?.addEventListener('click', () => {
@@ -2491,9 +2730,9 @@ window.addEventListener('keydown', (e) => {
   }
 
   switch (key) {
-    case 'w': transformCtrl.setMode('translate'); break;
-    case 'e': transformCtrl.setMode('rotate'); break;
-    case 'r': transformCtrl.setMode('scale'); break;
+    case 'w': setTransformMode('translate'); break;
+    case 'e': setTransformMode('rotate'); break;
+    case 'r': setTransformMode('scale'); break;
     case 'escape':
       if (pastePreviewMode) {
         e.preventDefault();
@@ -2502,11 +2741,15 @@ window.addEventListener('keydown', (e) => {
         break;
       }
       if (transformCtrl.object) {
-        broadcast({
-          kind: 'scene-unlock',
-          objectId: transformCtrl.object.userData.objectId,
-        });
+        const objectId = transformCtrl.object.userData?.objectId;
+        if (objectId) {
+          broadcast({
+            kind: 'scene-unlock',
+            objectId,
+          });
+        }
       }
+      cleanupMultiTransformPivot();
       transformCtrl.detach();
       hideToolbar();
       break;
@@ -5260,6 +5503,7 @@ const dragDropManager = new DragDropManager({
     scene.traverse((obj) => {
       if (obj.userData?.isPlacementTarget
         && obj.visible !== false
+        && obj.userData?.role !== 'multi-transform-pivot'
         && !obj.userData?._temporary
         && !isPastePreviewUserData(obj.userData)) {
         targets.push(obj);
