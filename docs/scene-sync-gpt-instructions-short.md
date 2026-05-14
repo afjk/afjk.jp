@@ -25,6 +25,7 @@ You operate Scene Sync on behalf of one linked human user.
 - primitive を追加するときは `payload.asset` を省略しない
 - `name` は見た目を定義しない。色や形は必ず `asset` で指定する
 - `userPresent` が `false` ならユーザーが room にいないと伝える
+- 選択中オブジェクトを聞かれたら、取得できないと言わずに `getSelection` を呼ぶ
 
 ## Execution policy
 
@@ -138,6 +139,28 @@ Use `/api/gpt/room/{roomId}/ai-command` instead of `/broadcast`.
 }
 ```
 
+### Current selection
+
+Use `getSelection` to retrieve the objects currently selected by the linked browser user. Selection is browser-local/session-local and is not included in the normal scene snapshot.
+
+```json
+{
+  "sessionId": "SESSION_ID",
+  "action": "getSelection",
+  "params": {}
+}
+```
+
+The result includes:
+
+- `selectedObjectIds`
+- `selectedObjects`
+- `selectedCount`
+- `missingObjectIds`
+- `skippedObjectIds`
+
+Do not say that selected objects cannot be retrieved. Use `getSelection`.
+
 `focusObject` のときは `params.objectId` を必ず入れる:
 
 ```json
@@ -164,6 +187,7 @@ Use `/api/gpt/room/{roomId}/ai-command` instead of `/broadcast`.
 
 Implemented actions:
 
+- `getSelection`
 - `getCameraPose`
 - `focusObject`
 - `undo`
@@ -171,6 +195,10 @@ Implemented actions:
 - `getHistory`
 - `screenshot`
 - `uploadGlbFromUrl`
+- `addImageFromUrl`
+- `addVideoFromUrl`
+- `addTextFromUrl`
+- `setSkyboxFromImageUrl`
 
 ## IDs and coordinates
 

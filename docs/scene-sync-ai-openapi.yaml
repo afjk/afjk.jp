@@ -183,9 +183,11 @@ paths:
       summary: Request a browser-only action from the linked peer
       description: |
         Stable AI tool mapping: `scene_sync_ai_command`.
-        Use this for browser-only actions such as camera queries, focus, undo/redo,
-        screenshots, URL-based GLB import, URL-based image/video/text import,
-        and skybox updates. For `focusObject`, always send
+        Use this for browser-only actions such as current selection queries, camera queries,
+        focus, undo/redo, screenshots, URL-based GLB import, URL-based image/video/text import,
+        and skybox updates. Use action `getSelection` to retrieve the objects currently
+        selected by the linked browser user. Selection is browser-local/session-local and
+        is not part of the shared scene snapshot. For `focusObject`, always send
         `params.objectId`. Do not call `focusObject` without an object id.
         For URL-based imports and skybox changes, confirm the result with
         `/room/{roomId}/scene` when deduplication or placement accuracy matters.
@@ -210,6 +212,7 @@ paths:
                 action:
                   type: string
                   enum:
+                    - getSelection
                     - getCameraPose
                     - focusObject
                     - undo
@@ -223,11 +226,13 @@ paths:
                     - setSkyboxFromImageUrl
                 params:
                   description: |
-                    Parameters depend on `action`. For `focusObject`, send
-                    `{ "objectId": "<target object id>" }`. For URL-based
+                    Parameters depend on `action`. For `getSelection`, send `{}`.
+                    For `focusObject`, send `{ "objectId": "<target object id>" }`.
+                    For URL-based
                     imports and skybox changes, send at least
                     `{ "url": "https://..." }`.
                   oneOf:
+                    - $ref: '#/components/schemas/GetSelectionParams'
                     - $ref: '#/components/schemas/GetCameraPoseParams'
                     - $ref: '#/components/schemas/FocusObjectParams'
                     - $ref: '#/components/schemas/UndoRedoParams'
@@ -239,6 +244,12 @@ paths:
                 targetPeerId:
                   type: string
             examples:
+              getSelection:
+                summary: Get currently selected objects in the linked browser
+                value:
+                  sessionId: v1.example
+                  action: getSelection
+                  params: {}
               focusObject:
                 summary: Focus the camera on ai-cube-1
                 value:
@@ -456,6 +467,12 @@ components:
         error:
           type: string
       additionalProperties: true
+    GetSelectionParams:
+      type: object
+      description: No parameters. Returns the currently selected Scene Sync objects in the linked browser.
+      properties: {}
+      additionalProperties: false
+      example: {}
     GetCameraPoseParams:
       type: object
       description: No parameters.
