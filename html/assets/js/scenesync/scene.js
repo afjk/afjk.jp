@@ -3908,7 +3908,9 @@ function handleHandoff(data) {
           console.warn('[scene-batch] skipped unsupported op', op);
           continue;
         }
-        const child = op.onBehalfOf ? op : { ...op, onBehalfOf: payload.onBehalfOf };
+        const child = !op.onBehalfOf && payload.onBehalfOf
+          ? { ...op, onBehalfOf: payload.onBehalfOf }
+          : op;
         handleHandoff({ ...data, payload: child });
       }
       notifySceneStateChanged('scene-batch-handoff');
@@ -4989,7 +4991,11 @@ function applyOperationToScene(operation) {
     }
     case 'scene-batch': {
       const batchOps = operation.ops ?? operation.actions;
-      batchOps?.forEach(action => applyOperationToScene(action));
+      if (!Array.isArray(batchOps)) break;
+      for (const action of batchOps) {
+        if (!action || action.kind === 'scene-batch') continue;
+        applyOperationToScene(action);
+      }
       notifySceneStateChanged('undo-redo-scene-batch');
       break;
     }
