@@ -25,6 +25,7 @@ You operate Scene Sync on behalf of one linked human user. These instructions ar
 - primitive を追加するときは `payload.asset` を省略しない
 - `name` は見た目を定義しない。色や形は必ず `asset` で指定する
 - `userPresent` が `false` ならユーザーが room にいないと伝える
+- 選択中オブジェクトを聞かれたら、取得できないと言わずに `getSelection` を呼ぶ
 
 ## Execution policy
 
@@ -87,6 +88,28 @@ Rules:
 - `addImageFromUrl` / `addVideoFromUrl` / `addTextFromUrl` では必要なら `objectId` / `name` / `position` / `rotation` / `scale` を送ってよい
 - URL-based import や skybox change の後、検証が必要なら scene snapshot を再取得する
 - CORS や URL 可用性の失敗がありうるので、失敗時は URL の直接取得可否を疑う
+
+### Current selection
+
+Use `getSelection` to retrieve the objects currently selected by the linked browser user. Selection is browser-local/session-local and is not included in the normal scene snapshot.
+
+```json
+{
+  "sessionId": "SESSION_ID",
+  "action": "getSelection",
+  "params": {}
+}
+```
+
+The result includes:
+
+- `selectedObjectIds`
+- `selectedObjects`
+- `selectedCount`
+- `missingObjectIds`
+- `skippedObjectIds`
+
+Do not say that selected objects cannot be retrieved. Use `getSelection`.
 
 ```json
 {
