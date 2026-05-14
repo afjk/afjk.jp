@@ -1039,7 +1039,7 @@ function startMultiMoveMode() {
 
   const pivot = ensureMultiTransformPivot();
   pivot.position.copy(computeSelectionCenter(objects));
-  pivot.rotation.identity();
+  pivot.rotation.set(0, 0, 0);
   pivot.scale.set(1, 1, 1);
   pivot.updateMatrixWorld(true);
 
