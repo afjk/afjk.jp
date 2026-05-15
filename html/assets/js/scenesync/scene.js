@@ -1384,12 +1384,8 @@ function ensureObjectRuntime(obj) {
 }
 
 function isRuntimeFrozenForSelection(objectId) {
-  const obj = managedObjects.get(objectId);
-  if (!obj) return false;
-
-  // Prefer existing selected object tracking if available.
-  // Fallback: transformCtrl.object === obj.
-  return transformCtrl?.object === obj;
+  if (!objectId) return false;
+  return selectedObjectIds.has(objectId);
 }
 
 function getObjectRuntimeTime(objectId, now = performance.now()) {
@@ -1437,16 +1433,18 @@ function resetObjectRuntimeOrigin(objectId, now = performance.now()) {
   obj.userData.runtime = runtime;
 }
 
-let previousSelectedRuntimeObjectId = null;
+let previousSelectedRuntimeObjectIds = new Set();
 
 function updateRuntimeSelectionTransition() {
-  const current = transformCtrl?.object?.userData?.objectId || null;
+  const current = new Set(selectedObjectIds);
 
-  if (previousSelectedRuntimeObjectId && previousSelectedRuntimeObjectId !== current) {
-    resetObjectRuntimeOrigin(previousSelectedRuntimeObjectId);
+  for (const objectId of previousSelectedRuntimeObjectIds) {
+    if (!current.has(objectId)) {
+      resetObjectRuntimeOrigin(objectId);
+    }
   }
 
-  previousSelectedRuntimeObjectId = current;
+  previousSelectedRuntimeObjectIds = current;
 }
 
 // ── ロック表示 ──────────────────────────────────────────
@@ -1817,7 +1815,9 @@ function updateObjectGlbAnimations(now = performance.now()) {
     const clip = entry.clips[entry.clipIndex] || entry.clips[0];
     if (!clip) continue;
 
-    const t = getObjectRuntimeTime(objectId, now);
+    const baseTime = getObjectRuntimeTime(objectId, now);
+    const animationSpeed = Number.isFinite(state.speed) ? state.speed : 1;
+    const t = baseTime * animationSpeed;
     const duration = clip.duration || 1;
     const clipTime = state.mode === 'loop'
       ? t % duration
