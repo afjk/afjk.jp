@@ -1273,6 +1273,7 @@ const lockOverlays = new Map();
 const activeTransformTweens = new Map();
 const AI_TRANSFORM_TWEEN_DURATION_MS = 850;
 const AI_TRANSFORM_TWEEN_STAGGER_MS = 35;
+let aiTransformTweenSnapshotTimer = null;
 
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
@@ -1317,8 +1318,25 @@ function animateObjectTransform(objectId, obj, payload, options = {}) {
   });
 }
 
+function scheduleAiTransformTweenSnapshot() {
+  clearTimeout(aiTransformTweenSnapshotTimer);
+  // Batch near-simultaneous tween completions into one snapshot save.
+  aiTransformTweenSnapshotTimer = setTimeout(() => {
+    aiTransformTweenSnapshotTimer = null;
+    scheduleSaveRoomSnapshot('ai-transform-tween-complete');
+  }, 50);
+}
+
 function updateTransformTweens(now = performance.now()) {
+  let completedCount = 0;
+
   for (const [objectId, tween] of activeTransformTweens.entries()) {
+    // Object may be removed/replaced while tween is active; drop safely.
+    if (!tween.object || !tween.object.parent) {
+      activeTransformTweens.delete(objectId);
+      continue;
+    }
+
     const elapsed = now - tween.startTime - tween.delay;
 
     if (elapsed < 0) continue;
@@ -1351,12 +1369,19 @@ function updateTransformTweens(now = performance.now()) {
     }
 
     if (t >= 1) {
-      if (tween.hasPosition) tween.object.position.copy(tween.toPosition);
-      if (tween.hasRotation) tween.object.quaternion.copy(tween.toQuaternion);
-      if (tween.hasScale) tween.object.scale.copy(tween.toScale);
+      if (tween.hasPosition && tween.toPosition) tween.object.position.copy(tween.toPosition);
+      if (tween.hasRotation && tween.toQuaternion) tween.object.quaternion.copy(tween.toQuaternion);
+      if (tween.hasScale && tween.toScale) tween.object.scale.copy(tween.toScale);
+      tween.object.updateMatrixWorld(true);
       activeTransformTweens.delete(objectId);
+      completedCount += 1;
       console.debug('[ai-transform-tween] complete', { objectId });
     }
+  }
+
+  if (completedCount > 0) {
+    updateSelectionHelpers();
+    scheduleAiTransformTweenSnapshot();
   }
 }
 
@@ -3538,8 +3563,10 @@ function reconnectPresence() {
   clearTimeout(reconnectTimer);
   clearTimeout(saveRoomSnapshotTimer);
   clearTimeout(restoreSnapshotTimer);
+  clearTimeout(aiTransformTweenSnapshotTimer);
   saveRoomSnapshotTimer = null;
   restoreSnapshotTimer = null;
+  aiTransformTweenSnapshotTimer = null;
   reconnectTimer = null;
   if (presenceState.ws) {
     const old = presenceState.ws;
@@ -6217,6 +6244,7 @@ window.__sceneSyncDebug = {
   ...(window.__sceneSyncDebug || {}),
   dragDropManager,
   getSelection: getCurrentSelectionPayload,
+  getActiveTransformTweenCount: () => activeTransformTweens.size,
 };
 
 function isMobileUi() {
