@@ -120,9 +120,13 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
 
 ### Animated GLB Export
 
-Animation を含む GLB ファイルをエクスポートするには UnityGLTF が必要です。
+**UnityGLTF はオプショナル依存です。**
 
-#### インストール
+- Scene Sync は UnityGLTF を自動インストールしません
+- Editor で animation を含む GLB エクスポートが必要な場合のみインストールしてください
+- Runtime / Player builds は常に glTFast を使用します（UnityGLTF 不要）
+
+#### インストール（オプション）
 
 ##### manifest.json による方法
 
