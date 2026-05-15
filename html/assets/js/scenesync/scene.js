@@ -2499,10 +2499,11 @@ function cleanupPastePreview() {
   pastePreviewMode = false;
   pastePreviewPlacement = null;
 
-  if (!pastePreviewObject) return;
-  scene.remove(pastePreviewObject);
-  disposePastePreviewObject(pastePreviewObject);
-  pastePreviewObject = null;
+  if (pastePreviewObject) {
+    scene.remove(pastePreviewObject);
+    disposePastePreviewObject(pastePreviewObject);
+    pastePreviewObject = null;
+  }
 
   disposeStampPreviewGizmo();
 }
@@ -2587,15 +2588,18 @@ function ensureStampPreviewGizmo(sourceObjectId, sourceObject) {
   return stampPreviewGizmoState.object;
 }
 
-function updateStampPreviewGizmo({ sourceObjectId, sourceObject, position, quaternion, scale }) {
+function updateStampPreviewGizmo({ sourceObjectId, sourceObject, position, quaternion }) {
   const gizmo = ensureStampPreviewGizmo(sourceObjectId, sourceObject);
   if (!gizmo) return;
 
   gizmo.visible = true;
   if (position) gizmo.position.copy(position);
   if (quaternion) gizmo.quaternion.copy(quaternion);
-  if (scale) gizmo.scale.copy(scale);
-  else gizmo.scale.set(1, 1, 1);
+
+  // Box3.setFromObject(sourceObject) already includes object scale.
+  // Do not apply clipboard scale again.
+  gizmo.scale.set(1, 1, 1);
+
   gizmo.updateMatrixWorld(true);
 }
 
@@ -2701,13 +2705,11 @@ function updatePastePreviewFromPointer(event = null) {
   const sourceObject = sourceObjectId ? managedObjects.get(sourceObjectId) : null;
   const gizmoPosition = new THREE.Vector3().fromArray(pastePreviewPlacement.position);
   const gizmoQuaternion = new THREE.Quaternion().fromArray(pastePreviewPlacement.rotation);
-  const gizmoScale = new THREE.Vector3().fromArray(pastePreviewPlacement.scale);
   updateStampPreviewGizmo({
     sourceObjectId,
     sourceObject,
     position: gizmoPosition,
     quaternion: gizmoQuaternion,
-    scale: gizmoScale,
   });
 }
 
