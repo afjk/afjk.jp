@@ -215,53 +215,8 @@ namespace Afjk.SceneSync
 
         public static async Task<byte[]> ExportGameObjectAsGlb(UnityEngine.GameObject go)
         {
-            try
-            {
-                Debug.Log("[SceneSync] Export start: " + DescribeGameObject(go));
-
-                var exportSettings = new ExportSettings
-                {
-                    Format = GltfFormat.Binary,
-                    FileConflictResolution = FileConflictResolution.Overwrite,
-                };
-                var goSettings = new GameObjectExportSettings
-                {
-                    OnlyActiveInHierarchy = false,
-                };
-                var export = new GameObjectExport(exportSettings, goSettings);
-                // transform を一時的にリセットしてエクスポート
-                // glB にはメッシュ形状のみを含める（配置は wire で制御）
-                var originalPos = go.transform.position;
-                var originalRot = go.transform.rotation;
-                var originalScale = go.transform.localScale;
-
-                go.transform.position = Vector3.zero;
-                go.transform.rotation = Quaternion.identity;
-                go.transform.localScale = Vector3.one;
-
-                export.AddScene(new[] { go }, go.name);
-
-                // 復元
-                go.transform.position = originalPos;
-                go.transform.rotation = originalRot;
-                go.transform.localScale = originalScale;
-
-                using var stream = new MemoryStream();
-                var success = await export.SaveToStreamAndDispose(stream);
-                if (!success)
-                {
-                    Debug.LogWarning("[SceneSync] GLB export returned false: " + DescribeGameObject(go));
-                    return null;
-                }
-
-                Debug.Log("[SceneSync] Export success: name=" + go.name + ", bytes=" + stream.Length);
-                return stream.ToArray();
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning("[SceneSync] Export failed: " + DescribeGameObject(go) + "\n" + ex);
-                return null;
-            }
+            GlbExporter.ConfiguredBackend = SceneSyncGlbExportBackend.GltfFast;
+            return await GlbExporter.ExportGameObjectAsGlb(go);
         }
 
         public static async Task UploadGlb(byte[] glb, string blobBaseUrl, string path)

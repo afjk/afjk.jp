@@ -118,6 +118,38 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
    - `Auto Connect`: 起動時に自動接続する場合はチェック
 3. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
 
+### Animated GLB Export
+
+Animation を含む GLB ファイルをエクスポートするには UnityGLTF が必要です。
+
+#### インストール
+
+```json
+{
+  "dependencies": {
+    "com.unity.gltf": "2.4.0-exp.2"
+  }
+}
+```
+
+#### 有効化
+
+以下の Define を Project Settings > Player > Scripting Define Symbols に追加:
+
+```
+SCENESYNC_USE_UNITYGLTF
+```
+
+#### Export Backend 選択
+
+Window > Scene Sync の Export Settings で backend を選択:
+
+- **Auto**（デフォルト）: Animation を検出して自動選択
+  - Animation あり + UnityGLTF 利用可 → UnityGLTF
+  - Animation なし or UnityGLTF 未インストール → glTFast
+- **glTFast**: 常に glTFast を使用（Animation 非対応）
+- **UnityGltf**: 常に UnityGLTF を使用（Editor のみ）
+
 ## 技術仕様
 
 詳細は [docs/scene-sync-spec.md](../../docs/scene-sync-spec.md) を参照。
