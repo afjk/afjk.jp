@@ -1268,6 +1268,98 @@ const locks = new Map();
 // objectId → wireframe mesh
 const lockOverlays = new Map();
 
+// ── トランスフォームツイーン（AI/GPT アニメーション） ────────
+
+const activeTransformTweens = new Map();
+const AI_TRANSFORM_TWEEN_DURATION_MS = 850;
+const AI_TRANSFORM_TWEEN_STAGGER_MS = 35;
+
+function easeOutCubic(t) {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function animateObjectTransform(objectId, obj, payload, options = {}) {
+  const duration = options.duration ?? AI_TRANSFORM_TWEEN_DURATION_MS;
+  const delay = options.delay ?? 0;
+
+  const tween = {
+    objectId,
+    object: obj,
+    startTime: performance.now(),
+    duration,
+    delay,
+    hasPosition: Array.isArray(payload.position),
+    hasRotation: Array.isArray(payload.rotation),
+    hasScale: Array.isArray(payload.scale),
+    fromPosition: obj.position.clone(),
+    toPosition: Array.isArray(payload.position)
+      ? new THREE.Vector3().fromArray(payload.position)
+      : null,
+    fromQuaternion: obj.quaternion.clone(),
+    toQuaternion: Array.isArray(payload.rotation)
+      ? new THREE.Quaternion().fromArray(payload.rotation)
+      : null,
+    fromScale: obj.scale.clone(),
+    toScale: Array.isArray(payload.scale)
+      ? new THREE.Vector3().fromArray(payload.scale)
+      : null,
+  };
+
+  activeTransformTweens.set(objectId, tween);
+
+  console.debug('[ai-transform-tween] start', {
+    objectId,
+    hasPosition: tween.hasPosition,
+    hasRotation: tween.hasRotation,
+    hasScale: tween.hasScale,
+    duration,
+    delay,
+  });
+}
+
+function updateTransformTweens(now = performance.now()) {
+  for (const [objectId, tween] of activeTransformTweens.entries()) {
+    const elapsed = now - tween.startTime - tween.delay;
+
+    if (elapsed < 0) continue;
+
+    const t = Math.min(1, elapsed / tween.duration);
+    const eased = easeOutCubic(t);
+
+    if (tween.hasPosition && tween.toPosition) {
+      tween.object.position.lerpVectors(
+        tween.fromPosition,
+        tween.toPosition,
+        eased
+      );
+    }
+
+    if (tween.hasRotation && tween.toQuaternion) {
+      tween.object.quaternion.slerpQuaternions(
+        tween.fromQuaternion,
+        tween.toQuaternion,
+        eased
+      );
+    }
+
+    if (tween.hasScale && tween.toScale) {
+      tween.object.scale.lerpVectors(
+        tween.fromScale,
+        tween.toScale,
+        eased
+      );
+    }
+
+    if (t >= 1) {
+      if (tween.hasPosition) tween.object.position.copy(tween.toPosition);
+      if (tween.hasRotation) tween.object.quaternion.copy(tween.toQuaternion);
+      if (tween.hasScale) tween.object.scale.copy(tween.toScale);
+      activeTransformTweens.delete(objectId);
+      console.debug('[ai-transform-tween] complete', { objectId });
+    }
+  }
+}
+
 // ── ロック表示 ──────────────────────────────────────────
 
 function createCornerLines(obj) {
@@ -2924,6 +3016,8 @@ renderer.setAnimationLoop((time, frame) => {
     orbit.update();
   }
 
+  updateTransformTweens(time);
+
   for (const [objectId, entry] of lockOverlays) {
     if (entry.target && entry.group) {
       updateLockOverlayPosition(entry.group, entry.target);
@@ -3768,33 +3862,72 @@ function handleHandoff(data) {
       const beforePos = obj.position.toArray();
       const beforeRot = obj.quaternion.toArray();
       const beforeScl = obj.scale.toArray();
+
+      // Calculate target values for history (before animation starts)
+      const targetPos = Array.isArray(payload.position)
+        ? payload.position.slice()
+        : beforePos;
+      const targetRot = Array.isArray(payload.rotation)
+        ? payload.rotation.slice()
+        : beforeRot;
+      const targetScl = Array.isArray(payload.scale)
+        ? payload.scale.slice()
+        : beforeScl;
+
+      // Check if this should animate (AI/GPT-originated)
+      const shouldAnimateTransform =
+        Boolean(payload.onBehalfOf) ||
+        Boolean(data.from?.id?.startsWith?.('api-'));
+
+      // Apply non-transform updates immediately
       if (typeof payload.name === 'string') applyObjectName(obj, payload.name);
-      if (payload.position) obj.position.fromArray(payload.position);
-      if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
-      if (payload.scale) obj.scale.fromArray(payload.scale);
       if (typeof payload.visible === 'boolean') applyObjectVisibility(obj, payload.visible);
       if (payload.asset) {
         applyAssetDelta(obj, payload.asset);
       }
-      console.debug('[scene-delta] applied', {
-        objectId: payload.objectId,
-        position: obj.position.toArray(),
-        rotation: obj.quaternion.toArray(),
-        scale: obj.scale.toArray(),
-      });
+
+      // Handle transform updates (animated or immediate)
+      if (shouldAnimateTransform && (
+        Array.isArray(payload.position) ||
+        Array.isArray(payload.rotation) ||
+        Array.isArray(payload.scale)
+      )) {
+        const batchIndex = Number.isInteger(data.__batchIndex)
+          ? data.__batchIndex
+          : 0;
+        animateObjectTransform(payload.objectId, obj, payload, {
+          delay: batchIndex * AI_TRANSFORM_TWEEN_STAGGER_MS,
+        });
+        console.debug('[scene-delta] transform tween queued', {
+          objectId: payload.objectId,
+          targetPosition: payload.position || null,
+          targetRotation: payload.rotation || null,
+          targetScale: payload.scale || null,
+        });
+      } else {
+        // Immediate application for non-AI updates
+        if (payload.position) obj.position.fromArray(payload.position);
+        if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
+        if (payload.scale) obj.scale.fromArray(payload.scale);
+        console.debug('[scene-delta] applied', {
+          objectId: payload.objectId,
+          position: obj.position.toArray(),
+          rotation: obj.quaternion.toArray(),
+          scale: obj.scale.toArray(),
+        });
+      }
+
       if (shouldTrackHistory && isOnBehalfOf) {
-        const afterPos = obj.position.toArray();
-        const afterRot = obj.quaternion.toArray();
-        const afterScl = obj.scale.toArray();
+        // Use target values for history (even when animated)
         const historyEntry = HistoryManager.createDeltaEntry(
           payload.objectId,
           obj.userData?.name || payload.objectId,
           beforePos,
           beforeRot,
           beforeScl,
-          afterPos,
-          afterRot,
-          afterScl
+          targetPos,
+          targetRot,
+          targetScl
         );
         presenceState.historyManager.push(historyEntry);
       }
@@ -3965,7 +4098,7 @@ function handleHandoff(data) {
           hasScale: Array.isArray(child.scale),
           onBehalfOf: child.onBehalfOf || null,
         });
-        handleHandoff({ ...data, payload: child });
+        handleHandoff({ ...data, payload: child, __batchIndex: index });
       }
       notifySceneStateChanged('scene-batch-handoff');
       break;
