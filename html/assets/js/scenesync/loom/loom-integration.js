@@ -16,7 +16,6 @@ export function createSceneSyncLoomIntegration({
     getObjectRuntimeTime,
     resolveTarget: (targetId) => {
       if (!targetId) return null;
-      if (isObjectBeingEdited?.(targetId)) return null;
       return getObjectById(targetId);
     },
     isObjectBeingEdited,

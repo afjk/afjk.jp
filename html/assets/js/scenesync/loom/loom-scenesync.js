@@ -132,6 +132,7 @@ export class LoomSceneSync {
 
     this._evaluationContext = {
       scope: { object: objectId },
+      time,
       allowEditedTarget: Boolean(options.allowEditedTarget),
       reason: options.reason || 'manual',
     };
@@ -198,8 +199,14 @@ export class LoomSceneSync {
       params: [{ name: "adapterId", type: "string", default: "" }],
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
-        const t = adapter ? adapter.getServerTime() : 0;
-        return { t };
+        if (!adapter) return { t: 0 };
+
+        const contextTime = adapter._evaluationContext?.time;
+        if (Number.isFinite(contextTime)) {
+          return { t: contextTime };
+        }
+
+        return { t: adapter.getServerTime() };
       }
     });
 

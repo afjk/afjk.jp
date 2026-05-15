@@ -3439,6 +3439,8 @@ const loomIntegration = createSceneSyncLoomIntegration({
   isObjectBeingEdited: (objectId) => {
     if (!objectId) return false;
 
+    if (selectedObjectIds.has(objectId)) return true;
+
     const transformObjectId = transformCtrl.object?.userData?.objectId;
     if (transformObjectId === objectId) return true;
 
