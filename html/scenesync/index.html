@@ -462,6 +462,35 @@
     .scene-inspector-object-actions .chip {
       justify-content: center;
     }
+    .scene-inspector-animation-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .scene-inspector-control-row {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 8px;
+      align-items: center;
+      color: rgba(255,255,255,0.82);
+    }
+    .scene-inspector-number-input {
+      width: 100%;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.45);
+      color: #fff;
+      font: 12px/1.4 monospace;
+    }
+    .scene-inspector-number-input:focus {
+      border-color: rgba(68,136,255,0.5);
+      outline: none;
+    }
     .scene-inspector-body {
       flex: 1 1 auto;
       min-height: 0;
@@ -969,11 +998,33 @@
 }</pre>
       <section id="scene-inspector-object-section" class="scene-inspector-section">
         <div class="scene-inspector-section-header">
-          <div class="scene-inspector-section-title">Selected Object JSON</div>
+          <div class="scene-inspector-section-title">Selected Object</div>
           <div id="scene-inspector-object-meta" class="scene-inspector-section-meta">No object selected</div>
         </div>
-        <div id="scene-inspector-object-empty" class="scene-inspector-empty">Select an object in the scene to edit its JSON block as text.</div>
+        <div id="scene-inspector-object-empty" class="scene-inspector-empty">Select an object in the scene to view details.</div>
         <div id="scene-inspector-object-head" class="scene-inspector-object-head" hidden></div>
+
+        <div id="scene-inspector-animation-controls" class="scene-inspector-animation-controls" hidden>
+          <div class="scene-inspector-section-header">
+            <div class="scene-inspector-section-title">Animation</div>
+            <div id="scene-inspector-animation-meta" class="scene-inspector-section-meta"></div>
+          </div>
+
+          <label class="scene-inspector-control-row">
+            <span>Enabled</span>
+            <input id="scene-inspector-animation-enabled" type="checkbox">
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Clip</span>
+            <select id="scene-inspector-animation-clip" class="chip"></select>
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Speed</span>
+            <input id="scene-inspector-animation-speed" class="scene-inspector-number-input" type="number" min="0" step="0.1" value="1">
+          </label>
+        </div>
         <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
           <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
           <button id="scene-inspector-object-format" class="chip" type="button" hidden>Format JSON</button>
