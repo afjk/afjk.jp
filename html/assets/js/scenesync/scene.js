@@ -3863,6 +3863,17 @@ function handleHandoff(data) {
       const beforeRot = obj.quaternion.toArray();
       const beforeScl = obj.scale.toArray();
 
+      // Calculate target values for history (before animation starts)
+      const targetPos = Array.isArray(payload.position)
+        ? payload.position.slice()
+        : beforePos;
+      const targetRot = Array.isArray(payload.rotation)
+        ? payload.rotation.slice()
+        : beforeRot;
+      const targetScl = Array.isArray(payload.scale)
+        ? payload.scale.slice()
+        : beforeScl;
+
       // Check if this should animate (AI/GPT-originated)
       const shouldAnimateTransform =
         Boolean(payload.onBehalfOf) ||
@@ -3886,33 +3897,36 @@ function handleHandoff(data) {
             ? payload.__batchIndex * AI_TRANSFORM_TWEEN_STAGGER_MS
             : 0,
         });
+        console.debug('[scene-delta] transform tween queued', {
+          objectId: payload.objectId,
+          targetPosition: payload.position || null,
+          targetRotation: payload.rotation || null,
+          targetScale: payload.scale || null,
+        });
       } else {
         // Immediate application for non-AI updates
         if (payload.position) obj.position.fromArray(payload.position);
         if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
         if (payload.scale) obj.scale.fromArray(payload.scale);
+        console.debug('[scene-delta] applied', {
+          objectId: payload.objectId,
+          position: obj.position.toArray(),
+          rotation: obj.quaternion.toArray(),
+          scale: obj.scale.toArray(),
+        });
       }
 
-      console.debug('[scene-delta] applied', {
-        objectId: payload.objectId,
-        position: obj.position.toArray(),
-        rotation: obj.quaternion.toArray(),
-        scale: obj.scale.toArray(),
-        animated: shouldAnimateTransform,
-      });
       if (shouldTrackHistory && isOnBehalfOf) {
-        const afterPos = obj.position.toArray();
-        const afterRot = obj.quaternion.toArray();
-        const afterScl = obj.scale.toArray();
+        // Use target values for history (even when animated)
         const historyEntry = HistoryManager.createDeltaEntry(
           payload.objectId,
           obj.userData?.name || payload.objectId,
           beforePos,
           beforeRot,
           beforeScl,
-          afterPos,
-          afterRot,
-          afterScl
+          targetPos,
+          targetRot,
+          targetScl
         );
         presenceState.historyManager.push(historyEntry);
       }
