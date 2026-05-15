@@ -5470,6 +5470,22 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       : (info?.asset ? structuredClone(info.asset) : null);
     if (options.assetId) wrapper.userData.assetId = options.assetId;
 
+    const animations = Array.isArray(gltf.animations) ? gltf.animations : [];
+    const animationState = animations.length > 0
+      ? {
+          enabled: true,
+          clip: 0,
+          mode: 'loop',
+          speed: 1,
+        }
+      : null;
+
+    wrapper.userData.scenesync = {
+      ...wrapper.userData.scenesync,
+      animations,
+      animationState,
+    };
+
     if (info?.runtime) {
       wrapper.userData.runtime = {
         ...(wrapper.userData.runtime || {}),
@@ -5480,7 +5496,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
 
     if (info?.animation) {
       wrapper.userData.animationState = {
-        ...(wrapper.userData.animationState || {}),
+        ...(animationState || {}),
         ...info.animation,
       };
 
