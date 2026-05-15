@@ -514,7 +514,11 @@ export class LoomSceneSync {
         const t = this.getObjectRuntimeTime
           ? this.getObjectRuntimeTime(targetId, performance.now())
           : 0;
-        engine.evaluateAt(t);
+
+        this.evaluateObjectGraphAt(targetId, t, {
+          reason: 'graph-set-initial',
+          allowEditedTarget: false,
+        });
       }
     }
   }
