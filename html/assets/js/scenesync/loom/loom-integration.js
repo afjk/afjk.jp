@@ -5,27 +5,21 @@ export function createSceneSyncLoomIntegration({
   getObjectById,
   send,
   getServerTime,
+  getObjectRuntimeTime,
   isObjectBeingEdited,
   showToast,
 }) {
-  // TODO: Integrate Loomlet object graph evaluation with Scene Sync runtime time model.
-  // Currently Loom uses its own requestAnimationFrame loop with wall-clock time.
-  // Should be modified to:
-  // 1. Call getObjectRuntimeTime(objectId) from Scene Sync
-  // 2. Selected object graphs get t=0
-  // 3. Deselected object graphs get advancing t from runtime origin reset on deselect
-  // This will make object graph evaluation deterministic for late joiners and
-  // multi-client synchronization, consistent with GLB animation behavior.
-
   const adapter = new LoomSceneSync({
     LoomClass: Loom,
     send,
     getServerTime,
+    getObjectRuntimeTime,
     resolveTarget: (targetId) => {
       if (!targetId) return null;
       if (isObjectBeingEdited?.(targetId)) return null;
       return getObjectById(targetId);
     },
+    isObjectBeingEdited,
   });
 
   adapter.start();
@@ -63,6 +57,9 @@ export function createSceneSyncLoomIntegration({
     exportState: () => adapter.exportState(),
     importState: (state) => adapter.importState(state),
     clearObjectGraph: (objectId) => adapter.clearObjectGraph(objectId),
+    tickObjectGraphs: (now) => adapter.tickObjectGraphs(now),
+    onObjectSelected: (objectId) => adapter.onObjectSelected(objectId),
+    onObjectDeselected: (objectId) => adapter.onObjectDeselected(objectId),
     dispose,
     adapter,
   };

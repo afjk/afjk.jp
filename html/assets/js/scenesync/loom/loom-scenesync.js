@@ -28,11 +28,13 @@ const SCENESYNC_ALLOWED_NODE_TYPES = new Set([
 ]);
 
 export class LoomSceneSync {
-  constructor({ LoomClass, send, getServerTime, resolveTarget }) {
+  constructor({ LoomClass, send, getServerTime, getObjectRuntimeTime, resolveTarget, isObjectBeingEdited }) {
     this.LoomClass = LoomClass;
     this.send = send;
     this.getServerTime = getServerTime;
+    this.getObjectRuntimeTime = getObjectRuntimeTime;
     this.resolveTarget = resolveTarget;
+    this.isObjectBeingEdited = isObjectBeingEdited;
 
     // このアダプタの一意ID
     this.adapterId = `adapter-${nextAdapterId++}`;
@@ -51,6 +53,9 @@ export class LoomSceneSync {
 
     // sceneOffsetPosition の base position 管理
     this.behaviorBases = new Map();
+
+    // Evaluation context for tracking the current evaluation
+    this._evaluationContext = null;
 
     // ノード型登録（冪等性を保証）
     this._registerNodeTypes();
@@ -109,6 +114,74 @@ export class LoomSceneSync {
     }
   }
 
+  _resolveTargetWithEditGuard(targetId) {
+    if (!targetId) return null;
+
+    const allowEditedTarget = this._evaluationContext?.allowEditedTarget === true;
+
+    if (!allowEditedTarget && this.isObjectBeingEdited?.(targetId)) {
+      return null;
+    }
+
+    return this.resolveTarget(targetId);
+  }
+
+  evaluateObjectGraphAt(objectId, time, options = {}) {
+    const engine = this._objectGraphs.get(objectId);
+    if (!engine) return;
+
+    this._evaluationContext = {
+      scope: { object: objectId },
+      allowEditedTarget: Boolean(options.allowEditedTarget),
+      reason: options.reason || 'manual',
+    };
+
+    try {
+      engine.evaluateAt(time);
+    } finally {
+      this._evaluationContext = null;
+    }
+  }
+
+  tickObjectGraphs(now = performance.now()) {
+    if (!this._started) return;
+
+    for (const [objectId, engine] of this._objectGraphs.entries()) {
+      const t = this.getObjectRuntimeTime
+        ? this.getObjectRuntimeTime(objectId, now)
+        : 0;
+
+      this.evaluateObjectGraphAt(objectId, t, {
+        reason: 'runtime-tick',
+        allowEditedTarget: false,
+      });
+    }
+  }
+
+  resetBehaviorBasesForObject(objectId) {
+    const scopeKey = `object:${objectId}`;
+    for (const key of Array.from(this.behaviorBases.keys())) {
+      if (key.startsWith(`${scopeKey}:`)) {
+        this.behaviorBases.delete(key);
+      }
+    }
+  }
+
+  onObjectSelected(objectId) {
+    if (!objectId) return;
+
+    this.evaluateObjectGraphAt(objectId, 0, {
+      reason: 'selected-reset',
+      allowEditedTarget: true,
+    });
+  }
+
+  onObjectDeselected(objectId) {
+    if (!objectId) return;
+
+    this.resetBehaviorBasesForObject(objectId);
+  }
+
   _registerNodeTypes() {
     // 既にこの LoomClass で登録済みならスキップ
     if (registeredLoomClasses.has(this.LoomClass)) {
@@ -146,7 +219,7 @@ export class LoomSceneSync {
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
-        const obj = adapter.resolveTarget(params.target);
+        const obj = adapter._resolveTargetWithEditGuard(params.target);
         if (obj && obj.position && typeof obj.position.set === "function") {
           obj.position.set(inputs.x, inputs.y, inputs.z);
         }
@@ -171,7 +244,7 @@ export class LoomSceneSync {
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
-        const obj = adapter.resolveTarget(params.target);
+        const obj = adapter._resolveTargetWithEditGuard(params.target);
         if (!obj || !obj.position) return {};
 
         const basePosition = adapter._getOrCaptureBehaviorBase(params.scopeKey, params.target, obj);
@@ -202,7 +275,7 @@ export class LoomSceneSync {
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
-        const obj = adapter.resolveTarget(params.target);
+        const obj = adapter._resolveTargetWithEditGuard(params.target);
         if (obj && obj.rotation && typeof obj.rotation.set === "function") {
           obj.rotation.set(inputs.x, inputs.y, inputs.z);
         }
@@ -226,7 +299,7 @@ export class LoomSceneSync {
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
-        const obj = adapter.resolveTarget(params.target);
+        const obj = adapter._resolveTargetWithEditGuard(params.target);
         if (obj && obj.scale && typeof obj.scale.set === "function") {
           obj.scale.set(inputs.x, inputs.y, inputs.z);
         }
@@ -250,7 +323,7 @@ export class LoomSceneSync {
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
-        const obj = adapter.resolveTarget(params.target);
+        const obj = adapter._resolveTargetWithEditGuard(params.target);
 
         // Helper function to apply color to material (handles arrays and nested materials)
         const applyColorToMaterial = (material, r, g, b) => {
@@ -296,7 +369,7 @@ export class LoomSceneSync {
       evaluate: (inputs, params) => {
         const adapter = adapterRegistry.get(params.adapterId);
         if (!adapter) return {};
-        const obj = adapter.resolveTarget(params.target);
+        const obj = adapter._resolveTargetWithEditGuard(params.target);
         if (obj) {
           obj.visible = Boolean(inputs.visible);
         }
@@ -429,8 +502,12 @@ export class LoomSceneSync {
       const engine = new this.LoomClass(injectedGraph);
       this._objectGraphs.set(targetId, engine);
       this._objectGraphDefinitions.set(targetId, graphDefinition);
+
       if (this._started) {
-        engine.start();
+        const t = this.getObjectRuntimeTime
+          ? this.getObjectRuntimeTime(targetId, performance.now())
+          : 0;
+        engine.evaluateAt(t);
       }
     }
   }
@@ -483,14 +560,15 @@ export class LoomSceneSync {
   start() {
     this._started = true;
     this._sceneGraph.start();
-    for (const engine of this._objectGraphs.values()) {
-      engine.start();
-    }
+
+    // Do not call engine.start() for object graphs.
+    // Object graphs are manually ticked by Scene Sync runtime time.
   }
 
   stop() {
     this._started = false;
     this._sceneGraph.stop();
+
     for (const engine of this._objectGraphs.values()) {
       engine.stop();
     }

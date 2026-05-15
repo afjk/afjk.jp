@@ -1438,10 +1438,30 @@ let previousSelectedRuntimeObjectIds = new Set();
 function updateRuntimeSelectionTransition() {
   const current = new Set(selectedObjectIds);
 
+  // Compute newly selected and deselected objects
+  const newlySelected = [];
+  const deselected = [];
+
+  for (const objectId of current) {
+    if (!previousSelectedRuntimeObjectIds.has(objectId)) {
+      newlySelected.push(objectId);
+    }
+  }
+
   for (const objectId of previousSelectedRuntimeObjectIds) {
     if (!current.has(objectId)) {
+      deselected.push(objectId);
       resetObjectRuntimeOrigin(objectId);
     }
+  }
+
+  // Notify Loom integration of selection changes
+  for (const objectId of newlySelected) {
+    loomIntegration?.onObjectSelected?.(objectId);
+  }
+
+  for (const objectId of deselected) {
+    loomIntegration?.onObjectDeselected?.(objectId);
   }
 
   previousSelectedRuntimeObjectIds = current;
@@ -3206,6 +3226,7 @@ renderer.setAnimationLoop((time, frame) => {
 
   const now = performance.now();
   updateObjectGlbAnimations(now);
+  loomIntegration?.tickObjectGraphs?.(now);
 
   if (xrState.active) {
     updateXrGrab();
@@ -3414,6 +3435,7 @@ const loomIntegration = createSceneSyncLoomIntegration({
   getObjectById: (objectId) => managedObjects.get(objectId) || null,
   send: (payload) => broadcast(payload),
   getServerTime: () => Date.now() / 1000,
+  getObjectRuntimeTime,
   isObjectBeingEdited: (objectId) => {
     if (!objectId) return false;
 
