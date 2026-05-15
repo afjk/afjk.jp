@@ -1814,8 +1814,9 @@ function setupObjectGlbAnimation(objectId, model) {
   };
 
   const mixer = new THREE.AnimationMixer(model);
-  const clipIndex = Number.isInteger(state.clip) ? state.clip : 0;
-  const clip = clips[clipIndex] || clips[0];
+  const clipIndex = clampAnimationClipIndex(state.clip, clips.length);
+  state.clip = clipIndex;
+  const clip = clips[clipIndex];
   const action = mixer.clipAction(clip);
 
   action.reset();
@@ -1982,6 +1983,27 @@ function applyObjectAnimationDelta(obj, animationDelta) {
   };
 
   updateObjectGlbAnimationClip(obj.userData.objectId, next.clip);
+}
+
+function serializeObjectAnimationState(obj) {
+  const raw =
+    obj?.userData?.animationState ||
+    obj?.userData?.scenesync?.animationState ||
+    null;
+  if (!raw) return null;
+
+  const clips = obj?.userData?.scenesync?.animations;
+  const clipCount = Array.isArray(clips) ? clips.length : 0;
+  const clip = clampAnimationClipIndex(raw.clip, clipCount || 1);
+  const clipName = clips?.[clip]?.name || raw.clipName || null;
+
+  return {
+    enabled: raw.enabled !== false,
+    clip,
+    clipName,
+    mode: raw.mode === 'once' ? 'once' : 'loop',
+    speed: Number.isFinite(raw.speed) ? raw.speed : 1,
+  };
 }
 
 function registerLoadedGlbAnimation(objectId, model, reason = 'unknown') {
@@ -4932,7 +4954,7 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
   if (obj.userData?.role === 'paste-preview') return null;
   if (obj.userData?.role === 'placement-floor') return null;
 
-  return {
+  const result = {
     objectId,
     name: obj.userData?.name || obj.name || objectId,
     position: obj.position.toArray(),
@@ -4942,6 +4964,13 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
     metadata: obj.userData?.metadata || null,
     meshPath: obj.userData?.meshPath || obj.userData?.asset?.meshPath || null,
   };
+
+  const animation = serializeObjectAnimationState(obj);
+  if (animation) {
+    result.animation = animation;
+  }
+
+  return result;
 }
 
 function getCurrentSelectionPayload() {
@@ -7847,8 +7876,9 @@ function createCurrentSceneSnapshot() {
 
     const asset = safeCloneJson(object.userData?.asset || null);
     const metadata = safeCloneJson(object.userData?.metadata || null);
+    const animation = serializeObjectAnimationState(object);
 
-    objects.push({
+    const entry = {
       objectId,
       name: object.userData?.name || object.name || objectId,
       position: object.position.toArray(),
@@ -7858,7 +7888,13 @@ function createCurrentSceneSnapshot() {
       asset,
       meshPath: object.userData?.meshPath || asset?.meshPath || null,
       metadata,
-    });
+    };
+
+    if (animation) {
+      entry.animation = animation;
+    }
+
+    objects.push(entry);
   }
 
   return {
@@ -8047,6 +8083,10 @@ function restoreSnapshotObject(entry, options = {}) {
       restoreSource: options.source || 'indexeddb-room-snapshot',
     },
   };
+
+  if (entry.animation && typeof entry.animation === 'object') {
+    payload.animation = safeCloneJson(entry.animation);
+  }
 
   addOrUpdateObject(objectId, payload, {
     skipFallbackOnFailure: true,
