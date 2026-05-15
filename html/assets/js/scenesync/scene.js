@@ -5171,6 +5171,27 @@ function replaceManagedObject(objectId, nextObject, info) {
   applyObjectName(nextObject, info.name);
   applySceneTransform(nextObject, info);
   applyObjectVisibility(nextObject, info.visible);
+
+  if (info.runtime) {
+    nextObject.userData.runtime = {
+      ...(nextObject.userData.runtime || {}),
+      ...info.runtime,
+      startLocalTime: performance.now(),
+    };
+  }
+
+  if (info.animation) {
+    nextObject.userData.animationState = {
+      ...(nextObject.userData.animationState || {}),
+      ...info.animation,
+    };
+
+    nextObject.userData.scenesync = {
+      ...nextObject.userData.scenesync,
+      animationState: nextObject.userData.animationState,
+    };
+  }
+
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
 
