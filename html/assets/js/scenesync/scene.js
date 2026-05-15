@@ -2503,6 +2503,104 @@ function cleanupPastePreview() {
   scene.remove(pastePreviewObject);
   disposePastePreviewObject(pastePreviewObject);
   pastePreviewObject = null;
+
+  disposeStampPreviewGizmo();
+}
+
+function computeStampPreviewBoundsSize(sourceObject) {
+  const fallback = new THREE.Vector3(1, 1, 1);
+  if (!sourceObject) return fallback.clone();
+
+  const box = new THREE.Box3().setFromObject(sourceObject);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+
+  const valid =
+    Number.isFinite(size.x) &&
+    Number.isFinite(size.y) &&
+    Number.isFinite(size.z) &&
+    size.lengthSq() > 0.000001;
+
+  if (!valid) return fallback.clone();
+
+  const minSize = 0.05;
+  size.x = Math.max(size.x, minSize);
+  size.y = Math.max(size.y, minSize);
+  size.z = Math.max(size.z, minSize);
+
+  return size;
+}
+
+function createStampPreviewGizmo(size) {
+  const safeSize = size || new THREE.Vector3(1, 1, 1);
+  const geometry = new THREE.BoxGeometry(safeSize.x, safeSize.y, safeSize.z);
+  const edges = new THREE.EdgesGeometry(geometry);
+  geometry.dispose();
+
+  const material = new THREE.LineBasicMaterial({
+    color: 0x66ccff,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+  });
+
+  const gizmo = new THREE.LineSegments(edges, material);
+  gizmo.name = 'scene-sync-stamp-preview-gizmo';
+  gizmo.userData = {
+    isSceneSyncHelper: true,
+    isStampPreviewGizmo: true,
+  };
+  gizmo.raycast = () => {};
+  gizmo.renderOrder = 9999;
+  gizmo.frustumCulled = false;
+  gizmo.matrixAutoUpdate = true;
+
+  return gizmo;
+}
+
+function disposeStampPreviewGizmo() {
+  const gizmo = stampPreviewGizmoState.object;
+  if (!gizmo) return;
+
+  if (gizmo.parent) gizmo.parent.remove(gizmo);
+  gizmo.geometry?.dispose?.();
+  gizmo.material?.dispose?.();
+
+  stampPreviewGizmoState.object = null;
+  stampPreviewGizmoState.sourceObjectId = null;
+}
+
+function ensureStampPreviewGizmo(sourceObjectId, sourceObject) {
+  const size = computeStampPreviewBoundsSize(sourceObject);
+  const needsRecreate =
+    !stampPreviewGizmoState.object ||
+    stampPreviewGizmoState.sourceObjectId !== sourceObjectId;
+
+  if (needsRecreate) {
+    disposeStampPreviewGizmo();
+    stampPreviewGizmoState.object = createStampPreviewGizmo(size);
+    stampPreviewGizmoState.sourceObjectId = sourceObjectId;
+    stampPreviewGizmoState.size.copy(size);
+    scene.add(stampPreviewGizmoState.object);
+  }
+
+  return stampPreviewGizmoState.object;
+}
+
+function updateStampPreviewGizmo({ sourceObjectId, sourceObject, position, quaternion, scale }) {
+  const gizmo = ensureStampPreviewGizmo(sourceObjectId, sourceObject);
+  if (!gizmo) return;
+
+  gizmo.visible = true;
+  if (position) gizmo.position.copy(position);
+  if (quaternion) gizmo.quaternion.copy(quaternion);
+  if (scale) gizmo.scale.copy(scale);
+  else gizmo.scale.set(1, 1, 1);
+  gizmo.updateMatrixWorld(true);
+}
+
+function hideStampPreviewGizmo() {
+  if (stampPreviewGizmoState.object) stampPreviewGizmoState.object.visible = false;
 }
 
 function makeObjectTransparentPreview(root) {
@@ -2570,13 +2668,19 @@ function getPointerPlacementFromEvent(event = null) {
 function updatePastePreviewFromPointer(event = null) {
   if (!pastePreviewMode || !pastePreviewObject) return;
   const placement = getPointerPlacementFromEvent(event);
-  if (!placement?.position) return;
+  if (!placement?.position) {
+    hideStampPreviewGizmo();
+    return;
+  }
 
   const clip = sceneObjectClipboard;
   const positionArray = placement.position.toArray
     ? placement.position.toArray()
     : (Array.isArray(placement.position) ? placement.position : null);
-  if (!positionArray) return;
+  if (!positionArray) {
+    hideStampPreviewGizmo();
+    return;
+  }
 
   pastePreviewPlacement = {
     position: positionArray,
@@ -2592,6 +2696,19 @@ function updatePastePreviewFromPointer(event = null) {
   pastePreviewObject.scale.fromArray(pastePreviewPlacement.scale);
   pastePreviewObject.updateMatrixWorld(true);
   pastePreviewObject.visible = true;
+
+  const sourceObjectId = clip?.sourceObjectId;
+  const sourceObject = sourceObjectId ? managedObjects.get(sourceObjectId) : null;
+  const gizmoPosition = new THREE.Vector3().fromArray(pastePreviewPlacement.position);
+  const gizmoQuaternion = new THREE.Quaternion().fromArray(pastePreviewPlacement.rotation);
+  const gizmoScale = new THREE.Vector3().fromArray(pastePreviewPlacement.scale);
+  updateStampPreviewGizmo({
+    sourceObjectId,
+    sourceObject,
+    position: gizmoPosition,
+    quaternion: gizmoQuaternion,
+    scale: gizmoScale,
+  });
 }
 
 async function startPastePreviewMode() {
@@ -2610,6 +2727,12 @@ async function startPastePreviewMode() {
 
   pastePreviewMode = true;
   scene.add(pastePreviewObject);
+
+  const sourceObjectId = sceneObjectClipboard?.sourceObjectId;
+  const sourceObject = sourceObjectId ? managedObjects.get(sourceObjectId) : null;
+  const gizmo = ensureStampPreviewGizmo(sourceObjectId, sourceObject);
+  gizmo.visible = false;
+
   if (lastPointerEventForPastePreview) {
     updatePastePreviewFromPointer(lastPointerEventForPastePreview);
   } else {
@@ -2932,6 +3055,10 @@ function deleteObjectById(objectId, options = {}) {
   managedObjects.delete(objectId);
   selectedObjectIds.delete(objectId);
   removeSelectionHelper(objectId);
+
+  if (pastePreviewMode && sceneObjectClipboard?.sourceObjectId === objectId) {
+    cleanupPastePreview();
+  }
 
   // 履歴に追加
   if (pushHistory) {
@@ -3450,6 +3577,11 @@ let sceneObjectPasteCount = 0;
 let pastePreviewMode = false;
 let pastePreviewObject = null;
 let pastePreviewPlacement = null;
+const stampPreviewGizmoState = {
+  object: null,
+  sourceObjectId: null,
+  size: new THREE.Vector3(1, 1, 1),
+};
 const sceneInspectorState = {
   isOpen: false,
   isEditing: false,
@@ -3545,6 +3677,7 @@ function pipeUrlForRoom(code) {
 }
 
 function resetSceneState() {
+  cleanupPastePreview();
   clearSelectionHelpers();
   selectedObjectIds.clear();
   for (const tempObjectId of [...temporaryImagePreviews.keys()]) {
