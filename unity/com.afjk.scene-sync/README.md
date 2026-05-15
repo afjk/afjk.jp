@@ -124,13 +124,34 @@ Animation を含む GLB ファイルをエクスポートするには UnityGLTF 
 
 #### インストール
 
+##### manifest.json による方法
+
 ```json
 {
   "dependencies": {
-    "com.unity.gltf": "2.4.0-exp.2"
+    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git"
   }
 }
 ```
+
+バージョンを固定する場合:
+
+```json
+{
+  "dependencies": {
+    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git#release/2.14.1"
+  }
+}
+```
+
+##### Package Manager UI による方法
+
+1. **Window > Package Manager** を開く
+2. **+** ボタン > **Add package from git URL** を選択
+3. 以下を入力:
+   ```
+   https://github.com/KhronosGroup/UnityGLTF.git
+   ```
 
 #### 有効化
 
