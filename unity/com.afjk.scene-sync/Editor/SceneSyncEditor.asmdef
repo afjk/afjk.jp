@@ -4,7 +4,8 @@
   "references": [
     "glTFast",
     "glTFast.Export",
-    "com.afjk.scene-sync.Runtime"
+    "com.afjk.scene-sync.Runtime",
+    "UnityGLTFScripts"
   ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
