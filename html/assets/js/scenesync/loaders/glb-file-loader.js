@@ -82,12 +82,24 @@ export class GLBFileLoader {
       source: 'url',
     };
 
+    const animations = Array.isArray(gltf.animations) ? gltf.animations : [];
+    const animationState = animations.length > 0
+      ? {
+          enabled: true,
+          clip: 0,
+          mode: 'loop',
+          speed: 1,
+        }
+      : null;
+
     wrapper.userData = {
       ...wrapper.userData,
       dropRaycastTarget: true,
       scenesync: {
         ...wrapper.userData?.scenesync,
         glbMetadata: metadata,
+        animations,
+        animationState,
       },
     };
 

@@ -1360,6 +1360,95 @@ function updateTransformTweens(now = performance.now()) {
   }
 }
 
+// ── GLB Animation Mixers ─────────────────────────────────
+// objectId → { mixer, clips, action, clipIndex }
+const glbAnimationMixers = new Map();
+
+// ── Runtime Time Model ───────────────────────────────────
+// Selected objects evaluate at t=0 (edit mode).
+// Unselected objects advance runtime time from 0.
+
+function ensureObjectRuntime(obj) {
+  if (!obj) return null;
+
+  obj.userData.runtime = {
+    enabled: true,
+    speed: 1,
+    startLocalTime: performance.now(),
+    startServerTime: null,
+    selectedTime: 0,
+    ...(obj.userData.runtime || {}),
+  };
+
+  return obj.userData.runtime;
+}
+
+function isRuntimeFrozenForSelection(objectId) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return false;
+
+  // Prefer existing selected object tracking if available.
+  // Fallback: transformCtrl.object === obj.
+  return transformCtrl?.object === obj;
+}
+
+function getObjectRuntimeTime(objectId, now = performance.now()) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return 0;
+
+  const runtime = ensureObjectRuntime(obj);
+  if (!runtime?.enabled) return 0;
+
+  if (isRuntimeFrozenForSelection(objectId)) {
+    return runtime.selectedTime ?? 0;
+  }
+
+  const speed = Number.isFinite(runtime.speed) ? runtime.speed : 1;
+  const start = Number.isFinite(runtime.startLocalTime)
+    ? runtime.startLocalTime
+    : now;
+
+  return Math.max(0, ((now - start) / 1000) * speed);
+}
+
+// TODO: Replace local performance.now() with synchronized server time.
+// Desired deterministic model:
+//
+// selected:
+//   t = 0
+//
+// unselected:
+//   t = ((serverNow - runtime.startServerTime) / 1000) * speed
+//
+// On deselect:
+//   runtime.startServerTime = serverNow
+//
+// This should make GLB animation and Loomlet object graphs deterministic
+// for late joiners and multi-client synchronization.
+
+function resetObjectRuntimeOrigin(objectId, now = performance.now()) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return;
+
+  const runtime = ensureObjectRuntime(obj);
+  runtime.startLocalTime = now;
+  runtime.selectedTime = 0;
+
+  obj.userData.runtime = runtime;
+}
+
+let previousSelectedRuntimeObjectId = null;
+
+function updateRuntimeSelectionTransition() {
+  const current = transformCtrl?.object?.userData?.objectId || null;
+
+  if (previousSelectedRuntimeObjectId && previousSelectedRuntimeObjectId !== current) {
+    resetObjectRuntimeOrigin(previousSelectedRuntimeObjectId);
+  }
+
+  previousSelectedRuntimeObjectId = current;
+}
+
 // ── ロック表示 ──────────────────────────────────────────
 
 function createCornerLines(obj) {
@@ -1662,6 +1751,84 @@ function removeLoadingOverlay(objectId) {
   });
 
   loadingOverlays.delete(objectId);
+}
+
+// ── GLB Animation Setup and Updates ──────────────────────
+
+function setupObjectGlbAnimation(objectId, model) {
+  const clips = model.userData?.scenesync?.animations;
+  if (!Array.isArray(clips) || clips.length === 0) return;
+
+  disposeObjectGlbAnimation(objectId);
+
+  const state = {
+    enabled: true,
+    clip: 0,
+    mode: 'loop',
+    speed: 1,
+    ...(model.userData?.scenesync?.animationState || {}),
+    ...(model.userData?.animationState || {}),
+  };
+
+  const mixer = new THREE.AnimationMixer(model);
+  const clipIndex = Number.isInteger(state.clip) ? state.clip : 0;
+  const clip = clips[clipIndex] || clips[0];
+  const action = mixer.clipAction(clip);
+
+  action.reset();
+  action.setLoop(THREE.LoopRepeat, Infinity);
+  action.play();
+
+  model.userData.animationState = state;
+  model.userData.scenesync = {
+    ...model.userData.scenesync,
+    animationState: state,
+  };
+
+  ensureObjectRuntime(model);
+
+  glbAnimationMixers.set(objectId, {
+    mixer,
+    clips,
+    action,
+    clipIndex,
+  });
+}
+
+function disposeObjectGlbAnimation(objectId) {
+  const entry = glbAnimationMixers.get(objectId);
+  if (!entry) return;
+
+  entry.mixer.stopAllAction();
+  glbAnimationMixers.delete(objectId);
+}
+
+function updateObjectGlbAnimations(now = performance.now()) {
+  for (const [objectId, entry] of glbAnimationMixers) {
+    const obj = managedObjects.get(objectId);
+    if (!obj) {
+      disposeObjectGlbAnimation(objectId);
+      continue;
+    }
+
+    const state = obj.userData?.animationState || obj.userData?.scenesync?.animationState;
+    if (!state?.enabled) continue;
+
+    const clip = entry.clips[entry.clipIndex] || entry.clips[0];
+    if (!clip) continue;
+
+    const t = getObjectRuntimeTime(objectId, now);
+    const duration = clip.duration || 1;
+    const clipTime = state.mode === 'loop'
+      ? t % duration
+      : Math.min(t, duration);
+
+    entry.action.enabled = true;
+    entry.action.paused = false;
+    entry.action.time = clipTime;
+
+    entry.mixer.update(0);
+  }
 }
 
 function showTemporaryImagePreview(objectId, file, position, options = {}) {
@@ -2679,6 +2846,8 @@ function deleteObjectById(objectId, options = {}) {
   removeLockOverlay(objectId);
   locks.delete(objectId);
 
+  disposeObjectGlbAnimation(objectId);
+
   // 削除前にオブジェクト情報を保存
   const name = attached.userData.name || objectId;
   const position = attached.position.toArray();
@@ -3017,6 +3186,7 @@ renderer.setAnimationLoop((time, frame) => {
   }
 
   updateTransformTweens(time);
+  updateRuntimeSelectionTransition();
 
   for (const [objectId, entry] of lockOverlays) {
     if (entry.target && entry.group) {
@@ -3033,6 +3203,9 @@ renderer.setAnimationLoop((time, frame) => {
   for (const helper of selectionHelpers.values()) {
     helper.update?.();
   }
+
+  const now = performance.now();
+  updateObjectGlbAnimations(now);
 
   if (xrState.active) {
     updateXrGrab();
@@ -3723,6 +3896,20 @@ async function respondToSceneRequest(from) {
       entry.asset = structuredClone(obj.userData.asset);
     }
 
+    if (obj.userData.runtime) {
+      entry.runtime = {
+        enabled: obj.userData.runtime.enabled ?? true,
+        speed: obj.userData.runtime.speed ?? 1,
+        selectedTime: obj.userData.runtime.selectedTime ?? 0,
+      };
+    }
+
+    if (obj.userData.animationState || obj.userData.scenesync?.animationState) {
+      entry.animation = structuredClone(
+        obj.userData.animationState || obj.userData.scenesync.animationState
+      );
+    }
+
     objects[objectId] = entry;
   }
 
@@ -4008,6 +4195,7 @@ function handleHandoff(data) {
           applyTransform(model, payload);
         }
         managedObjects.set(payload.objectId, model);
+        setupObjectGlbAnimation(payload.objectId, model);
         notifySceneStateChanged('scene-mesh-loaded');
       }).catch((err) => {
         removeLoadingOverlay(payload.objectId);
@@ -4282,6 +4470,7 @@ async function uploadGlbFromUrl(url, params = {}) {
   model.userData.objectId = objectId;
   model.userData.name = file.name;
   managedObjects.set(model.userData.objectId, model);
+  setupObjectGlbAnimation(objectId, model);
   selectManagedObject(model);
   notifySceneStateChanged('glb-uploaded-from-url');
 
@@ -4709,6 +4898,26 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           model.userData.meshPath = meshPath;
           if (info.asset) model.userData.asset = structuredClone(info.asset);
 
+          if (info.runtime) {
+            model.userData.runtime = {
+              ...(model.userData.runtime || {}),
+              ...info.runtime,
+              startLocalTime: performance.now(),
+            };
+          }
+
+          if (info.animation) {
+            model.userData.animationState = {
+              ...(model.userData.animationState || {}),
+              ...info.animation,
+            };
+
+            model.userData.scenesync = {
+              ...model.userData.scenesync,
+              animationState: model.userData.animationState,
+            };
+          }
+
           if (existing) {
             model.position.copy(existing.position);
             model.quaternion.copy(existing.quaternion);
@@ -4964,6 +5173,9 @@ function replaceManagedObject(objectId, nextObject, info) {
   applyObjectVisibility(nextObject, info.visible);
   scene.add(nextObject);
   managedObjects.set(objectId, nextObject);
+
+  setupObjectGlbAnimation(objectId, nextObject);
+
   console.debug('[scene-add] applied transform', {
     objectId: nextObject.userData?.objectId || null,
     position: nextObject.position.toArray(),
@@ -5257,6 +5469,27 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       ? structuredClone(obj.userData.asset)
       : (info?.asset ? structuredClone(info.asset) : null);
     if (options.assetId) wrapper.userData.assetId = options.assetId;
+
+    if (info?.runtime) {
+      wrapper.userData.runtime = {
+        ...(wrapper.userData.runtime || {}),
+        ...info.runtime,
+        startLocalTime: performance.now(),
+      };
+    }
+
+    if (info?.animation) {
+      wrapper.userData.animationState = {
+        ...(wrapper.userData.animationState || {}),
+        ...info.animation,
+      };
+
+      wrapper.userData.scenesync = {
+        ...wrapper.userData.scenesync,
+        animationState: wrapper.userData.animationState,
+      };
+    }
+
     applyObjectName(wrapper, wrapper.userData.name);
     applyObjectVisibility(wrapper, info?.visible);
 
@@ -5266,6 +5499,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
     }
     scene.add(wrapper);
     managedObjects.set(objectId, wrapper);
+    setupObjectGlbAnimation(objectId, wrapper);
     notifySceneStateChanged('glb-blob-loaded');
   } finally {
     URL.revokeObjectURL(url);
@@ -5901,6 +6135,7 @@ const dragDropManager = new DragDropManager({
   },
   onLoaded: async (model, file) => {
     managedObjects.set(model.userData.objectId, model);
+    setupObjectGlbAnimation(model.userData.objectId, model);
     selectManagedObject(model);
     notifySelectionChanged('drag-drop-object-selected');
 
