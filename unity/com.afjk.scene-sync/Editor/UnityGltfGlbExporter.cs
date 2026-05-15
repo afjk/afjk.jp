@@ -1,11 +1,18 @@
 #if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
+using UnityEditor;
 using UnityEngine;
 using UnityGLTF;
 
 namespace Afjk.SceneSync
 {
+    [InitializeOnLoad]
     internal static class UnityGltfGlbExporter
     {
+        static UnityGltfGlbExporter()
+        {
+            GlbExporter.UnityGltfExportHandler = Export;
+        }
+
         public static byte[] Export(GameObject go)
         {
             var context = new ExportContext();

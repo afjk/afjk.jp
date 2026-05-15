@@ -18,6 +18,10 @@ namespace Afjk.SceneSync
     {
         public static SceneSyncGlbExportBackend ConfiguredBackend { get; set; } = SceneSyncGlbExportBackend.Auto;
 
+#if UNITY_EDITOR
+        public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
+#endif
+
         public static async Task<byte[]> ExportGameObjectAsGlb(GameObject go)
         {
             var backend = ResolveExportBackend(go);
@@ -40,7 +44,7 @@ namespace Afjk.SceneSync
                 {
                     return await ExportWithGltfFast(go);
                 }
-#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
+#if UNITY_EDITOR
                 else if (backend == SceneSyncGlbExportBackend.UnityGltf)
                 {
                     return await ExportWithUnityGltf(go);
@@ -62,44 +66,46 @@ namespace Afjk.SceneSync
         {
             if (ConfiguredBackend == SceneSyncGlbExportBackend.UnityGltf)
             {
-#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
-                return SceneSyncGlbExportBackend.UnityGltf;
-#else
+#if UNITY_EDITOR
+                if (UnityGltfExportHandler != null)
+                    return SceneSyncGlbExportBackend.UnityGltf;
+
                 Debug.LogWarning(
-                    "[SceneSync] UnityGLTF exporter is not enabled. " +
+                    "[SceneSync] UnityGLTF exporter handler is not registered. " +
                     "Falling back to glTFast; animations will not be exported."
                 );
-                return SceneSyncGlbExportBackend.GltfFast;
+#else
+                Debug.LogWarning(
+                    "[SceneSync] UnityGLTF export is Editor-only. " +
+                    "Falling back to glTFast in runtime/player builds."
+                );
 #endif
+                return SceneSyncGlbExportBackend.GltfFast;
             }
 
             if (ConfiguredBackend != SceneSyncGlbExportBackend.Auto)
-            {
-#if !UNITY_EDITOR
-                if (ConfiguredBackend == SceneSyncGlbExportBackend.UnityGltf)
-                {
-                    Debug.LogWarning(
-                        "[SceneSync] UnityGLTF export is Editor-only. " +
-                        "Falling back to glTFast in runtime/player builds."
-                    );
-                    return SceneSyncGlbExportBackend.GltfFast;
-                }
-#endif
                 return ConfiguredBackend;
-            }
 
-#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
+#if UNITY_EDITOR
             if (HasExportableAnimation(root))
             {
-                Debug.Log("[SceneSync] Animation detected. Using UnityGLTF exporter.");
-                return SceneSyncGlbExportBackend.UnityGltf;
+                if (UnityGltfExportHandler != null)
+                {
+                    Debug.Log("[SceneSync] Animation detected. Using UnityGLTF exporter.");
+                    return SceneSyncGlbExportBackend.UnityGltf;
+                }
+
+                Debug.LogWarning(
+                    "[SceneSync] Animation detected, but UnityGLTF exporter handler is not registered. " +
+                    "Falling back to glTFast; animations will not be exported."
+                );
             }
 #else
             if (HasExportableAnimation(root))
             {
                 Debug.LogWarning(
-                    "[SceneSync] Animation detected, but animated GLB export is Editor-only " +
-                    "and requires UnityGLTF. Falling back to glTFast; animations will not be exported."
+                    "[SceneSync] Animation detected, but animated GLB export is Editor-only. " +
+                    "Falling back to glTFast; animations will not be exported."
                 );
             }
 #endif
@@ -171,22 +177,30 @@ namespace Afjk.SceneSync
             }
         }
 
-#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
-        private static Task<byte[]> ExportWithUnityGltf(GameObject go)
+#if UNITY_EDITOR
+        private static async Task<byte[]> ExportWithUnityGltf(GameObject go)
         {
+            if (UnityGltfExportHandler == null)
+            {
+                Debug.LogWarning(
+                    "[SceneSync] UnityGLTF exporter handler is not registered. " +
+                    "Falling back to glTFast; animations will not be exported."
+                );
+                return await ExportWithGltfFast(go);
+            }
+
             try
             {
-                var bytes = UnityGltfGlbExporter.Export(go);
+                var bytes = UnityGltfExportHandler(go);
                 Debug.Log("[SceneSync] Export backend: UnityGLTF with animations.");
-                return Task.FromResult(bytes);
+                return bytes;
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] UnityGLTF export failed: " + ex.Message);
-                return Task.FromResult<byte[]>(null);
+                return await ExportWithGltfFast(go);
             }
         }
 #endif
     }
 }
-
