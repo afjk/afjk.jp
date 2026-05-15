@@ -3892,10 +3892,11 @@ function handleHandoff(data) {
         Array.isArray(payload.rotation) ||
         Array.isArray(payload.scale)
       )) {
+        const batchIndex = Number.isInteger(data.__batchIndex)
+          ? data.__batchIndex
+          : 0;
         animateObjectTransform(payload.objectId, obj, payload, {
-          delay: payload.__batchIndex
-            ? payload.__batchIndex * AI_TRANSFORM_TWEEN_STAGGER_MS
-            : 0,
+          delay: batchIndex * AI_TRANSFORM_TWEEN_STAGGER_MS,
         });
         console.debug('[scene-delta] transform tween queued', {
           objectId: payload.objectId,
@@ -4086,8 +4087,8 @@ function handleHandoff(data) {
           continue;
         }
         const child = !op.onBehalfOf && payload.onBehalfOf
-          ? { ...op, onBehalfOf: payload.onBehalfOf, __batchIndex: index }
-          : { ...op, __batchIndex: index };
+          ? { ...op, onBehalfOf: payload.onBehalfOf }
+          : op;
         console.debug('[scene-batch] applying child op', {
           index,
           kind: child.kind || null,
@@ -4097,7 +4098,7 @@ function handleHandoff(data) {
           hasScale: Array.isArray(child.scale),
           onBehalfOf: child.onBehalfOf || null,
         });
-        handleHandoff({ ...data, payload: child });
+        handleHandoff({ ...data, payload: child, __batchIndex: index });
       }
       notifySceneStateChanged('scene-batch-handoff');
       break;
