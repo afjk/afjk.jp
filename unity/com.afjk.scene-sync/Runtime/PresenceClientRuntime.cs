@@ -215,8 +215,7 @@ namespace Afjk.SceneSync
 
         public static async Task<byte[]> ExportGameObjectAsGlb(UnityEngine.GameObject go)
         {
-            GlbExporter.ConfiguredBackend = SceneSyncGlbExportBackend.GltfFast;
-            return await GlbExporter.ExportGameObjectAsGlb(go);
+            return await GlbExporter.ExportGameObjectAsGlb(go, SceneSyncGlbExportBackend.GltfFast);
         }
 
         public static async Task UploadGlb(byte[] glb, string blobBaseUrl, string path)

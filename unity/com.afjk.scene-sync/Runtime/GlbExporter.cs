@@ -21,18 +21,65 @@ namespace Afjk.SceneSync
         public static async Task<byte[]> ExportGameObjectAsGlb(GameObject go)
         {
             var backend = ResolveExportBackend(go);
-            return await ExportGameObjectAsGlbWithBackend(go, backend);
+            return await ExportGameObjectAsGlb(go, backend);
+        }
+
+        public static async Task<byte[]> ExportGameObjectAsGlb(GameObject go, SceneSyncGlbExportBackend backend)
+        {
+            var originalPos = go.transform.position;
+            var originalRot = go.transform.rotation;
+            var originalScale = go.transform.localScale;
+
+            try
+            {
+                go.transform.position = Vector3.zero;
+                go.transform.rotation = Quaternion.identity;
+                go.transform.localScale = Vector3.one;
+
+                if (backend == SceneSyncGlbExportBackend.GltfFast)
+                {
+                    return await ExportWithGltfFast(go);
+                }
+#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
+                else if (backend == SceneSyncGlbExportBackend.UnityGltf)
+                {
+                    return await ExportWithUnityGltf(go);
+                }
+#endif
+
+                Debug.LogWarning("[SceneSync] Invalid export backend: " + backend);
+                return null;
+            }
+            finally
+            {
+                go.transform.position = originalPos;
+                go.transform.rotation = originalRot;
+                go.transform.localScale = originalScale;
+            }
         }
 
         private static SceneSyncGlbExportBackend ResolveExportBackend(GameObject root)
         {
+            if (ConfiguredBackend == SceneSyncGlbExportBackend.UnityGltf)
+            {
+#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
+                return SceneSyncGlbExportBackend.UnityGltf;
+#else
+                Debug.LogWarning(
+                    "[SceneSync] UnityGLTF exporter is not enabled. " +
+                    "Falling back to glTFast; animations will not be exported."
+                );
+                return SceneSyncGlbExportBackend.GltfFast;
+#endif
+            }
+
             if (ConfiguredBackend != SceneSyncGlbExportBackend.Auto)
             {
 #if !UNITY_EDITOR
                 if (ConfiguredBackend == SceneSyncGlbExportBackend.UnityGltf)
                 {
                     Debug.LogWarning(
-                        "[SceneSync] UnityGLTF export is Editor-only for now. " +
+                        "[SceneSync] UnityGLTF export is Editor-only. " +
                         "Falling back to glTFast in runtime/player builds."
                     );
                     return SceneSyncGlbExportBackend.GltfFast;
@@ -91,44 +138,6 @@ namespace Afjk.SceneSync
             return false;
         }
 
-        private static async Task<byte[]> ExportGameObjectAsGlbWithBackend(GameObject go, SceneSyncGlbExportBackend backend)
-        {
-            try
-            {
-                var originalPos = go.transform.position;
-                var originalRot = go.transform.rotation;
-                var originalScale = go.transform.localScale;
-
-                go.transform.position = Vector3.zero;
-                go.transform.rotation = Quaternion.identity;
-                go.transform.localScale = Vector3.one;
-
-                byte[] result = null;
-
-                if (backend == SceneSyncGlbExportBackend.GltfFast)
-                {
-                    result = await ExportWithGltfFast(go);
-                }
-#if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
-                else if (backend == SceneSyncGlbExportBackend.UnityGltf)
-                {
-                    result = await ExportWithUnityGltf(go);
-                }
-#endif
-
-                go.transform.position = originalPos;
-                go.transform.rotation = originalRot;
-                go.transform.localScale = originalScale;
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning("[SceneSync] Export failed: " + ex.Message);
-                return null;
-            }
-        }
-
         private static async Task<byte[]> ExportWithGltfFast(GameObject go)
         {
             try
@@ -163,23 +172,28 @@ namespace Afjk.SceneSync
         }
 
 #if UNITY_EDITOR && SCENESYNC_USE_UNITYGLTF
-        private static async Task<byte[]> ExportWithUnityGltf(GameObject go)
+        private static Task<byte[]> ExportWithUnityGltf(GameObject go)
         {
             try
             {
-                using var stream = new MemoryStream();
-                var exporter = new UnityGLTF.Exporter(new[] { go });
-                await exporter.SaveGLB(stream, go.name);
+                var context = new UnityGLTF.ExportContext();
+                var exporter = new UnityGLTF.GLTFSceneExporter(
+                    new[] { go.transform },
+                    context
+                );
+
+                var bytes = exporter.SaveGLBToByteArray(go.name);
 
                 Debug.Log("[SceneSync] Export backend: UnityGLTF with animations.");
-                return stream.ToArray();
+                return Task.FromResult(bytes);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] UnityGLTF export failed: " + ex.Message);
-                return null;
+                return Task.FromResult<byte[]>(null);
             }
         }
 #endif
     }
 }
+
