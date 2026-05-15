@@ -1846,6 +1846,144 @@ function disposeObjectGlbAnimation(objectId) {
   glbAnimationMixers.delete(objectId);
 }
 
+function getObjectAnimationState(obj) {
+  if (!obj) return null;
+
+  const raw =
+    obj?.userData?.animationState ||
+    obj?.userData?.scenesync?.animationState ||
+    null;
+
+  if (!raw) return null;
+
+  return {
+    enabled: raw.enabled !== false,
+    clip: Number.isInteger(raw.clip) ? raw.clip : 0,
+    mode: raw.mode === 'once' ? 'once' : 'loop',
+    speed: Number.isFinite(raw.speed) ? raw.speed : 1,
+  };
+}
+
+function getObjectAnimationClipSummaries(obj) {
+  const clips = obj?.userData?.scenesync?.animations;
+  if (!Array.isArray(clips) || clips.length === 0) return [];
+
+  return clips.map((clip, index) => ({
+    index,
+    name: clip?.name || `Animation ${index}`,
+    duration: Number.isFinite(clip?.duration) ? clip.duration : null,
+  }));
+}
+
+function clampAnimationClipIndex(value, clipCount) {
+  const index = Number.parseInt(value, 10);
+  if (!Number.isFinite(index)) return 0;
+  return Math.max(0, Math.min(Math.max(0, clipCount - 1), index));
+}
+
+function updateObjectGlbAnimationClip(objectId, nextClipIndex) {
+  const entry = glbAnimationMixers.get(objectId);
+  if (!entry || !Array.isArray(entry.clips) || entry.clips.length === 0) return;
+
+  const clipIndex = clampAnimationClipIndex(nextClipIndex, entry.clips.length);
+  if (entry.clipIndex === clipIndex && entry.action) return;
+
+  if (entry.action) {
+    entry.action.stop();
+    entry.mixer.uncacheAction(entry.clips[entry.clipIndex]);
+  }
+
+  const clip = entry.clips[clipIndex];
+  const action = entry.mixer.clipAction(clip);
+  action.reset();
+  action.setLoop(THREE.LoopRepeat, Infinity);
+  action.play();
+
+  entry.action = action;
+  entry.clipIndex = clipIndex;
+
+  const obj = managedObjects.get(objectId);
+  if (obj) {
+    const current =
+      obj.userData?.animationState ||
+      obj.userData?.scenesync?.animationState ||
+      {};
+    const next = {
+      ...current,
+      clip: clipIndex,
+    };
+    obj.userData.animationState = next;
+    obj.userData.scenesync = {
+      ...(obj.userData.scenesync || {}),
+      animationState: next,
+    };
+  }
+
+  console.info('[SceneSync] GLB animation clip selected', {
+    objectId,
+    clipIndex,
+    name: clip?.name || `Animation ${clipIndex}`,
+    duration: clip?.duration || null,
+  });
+}
+
+function normalizeObjectAnimationState(current, delta, clipCount = 0) {
+  const next = {
+    enabled: current?.enabled !== false,
+    clip: Number.isInteger(current?.clip) ? current.clip : 0,
+    mode: current?.mode === 'once' ? 'once' : 'loop',
+    speed: Number.isFinite(current?.speed) ? current.speed : 1,
+  };
+
+  if (typeof delta.enabled === 'boolean') {
+    next.enabled = delta.enabled;
+  }
+
+  if (delta.clip !== undefined) {
+    const rawIndex = Number.parseInt(delta.clip, 10);
+    if (Number.isFinite(rawIndex)) {
+      const maxIndex = Math.max(0, clipCount - 1);
+      next.clip = Math.max(0, Math.min(maxIndex, rawIndex));
+    }
+  }
+
+  if (delta.mode === 'loop' || delta.mode === 'once') {
+    next.mode = delta.mode;
+  }
+
+  if (delta.speed !== undefined) {
+    const speed = Number(delta.speed);
+    if (Number.isFinite(speed) && speed >= 0) {
+      next.speed = speed;
+    }
+  }
+
+  return next;
+}
+
+function applyObjectAnimationDelta(obj, animationDelta) {
+  if (!obj || !animationDelta || typeof animationDelta !== 'object') return;
+
+  const clips = obj.userData?.scenesync?.animations;
+  const clipCount = Array.isArray(clips) ? clips.length : 0;
+  if (clipCount <= 0) return;
+
+  const current =
+    obj.userData?.animationState ||
+    obj.userData?.scenesync?.animationState ||
+    {};
+
+  const next = normalizeObjectAnimationState(current, animationDelta, clipCount);
+
+  obj.userData.animationState = next;
+  obj.userData.scenesync = {
+    ...(obj.userData.scenesync || {}),
+    animationState: next,
+  };
+
+  updateObjectGlbAnimationClip(obj.userData.objectId, next.clip);
+}
+
 function registerLoadedGlbAnimation(objectId, model, reason = 'unknown') {
   if (!objectId || !model) return;
 
@@ -1875,8 +2013,13 @@ function updateObjectGlbAnimations(now = performance.now()) {
     const state = obj.userData?.animationState || obj.userData?.scenesync?.animationState;
     if (!state?.enabled) continue;
 
+    const clipIndex = clampAnimationClipIndex(state.clip, entry.clips.length);
+    if (entry.clipIndex !== clipIndex || !entry.action) {
+      updateObjectGlbAnimationClip(objectId, clipIndex);
+    }
+
     const clip = entry.clips[entry.clipIndex] || entry.clips[0];
-    if (!clip) continue;
+    if (!clip || !entry.action) continue;
 
     const baseTime = getObjectRuntimeTime(objectId, now);
     const animationSpeed = Number.isFinite(state.speed) ? state.speed : 1;
@@ -3453,6 +3596,11 @@ const sceneInspectorObjectValidationEl = document.getElementById('scene-inspecto
 const sceneInspectorObjectDiffEl = document.getElementById('scene-inspector-object-diff');
 const sceneInspectorObjectEditorEl = document.getElementById('scene-inspector-object-editor');
 const sceneInspectorObjectOutputEl = document.getElementById('scene-inspector-object-output');
+const sceneInspectorAnimationControlsEl = document.getElementById('scene-inspector-animation-controls');
+const sceneInspectorAnimationMetaEl = document.getElementById('scene-inspector-animation-meta');
+const sceneInspectorAnimationEnabledEl = document.getElementById('scene-inspector-animation-enabled');
+const sceneInspectorAnimationClipEl = document.getElementById('scene-inspector-animation-clip');
+const sceneInspectorAnimationSpeedEl = document.getElementById('scene-inspector-animation-speed');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -5600,6 +5748,9 @@ function applyOperationToScene(operation) {
         if (operation.asset) {
           applyAssetDelta(obj, operation.asset);
         }
+        if (operation.animation && typeof operation.animation === 'object') {
+          applyObjectAnimationDelta(obj, operation.animation);
+        }
       }
       notifySceneStateChanged('undo-redo-scene-delta');
       break;
@@ -7130,6 +7281,49 @@ function resetSceneInspectorObjectEditor({ preserveObjectId = false } = {}) {
   };
 }
 
+function renderSceneInspectorAnimationControls(selectedObject) {
+  const objectId = selectedObject?.objectId;
+  const objectSnapshot = selectedObject?.objectSnapshot;
+  const clips = objectSnapshot?.animationClips || [];
+  const animation = objectSnapshot?.animation || null;
+
+  const hasAnimation = !!objectId && Array.isArray(clips) && clips.length > 0 && animation;
+
+  if (sceneInspectorAnimationControlsEl) {
+    sceneInspectorAnimationControlsEl.hidden = !hasAnimation;
+  }
+  if (!hasAnimation) return;
+
+  if (sceneInspectorAnimationMetaEl) {
+    sceneInspectorAnimationMetaEl.textContent = `${clips.length} clip(s)`;
+  }
+
+  if (sceneInspectorAnimationEnabledEl) {
+    sceneInspectorAnimationEnabledEl.checked = animation.enabled !== false;
+  }
+
+  if (sceneInspectorAnimationSpeedEl) {
+    sceneInspectorAnimationSpeedEl.value = String(Number.isFinite(animation.speed) ? animation.speed : 1);
+  }
+
+  if (sceneInspectorAnimationClipEl) {
+    const currentValue = String(animation.clip || 0);
+    sceneInspectorAnimationClipEl.innerHTML = '';
+
+    for (const clip of clips) {
+      const option = document.createElement('option');
+      option.value = String(clip.index);
+      const durationLabel = Number.isFinite(clip.duration)
+        ? ` (${clip.duration.toFixed(2)}s)`
+        : '';
+      option.textContent = `${clip.index}: ${clip.name || `Animation ${clip.index}`}${durationLabel}`;
+      sceneInspectorAnimationClipEl.appendChild(option);
+    }
+
+    sceneInspectorAnimationClipEl.value = currentValue;
+  }
+}
+
 function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   const roomLabel = snapshot.room || 'no-room';
   const selectedLabel = snapshot.selection.objectId || 'none';
@@ -7228,6 +7422,8 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (objectEditorIsEditing && sceneInspectorObjectEditorEl && sceneInspectorObjectEditorEl.value !== objectEditorState.draftText) {
     sceneInspectorObjectEditorEl.value = objectEditorState.draftText;
   }
+
+  renderSceneInspectorAnimationControls(selectedObject);
 
   const objectHasErrors = objectEditorState.validationErrors.length > 0;
   const objectSummary = objectEditorState.diffSummary;
@@ -7557,6 +7753,12 @@ function buildSceneInspectorSnapshot() {
       };
     }
 
+    const animationState = getObjectAnimationState(obj);
+    if (animationState) {
+      entry.animation = animationState;
+      entry.animationClips = getObjectAnimationClipSummaries(obj);
+    }
+
     objects[objectId] = entry;
   }
 
@@ -7852,6 +8054,35 @@ function restoreSnapshotObject(entry, options = {}) {
   });
 }
 
+function broadcastSelectedObjectAnimationDelta(delta) {
+  const snapshot = buildSceneInspectorSnapshot();
+  const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
+  if (!objectId || !objectSnapshot) {
+    showToast('オブジェクトを選択してください');
+    return;
+  }
+
+  const obj = managedObjects.get(objectId);
+  if (!obj) return;
+
+  const clips = obj.userData?.scenesync?.animations;
+  if (!Array.isArray(clips) || clips.length === 0) {
+    showToast('選択中オブジェクトに animation clip がありません');
+    return;
+  }
+
+  const operation = {
+    kind: 'scene-delta',
+    objectId,
+    animation: delta,
+  };
+
+  applyOperationToScene(operation);
+  broadcast(operation);
+  notifySceneStateChanged('scene-inspector-animation-updated');
+  notifySelectionChanged('scene-inspector-animation-updated');
+}
+
 function notifySceneStateChanged(reason) {
   notifyInspectorStateChanged(`scene:${reason}`);
   syncSceneUiState();
@@ -8064,6 +8295,26 @@ sceneInspectorObjectEditorEl?.addEventListener('keydown', (event) => {
     tryExitSceneInspectorObjectEditMode();
   }
 });
+
+sceneInspectorAnimationEnabledEl?.addEventListener('change', () => {
+  broadcastSelectedObjectAnimationDelta({
+    enabled: !!sceneInspectorAnimationEnabledEl.checked,
+  });
+});
+
+sceneInspectorAnimationClipEl?.addEventListener('change', () => {
+  broadcastSelectedObjectAnimationDelta({
+    clip: Number.parseInt(sceneInspectorAnimationClipEl.value, 10),
+    mode: 'loop',
+  });
+});
+
+sceneInspectorAnimationSpeedEl?.addEventListener('change', () => {
+  broadcastSelectedObjectAnimationDelta({
+    speed: Number(sceneInspectorAnimationSpeedEl.value),
+  });
+});
+
 pairingDialog?.addEventListener('click', (event) => {
   if (event.target === pairingDialog) {
     cancelPairing();
