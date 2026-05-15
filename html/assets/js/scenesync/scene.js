@@ -1846,7 +1846,7 @@ function disposeObjectGlbAnimation(objectId) {
   glbAnimationMixers.delete(objectId);
 }
 
-function registerGlbObject(objectId, model, reason = 'unknown') {
+function registerLoadedGlbAnimation(objectId, model, reason = 'unknown') {
   if (!objectId || !model) return;
 
   model.userData.objectId = objectId;
@@ -4263,7 +4263,7 @@ function handleHandoff(data) {
         } else {
           applyTransform(model, payload);
         }
-        registerGlbObject(payload.objectId, model, 'scene-mesh');
+        registerLoadedGlbAnimation(payload.objectId, model, 'scene-mesh');
         notifySceneStateChanged('scene-mesh-loaded');
       }).catch((err) => {
         removeLoadingOverlay(payload.objectId);
@@ -5603,7 +5603,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       scene.remove(obj);
     }
     scene.add(wrapper);
-    registerGlbObject(objectId, wrapper, 'glb-blob-loaded');
+    registerLoadedGlbAnimation(objectId, wrapper, 'glb-blob-loaded');
     notifySceneStateChanged('glb-blob-loaded');
   } finally {
     URL.revokeObjectURL(url);
