@@ -34,6 +34,12 @@ glB メッシュデータは presence-server の blob store に一度アップ�
 
 ---
 
+## Related specs
+
+- [Runtime Time Model](./scene-sync-runtime-time-model.md)
+
+---
+
 ## REST API
 
 presence-server に HTTP エンドポイントを追加し、外部ツール（Claude Code、ChatGPT GPTs、MCP 等）から
