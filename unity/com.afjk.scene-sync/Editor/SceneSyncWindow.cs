@@ -202,6 +202,9 @@ namespace Afjk.SceneSync.Editor
             DrawActionsSection();
             GUILayout.Space(8);
 
+            DrawExportSettingsSection();
+            GUILayout.Space(8);
+
             DrawSetupSection();
             GUILayout.Space(8);
 
@@ -392,6 +395,25 @@ namespace Afjk.SceneSync.Editor
                 ShowSceneSyncGizmos = showSceneSyncGizmos;
                 SceneView.RepaintAll();
             }
+        }
+
+        private void DrawExportSettingsSection()
+        {
+            GUILayout.Label("Export Settings", EditorStyles.boldLabel);
+
+            var currentBackend = GlbExporter.ConfiguredBackend;
+            var newBackend = (SceneSyncGlbExportBackend)EditorGUILayout.EnumPopup("GLB Export Backend", currentBackend);
+            if (newBackend != currentBackend)
+            {
+                GlbExporter.ConfiguredBackend = newBackend;
+            }
+
+            EditorGUILayout.HelpBox(
+                "Auto: Detects animations and uses UnityGLTF if available\n" +
+                "glTFast: Always use glTFast (no animations)\n" +
+                "UnityGltf: Always use UnityGLTF (Editor-only)",
+                MessageType.Info
+            );
         }
 
         private static void MarkManagerDirty(SceneSyncManager manager)

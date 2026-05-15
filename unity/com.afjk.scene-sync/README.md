@@ -118,6 +118,63 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
    - `Auto Connect`: 起動時に自動接続する場合はチェック
 3. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
 
+### Animated GLB Export
+
+**UnityGLTF はオプショナル依存です。**
+
+- Scene Sync は UnityGLTF を自動インストールしません
+- Editor で animation を含む GLB エクスポートが必要な場合のみインストールしてください
+- Runtime / Player builds は常に glTFast を使用します（UnityGLTF 不要）
+
+#### インストール（オプション）
+
+##### manifest.json による方法
+
+```json
+{
+  "dependencies": {
+    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git"
+  }
+}
+```
+
+バージョンを固定する場合:
+
+```json
+{
+  "dependencies": {
+    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git#release/2.14.1"
+  }
+}
+```
+
+##### Package Manager UI による方法
+
+1. **Window > Package Manager** を開く
+2. **+** ボタン > **Add package from git URL** を選択
+3. 以下を入力:
+   ```
+   https://github.com/KhronosGroup/UnityGLTF.git
+   ```
+
+#### 有効化
+
+以下の Define を Project Settings > Player > Scripting Define Symbols に追加:
+
+```
+SCENESYNC_USE_UNITYGLTF
+```
+
+#### Export Backend 選択
+
+Window > Scene Sync の Export Settings で backend を選択:
+
+- **Auto**（デフォルト）: Animation を検出して自動選択
+  - Animation あり + UnityGLTF 利用可 → UnityGLTF
+  - Animation なし or UnityGLTF 未インストール → glTFast
+- **glTFast**: 常に glTFast を使用（Animation 非対応）
+- **UnityGltf**: 常に UnityGLTF を使用（Editor のみ）
+
 ## 技術仕様
 
 詳細は [docs/scene-sync-spec.md](../../docs/scene-sync-spec.md) を参照。
