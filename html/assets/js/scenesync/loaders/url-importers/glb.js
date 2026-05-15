@@ -66,8 +66,20 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
     throw new Error(`GLB ファイルの解析に失敗しました: ${err?.message || '不明なエラー'}`);
   }
 
+  const animations = Array.isArray(gltf.animations) ? gltf.animations : [];
+  const animationState = animations.length > 0
+    ? { enabled: true, clip: 0, mode: 'loop', speed: 1 }
+    : null;
+
+  gltf.scene.userData.scenesync = {
+    ...gltf.scene.userData?.scenesync,
+    animations,
+    animationState,
+  };
+
   return {
     model: gltf.scene,
+    animations,
     sizeBytes: arrayBuffer.byteLength,
     contentType,
   };
@@ -81,12 +93,40 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
  */
 export async function importGlbUrl(url, ctx) {
   try {
-    const { model } = await loadGlbFromUrl(url, { THREE: ctx.THREE, GLTFLoader: ctx.GLTFLoader });
+    const { model, animations } = await loadGlbFromUrl(url, {
+      THREE: ctx.THREE,
+      GLTFLoader: ctx.GLTFLoader,
+    });
 
     const objectId = ctx.generateObjectId('glb');
     const filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'model.glb');
     const displayName = filename.slice(0, 60) || 'model.glb';
     const spawnTransform = ctx.getSpawnTransform();
+
+    const animationState = animations.length > 0
+      ? { enabled: true, clip: 0, mode: 'loop', speed: 1 }
+      : null;
+
+    model.userData = {
+      ...model.userData,
+      scenesync: {
+        ...model.userData?.scenesync,
+        animations,
+        animationState,
+      },
+    };
+
+    if (animationState) {
+      model.userData.animationState = animationState;
+    }
+
+    if (animations.length > 0) {
+      console.info('[glb-url] animations detected', {
+        url,
+        count: animations.length,
+        names: animations.map((clip) => clip?.name || '(unnamed)'),
+      });
+    }
 
     const payload = {
       kind: 'scene-add',
@@ -97,6 +137,10 @@ export async function importGlbUrl(url, ctx) {
       scale: spawnTransform.scale,
       asset: { type: 'mesh', source: 'url', url },
     };
+
+    if (animations.length > 0) {
+      payload.animation = { enabled: true, clip: 0, mode: 'loop', speed: 1 };
+    }
 
     ctx.broadcastSceneAdd(payload);
 

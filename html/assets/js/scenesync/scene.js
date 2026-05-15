@@ -1846,6 +1846,24 @@ function disposeObjectGlbAnimation(objectId) {
   glbAnimationMixers.delete(objectId);
 }
 
+function registerGlbObject(objectId, model, reason = 'unknown') {
+  if (!objectId || !model) return;
+
+  model.userData.objectId = objectId;
+  managedObjects.set(objectId, model);
+  setupObjectGlbAnimation(objectId, model);
+
+  const clips = model.userData?.scenesync?.animations;
+  if (Array.isArray(clips) && clips.length > 0) {
+    console.info('[SceneSync] GLB animations registered', {
+      objectId,
+      reason,
+      count: clips.length,
+      names: clips.map((clip) => clip?.name || '(unnamed)'),
+    });
+  }
+}
+
 function updateObjectGlbAnimations(now = performance.now()) {
   for (const [objectId, entry] of glbAnimationMixers) {
     const obj = managedObjects.get(objectId);
@@ -4245,8 +4263,7 @@ function handleHandoff(data) {
         } else {
           applyTransform(model, payload);
         }
-        managedObjects.set(payload.objectId, model);
-        setupObjectGlbAnimation(payload.objectId, model);
+        registerGlbObject(payload.objectId, model, 'scene-mesh');
         notifySceneStateChanged('scene-mesh-loaded');
       }).catch((err) => {
         removeLoadingOverlay(payload.objectId);
@@ -5586,8 +5603,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       scene.remove(obj);
     }
     scene.add(wrapper);
-    managedObjects.set(objectId, wrapper);
-    setupObjectGlbAnimation(objectId, wrapper);
+    registerGlbObject(objectId, wrapper, 'glb-blob-loaded');
     notifySceneStateChanged('glb-blob-loaded');
   } finally {
     URL.revokeObjectURL(url);
