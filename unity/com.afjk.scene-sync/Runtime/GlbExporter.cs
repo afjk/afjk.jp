@@ -176,14 +176,7 @@ namespace Afjk.SceneSync
         {
             try
             {
-                var context = new UnityGLTF.ExportContext();
-                var exporter = new UnityGLTF.GLTFSceneExporter(
-                    new[] { go.transform },
-                    context
-                );
-
-                var bytes = exporter.SaveGLBToByteArray(go.name);
-
+                var bytes = UnityGltfGlbExporter.Export(go);
                 Debug.Log("[SceneSync] Export backend: UnityGLTF with animations.");
                 return Task.FromResult(bytes);
             }
