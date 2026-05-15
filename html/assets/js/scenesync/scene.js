@@ -1320,6 +1320,7 @@ function animateObjectTransform(objectId, obj, payload, options = {}) {
 
 function scheduleAiTransformTweenSnapshot() {
   clearTimeout(aiTransformTweenSnapshotTimer);
+  // Batch near-simultaneous tween completions into one snapshot save.
   aiTransformTweenSnapshotTimer = setTimeout(() => {
     aiTransformTweenSnapshotTimer = null;
     scheduleSaveRoomSnapshot('ai-transform-tween-complete');
@@ -1330,6 +1331,7 @@ function updateTransformTweens(now = performance.now()) {
   let completedCount = 0;
 
   for (const [objectId, tween] of activeTransformTweens.entries()) {
+    // Object may be removed/replaced while tween is active; drop safely.
     if (!tween.object || !tween.object.parent) {
       activeTransformTweens.delete(objectId);
       continue;
