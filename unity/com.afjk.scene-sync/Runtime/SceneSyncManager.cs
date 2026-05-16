@@ -1205,6 +1205,11 @@ namespace Afjk.SceneSync
                 raw, "\"assetId\":\"([^\"]+)\"");
             var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
 
+            // Extract visualBasis from asset JSON
+            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"visualBasis\":\"([^\"]+)\"");
+            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+
             // meshPath を保存
             if (!string.IsNullOrEmpty(meshPath))
             {
@@ -1242,7 +1247,7 @@ namespace Afjk.SceneSync
                 _instanceToObjectId[placeholder.GetInstanceID()] = objectId;
 
                 // 非同期でダウンロード・インポート開始
-                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis);
             }
             else
             {
@@ -1350,6 +1355,11 @@ namespace Afjk.SceneSync
                 raw, "\"assetId\":\"([^\"]+)\"");
             var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
 
+            // Extract visualBasis from asset JSON
+            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"visualBasis\":\"([^\"]+)\"");
+            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
 
@@ -1397,11 +1407,11 @@ namespace Afjk.SceneSync
                     new float[] { pos.x, pos.y, -pos.z },
                     new float[] { rot.x, rot.y, -rot.z, -rot.w },
                     new float[] { scl.x, scl.y, scl.z },
-                    assetId);
+                    assetId, visualBasis);
             }
             else
             {
-                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId, visualBasis);
             }
         }
 
@@ -1701,7 +1711,7 @@ namespace Afjk.SceneSync
 
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
-            float[] position, float[] rotation, float[] scale, string assetId = null)
+            float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null)
         {
             _knownObjectIds.Add(objectId);
 
@@ -1831,8 +1841,17 @@ namespace Afjk.SceneSync
                     // Keep the synchronized object transform on the parent and apply this asset-local
                     // correction only to the imported visual root.
                     importedGlbRoot.transform.localPosition = Vector3.zero;
-                    importedGlbRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    var shouldApplyUnityImportYawCorrection = visualBasis != "unity";
+                    importedGlbRoot.transform.localRotation = shouldApplyUnityImportYawCorrection
+                        ? Quaternion.Euler(0f, 180f, 0f)
+                        : Quaternion.identity;
                     importedGlbRoot.transform.localScale = Vector3.one;
+
+                    Debug.Log(
+                        "[SceneSync] GLB visual basis: objectId=" + objectId
+                        + ", visualBasis=" + (visualBasis ?? "web")
+                        + ", applyUnityImportYawCorrection=" + shouldApplyUnityImportYawCorrection
+                        + ", importedGlbRoot.localEulerAngles=" + importedGlbRoot.transform.localEulerAngles);
 
                     // プレースホルダーのマッピングを新オブジェクトに移動
                     _instanceToObjectId.Remove(placeholderInstanceId);
