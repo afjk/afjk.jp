@@ -2706,6 +2706,58 @@ function cloneJsonSafe(value) {
   }
 }
 
+// Unity visual basis copy rotation correction helpers
+const UNITY_VISUAL_BASIS_YAW_CORRECTION = new THREE.Quaternion()
+  .setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+
+function getSceneSyncVisualBasis(asset, metadata = null) {
+  if (asset && typeof asset.visualBasis === 'string') {
+    return asset.visualBasis;
+  }
+  if (metadata && typeof metadata.visualBasis === 'string') {
+    return metadata.visualBasis;
+  }
+  return null;
+}
+
+function hasUnityVisualBasis(asset, metadata = null) {
+  return getSceneSyncVisualBasis(asset, metadata) === 'unity';
+}
+
+function wasCopyRotationAdjustedForVisualBasis(metadata) {
+  return metadata?.sceneSyncCopyRotationAdjustedForVisualBasis === true;
+}
+
+function getCopyRotationForPayload(source, asset, metadata = null) {
+  const rotation = source.quaternion.clone();
+
+  if (
+    hasUnityVisualBasis(asset, metadata) &&
+    !wasCopyRotationAdjustedForVisualBasis(metadata)
+  ) {
+    rotation.multiply(UNITY_VISUAL_BASIS_YAW_CORRECTION);
+  }
+
+  return rotation.toArray();
+}
+
+function buildCopyMetadata(sourceMetadata, asset, sourceObjectId) {
+  const metadata = cloneJsonSafe(sourceMetadata) || {};
+
+  const nextMetadata = {
+    ...metadata,
+    copiedFrom: sourceObjectId,
+    copiedAt: Date.now(),
+  };
+
+  if (hasUnityVisualBasis(asset, metadata)) {
+    nextMetadata.visualBasis = 'unity';
+    nextMetadata.sceneSyncCopyRotationAdjustedForVisualBasis = true;
+  }
+
+  return nextMetadata;
+}
+
 function canDuplicateObject(object) {
   if (!object) return false;
 
@@ -3042,10 +3094,11 @@ function duplicateSelectedObject() {
   const sourceObjectId = source.userData.objectId;
   const newObjectId = generateObjectId('copy');
   const position = source.position.clone().add(getDuplicateOffset());
-  const quaternion = source.quaternion.clone();
   const scale = source.scale.clone();
   const asset = cloneJsonSafe(source.userData?.asset || null);
-  const metadata = cloneJsonSafe(source.userData?.metadata || null) || {};
+  const sourceMetadata = cloneJsonSafe(source.userData?.metadata || null) || {};
+  const rotation = getCopyRotationForPayload(source, asset, sourceMetadata);
+  const newMetadata = buildCopyMetadata(sourceMetadata, asset, sourceObjectId);
   const meshPath = asset?.meshPath || source.userData?.meshPath || null;
   const name = `${source.userData?.name || source.name || 'Object'} Copy`;
 
@@ -3054,15 +3107,11 @@ function duplicateSelectedObject() {
     objectId: newObjectId,
     name,
     position: position.toArray(),
-    rotation: quaternion.toArray(),
+    rotation,
     scale: scale.toArray(),
     asset,
     meshPath,
-    metadata: {
-      ...metadata,
-      copiedFrom: sourceObjectId,
-      copiedAt: Date.now(),
-    },
+    metadata: newMetadata,
   };
 
   addOrUpdateObject(newObjectId, payload, {
@@ -3081,6 +3130,14 @@ function duplicateSelectedObject() {
     )
   );
 
+  console.debug('[scene-copy] visual basis rotation', {
+    sourceObjectId,
+    visualBasis: getSceneSyncVisualBasis(asset, sourceMetadata),
+    wasAdjusted: wasCopyRotationAdjustedForVisualBasis(sourceMetadata),
+    outputRotation: rotation,
+    metadataAdjusted: newMetadata.sceneSyncCopyRotationAdjustedForVisualBasis === true,
+  });
+
   broadcast(payload);
   notifySceneStateChanged('object-copy');
   selectDuplicatedObjectWhenReady(newObjectId);
@@ -3096,16 +3153,21 @@ function copySelectedObjectToSceneClipboard() {
   }
 
   const sourceObjectId = source.userData.objectId;
+  const asset = cloneJsonSafe(source.userData?.asset || null);
+  const sourceMetadata = cloneJsonSafe(source.userData?.metadata || null) || {};
+  const metadata = buildCopyMetadata(sourceMetadata, asset, sourceObjectId);
+  const rotation = getCopyRotationForPayload(source, asset, sourceMetadata);
+
   sceneObjectClipboard = {
     schemaVersion: 1,
     copiedAt: Date.now(),
     sourceObjectId,
     name: source.userData?.name || source.name || 'Object',
-    asset: cloneJsonSafe(source.userData?.asset || null),
+    asset,
     meshPath: source.userData?.meshPath || source.userData?.asset?.meshPath || null,
-    metadata: cloneJsonSafe(source.userData?.metadata || null),
+    metadata,
     position: source.position.toArray(),
-    rotation: source.quaternion.toArray(),
+    rotation,
     scale: source.scale.toArray(),
   };
   sceneObjectPasteCount = 0;
@@ -3114,6 +3176,9 @@ function copySelectedObjectToSceneClipboard() {
   showToast?.('オブジェクトをコピーしました');
   console.debug('[scene-clipboard] copied object', {
     sourceObjectId,
+    visualBasis: getSceneSyncVisualBasis(asset, sourceMetadata),
+    wasAdjusted: wasCopyRotationAdjustedForVisualBasis(sourceMetadata),
+    outputRotation: rotation,
     assetId: sceneObjectClipboard.asset?.assetId || null,
     meshPath: sceneObjectClipboard.meshPath || null,
   });
