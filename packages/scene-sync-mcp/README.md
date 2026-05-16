@@ -10,6 +10,7 @@ Scene Sync is a real-time 3D scene synchronization system. This MCP server lets 
 - Focus the camera on objects
 - Update the scene skybox from an image URL
 - Take screenshots
+- Switch animation clips on animated GLB objects
 - Manage the link session
 
 ## Installation
@@ -340,6 +341,53 @@ Input:
 
 Returns the last N history entries from the browser.
 
+### scene_sync_set_animation_clip
+
+Switch an animated GLB object to a specific animation clip by name or index.
+
+First inspect selected object clips:
+
+````json
+{
+  "tool": "scene_sync_get_selection",
+  "arguments": {}
+}
+````
+
+Then switch clip:
+
+````json
+{
+  "tool": "scene_sync_set_animation_clip",
+  "arguments": {
+    "objectId": "minotauros-001",
+    "clipName": "laugh",
+    "mode": "loop"
+  }
+}
+````
+
+If a clip name is ambiguous, for example `attack`, the browser returns candidates such as `attack_1`, `attack_2`, etc. Choose a specific one.
+
+Input:
+```json
+{
+  "objectId": "minotauros-001",
+  "clipName": "laugh",
+  "mode": "loop"
+}
+```
+
+Or by index:
+```json
+{
+  "objectId": "minotauros-001",
+  "clip": 7
+}
+```
+
+Fields: `objectId` (required), `clipName` or `name` or `clip` (one required), `mode` (loop/once, default loop), `speed` (default 1), `enabled` (default true).
+
 ### scene_sync_get_selection
 
 Returns the objects currently selected in the linked Scene Sync browser.
@@ -443,6 +491,7 @@ Browser AI commands in `html/assets/js/scenesync/scene.js` should stay in sync w
 | `undo` | `scene_sync_undo` | supported |
 | `redo` | `scene_sync_redo` | supported |
 | `getSelection` | `scene_sync_get_selection` | supported |
+| `setAnimationClip` | `scene_sync_set_animation_clip` | supported |
 
 When adding a new browser AI command:
 

@@ -185,7 +185,7 @@ paths:
         Stable AI tool mapping: `scene_sync_ai_command`.
         Use this for browser-only actions such as current selection queries, camera queries,
         focus, undo/redo, screenshots, URL-based GLB import, URL-based image/video/text import,
-        and skybox updates. Use action `getSelection` to retrieve the objects currently
+        skybox updates, and GLB animation clip switching. Use action `getSelection` to retrieve the objects currently
         selected by the linked browser user. Selection is browser-local/session-local and
         is not part of the shared scene snapshot. For `focusObject`, always send
         `params.objectId`. Do not call `focusObject` without an object id.
@@ -224,6 +224,7 @@ paths:
                     - addVideoFromUrl
                     - addTextFromUrl
                     - setSkyboxFromImageUrl
+                    - setAnimationClip
                 params:
                   description: |
                     Parameters depend on `action`. For `getSelection`, send `{}`.
@@ -241,6 +242,7 @@ paths:
                     - $ref: '#/components/schemas/UploadGlbFromUrlParams'
                     - $ref: '#/components/schemas/UrlImportParams'
                     - $ref: '#/components/schemas/SetSkyboxFromImageUrlParams'
+                    - $ref: '#/components/schemas/SetAnimationClipParams'
                 targetPeerId:
                   type: string
             examples:
@@ -288,6 +290,15 @@ paths:
                   action: setSkyboxFromImageUrl
                   params:
                     url: https://example.com/panorama.jpg
+              setAnimationClip:
+                summary: Set an animated GLB object to the laugh clip
+                value:
+                  sessionId: v1.example
+                  action: setAnimationClip
+                  params:
+                    objectId: minotauros-001
+                    clipName: laugh
+                    mode: loop
       responses:
         '200':
           description: AI command result
@@ -563,6 +574,42 @@ components:
           format: uri
       example:
         url: https://example.com/panorama.jpg
+    SetAnimationClipParams:
+      type: object
+      additionalProperties: false
+      properties:
+        objectId:
+          type: string
+          description: Existing animated GLB object id. Prefer passing this explicitly.
+        clip:
+          type: integer
+          minimum: 0
+          description: Animation clip index. Takes priority over clipName.
+        clipName:
+          type: string
+          description: Animation clip name, such as idle, laugh, talk, or attack_1.
+        name:
+          type: string
+          description: Alias for clipName.
+        mode:
+          type: string
+          enum: [loop, once]
+          default: loop
+        speed:
+          type: number
+          minimum: 0
+          default: 1
+        enabled:
+          type: boolean
+          default: true
+      anyOf:
+        - required: [clip]
+        - required: [clipName]
+        - required: [name]
+      example:
+        objectId: minotauros-001
+        clipName: laugh
+        mode: loop
     SceneState:
       type: object
       properties:
