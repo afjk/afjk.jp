@@ -5126,8 +5126,12 @@ function resolveAiCommandObjectId(params = {}) {
   const explicit = typeof params.objectId === 'string' ? params.objectId.trim() : '';
   if (explicit) return explicit;
 
-  const selected = selectedObjectIds instanceof Set ? Array.from(selectedObjectIds)[0] : '';
-  return selected || '';
+  if (!(selectedObjectIds instanceof Set) || selectedObjectIds.size !== 1) {
+    return '';
+  }
+
+  const [selected] = Array.from(selectedObjectIds);
+  return typeof selected === 'string' ? selected : '';
 }
 
 function setObjectAnimationClipByAiCommand(params = {}) {
@@ -5136,7 +5140,7 @@ function setObjectAnimationClipByAiCommand(params = {}) {
   if (!objectId) {
     return {
       ok: false,
-      error: 'objectId is required when there is no selected object',
+      error: 'objectId is required unless exactly one object is selected',
     };
   }
 
