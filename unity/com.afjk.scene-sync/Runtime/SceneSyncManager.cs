@@ -329,6 +329,8 @@ namespace Afjk.SceneSync
                     && go.GetComponentInChildren<SkinnedMeshRenderer>() == null)
                     continue;
 
+                EnsureUnityManagedIdentity(go);
+
                 var glb = await PresenceClientRuntime.ExportGameObjectAsGlb(go);
                 if (glb == null) continue;
 
@@ -662,6 +664,7 @@ namespace Afjk.SceneSync
         private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
         {
             _remoteRemovedUnityObjectIds.Remove(go.GetInstanceID().ToString());
+            EnsureUnityManagedIdentity(go);
 
             var pos = go.transform.position;
             var rot = go.transform.rotation;
@@ -1234,6 +1237,12 @@ namespace Afjk.SceneSync
 
             var go = FindManagedObject(objectId);
 
+            Debug.Log(
+                "[SceneSync] scene-remove received: objectId=" + objectId
+                + ", found=" + (go != null)
+                + ", unityAuthored=" + (go != null && IsUnityAuthoredObject(go, objectId))
+                + ", temporary=" + (go != null && IsTemporaryObject(go)));
+
             if (go != null && IsUnityAuthoredObject(go, objectId))
             {
                 RestoreUnityAuthoredObjectAfterRemoteRemove(objectId, go);
@@ -1313,7 +1322,35 @@ namespace Afjk.SceneSync
             var go = FindManagedObject(objectId);
             var name = go != null ? go.name : objectId;
 
-            // 既存オブジェクトがあれば削除して再作成
+            Debug.Log(
+                "[SceneSync] scene-mesh received: objectId=" + objectId
+                + ", found=" + (go != null)
+                + ", unityAuthored=" + (go != null && IsUnityAuthoredObject(go, objectId))
+                + ", temporary=" + (go != null && IsTemporaryObject(go)));
+
+            if (go != null && IsUnityAuthoredObject(go, objectId))
+            {
+                _meshPaths[objectId] = meshPath;
+
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity != null)
+                {
+                    identity.Origin = SceneSyncOrigin.Unity;
+                    identity.Temporary = false;
+                    identity.State = SceneSyncState.Synced;
+                    identity.MeshPath = meshPath;
+                    identity.AssetId = assetId;
+                }
+
+                _managedObjects[objectId] = go;
+                _knownObjectIds.Add(objectId);
+                _remoteRemovedUnityObjectIds.Remove(objectId);
+
+                Debug.Log("[SceneSync] Received scene-mesh for Unity-authored object; keeping local GameObject: " + objectId);
+                return;
+            }
+
+            // 既存の remote temporary object は従来通り置き換えてよい
             if (go != null)
             {
                 var pos = go.transform.position;
