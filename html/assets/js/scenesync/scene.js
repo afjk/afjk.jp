@@ -1876,6 +1876,117 @@ function getObjectAnimationClipSummaries(obj) {
   }));
 }
 
+function normalizeAnimationClipName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[-]+/g, '_');
+}
+
+function getObjectAnimationClips(obj) {
+  const clips = obj?.userData?.scenesync?.animations;
+  return Array.isArray(clips) ? clips : [];
+}
+
+function serializeObjectAnimationClipSummariesForExternalUse(obj) {
+  return getObjectAnimationClips(obj).map((clip, index) => ({
+    index,
+    name: clip?.name || `Animation ${index}`,
+    duration: Number.isFinite(clip?.duration) ? clip.duration : null,
+  }));
+}
+
+function resolveAnimationClipIndex(obj, params = {}) {
+  const clips = getObjectAnimationClips(obj);
+
+  if (clips.length === 0) {
+    return {
+      ok: false,
+      error: 'target object has no animation clips',
+      clips: [],
+    };
+  }
+
+  if (params.clip !== undefined) {
+    const clipIndex = clampAnimationClipIndex(params.clip, clips.length);
+    return {
+      ok: true,
+      clipIndex,
+      clipName: clips[clipIndex]?.name || `Animation ${clipIndex}`,
+      matchedBy: 'clip',
+      clips,
+    };
+  }
+
+  const requestedName = params.clipName ?? params.name;
+  if (typeof requestedName !== 'string' || !requestedName.trim()) {
+    return {
+      ok: false,
+      error: 'clip or clipName is required',
+      clips,
+    };
+  }
+
+  const normalizedRequested = normalizeAnimationClipName(requestedName);
+
+  // 1. exact normalized match
+  let clipIndex = clips.findIndex((clip, index) => {
+    const displayName = clip?.name || `Animation ${index}`;
+    return normalizeAnimationClipName(displayName) === normalizedRequested;
+  });
+
+  // 2. case-insensitive raw exact match
+  if (clipIndex < 0) {
+    const lowerRequested = requestedName.trim().toLowerCase();
+    clipIndex = clips.findIndex((clip, index) => {
+      const displayName = clip?.name || `Animation ${index}`;
+      return String(displayName).trim().toLowerCase() === lowerRequested;
+    });
+  }
+
+  // 3. safe partial match only if exactly one candidate matches
+  if (clipIndex < 0) {
+    const candidates = clips
+      .map((clip, index) => ({
+        index,
+        name: clip?.name || `Animation ${index}`,
+        normalized: normalizeAnimationClipName(clip?.name || `Animation ${index}`),
+      }))
+      .filter((candidate) => candidate.normalized.includes(normalizedRequested));
+
+    if (candidates.length === 1) {
+      clipIndex = candidates[0].index;
+    } else if (candidates.length > 1) {
+      return {
+        ok: false,
+        error: `ambiguous animation clip name: ${requestedName}`,
+        candidates: candidates.map((candidate) => ({
+          index: candidate.index,
+          name: candidate.name,
+        })),
+        clips,
+      };
+    }
+  }
+
+  if (clipIndex < 0) {
+    return {
+      ok: false,
+      error: `animation clip not found: ${requestedName}`,
+      clips: serializeObjectAnimationClipSummariesForExternalUse(obj),
+    };
+  }
+
+  return {
+    ok: true,
+    clipIndex,
+    clipName: clips[clipIndex]?.name || `Animation ${clipIndex}`,
+    matchedBy: 'clipName',
+    clips,
+  };
+}
+
 function clampAnimationClipIndex(value, clipCount) {
   const index = Number.parseInt(value, 10);
   if (!Number.isFinite(index)) return 0;
@@ -4970,6 +5081,11 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
     result.animation = animation;
   }
 
+  const animationClips = serializeObjectAnimationClipSummariesForExternalUse(obj);
+  if (animationClips.length > 0) {
+    result.animationClips = animationClips;
+  }
+
   return result;
 }
 
@@ -5003,6 +5119,98 @@ function getCurrentSelectionPayload() {
     selectedCount: selectedObjects.length,
     missingObjectIds,
     skippedObjectIds,
+  };
+}
+
+function resolveAiCommandObjectId(params = {}) {
+  const explicit = typeof params.objectId === 'string' ? params.objectId.trim() : '';
+  if (explicit) return explicit;
+
+  const selected = selectedObjectIds instanceof Set ? Array.from(selectedObjectIds)[0] : '';
+  return selected || '';
+}
+
+function setObjectAnimationClipByAiCommand(params = {}) {
+  const objectId = resolveAiCommandObjectId(params);
+
+  if (!objectId) {
+    return {
+      ok: false,
+      error: 'objectId is required when there is no selected object',
+    };
+  }
+
+  const obj = managedObjects.get(objectId);
+  if (!obj) {
+    return {
+      ok: false,
+      error: `object not found: ${objectId}`,
+    };
+  }
+
+  const resolution = resolveAnimationClipIndex(obj, params);
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      error: resolution.error,
+      candidates: resolution.candidates,
+      clips: Array.isArray(resolution.clips)
+        ? resolution.clips.map((clip, index) => {
+            if (clip && typeof clip.index === 'number') return clip;
+            return {
+              index,
+              name: clip?.name || `Animation ${index}`,
+              duration: Number.isFinite(clip?.duration) ? clip.duration : null,
+            };
+          })
+        : undefined,
+    };
+  }
+
+  const current =
+    obj.userData?.animationState ||
+    obj.userData?.scenesync?.animationState ||
+    {};
+
+  const delta = {
+    enabled: typeof params.enabled === 'boolean' ? params.enabled : true,
+    clip: resolution.clipIndex,
+    clipName: resolution.clipName,
+    mode: params.mode === 'once' ? 'once' : 'loop',
+  };
+
+  if (params.speed !== undefined) {
+    const speed = Number(params.speed);
+    if (Number.isFinite(speed) && speed >= 0) {
+      delta.speed = speed;
+    }
+  } else if (Number.isFinite(current.speed)) {
+    delta.speed = current.speed;
+  } else {
+    delta.speed = 1;
+  }
+
+  const operation = {
+    kind: 'scene-delta',
+    objectId,
+    animation: delta,
+  };
+
+  applyOperationToScene(operation);
+  broadcast(operation);
+  notifySceneStateChanged('ai-animation-clip-updated');
+  notifySelectionChanged('ai-animation-clip-updated');
+
+  return {
+    ok: true,
+    objectId,
+    animation: {
+      ...delta,
+      clip: resolution.clipIndex,
+      clipName: resolution.clipName,
+    },
+    matchedBy: resolution.matchedBy,
+    availableClips: serializeObjectAnimationClipSummariesForExternalUse(obj),
   };
 }
 
@@ -5076,6 +5284,9 @@ async function handleAiCommand(from, payload) {
           action: 'getSelection',
           ...getCurrentSelectionPayload(),
         };
+        break;
+      case 'setAnimationClip':
+        result = setObjectAnimationClipByAiCommand(payload.params || {});
         break;
       default:
         result = { ok: false, error: `unsupported ai-command action: ${payload.action}` };

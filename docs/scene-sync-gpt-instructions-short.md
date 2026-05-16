@@ -199,6 +199,20 @@ Implemented actions:
 - `addVideoFromUrl`
 - `addTextFromUrl`
 - `setSkyboxFromImageUrl`
+- `setAnimationClip`
+
+## Animation clips
+
+For animated GLB objects, use `setAnimationClip` to switch clips by name or index.
+
+Preferred flow:
+
+1. Use `getSelection` when the user says "selected object".
+2. Inspect `animationClips` in the selected object payload.
+3. Call `setAnimationClip` with `objectId` and `clipName`.
+
+If the requested name is ambiguous, ask the user to choose from candidates.
+Do not guess between `attack_1`, `attack_2`, etc.
 
 ## IDs and coordinates
 

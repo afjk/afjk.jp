@@ -387,6 +387,70 @@ server.registerTool(
   }
 )
 
+// scene_sync_set_animation_clip
+const animationClipInputSchema = z.object({
+  objectId: z.string().describe('Target animated GLB object ID'),
+  clipName: z.string().optional().describe('Animation clip name, such as idle, laugh, talk, or attack_1'),
+  name: z.string().optional().describe('Alias for clipName'),
+  clip: z.number().int().min(0).optional().describe('Animation clip index. Takes priority over clipName.'),
+  mode: z.enum(['loop', 'once']).optional().describe('Playback mode. Defaults to loop.'),
+  speed: z.number().min(0).optional().describe('Playback speed. Omit to keep current speed.'),
+  enabled: z.boolean().optional().describe('Whether animation playback is enabled. Defaults to true.')
+}).refine((value) => (
+  value.clip !== undefined ||
+  typeof value.clipName === 'string' ||
+  typeof value.name === 'string'
+), {
+  message: 'clip, clipName, or name is required'
+})
+
+server.registerTool(
+  'scene_sync_set_animation_clip',
+  {
+    title: 'Set GLB animation clip',
+    description: 'Switch an animated GLB object to a specific animation clip by name or index. Use scene_sync_get_selection or scene_sync_get_scene first to inspect available animationClips.',
+    inputSchema: animationClipInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async ({ objectId, clipName, name, clip, mode, speed, enabled }) => {
+    try {
+      assertObjectId(objectId)
+
+      const params = { objectId }
+
+      if (clip !== undefined) params.clip = clip
+      if (clipName !== undefined) params.clipName = clipName
+      if (name !== undefined) params.name = name
+      if (mode !== undefined) params.mode = mode
+      if (speed !== undefined) params.speed = speed
+      if (enabled !== undefined) params.enabled = enabled
+
+      const response = await runAiCommand(
+        'setAnimationClip',
+        params,
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ...response,
+        ok: response?.ok !== false,
+        action: 'setAnimationClip',
+        objectId
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
 // scene_sync_add_primitive
 server.registerTool(
   'scene_sync_add_primitive',
