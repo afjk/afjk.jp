@@ -333,6 +333,7 @@ namespace Afjk.SceneSync
                 if (glb == null) continue;
 
                 var objectId = go.GetInstanceID().ToString();
+                _remoteRemovedUnityObjectIds.Remove(objectId);
 
                 // blob store に POST（全クライアント共有）
                 var path = PresenceClientRuntime.GenerateRandomPath();
@@ -1277,8 +1278,14 @@ namespace Afjk.SceneSync
                 identity.State = SceneSyncState.Disconnected;
                 identity.Temporary = false;
                 identity.Origin = SceneSyncOrigin.Unity;
+                identity.MeshPath = null;
+                identity.AssetId = null;
+                identity.LockOwner = null;
             }
 
+            _lastSnapshots.Remove(objectId);
+            _meshPaths.Remove(objectId);
+            _locks.Remove(objectId);
             _remoteRemovedUnityObjectIds.Add(objectId);
 
             Debug.Log("[SceneSync] Remote removed Unity-authored object; restored to unpublished state: " + objectId);
