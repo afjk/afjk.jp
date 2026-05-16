@@ -690,6 +690,24 @@ namespace Afjk.SceneSync.Editor
                 if (string.IsNullOrWhiteSpace(identity.MeshPath)) continue;
 
                 var objectId = identity.ObjectId;
+
+                // Detect duplicate: another GameObject is already bound with this objectId.
+                // This happens when a published object is duplicated (MeshPath is copied too).
+                if (_managedObjects.TryGetValue(objectId, out var alreadyBound)
+                    && alreadyBound != null
+                    && alreadyBound != go)
+                {
+                    identity.MeshPath = null;
+                    identity.State = SceneSyncState.Disconnected;
+                    EditorUtility.SetDirty(identity);
+                    Debug.LogWarning(
+                        $"[SceneSync] Rebound: duplicate objectId detected on different GameObject. " +
+                        $"Clearing MeshPath on duplicate. " +
+                        $"original={alreadyBound.name}, duplicate={go.name}, objectId={objectId}"
+                    );
+                    continue;
+                }
+
                 _managedObjects[objectId] = go;
                 _instanceToObjectId[go.GetInstanceID()] = objectId;
                 _knownObjectIds.Add(objectId);
