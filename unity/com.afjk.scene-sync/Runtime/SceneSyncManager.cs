@@ -45,6 +45,7 @@ namespace Afjk.SceneSync
         private Dictionary<string, ExpiredGlbRecovery> _pendingRecoveries = new Dictionary<string, ExpiredGlbRecovery>();
         private Dictionary<string, double> _responderCooldowns = new Dictionary<string, double>(); // cacheKey-peerId → timestamp
         private string _activeOutgoingTransferId = null;
+        private readonly HashSet<string> _remoteRemovedUnityObjectIds = new HashSet<string>();
 
         private const double RECOVERY_TIMEOUT_MS = 30000;
         private const double PEER_RETRY_INTERVAL_MS = 4000;
@@ -332,6 +333,7 @@ namespace Afjk.SceneSync
                 if (glb == null) continue;
 
                 var objectId = go.GetInstanceID().ToString();
+                _remoteRemovedUnityObjectIds.Remove(objectId);
 
                 // blob store に POST（全クライアント共有）
                 var path = PresenceClientRuntime.GenerateRandomPath();
@@ -596,6 +598,11 @@ namespace Afjk.SceneSync
                 var id = instanceId.ToString();
                 currentIds.Add(id);
 
+                if (_remoteRemovedUnityObjectIds.Contains(id))
+                {
+                    continue;
+                }
+
                 if (!_knownObjectIds.Contains(id))
                 {
                     // 新規オブジェクト
@@ -654,6 +661,8 @@ namespace Afjk.SceneSync
 
         private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
         {
+            _remoteRemovedUnityObjectIds.Remove(go.GetInstanceID().ToString());
+
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
@@ -1224,12 +1233,62 @@ namespace Afjk.SceneSync
             var objectId = objectIdMatch.Groups[1].Value;
 
             var go = FindManagedObject(objectId);
-            ForgetObject(objectId, go);
-            if (go != null)
+
+            if (go != null && IsUnityAuthoredObject(go, objectId))
             {
-                Destroy(go);
+                RestoreUnityAuthoredObjectAfterRemoteRemove(objectId, go);
             }
+            else
+            {
+                ForgetObject(objectId, go);
+                if (go != null)
+                {
+                    Debug.Log("[SceneSync] Remote removed temporary object; destroying local object: " + objectId);
+                    Destroy(go);
+                }
+            }
+
             OnObjectRemoved?.Invoke(objectId);
+        }
+
+        private bool IsUnityAuthoredObject(GameObject go, string objectId)
+        {
+            if (go == null) return false;
+
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity != null)
+            {
+                if (identity.Origin == SceneSyncOrigin.Unity && !identity.Temporary)
+                    return true;
+            }
+
+            // Fallback: Unity-authored objects use Unity InstanceID as objectId.
+            return int.TryParse(objectId, out var instanceId)
+                && go.GetInstanceID() == instanceId
+                && !IsTemporaryObject(go);
+        }
+
+        private void RestoreUnityAuthoredObjectAfterRemoteRemove(string objectId, GameObject go)
+        {
+            ForgetObject(objectId, go);
+
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            if (identity != null)
+            {
+                identity.State = SceneSyncState.Disconnected;
+                identity.Temporary = false;
+                identity.Origin = SceneSyncOrigin.Unity;
+                identity.MeshPath = null;
+                identity.AssetId = null;
+                identity.LockOwner = null;
+            }
+
+            _lastSnapshots.Remove(objectId);
+            _meshPaths.Remove(objectId);
+            _locks.Remove(objectId);
+            _remoteRemovedUnityObjectIds.Add(objectId);
+
+            Debug.Log("[SceneSync] Remote removed Unity-authored object; restored to unpublished state: " + objectId);
         }
 
         private void HandleSceneMesh(string raw)
