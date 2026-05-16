@@ -1278,12 +1278,21 @@ namespace Afjk.SceneSync.Editor
 
             if (IsBoundUnityOriginObject(objectId))
             {
-                Debug.Log("[SceneSync] Skipping remote import for bound Unity object: " + objectId);
+                Debug.Log("[SceneSync] scene-add received: objectId=" + objectId + " → bound Unity object, skipping remote creation");
                 return;
             }
 
             // 既に存在する場合はスキップ
-            if (_managedObjects.ContainsKey(objectId)) return;
+            if (_managedObjects.ContainsKey(objectId))
+            {
+                var existing = _managedObjects[objectId];
+                Debug.Log("[SceneSync] scene-add received: objectId=" + objectId
+                    + " → already managed (name=" + (existing != null ? existing.name : "null")
+                    + ", unityOrigin=" + IsBoundUnityOriginObject(objectId) + "), skipping");
+                return;
+            }
+
+            Debug.Log("[SceneSync] scene-add received: objectId=" + objectId + " → not yet managed");
 
             var nameMatch = System.Text.RegularExpressions.Regex.Match(
                 raw, "\"name\":\"([^\"]+)\"");
@@ -1347,10 +1356,33 @@ namespace Afjk.SceneSync.Editor
             var objectId = objectIdMatch.Groups[1].Value;
 
             var go = FindManagedObject(objectId);
-            ForgetObject(objectId, go);
-            if (go != null)
+
+            Debug.Log(
+                "[SceneSync] scene-remove received: objectId=" + objectId
+                + ", found=" + (go != null)
+                + ", unityOrigin=" + IsBoundUnityOriginObject(objectId));
+
+            if (IsBoundUnityOriginObject(objectId))
             {
-                DestroyImmediate(go);
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity != null)
+                {
+                    identity.State = SceneSyncState.Disconnected;
+                    identity.MeshPath = null;
+                    identity.AssetId = null;
+                    EditorUtility.SetDirty(identity);
+                }
+                ForgetObject(objectId, go);
+                Debug.Log("[SceneSync] Remote removed Unity-authored object; restored to unpublished state: " + objectId);
+            }
+            else
+            {
+                ForgetObject(objectId, go);
+                if (go != null)
+                {
+                    Debug.Log("[SceneSync] Remote removed temporary object; destroying local object: " + objectId);
+                    DestroyImmediate(go);
+                }
             }
         }
 
@@ -1376,7 +1408,25 @@ namespace Afjk.SceneSync.Editor
             var go = FindManagedObject(objectId);
             var name = go != null ? go.name : objectId;
 
-            // 既存オブジェクトがあれば削除して再作成
+            Debug.Log(
+                "[SceneSync] scene-mesh received: objectId=" + objectId
+                + ", found=" + (go != null)
+                + ", unityOrigin=" + IsBoundUnityOriginObject(objectId));
+
+            if (go != null && IsBoundUnityOriginObject(objectId))
+            {
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity != null)
+                {
+                    identity.MeshPath = meshPath;
+                    if (assetId != null) identity.AssetId = assetId;
+                    EditorUtility.SetDirty(identity);
+                }
+                Debug.Log("[SceneSync] Received scene-mesh for Unity-authored object; keeping local GameObject: " + objectId);
+                return;
+            }
+
+            // 既存の remote temporary object は従来通り置き換えてよい
             if (go != null)
             {
                 var pos = go.transform.position;
