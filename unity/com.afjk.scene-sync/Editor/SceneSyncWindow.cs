@@ -1368,8 +1368,11 @@ namespace Afjk.SceneSync.Editor
                 if (identity != null)
                 {
                     identity.State = SceneSyncState.Disconnected;
+                    identity.Temporary = false;
+                    identity.Origin = SceneSyncOrigin.Unity;
                     identity.MeshPath = null;
                     identity.AssetId = null;
+                    identity.LockOwner = null;
                     EditorUtility.SetDirty(identity);
                 }
                 ForgetObject(objectId, go);
