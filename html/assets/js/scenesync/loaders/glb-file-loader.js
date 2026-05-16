@@ -43,6 +43,10 @@ export class GLBFileLoader {
     // Apply visual-only correction for Unity-authored GLBs.
     // The correction is applied to the visual hierarchy, not the synced root transform.
     const isUnityBasis = asset?.visualBasis === "unity";
+    console.debug('[glb-loader] visualBasis correction', {
+      visualBasis: asset?.visualBasis,
+      applyUnityBasisCorrection: isUnityBasis,
+    });
     if (isUnityBasis) {
       gltf.scene.rotation.y = Math.PI;
     }
