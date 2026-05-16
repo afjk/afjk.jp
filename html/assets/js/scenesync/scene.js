@@ -4668,6 +4668,8 @@ function handleHandoff(data) {
         model.userData.objectId = payload.objectId;
         model.userData.name = obj?.userData?.name || payload.name || payload.meshPath;
         model.userData.meshPath = payload.meshPath;
+        if (payload.asset) model.userData.asset = structuredClone(payload.asset);
+      }, payload.asset);
 
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
@@ -5492,6 +5494,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           model.userData.name = info.name;
           model.userData.meshPath = meshPath;
           if (info.asset) model.userData.asset = structuredClone(info.asset);
+      }, info.asset);
 
           if (info.runtime) {
             model.userData.runtime = {

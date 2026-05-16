@@ -35,10 +35,18 @@ export class GLBFileLoader {
     });
   }
 
-  _buildModel(gltf, position) {
+  _buildModel(gltf, position, asset) {
     const wrapper = new THREE.Group();
     // Scene Sync treats meshPath GLBs as authored assets.
     // Do not add client-specific yaw fixes here; object rotation comes from wire transforms.
+
+    // Apply visual-only correction for Unity-authored GLBs.
+    // The correction is applied to the visual hierarchy, not the synced root transform.
+    const isUnityBasis = asset?.visualBasis === "unity";
+    if (isUnityBasis) {
+      gltf.scene.rotation.y = Math.PI;
+    }
+
     wrapper.add(gltf.scene);
 
     wrapper.updateMatrixWorld(true);
@@ -106,13 +114,13 @@ export class GLBFileLoader {
     return { wrapper, metadata };
   }
 
-  async loadFromUrl(url, position, scene, onLoaded) {
+  async loadFromUrl(url, position, scene, onLoaded, asset) {
     if (!url || !scene) {
       throw new Error('必要なパラメータが不足しています');
     }
 
     const gltf = await this._load(url);
-    const { wrapper, metadata } = this._buildModel(gltf, position);
+    const { wrapper, metadata } = this._buildModel(gltf, position, asset);
     scene.add(wrapper);
 
     if (onLoaded) {
@@ -122,7 +130,7 @@ export class GLBFileLoader {
     return wrapper;
   }
 
-  async loadFromFile(file, position, scene, onLoaded) {
+  async loadFromFile(file, position, scene, onLoaded, asset) {
     if (!file || !scene) {
       throw new Error('必要なパラメータが不足しています');
     }
@@ -130,7 +138,7 @@ export class GLBFileLoader {
     const objectURL = URL.createObjectURL(file);
 
     try {
-      const model = await this.loadFromUrl(objectURL, position, scene);
+      const model = await this.loadFromUrl(objectURL, position, scene, null, asset);
       const metadata = model.userData?.scenesync?.glbMetadata;
       if (metadata) {
         metadata.fileName = file.name;

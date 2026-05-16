@@ -1279,7 +1279,8 @@ namespace Afjk.SceneSync.Editor
                 ",\"position\":[" + FormatFloat(pos.x) + "," + FormatFloat(pos.y) + "," + FormatFloat(-pos.z) + "]" +
                 ",\"rotation\":[" + FormatFloat(rot.x) + "," + FormatFloat(rot.y) + "," + FormatFloat(-rot.z) + "," + FormatFloat(-rot.w) + "]" +
                 ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
-                ",\"meshPath\":\"" + JsonEscape(path) + "\"}";
+                ",\"meshPath\":\"" + JsonEscape(path) + "\"" +
+                ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}}";
             await _client.Broadcast(payload);
 
             _managedObjects[objectId] = go;
@@ -1726,7 +1727,10 @@ namespace Afjk.SceneSync.Editor
                     // Keep the synchronized object transform on the parent and apply the
                     // same Unity GLB visual correction as Runtime/SceneSyncManager.
                     importedGlbRoot.transform.localPosition = Vector3.zero;
-                    importedGlbRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    var shouldApplyUnityImportYawCorrection = true;
+                    importedGlbRoot.transform.localRotation = shouldApplyUnityImportYawCorrection
+                        ? Quaternion.Euler(0f, 180f, 0f)
+                        : Quaternion.identity;
                     importedGlbRoot.transform.localScale = Vector3.one;
 
                     await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
