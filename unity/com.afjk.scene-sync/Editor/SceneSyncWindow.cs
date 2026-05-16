@@ -1060,13 +1060,9 @@ namespace Afjk.SceneSync.Editor
         private static bool HasDuplicateObjectIdOnDifferentUnityObject(SceneSyncIdentity identity)
         {
             if (identity == null || string.IsNullOrWhiteSpace(identity.ObjectId))
-            {
-                Debug.Log("[SceneSync][DupCheck] Skipped: identity null or ObjectId empty");
                 return false;
-            }
 
             var currentGlobalId = GetGlobalObjectIdString(identity.gameObject);
-            Debug.Log($"[SceneSync][DupCheck] Checking objectId={identity.ObjectId}, go={identity.gameObject.name}, globalId={currentGlobalId}");
 
 #if UNITY_2023_1_OR_NEWER
             var identities = UnityEngine.Object.FindObjectsByType<SceneSyncIdentity>(
@@ -1077,41 +1073,18 @@ namespace Afjk.SceneSync.Editor
             var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>(true);
 #endif
 
-            Debug.Log($"[SceneSync][DupCheck] Found {identities.Length} SceneSyncIdentity components in scene");
-
             foreach (var other in identities)
             {
                 if (other == null || other == identity) continue;
-
-                Debug.Log($"[SceneSync][DupCheck] Candidate: go={other.gameObject.name}, objectId={other.ObjectId}, origin={other.Origin}, temporary={other.Temporary}");
-
-                if (other.Temporary)
-                {
-                    Debug.Log($"[SceneSync][DupCheck]   → skipped (Temporary)");
-                    continue;
-                }
-                if (other.Origin != SceneSyncOrigin.Unity)
-                {
-                    Debug.Log($"[SceneSync][DupCheck]   → skipped (Origin={other.Origin})");
-                    continue;
-                }
-                if (other.ObjectId != identity.ObjectId)
-                {
-                    Debug.Log($"[SceneSync][DupCheck]   → skipped (different ObjectId: {other.ObjectId})");
-                    continue;
-                }
+                if (other.Temporary) continue;
+                if (other.Origin != SceneSyncOrigin.Unity) continue;
+                if (other.ObjectId != identity.ObjectId) continue;
 
                 var otherGlobalId = GetGlobalObjectIdString(other.gameObject);
-                Debug.Log($"[SceneSync][DupCheck]   → same ObjectId! otherGlobalId={otherGlobalId}, currentGlobalId={currentGlobalId}, match={string.Equals(otherGlobalId, currentGlobalId, StringComparison.Ordinal)}");
-
                 if (!string.Equals(otherGlobalId, currentGlobalId, StringComparison.Ordinal))
-                {
-                    Debug.Log($"[SceneSync][DupCheck]   → DUPLICATE DETECTED on different Unity object");
                     return true;
-                }
             }
 
-            Debug.Log($"[SceneSync][DupCheck] No duplicate found for objectId={identity.ObjectId}");
             return false;
         }
 
@@ -1122,13 +1095,8 @@ namespace Afjk.SceneSync.Editor
             var identity = EnsureManagedUnityIdentity(manager, go, out _);
             if (identity == null) return null;
 
-            Debug.Log($"[SceneSync][DupCheck] EnsureUnique: go={go.name}, objectId={identity.ObjectId}, origin={identity.Origin}, temporary={identity.Temporary}, state={identity.State}");
-
-            var emptyId = string.IsNullOrWhiteSpace(identity.ObjectId);
-            var hasDuplicate = HasDuplicateObjectIdOnDifferentUnityObject(identity);
-            var needsNewObjectId = emptyId || hasDuplicate;
-
-            Debug.Log($"[SceneSync][DupCheck] needsNewObjectId={needsNewObjectId} (emptyId={emptyId}, hasDuplicate={hasDuplicate})");
+            var needsNewObjectId = string.IsNullOrWhiteSpace(identity.ObjectId)
+                || HasDuplicateObjectIdOnDifferentUnityObject(identity);
 
             if (needsNewObjectId)
             {
