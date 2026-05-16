@@ -1023,6 +1023,87 @@ namespace Afjk.SceneSync.Editor
             return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
+        private static string GenerateUnitySceneSyncObjectId()
+        {
+            return "unity-" + Guid.NewGuid().ToString("N");
+        }
+
+        private static string GetGlobalObjectIdString(GameObject go)
+        {
+            if (go == null) return string.Empty;
+            return GlobalObjectId.GetGlobalObjectIdSlow(go).ToString();
+        }
+
+        private static bool HasDuplicateObjectIdOnDifferentUnityObject(SceneSyncIdentity identity)
+        {
+            if (identity == null || string.IsNullOrWhiteSpace(identity.ObjectId))
+            {
+                return false;
+            }
+
+            var currentGlobalId = GetGlobalObjectIdString(identity.gameObject);
+
+#if UNITY_2023_1_OR_NEWER
+            var identities = UnityEngine.Object.FindObjectsByType<SceneSyncIdentity>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None
+            );
+#else
+            var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>(true);
+#endif
+
+            foreach (var other in identities)
+            {
+                if (other == null || other == identity) continue;
+                if (other.Temporary) continue;
+                if (other.Origin != SceneSyncOrigin.Unity) continue;
+                if (other.ObjectId != identity.ObjectId) continue;
+
+                var otherGlobalId = GetGlobalObjectIdString(other.gameObject);
+                if (!string.Equals(otherGlobalId, currentGlobalId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private SceneSyncIdentity EnsureUniqueManagedUnityIdentityForPublish(SceneSyncManager manager, GameObject go)
+        {
+            if (manager == null || go == null) return null;
+
+            var identity = EnsureManagedUnityIdentity(manager, go, out _);
+            if (identity == null) return null;
+
+            var needsNewObjectId =
+                string.IsNullOrWhiteSpace(identity.ObjectId) ||
+                HasDuplicateObjectIdOnDifferentUnityObject(identity);
+
+            if (needsNewObjectId)
+            {
+                var oldObjectId = identity.ObjectId;
+                identity.ObjectId = GenerateUnitySceneSyncObjectId();
+                identity.State = SceneSyncState.Disconnected;
+                identity.Temporary = false;
+                identity.Origin = SceneSyncOrigin.Unity;
+                identity.MeshPath = null;
+                identity.AssetId = null;
+                identity.LockOwner = null;
+
+                EditorUtility.SetDirty(identity);
+                MarkManagerDirty(manager);
+
+                Debug.LogWarning(
+                    "[SceneSync] Assigned a new Scene Sync ObjectId before publish. " +
+                    "This usually happens when a GameObject with SceneSyncIdentity was duplicated. " +
+                    $"GameObject={go.name}, oldObjectId={oldObjectId}, newObjectId={identity.ObjectId}"
+                );
+            }
+
+            return identity;
+        }
+
         private async void PublishSelectedObjects()
         {
             if (!_connected)
@@ -1045,7 +1126,7 @@ namespace Afjk.SceneSync.Editor
                 if (root == null || !seen.Add(root)) continue;
                 if (ShouldSkipPublishObject(root)) continue;
 
-                var identity = EnsureManagedUnityIdentity(manager, root, out _);
+                var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, root);
                 if (identity == null) continue;
 
                 Debug.Log("[SceneSync] Publishing selected object: " + root.name + " (objectId=" + identity.ObjectId + ")");
@@ -1074,7 +1155,7 @@ namespace Afjk.SceneSync.Editor
                 if (go == null || !seen.Add(go)) continue;
                 if (ShouldSkipPublishObject(go)) continue;
 
-                var identity = EnsureManagedUnityIdentity(manager, go, out _);
+                var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, go);
                 if (identity == null) continue;
 
                 Debug.Log("[SceneSync] Publishing managed object: " + go.name + " (objectId=" + identity.ObjectId + ")");
