@@ -1049,7 +1049,12 @@ namespace Afjk.SceneSync.Editor
         private static string GetGlobalObjectIdString(GameObject go)
         {
             if (go == null) return string.Empty;
-            return GlobalObjectId.GetGlobalObjectIdSlow(go).ToString();
+            var globalId = GlobalObjectId.GetGlobalObjectIdSlow(go).ToString();
+            // GlobalObjectId returns the zero id when the scene is unsaved.
+            // Fall back to InstanceID, which is unique per-object within the current session.
+            if (globalId == "GlobalObjectId_V1-0-00000000000000000000000000000000-0-0")
+                return "instanceId-" + go.GetInstanceID();
+            return globalId;
         }
 
         private static bool HasDuplicateObjectIdOnDifferentUnityObject(SceneSyncIdentity identity)
