@@ -1424,6 +1424,11 @@ namespace Afjk.SceneSync.Editor
                 raw, "\"assetId\":\"([^\"]+)\"");
             var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
 
+            // Extract visualBasis from asset JSON
+            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"visualBasis\":\"([^\"]+)\"");
+            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+
             // meshPath を保存
             if (!string.IsNullOrEmpty(meshPath))
             {
@@ -1433,7 +1438,7 @@ namespace Afjk.SceneSync.Editor
             // メッシュがある場合は glB をダウンロードしてインポート
             if (!string.IsNullOrEmpty(meshPath))
             {
-                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis);
             }
             else
             {
@@ -1505,6 +1510,11 @@ namespace Afjk.SceneSync.Editor
                 raw, "\"assetId\":\"([^\"]+)\"");
             var assetId = assetIdMatch.Success ? assetIdMatch.Groups[1].Value : null;
 
+            // Extract visualBasis from asset JSON
+            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
+                raw, "\"visualBasis\":\"([^\"]+)\"");
+            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
 
@@ -1542,11 +1552,11 @@ namespace Afjk.SceneSync.Editor
                     new float[] { pos.x, pos.y, -pos.z },
                     new float[] { rot.x, rot.y, -rot.z, -rot.w },
                     new float[] { scl.x, scl.y, scl.z },
-                    assetId);
+                    assetId, visualBasis);
             }
             else
             {
-                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId, visualBasis);
             }
         }
 
@@ -1613,11 +1623,12 @@ namespace Afjk.SceneSync.Editor
                 if (!first) objectsJson.Append(",");
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+                var assetJson = path != null ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}" : "";
                 objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + "}");
+                    meshPathJson + assetJson + "}");
             }
 
             // Web 由来のオブジェクトも含める
@@ -1670,7 +1681,7 @@ namespace Afjk.SceneSync.Editor
 
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
-            float[] position, float[] rotation, float[] scale, string assetId = null)
+            float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null)
         {
             try
             {
@@ -1727,11 +1738,17 @@ namespace Afjk.SceneSync.Editor
                     // Keep the synchronized object transform on the parent and apply the
                     // same Unity GLB visual correction as Runtime/SceneSyncManager.
                     importedGlbRoot.transform.localPosition = Vector3.zero;
-                    var shouldApplyUnityImportYawCorrection = true;
+                    var shouldApplyUnityImportYawCorrection = visualBasis != "unity";
                     importedGlbRoot.transform.localRotation = shouldApplyUnityImportYawCorrection
                         ? Quaternion.Euler(0f, 180f, 0f)
                         : Quaternion.identity;
                     importedGlbRoot.transform.localScale = Vector3.one;
+
+                    Debug.Log(
+                        "[SceneSync] GLB visual basis: objectId=" + objectId
+                        + ", visualBasis=" + (visualBasis ?? "web")
+                        + ", applyUnityImportYawCorrection=" + shouldApplyUnityImportYawCorrection
+                        + ", importedGlbRoot.localEulerAngles=" + importedGlbRoot.transform.localEulerAngles);
 
                     await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
                     ApplyTransform(go, position, rotation, scale);

@@ -4668,8 +4668,9 @@ function handleHandoff(data) {
         model.userData.objectId = payload.objectId;
         model.userData.name = obj?.userData?.name || payload.name || payload.meshPath;
         model.userData.meshPath = payload.meshPath;
-        if (payload.asset) model.userData.asset = structuredClone(payload.asset);
-      }, payload.asset);
+        if (payload.asset) {
+          model.userData.asset = structuredClone(payload.asset);
+        }
 
         if (obj) {
           // 位置・回転・スケールを引き継ぐ
@@ -4683,7 +4684,7 @@ function handleHandoff(data) {
         }
         registerLoadedGlbAnimation(payload.objectId, model, 'scene-mesh');
         notifySceneStateChanged('scene-mesh-loaded');
-      }).catch((err) => {
+      }, payload.asset).catch((err) => {
         removeLoadingOverlay(payload.objectId);
         // glB ロード失敗時のフォールバック
         console.warn('Failed to load mesh:', err);
@@ -5493,8 +5494,9 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           model.userData.objectId = objectId;
           model.userData.name = info.name;
           model.userData.meshPath = meshPath;
-          if (info.asset) model.userData.asset = structuredClone(info.asset);
-      }, info.asset);
+          if (info.asset) {
+            model.userData.asset = structuredClone(info.asset);
+          }
 
           if (info.runtime) {
             model.userData.runtime = {
@@ -5551,7 +5553,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           loadCompleted = true;
           URL.revokeObjectURL(objectUrl);
         }
-      }).catch((err) => {
+      }, info.asset).catch((err) => {
         removeLoadingOverlay(objectId);
         console.warn('Failed to load mesh for', objectId, ':', err);
         if (!existing && !skipFallbackOnFailure) {
