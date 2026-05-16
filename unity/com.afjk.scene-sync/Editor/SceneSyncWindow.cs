@@ -68,6 +68,7 @@ namespace Afjk.SceneSync.Editor
         private bool _applyingRemoteTransform;
         private bool _showSetup = false;
         private bool _showQuickGuide = false;
+        private Vector2 _scrollPosition;
 
         private void OnEnable()
         {
@@ -190,6 +191,8 @@ namespace Afjk.SceneSync.Editor
 
         private void OnGUI()
         {
+            _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+
             GUILayout.Label("Scene Sync", EditorStyles.boldLabel);
             GUILayout.Space(4);
 
@@ -209,6 +212,8 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Space(8);
 
             DrawQuickGuide();
+
+            EditorGUILayout.EndScrollView();
         }
 
         private void DrawConnectionSection()
