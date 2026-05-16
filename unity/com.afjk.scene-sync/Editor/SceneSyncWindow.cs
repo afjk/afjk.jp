@@ -68,6 +68,7 @@ namespace Afjk.SceneSync.Editor
         private bool _applyingRemoteTransform;
         private bool _showSetup = false;
         private bool _showQuickGuide = false;
+        private bool _showManagedUnityObjects = true;
         private Vector2 _scrollPosition;
 
         private void OnEnable()
@@ -327,23 +328,47 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Label($"With Identity: {identifiedCount} / {managedCount}");
 
             GUILayout.Space(4);
-            GUILayout.Label("Explicit Managed Objects:", EditorStyles.label);
 
             var list = manager.ManagedObjects;
-            EditorGUI.BeginChangeCheck();
-            for (var i = 0; i < list.Count; i++)
+            _showManagedUnityObjects = EditorGUILayout.Foldout(
+                _showManagedUnityObjects,
+                $"Object List ({list.Count})",
+                true
+            );
+
+            if (_showManagedUnityObjects)
             {
-                list[i] = (GameObject)EditorGUILayout.ObjectField(
-                    $"Object {i + 1}",
-                    list[i],
-                    typeof(GameObject),
-                    true
-                );
-            }
-            if (EditorGUI.EndChangeCheck())
-            {
-                manager.ValidateManagedObjects();
-                MarkManagerDirty(manager);
+                var removeIndex = -1;
+                EditorGUI.BeginChangeCheck();
+                for (var i = 0; i < list.Count; i++)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    list[i] = (GameObject)EditorGUILayout.ObjectField(
+                        $"Object {i + 1}",
+                        list[i],
+                        typeof(GameObject),
+                        true
+                    );
+                    if (GUILayout.Button("×", GUILayout.Width(24)))
+                    {
+                        removeIndex = i;
+                    }
+                    EditorGUILayout.EndHorizontal();
+                }
+                var fieldChanged = EditorGUI.EndChangeCheck();
+
+                if (removeIndex >= 0)
+                {
+                    list.RemoveAt(removeIndex);
+                    manager.ValidateManagedObjects();
+                    MarkManagerDirty(manager);
+                    Repaint();
+                }
+                else if (fieldChanged)
+                {
+                    manager.ValidateManagedObjects();
+                    MarkManagerDirty(manager);
+                }
             }
 
             using (new EditorGUILayout.HorizontalScope())
