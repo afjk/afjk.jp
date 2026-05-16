@@ -20,18 +20,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code]
+              required:
+                - code
               properties:
                 code:
                   type: string
-                  pattern: '^\d{6}$'
+                  pattern: ^\d{6}$
       responses:
-        '200':
+        "200":
           description: GPT session created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GptRedeemResponse'
+                $ref: "#/components/schemas/GptRedeemResponse"
   /link/revoke:
     post:
       operationId: revokeGptLink
@@ -41,15 +42,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SessionOnlyRequest'
+              $ref: "#/components/schemas/SessionOnlyRequest"
       responses:
-        '200':
+        "200":
           description: Link revoked
           content:
             application/json:
               schema:
                 type: object
-                required: [ok]
+                required:
+                  - ok
                 properties:
                   ok:
                     type: boolean
@@ -68,14 +70,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SessionOnlyRequest'
+              $ref: "#/components/schemas/SessionOnlyRequest"
       responses:
-        '200':
+        "200":
           description: Scene snapshot
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SceneState'
+                $ref: "#/components/schemas/SceneState"
   /room/{roomId}/broadcast:
     post:
       operationId: broadcastSceneMutationViaGptSession
@@ -96,7 +98,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [sessionId, payload]
+              required:
+                - sessionId
+                - payload
               properties:
                 sessionId:
                   type: string
@@ -105,42 +109,46 @@ paths:
                     Scene mutation payload. For `scene-add` of a primitive object, do not omit
                     `asset`. A cube without `asset` may be created without the intended appearance.
                   oneOf:
-                    - $ref: '#/components/schemas/SceneAddPayload'
-                    - $ref: '#/components/schemas/SceneDeltaPayload'
-                    - $ref: '#/components/schemas/SceneRemovePayload'
-                    - $ref: '#/components/schemas/SceneEnvPayload'
-                    - $ref: '#/components/schemas/SceneBatchPayload'
+                    - $ref: "#/components/schemas/SceneAddPayload"
+                    - $ref: "#/components/schemas/SceneDeltaPayload"
+                    - $ref: "#/components/schemas/SceneRemovePayload"
+                    - $ref: "#/components/schemas/SceneEnvPayload"
+                    - $ref: "#/components/schemas/SceneBatchPayload"
               example:
                 sessionId: v1.example
                 payload:
                   kind: scene-add
                   objectId: ai-cube-1
                   name: Orange Cube
-                  position: [0, 0.5, 0]
-                  rotation: [0, 0, 0, 1]
-                  scale: [1, 1, 1]
+                  position:
+                    - 0
+                    - 0.5
+                    - 0
+                  rotation:
+                    - 0
+                    - 0
+                    - 0
+                    - 1
+                  scale:
+                    - 1
+                    - 1
+                    - 1
                   asset:
                     type: primitive
                     primitive: box
-                    color: '#ff8800'
+                    color: "#ff8800"
       responses:
-        '200':
+        "200":
           description: Broadcast result
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BroadcastResponse'
+                $ref: "#/components/schemas/BroadcastResponse"
   /room/{roomId}/ai-command:
     post:
       operationId: runAiCommandViaGptSession
       summary: Request a browser-only action from the linked peer
-      description: |
-        Use this for browser-only actions such as current selection queries, camera queries,
-        focus, undo/redo, screenshots, URL-based GLB import, URL-based image/video/text import,
-        skybox updates, and GLB animation clip switching. Use action `getSelection` to retrieve the objects currently
-        selected by the linked browser user. Selection is browser-local/session-local and
-        is not part of the shared scene snapshot. For `focusObject`, always send
-        `params.objectId`. Do not call `focusObject` without an object id.
+      description: Browser-side actions are selection, camera, focus, imports, skybox, screenshots, and animation clips.
       parameters:
         - in: path
           name: roomId
@@ -153,7 +161,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [sessionId, action]
+              required:
+                - sessionId
+                - action
               properties:
                 sessionId:
                   type: string
@@ -183,16 +193,16 @@ paths:
                     imports and skybox changes, send at least
                     `{ "url": "https://..." }`.
                   oneOf:
-                    - $ref: '#/components/schemas/GetSelectionParams'
-                    - $ref: '#/components/schemas/GetCameraPoseParams'
-                    - $ref: '#/components/schemas/FocusObjectParams'
-                    - $ref: '#/components/schemas/UndoRedoParams'
-                    - $ref: '#/components/schemas/GetHistoryParams'
-                    - $ref: '#/components/schemas/ScreenshotParams'
-                    - $ref: '#/components/schemas/UploadGlbFromUrlParams'
-                    - $ref: '#/components/schemas/UrlImportParams'
-                    - $ref: '#/components/schemas/SetSkyboxFromImageUrlParams'
-                    - $ref: '#/components/schemas/SetAnimationClipParams'
+                    - $ref: "#/components/schemas/GetSelectionParams"
+                    - $ref: "#/components/schemas/GetCameraPoseParams"
+                    - $ref: "#/components/schemas/FocusObjectParams"
+                    - $ref: "#/components/schemas/UndoRedoParams"
+                    - $ref: "#/components/schemas/GetHistoryParams"
+                    - $ref: "#/components/schemas/ScreenshotParams"
+                    - $ref: "#/components/schemas/UploadGlbFromUrlParams"
+                    - $ref: "#/components/schemas/UrlImportParams"
+                    - $ref: "#/components/schemas/SetSkyboxFromImageUrlParams"
+                    - $ref: "#/components/schemas/SetAnimationClipParams"
                 targetPeerId:
                   type: string
             examples:
@@ -223,7 +233,10 @@ paths:
                   params:
                     url: https://example.com/model.glb
                     objectId: web-demo-1
-                    position: [0, 0.5, 0]
+                    position:
+                      - 0
+                      - 0.5
+                      - 0
               addImageFromUrl:
                 summary: Add an image panel from a URL
                 value:
@@ -232,7 +245,10 @@ paths:
                   params:
                     url: https://example.com/reference.jpg
                     objectId: ref-image-1
-                    position: [0, 1.2, -1.5]
+                    position:
+                      - 0
+                      - 1.2
+                      - -1.5
               setSkyboxFromImageUrl:
                 summary: Replace the skybox from an image URL
                 value:
@@ -250,24 +266,29 @@ paths:
                     clipName: laugh
                     mode: loop
       responses:
-        '200':
+        "200":
           description: AI command result
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AiCommandResponse'
+                $ref: "#/components/schemas/AiCommandResponse"
 components:
   schemas:
     SessionOnlyRequest:
       type: object
-      required: [sessionId]
+      required:
+        - sessionId
       properties:
         sessionId:
           type: string
           description: Opaque session token `v1.<base64url(iv|ciphertext|tag)>`
     GptRedeemResponse:
       type: object
-      required: [ok, sessionId, roomId, expiresAt]
+      required:
+        - ok
+        - sessionId
+        - roomId
+        - expiresAt
       properties:
         ok:
           type: boolean
@@ -279,7 +300,11 @@ components:
           type: integer
     BroadcastResponse:
       type: object
-      required: [ok, room, peers, userPresent]
+      required:
+        - ok
+        - room
+        - peers
+        - userPresent
       properties:
         ok:
           type: boolean
@@ -291,7 +316,13 @@ components:
           type: boolean
     AiCommandResponse:
       type: object
-      required: [ok, room, peers, userPresent, targetPeerId, result]
+      required:
+        - ok
+        - room
+        - peers
+        - userPresent
+        - targetPeerId
+        - result
       properties:
         ok:
           type: boolean
@@ -304,10 +335,12 @@ components:
         targetPeerId:
           type: string
         result:
-          $ref: '#/components/schemas/AiResultPayload'
+          $ref: "#/components/schemas/AiResultPayload"
     AiResultPayload:
       type: object
-      required: [kind, ok]
+      required:
+        - kind
+        - ok
       properties:
         kind:
           type: string
@@ -333,7 +366,8 @@ components:
       example: {}
     FocusObjectParams:
       type: object
-      required: [objectId]
+      required:
+        - objectId
       additionalProperties: false
       properties:
         objectId:
@@ -366,7 +400,8 @@ components:
       example: {}
     UploadGlbFromUrlParams:
       type: object
-      required: [url]
+      required:
+        - url
       properties:
         url:
           type: string
@@ -376,18 +411,22 @@ components:
         name:
           type: string
         position:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
         rotation:
-          $ref: '#/components/schemas/Quat'
+          $ref: "#/components/schemas/Quat"
         scale:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
       example:
         url: https://example.com/model.glb
         objectId: web-demo-1
-        position: [0, 0.5, 0]
+        position:
+          - 0
+          - 0.5
+          - 0
     UrlImportParams:
       type: object
-      required: [url]
+      required:
+        - url
       properties:
         url:
           type: string
@@ -397,18 +436,22 @@ components:
         name:
           type: string
         position:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
         rotation:
-          $ref: '#/components/schemas/Quat'
+          $ref: "#/components/schemas/Quat"
         scale:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
       example:
         url: https://example.com/reference.jpg
         objectId: ref-image-1
-        position: [0, 1.2, -1.5]
+        position:
+          - 0
+          - 1.2
+          - -1.5
     SetSkyboxFromImageUrlParams:
       type: object
-      required: [url]
+      required:
+        - url
       properties:
         url:
           type: string
@@ -434,7 +477,9 @@ components:
           description: Alias for clipName.
         mode:
           type: string
-          enum: [loop, once]
+          enum:
+            - loop
+            - once
           default: loop
         speed:
           type: number
@@ -444,9 +489,12 @@ components:
           type: boolean
           default: true
       anyOf:
-        - required: [clip]
-        - required: [clipName]
-        - required: [name]
+        - required:
+            - clip
+        - required:
+            - clipName
+        - required:
+            - name
       example:
         objectId: minotauros-001
         clipName: laugh
@@ -467,7 +515,9 @@ components:
         Adds a new object to the scene. If you are creating a primitive object,
         include `asset` and set `asset.type=primitive`, `asset.primitive`, and `asset.color`.
         Do not rely on `name` alone to describe the appearance.
-      required: [kind, objectId]
+      required:
+        - kind
+        - objectId
       properties:
         kind:
           type: string
@@ -479,18 +529,18 @@ components:
           type: string
           description: Human-readable label. This does not define appearance.
         position:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
         rotation:
-          $ref: '#/components/schemas/Quat'
+          $ref: "#/components/schemas/Quat"
         scale:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
         asset:
           description: |
             Required when adding a primitive object. Example:
             `{ "type": "primitive", "primitive": "box", "color": "#ff8800" }`
           oneOf:
-            - $ref: '#/components/schemas/PrimitiveAsset'
-            - $ref: '#/components/schemas/GenericAsset'
+            - $ref: "#/components/schemas/PrimitiveAsset"
+            - $ref: "#/components/schemas/GenericAsset"
         meshPath:
           type: string
         onBehalfOf:
@@ -499,16 +549,28 @@ components:
         kind: scene-add
         objectId: ai-cube-1
         name: Orange Cube
-        position: [0, 0.5, 0]
-        rotation: [0, 0, 0, 1]
-        scale: [1, 1, 1]
+        position:
+          - 0
+          - 0.5
+          - 0
+        rotation:
+          - 0
+          - 0
+          - 0
+          - 1
+        scale:
+          - 1
+          - 1
+          - 1
         asset:
           type: primitive
           primitive: box
-          color: '#ff8800'
+          color: "#ff8800"
     SceneDeltaPayload:
       type: object
-      required: [kind, objectId]
+      required:
+        - kind
+        - objectId
       properties:
         kind:
           type: string
@@ -518,22 +580,24 @@ components:
         name:
           type: string
         position:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
         rotation:
-          $ref: '#/components/schemas/Quat'
+          $ref: "#/components/schemas/Quat"
         scale:
-          $ref: '#/components/schemas/Vec3'
+          $ref: "#/components/schemas/Vec3"
         asset:
           oneOf:
-            - $ref: '#/components/schemas/PrimitiveAsset'
-            - $ref: '#/components/schemas/GenericAsset'
+            - $ref: "#/components/schemas/PrimitiveAsset"
+            - $ref: "#/components/schemas/GenericAsset"
         meshPath:
           type: string
         onBehalfOf:
           type: string
     SceneRemovePayload:
       type: object
-      required: [kind, objectId]
+      required:
+        - kind
+        - objectId
       properties:
         kind:
           type: string
@@ -544,7 +608,9 @@ components:
           type: string
     SceneEnvPayload:
       type: object
-      required: [kind, envId]
+      required:
+        - kind
+        - envId
       properties:
         kind:
           type: string
@@ -555,7 +621,9 @@ components:
           type: string
     SceneBatchPayload:
       type: object
-      required: [kind, ops]
+      required:
+        - kind
+        - ops
       properties:
         kind:
           type: string
@@ -564,10 +632,10 @@ components:
           type: array
           items:
             oneOf:
-              - $ref: '#/components/schemas/SceneAddPayload'
-              - $ref: '#/components/schemas/SceneDeltaPayload'
-              - $ref: '#/components/schemas/SceneRemovePayload'
-              - $ref: '#/components/schemas/SceneEnvPayload'
+              - $ref: "#/components/schemas/SceneAddPayload"
+              - $ref: "#/components/schemas/SceneDeltaPayload"
+              - $ref: "#/components/schemas/SceneRemovePayload"
+              - $ref: "#/components/schemas/SceneEnvPayload"
         onBehalfOf:
           type: string
       example:
@@ -576,16 +644,28 @@ components:
           - kind: scene-add
             objectId: ai-cube-1
             name: Orange Cube
-            position: [0, 0.5, 0]
-            rotation: [0, 0, 0, 1]
-            scale: [1, 1, 1]
+            position:
+              - 0
+              - 0.5
+              - 0
+            rotation:
+              - 0
+              - 0
+              - 0
+              - 1
+            scale:
+              - 1
+              - 1
+              - 1
             asset:
               type: primitive
               primitive: box
-              color: '#ff8800'
+              color: "#ff8800"
     PrimitiveAsset:
       type: object
-      required: [type, primitive]
+      required:
+        - type
+        - primitive
       properties:
         type:
           type: string
@@ -593,14 +673,18 @@ components:
         primitive:
           type: string
           description: Primitive mesh type such as box, sphere, cylinder, or plane.
-          enum: [box, sphere, cylinder, plane]
+          enum:
+            - box
+            - sphere
+            - cylinder
+            - plane
         color:
           type: string
           description: Hex color for the primitive, for example `#ff8800`.
       example:
         type: primitive
         primitive: box
-        color: '#ff8800'
+        color: "#ff8800"
     GenericAsset:
       type: object
       description: Non-primitive asset payload used by custom meshes or future asset types.
