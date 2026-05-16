@@ -1195,6 +1195,23 @@ namespace Afjk.SceneSync
                 _meshPaths[objectId] = meshPath;
             }
 
+            // Unity 由来の objectId は整数（InstanceID）。
+            // ローカルにその instanceId を持つ GO があれば自分自身のブロードキャストなので
+            // リモート temporary を作らずそのまま登録して返す。
+            if (int.TryParse(objectId, out var parsedInstanceId))
+            {
+                foreach (var candidate in GetAllSyncTargets())
+                {
+                    if (candidate.GetInstanceID() == parsedInstanceId && !IsTemporaryObject(candidate))
+                    {
+                        _managedObjects[objectId] = candidate;
+                        _knownObjectIds.Add(objectId);
+                        Debug.Log("[SceneSync] scene-add received for own Unity-authored object; skipping remote creation: " + objectId);
+                        return;
+                    }
+                }
+            }
+
             // メッシュがある場合は glB をダウンロードしてインポート
             if (!string.IsNullOrEmpty(meshPath))
             {
