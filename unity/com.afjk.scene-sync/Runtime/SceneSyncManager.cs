@@ -1436,6 +1436,17 @@ namespace Afjk.SceneSync
             _locks.Remove(objectId);
         }
 
+        private bool ShouldIncludeInUnitySceneState(SceneSyncIdentity identity)
+        {
+            if (identity == null) return false;
+
+            // Do not re-export remote temporary objects received from Web.
+            if (identity.Origin == SceneSyncOrigin.Remote) return false;
+            if (identity.Temporary) return false;
+
+            return true;
+        }
+
         private async System.Threading.Tasks.Task HandleSceneRequest(string fromId)
         {
             Debug.Log("[SceneSync] Responding to scene-request for: " + fromId);
@@ -1446,6 +1457,7 @@ namespace Afjk.SceneSync
             objectsJson.Append("{");
             bool first = true;
             var pendingUploads = new List<(byte[] glb, string path, string assetId)>();
+            int sceneStateObjectCount = 0;
 
             foreach (var go in rootObjects)
             {
@@ -1493,14 +1505,24 @@ namespace Afjk.SceneSync
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + assetIdJson + "}");
+                sceneStateObjectCount++;
             }
 
-            // Web 由来のオブジェクトも含める
+            // Web 由来のオブジェクトも含める（ただしリモート一時的オブジェクトは除外）
             foreach (var kvp in _managedObjects)
             {
                 if (int.TryParse(kvp.Key, out _)) continue; // Unity 由来はスキップ（上で処理済み）
                 var go = kvp.Value;
                 if (go == null) continue;
+
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (!ShouldIncludeInUnitySceneState(identity))
+                {
+                    var originStr = identity != null ? identity.Origin.ToString() : "Unknown";
+                    var temporaryStr = identity != null ? identity.Temporary.ToString() : "Unknown";
+                    Debug.Log($"[SceneSync] scene-state skip: objectId={kvp.Key} origin={originStr} temporary={temporaryStr}");
+                    continue;
+                }
 
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
@@ -1524,9 +1546,12 @@ namespace Afjk.SceneSync
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
                     meshPathJson + assetIdJson + "}");
+                sceneStateObjectCount++;
             }
 
             objectsJson.Append("}");
+
+            Debug.Log($"[SceneSync] Building scene-state. count={sceneStateObjectCount}");
 
             // アップロードを先に完了させる
             foreach (var (glb, path, assetId) in pendingUploads)
