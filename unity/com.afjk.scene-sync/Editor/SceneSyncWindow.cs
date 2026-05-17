@@ -1692,8 +1692,8 @@ namespace Afjk.SceneSync.Editor
 
                 var originStr2 = identity != null ? identity.Origin.ToString() : "None";
                 var temporaryStr2 = identity != null ? identity.Temporary.ToString() : "None";
-                var isUnityOrigin = identity != null && identity.Origin == SceneSyncOrigin.Unity;
-                Debug.Log($"[SceneSync] scene-state include: source=managedObjects objectId={kvp.Key} name={go.name} origin={originStr2} temporary={temporaryStr2} visualBasis={(isUnityOrigin ? "unity" : "none")}");
+                var isUnityVisualBasis = identity == null || identity.Origin == SceneSyncOrigin.Unity;
+                Debug.Log($"[SceneSync] scene-state include: source=managedObjects objectId={kvp.Key} name={go.name} origin={originStr2} temporary={temporaryStr2} visualBasis={(isUnityVisualBasis ? "unity" : "none")}");
 
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
@@ -1705,7 +1705,7 @@ namespace Afjk.SceneSync.Editor
                 if (!first) objectsJson.Append(",");
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-                var assetJson = path != null && isUnityOrigin
+                var assetJson = path != null && isUnityVisualBasis
                     ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}"
                     : "";
                 objectsJson.Append("\"" + kvp.Key + "\":{\"name\":\"" + go.name + "\"" +
