@@ -1493,7 +1493,8 @@ namespace Afjk.SceneSync
 
                 var originStr = identity != null ? identity.Origin.ToString() : "None";
                 var temporaryStr = identity != null ? identity.Temporary.ToString() : "None";
-                Debug.Log($"[SceneSync] scene-state include: source=rootObjects objectId={objectId} name={go.name} origin={originStr} temporary={temporaryStr}");
+                var isUnityVisualBasis = identity == null || identity.Origin == SceneSyncOrigin.Unity;
+                Debug.Log($"[SceneSync] scene-state include: source=rootObjects objectId={objectId} name={go.name} origin={originStr} temporary={temporaryStr} visualBasis={(isUnityVisualBasis ? "unity" : "none")}");
 
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
@@ -1531,11 +1532,14 @@ namespace Afjk.SceneSync
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
                 var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
+                var assetJson = path != null && isUnityVisualBasis
+                    ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}"
+                    : "";
                 objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + assetIdJson + "}");
+                    meshPathJson + assetIdJson + assetJson + "}");
                 sceneStateObjectCount++;
             }
 
@@ -1557,7 +1561,8 @@ namespace Afjk.SceneSync
 
                 var originStr2 = identity != null ? identity.Origin.ToString() : "None";
                 var temporaryStr2 = identity != null ? identity.Temporary.ToString() : "None";
-                Debug.Log($"[SceneSync] scene-state include: source=managedObjects objectId={kvp.Key} name={go.name} origin={originStr2} temporary={temporaryStr2}");
+                var isUnityVisualBasis = identity == null || identity.Origin == SceneSyncOrigin.Unity;
+                Debug.Log($"[SceneSync] scene-state include: source=managedObjects objectId={kvp.Key} name={go.name} origin={originStr2} temporary={temporaryStr2} visualBasis={(isUnityVisualBasis ? "unity" : "none")}");
 
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
@@ -1576,11 +1581,14 @@ namespace Afjk.SceneSync
                 first = false;
                 var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
                 var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
+                var assetJson = path != null && isUnityVisualBasis
+                    ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}"
+                    : "";
                 objectsJson.Append("\"" + kvp.Key + "\":{\"name\":\"" + go.name + "\"" +
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + assetIdJson + "}");
+                    meshPathJson + assetIdJson + assetJson + "}");
                 sceneStateObjectCount++;
             }
 
