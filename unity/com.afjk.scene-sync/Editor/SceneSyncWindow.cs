@@ -1264,11 +1264,33 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
+            var glbSizeMiB = glb.Length / 1024f / 1024f;
+            Debug.Log(
+                $"[SceneSync] Exported GLB: {go.name}, " +
+                $"objectId={identity.ObjectId}, " +
+                $"size={glb.Length} bytes ({glbSizeMiB:F2} MiB)"
+            );
+
             var objectId = identity.ObjectId;
             var path = PresenceClient.GenerateRandomPath();
+
+            var uploaded = await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+            if (!uploaded)
+            {
+                identity.State = SceneSyncState.Error;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                Debug.LogError(
+                    $"[SceneSync] Publish aborted because GLB upload failed: " +
+                    $"{go.name}, objectId={objectId}, path={path}, size={glb.Length} bytes ({glbSizeMiB:F2} MiB)"
+                );
+                return;
+            }
+
             _meshPaths[objectId] = path;
-            await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
             identity.MeshPath = path;
+            identity.State = SceneSyncState.Synced;
             EditorUtility.SetDirty(identity);
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
 
@@ -1614,7 +1636,8 @@ namespace Afjk.SceneSync.Editor
             var objectsJson = new System.Text.StringBuilder();
             objectsJson.Append("{");
             bool first = true;
-            var pendingUploads = new List<(byte[] glb, string path)>();
+            var pendingUploads = new List<(string objectId, byte[] glb, string path)>();
+            var objectData = new Dictionary<string, (GameObject go, string path, Transform transform)>();
             int sceneStateObjectCount = 0;
 
             foreach (var go in rootObjects)
@@ -1640,10 +1663,6 @@ namespace Afjk.SceneSync.Editor
                 var temporaryStr = identity != null ? identity.Temporary.ToString() : "None";
                 Debug.Log($"[SceneSync] scene-state include: source=rootObjects objectId={objectId} name={go.name} origin={originStr} temporary={temporaryStr}");
 
-                var pos = go.transform.position;
-                var rot = go.transform.rotation;
-                var scl = go.transform.localScale;
-
                 // 保存済み meshPath を優先使用
                 string path = null;
                 if (_meshPaths.TryGetValue(objectId, out var savedPath))
@@ -1657,20 +1676,11 @@ namespace Afjk.SceneSync.Editor
                     if (glb != null)
                     {
                         path = PresenceClient.GenerateRandomPath();
-                        pendingUploads.Add((glb, path));
-                        _meshPaths[objectId] = path;
+                        pendingUploads.Add((objectId, glb, path));
                     }
                 }
 
-                if (!first) objectsJson.Append(",");
-                first = false;
-                var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-                var assetJson = path != null ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}" : "";
-                objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
-                    ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                    ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
-                    ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + assetJson + "}");
+                objectData[objectId] = (go, path, go.transform);
                 sceneStateObjectCount++;
             }
 
@@ -1690,39 +1700,69 @@ namespace Afjk.SceneSync.Editor
                     continue;
                 }
 
-                var originStr2 = identity != null ? identity.Origin.ToString() : "None";
-                var temporaryStr2 = identity != null ? identity.Temporary.ToString() : "None";
-                var isUnityVisualBasis = identity == null || identity.Origin == SceneSyncOrigin.Unity;
-                Debug.Log($"[SceneSync] scene-state include: source=managedObjects objectId={kvp.Key} name={go.name} origin={originStr2} temporary={temporaryStr2} visualBasis={(isUnityVisualBasis ? "unity" : "none")}");
-
-                var pos = go.transform.position;
-                var rot = go.transform.rotation;
-                var scl = go.transform.localScale;
-
                 string path = null;
                 _meshPaths.TryGetValue(kvp.Key, out path);
 
-                if (!first) objectsJson.Append(",");
-                first = false;
-                var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-                var assetJson = path != null && isUnityVisualBasis
-                    ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}"
-                    : "";
-                objectsJson.Append("\"" + kvp.Key + "\":{\"name\":\"" + go.name + "\"" +
-                    ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                    ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
-                    ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    meshPathJson + assetJson + "}");
+                objectData[kvp.Key] = (go, path, go.transform);
                 sceneStateObjectCount++;
             }
-
-            objectsJson.Append("}");
 
             Debug.Log($"[SceneSync] Building scene-state. count={sceneStateObjectCount}");
 
             // アップロードを先に完了させる
-            foreach (var (glb, path) in pendingUploads)
-                await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+            var failedObjectIds = new HashSet<string>();
+            foreach (var (objectId, glb, path) in pendingUploads)
+            {
+                var uploaded = await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
+                if (uploaded)
+                {
+                    _meshPaths[objectId] = path;
+                }
+                else
+                {
+                    failedObjectIds.Add(objectId);
+                }
+            }
+
+            // JSON を構築（失敗したオブジェクトは scene-state から除外）
+            first = true;
+            foreach (var kvp in objectData)
+            {
+                var objectId = kvp.Key;
+                var (go, path, transform) = kvp.Value;
+
+                // アップロード失敗オブジェクトは scene-state に含めない
+                if (failedObjectIds.Contains(objectId))
+                {
+                    Debug.LogWarning(
+                        $"[SceneSync] scene-state skipped because GLB upload failed: " +
+                        $"objectId={objectId}, name={go.name}"
+                    );
+                    continue;
+                }
+
+                if (!first) objectsJson.Append(",");
+                first = false;
+
+                var isUnityVisualBasis = go.GetComponent<SceneSyncIdentity>() == null
+                    || go.GetComponent<SceneSyncIdentity>().Origin == SceneSyncOrigin.Unity;
+                var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
+                var assetJson = path != null && isUnityVisualBasis
+                    ? ",\"asset\":{\"type\":\"mesh\",\"visualBasis\":\"unity\"}"
+                    : "";
+
+                var pos = transform.position;
+                var rot = transform.rotation;
+                var scl = transform.localScale;
+
+                objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
+                    ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
+                    ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
+                    ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                    meshPathJson + assetJson + "}");
+            }
+
+            objectsJson.Append("}");
 
             // handoff で 1対1 返信（broadcast ではない）
             var payload = "{\"kind\":\"scene-state\",\"objects\":" + objectsJson + "}";
