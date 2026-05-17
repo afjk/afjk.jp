@@ -3095,6 +3095,12 @@ function duplicateSelectedObject() {
     )
   );
 
+  console.debug('[scene-copy] duplicate payload asset', {
+    objectId: newObjectId,
+    meshPath,
+    visualBasis: asset?.visualBasis,
+    rotation,
+  });
   console.debug('[scene-copy] root rotation copied as-is', {
     sourceObjectId,
     visualBasis: asset?.visualBasis,
@@ -5429,6 +5435,11 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     : undefined;
 
   console.log('[SceneSync] load mesh', { objectId, meshPath });
+  console.debug('[scene-glb-load] visualBasis input', {
+    objectId,
+    meshPath,
+    visualBasis: info.asset?.visualBasis,
+  });
 
   (async () => {
     try {
@@ -5521,9 +5532,13 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           model.userData.objectId = objectId;
           model.userData.name = info.name;
           model.userData.meshPath = meshPath;
-          if (info.asset) {
-            model.userData.asset = structuredClone(info.asset);
-          }
+          model.userData.asset = cloneJsonSafe(info.asset || null);
+
+          console.debug('[scene-glb-load] GLB loaded for mesh path', {
+            objectId,
+            meshPath,
+            visualBasis: info.asset?.visualBasis,
+          });
 
           if (info.runtime) {
             model.userData.runtime = {
@@ -6092,6 +6107,19 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
   const url = URL.createObjectURL(blob);
   try {
     const gltf = await new GLTFLoader().loadAsync(url);
+
+    // Apply visual-only correction for Unity-authored GLBs
+    const asset = obj?.userData?.asset || info?.asset || null;
+    const isUnityBasis = asset?.visualBasis === "unity";
+    console.debug('[glb-loader] visualBasis correction', {
+      objectId,
+      visualBasis: asset?.visualBasis,
+      applyUnityBasisCorrection: isUnityBasis,
+    });
+    if (isUnityBasis) {
+      gltf.scene.rotation.y = Math.PI;
+    }
+
     const wrapper = new THREE.Group();
     wrapper.add(gltf.scene);
     wrapper.updateMatrixWorld(true);
