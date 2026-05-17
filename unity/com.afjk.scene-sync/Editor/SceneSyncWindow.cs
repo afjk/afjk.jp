@@ -1610,6 +1610,14 @@ namespace Afjk.SceneSync.Editor
                 if (!IsSyncTarget(go)) continue;
 
                 var objectId = go.GetInstanceID().ToString();
+
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                if (identity != null && !ShouldIncludeInUnitySceneState(identity))
+                {
+                    Debug.Log($"[SceneSync] scene-state skip: objectId={objectId} origin={identity.Origin} temporary={identity.Temporary}");
+                    continue;
+                }
+
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
