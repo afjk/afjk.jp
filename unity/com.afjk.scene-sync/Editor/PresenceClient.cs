@@ -200,24 +200,52 @@ namespace Afjk.SceneSync.Editor
             return await GlbExporter.ExportGameObjectAsGlb(go);
         }
 
-        public static async Task UploadGlb(byte[] glb, string blobBaseUrl, string path)
+        public static async Task<bool> UploadGlb(byte[] glb, string blobBaseUrl, string path)
         {
-            if (glb == null || glb.Length == 0) return;
+            if (glb == null || glb.Length == 0)
+            {
+                Debug.LogWarning("[SceneSync] Upload failed: glb is null or empty");
+                return false;
+            }
 
             try
             {
                 var url = blobBaseUrl + "/" + path;
+                var glbSizeMiB = glb.Length / 1024f / 1024f;
                 var content = new ByteArrayContent(glb);
                 content.Headers.ContentType = new MediaTypeHeaderValue("model/gltf-binary");
                 var response = await _http.PostAsync(url, content);
                 if (!response.IsSuccessStatusCode)
                 {
-                    Debug.LogWarning("[SceneSync] Upload failed: " + response.StatusCode);
+                    var body = "";
+                    try
+                    {
+                        body = await response.Content.ReadAsStringAsync();
+                    }
+                    catch { }
+
+                    Debug.LogWarning(
+                        $"[SceneSync] Upload failed: status={(int)response.StatusCode} {response.ReasonPhrase}, " +
+                        $"size={glb.Length} bytes ({glbSizeMiB:F2} MiB), " +
+                        $"url={url}, body={body}"
+                    );
+                    return false;
                 }
+
+                Debug.Log(
+                    $"[SceneSync] Upload succeeded: size={glb.Length} bytes ({glbSizeMiB:F2} MiB), " +
+                    $"url={url}"
+                );
+                return true;
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[SceneSync] Upload failed: " + ex.Message);
+                var glbSizeMiB = glb.Length / 1024f / 1024f;
+                Debug.LogWarning(
+                    $"[SceneSync] Upload failed: {ex.Message}, " +
+                    $"size={glb.Length} bytes ({glbSizeMiB:F2} MiB)"
+                );
+                return false;
             }
         }
 
