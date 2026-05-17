@@ -1677,7 +1677,6 @@ namespace Afjk.SceneSync.Editor
                     {
                         path = PresenceClient.GenerateRandomPath();
                         pendingUploads.Add((objectId, glb, path));
-                        _meshPaths[objectId] = path;
                     }
                 }
 
@@ -1715,24 +1714,31 @@ namespace Afjk.SceneSync.Editor
             foreach (var (objectId, glb, path) in pendingUploads)
             {
                 var uploaded = await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
-                if (!uploaded)
+                if (uploaded)
+                {
+                    _meshPaths[objectId] = path;
+                }
+                else
                 {
                     failedObjectIds.Add(objectId);
-                    _meshPaths.Remove(objectId);
                 }
             }
 
-            // JSON を構築（失敗したオブジェクトは meshPath を除外）
+            // JSON を構築（失敗したオブジェクトは scene-state から除外）
             first = true;
             foreach (var kvp in objectData)
             {
                 var objectId = kvp.Key;
                 var (go, path, transform) = kvp.Value;
 
-                // アップロード失敗オブジェクトはmeshPathを除外
+                // アップロード失敗オブジェクトは scene-state に含めない
                 if (failedObjectIds.Contains(objectId))
                 {
-                    path = null;
+                    Debug.LogWarning(
+                        $"[SceneSync] scene-state skipped because GLB upload failed: " +
+                        $"objectId={objectId}, name={go.name}"
+                    );
+                    continue;
                 }
 
                 if (!first) objectsJson.Append(",");
