@@ -12,6 +12,8 @@ namespace Afjk.SceneSync.Editor
     public class SceneSyncWindow : EditorWindow
     {
         private const string ShowSceneSyncGizmosPrefKey = "Afjk.SceneSync.ShowSceneSyncGizmos";
+        private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
+        private const float DefaultMaxGlbUploadMiB = 50f;
 
         internal static bool ShowSceneSyncGizmos
         {
@@ -53,6 +55,7 @@ namespace Afjk.SceneSync.Editor
         private string _nickname = "Unity";
         private bool _connected;
         private List<PeerInfo> _peers = new List<PeerInfo>();
+        private float _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
 
         private Dictionary<string, TransformSnapshot> _lastSnapshots = new Dictionary<string, TransformSnapshot>();
         private double _lastSendTime;
@@ -73,6 +76,12 @@ namespace Afjk.SceneSync.Editor
 
         private void OnEnable()
         {
+            _maxGlbUploadMiB = EditorPrefs.GetFloat(MaxGlbUploadMiBPrefKey, DefaultMaxGlbUploadMiB);
+            if (_maxGlbUploadMiB <= 0f)
+            {
+                _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
+            }
+
             _client = new PresenceClient();
             _client.OnConnected += () =>
             {
@@ -126,6 +135,25 @@ namespace Afjk.SceneSync.Editor
                 .Replace("ws://", "http://");
             if (url.EndsWith("/")) url = url.TrimEnd('/');
             return url + "/blob";
+        }
+
+        private long MaxGlbUploadBytes
+        {
+            get
+            {
+                var mib = Mathf.Max(1f, _maxGlbUploadMiB);
+                return (long)(mib * 1024f * 1024f);
+            }
+        }
+
+        private static string FormatBytesMiB(long bytes)
+        {
+            return $"{bytes} bytes ({bytes / 1024f / 1024f:F2} MiB)";
+        }
+
+        private bool IsGlbWithinUploadLimit(byte[] glb)
+        {
+            return glb != null && glb.Length <= MaxGlbUploadBytes;
         }
 
         /// <summary>
@@ -442,6 +470,23 @@ namespace Afjk.SceneSync.Editor
                 "Auto: Detects animations and uses UnityGLTF if available\n" +
                 "glTFast: Always use glTFast (no animations)\n" +
                 "UnityGltf: Always use UnityGLTF (Editor-only)",
+                MessageType.Info
+            );
+
+            GUILayout.Space(8);
+
+            EditorGUI.BeginChangeCheck();
+            var newMaxGlbUploadMiB = EditorGUILayout.FloatField("Max GLB Upload Size (MiB)", _maxGlbUploadMiB);
+            if (EditorGUI.EndChangeCheck())
+            {
+                _maxGlbUploadMiB = Mathf.Max(1f, newMaxGlbUploadMiB);
+                EditorPrefs.SetFloat(MaxGlbUploadMiBPrefKey, _maxGlbUploadMiB);
+            }
+
+            EditorGUILayout.HelpBox(
+                "GLB files larger than this value are not uploaded. " +
+                "This is a Unity-side precheck to avoid slow failed uploads. " +
+                "The server may still reject uploads with its own limit.",
                 MessageType.Info
             );
         }
@@ -1271,6 +1316,21 @@ namespace Afjk.SceneSync.Editor
                 $"size={glb.Length} bytes ({glbSizeMiB:F2} MiB)"
             );
 
+            if (!IsGlbWithinUploadLimit(glb))
+            {
+                identity.State = SceneSyncState.Error;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                Debug.LogError(
+                    $"[SceneSync] Publish aborted before upload because GLB is too large: " +
+                    $"{go.name}, objectId={identity.ObjectId}, " +
+                    $"size={FormatBytesMiB(glb.Length)}, " +
+                    $"limit={FormatBytesMiB(MaxGlbUploadBytes)}"
+                );
+                return;
+            }
+
             var objectId = identity.ObjectId;
             var path = PresenceClient.GenerateRandomPath();
 
@@ -1675,6 +1735,18 @@ namespace Afjk.SceneSync.Editor
                     var glb = await PresenceClient.ExportGameObjectAsGlb(go);
                     if (glb != null)
                     {
+                        if (!IsGlbWithinUploadLimit(glb))
+                        {
+                            Debug.LogWarning(
+                                $"[SceneSync] scene-state skipped before upload because GLB is too large: " +
+                                $"objectId={objectId}, name={go.name}, " +
+                                $"size={FormatBytesMiB(glb.Length)}, " +
+                                $"limit={FormatBytesMiB(MaxGlbUploadBytes)}"
+                            );
+                            // サイズ超過オブジェクトは objectData に追加しない
+                            continue;
+                        }
+
                         path = PresenceClient.GenerateRandomPath();
                         pendingUploads.Add((objectId, glb, path));
                     }
