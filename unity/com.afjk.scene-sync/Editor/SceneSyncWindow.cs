@@ -1581,6 +1581,18 @@ namespace Afjk.SceneSync.Editor
             _locks.Remove(objectId);
         }
 
+        private static bool IsUnderSceneSyncInternalHierarchy(GameObject go)
+        {
+            var t = go.transform;
+            while (t != null)
+            {
+                if (t.name == "SceneSync Temporary") return true;
+                if (t.name == "SceneSyncManager") return true;
+                t = t.parent;
+            }
+            return false;
+        }
+
         private bool ShouldIncludeInUnitySceneState(SceneSyncIdentity identity)
         {
             if (identity == null) return false;
@@ -1611,12 +1623,22 @@ namespace Afjk.SceneSync.Editor
 
                 var objectId = go.GetInstanceID().ToString();
 
+                if (IsUnderSceneSyncInternalHierarchy(go))
+                {
+                    Debug.Log($"[SceneSync] scene-state skip: internal hierarchy: objectId={objectId} name={go.name}");
+                    continue;
+                }
+
                 var identity = go.GetComponent<SceneSyncIdentity>();
                 if (identity != null && !ShouldIncludeInUnitySceneState(identity))
                 {
                     Debug.Log($"[SceneSync] scene-state skip: objectId={objectId} origin={identity.Origin} temporary={identity.Temporary}");
                     continue;
                 }
+
+                var originStr = identity != null ? identity.Origin.ToString() : "None";
+                var temporaryStr = identity != null ? identity.Temporary.ToString() : "None";
+                Debug.Log($"[SceneSync] scene-state include: source=rootObjects objectId={objectId} name={go.name} origin={originStr} temporary={temporaryStr}");
 
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
@@ -1667,6 +1689,10 @@ namespace Afjk.SceneSync.Editor
                     Debug.Log($"[SceneSync] scene-state skip: objectId={kvp.Key} origin={originStr} temporary={temporaryStr}");
                     continue;
                 }
+
+                var originStr2 = identity != null ? identity.Origin.ToString() : "None";
+                var temporaryStr2 = identity != null ? identity.Temporary.ToString() : "None";
+                Debug.Log($"[SceneSync] scene-state include: source=managedObjects objectId={kvp.Key} name={go.name} origin={originStr2} temporary={temporaryStr2}");
 
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
