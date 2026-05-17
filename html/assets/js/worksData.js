@@ -123,6 +123,22 @@ export const WORKS = [
     ]
   },
   {
+    id: 'loomlet',
+    type: 'tool',
+    typeLabel: 'Tool',
+    title: { ja: 'Loomlet', en: 'Loomlet' },
+    desc: {
+      ja: '同期可能なふるまいを記述するための軽量データフロー DSL / ランタイム。ノードエディタや VS Code 拡張から、2D / 3D の動きや Scene Sync 向けのグラフを作成できます。',
+      en: 'A lightweight dataflow DSL and runtime for describing syncable behaviors. Create 2D / 3D motion and Scene Sync graphs from the node editor or VS Code extension.'
+    },
+    stat: '',
+    links: [
+      { label: 'Node Editor', url: 'https://afjk.github.io/loomlet/node-editor/' },
+      { label: 'GitHub', url: 'https://github.com/afjk/loomlet' },
+      { label: 'npm', url: 'https://www.npmjs.com/package/@afjk/loomlet' },
+    ]
+  },
+  {
     id: 'scenesync',
     type: 'tool',
     typeLabel: 'Tool',
