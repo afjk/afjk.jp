@@ -3465,6 +3465,7 @@ function deleteObjectById(objectId, options = {}) {
     pushHistory = true,
     notifyScene = true,
     updateSelection = true,
+    ignoreLock = false,
   } = options;
   const attached = managedObjects.get(objectId);
   if (!attached) {
@@ -3484,14 +3485,14 @@ function deleteObjectById(objectId, options = {}) {
     transformCtrl.detach();
   }
 
-  if (locks.has(objectId)) {
+  if (!ignoreLock && locks.has(objectId)) {
     const lockInfo = locks.get(objectId);
     const lockOwnerId = lockInfo?.id;
     if (lockOwnerId && lockOwnerId !== presenceState.id) {
       showToast('他のユーザーが編集中です');
       return false;
     }
-    // 自分のロックなら unlock をブロードキャストして解除
+
     if (broadcastDelete) {
       broadcastUnlockForObjectId(objectId);
     }
@@ -4861,6 +4862,7 @@ function handleHandoff(data) {
         broadcastDelete: false,
         pushHistory: false,
         notifyScene: false,
+        ignoreLock: true,
       });
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(objectId);
@@ -6350,6 +6352,7 @@ function applyOperationToScene(operation) {
         broadcastDelete: false,
         pushHistory: false,
         notifyScene: false,
+        ignoreLock: true,
       });
       // Loom object graph をクリーンアップ
       loomIntegration.clearObjectGraph(operation.objectId);
