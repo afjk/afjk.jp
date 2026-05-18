@@ -20,6 +20,13 @@ namespace Afjk.SceneSync
 
 #if UNITY_EDITOR
         public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
+
+        public static bool IsUnityGltfExportAvailable => UnityGltfExportHandler != null;
+
+        public static bool ShouldRecommendUnityGltf(GameObject root)
+        {
+            return HasExportableAnimation(root) && UnityGltfExportHandler == null;
+        }
 #endif
 
         public static async Task<byte[]> ExportGameObjectAsGlb(GameObject go)
@@ -113,7 +120,7 @@ namespace Afjk.SceneSync
             return SceneSyncGlbExportBackend.GltfFast;
         }
 
-        private static bool HasExportableAnimation(GameObject root)
+        public static bool HasExportableAnimation(GameObject root)
         {
             if (!root) return false;
 

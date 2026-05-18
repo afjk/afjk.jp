@@ -467,11 +467,15 @@ namespace Afjk.SceneSync.Editor
             }
 
             EditorGUILayout.HelpBox(
-                "Auto: Detects animations and uses UnityGLTF if available\n" +
-                "glTFast: Always use glTFast (no animations)\n" +
-                "UnityGltf: Always use UnityGLTF (Editor-only)",
+                "Auto: Uses glTFast for normal objects. If animation is detected and UnityGLTF is available, UnityGLTF is used.\n" +
+                "glTFast: Lightweight static GLB export. Animation is not exported.\n" +
+                "UnityGltf: Uses UnityGLTF for GLB export with animation support. Editor only.",
                 MessageType.Info
             );
+
+            GUILayout.Space(8);
+
+            DrawUnityGltfStatusSection();
 
             GUILayout.Space(8);
 
@@ -489,6 +493,54 @@ namespace Afjk.SceneSync.Editor
                 "The server may still reject uploads with its own limit.",
                 MessageType.Info
             );
+        }
+
+        private void DrawUnityGltfStatusSection()
+        {
+            GUILayout.Label("UnityGLTF", EditorStyles.boldLabel);
+
+            var defineEnabled = SceneSyncUnityGltfInstaller.IsUnityGltfDefineEnabled();
+            var exporterAvailable = GlbExporter.IsUnityGltfExportAvailable;
+            var isInstalling = SceneSyncUnityGltfInstaller.IsInstalling;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                GUILayout.Label("UnityGLTF is optional. Install it to export Animator / Animation clips in GLB.", EditorStyles.wordWrappedLabel);
+                GUILayout.Label("glTFast remains the default lightweight exporter for non-animated objects.", EditorStyles.wordWrappedLabel);
+
+                GUILayout.Space(4);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label("Exporter: " + (exporterAvailable ? "Available" : "Not available"), EditorStyles.miniLabel);
+                    GUILayout.Label("Define: " + (defineEnabled ? "Enabled" : "Disabled"), EditorStyles.miniLabel);
+                }
+
+                GUILayout.Space(4);
+
+                using (new EditorGUI.DisabledScope(isInstalling))
+                {
+                    if (!exporterAvailable)
+                    {
+                        if (GUILayout.Button("Install UnityGLTF", GUILayout.Height(32)))
+                        {
+                            SceneSyncUnityGltfInstaller.InstallUnityGltf();
+                        }
+                    }
+                    else if (!defineEnabled)
+                    {
+                        if (GUILayout.Button("Enable UnityGLTF Support", GUILayout.Height(32)))
+                        {
+                            SceneSyncUnityGltfInstaller.EnsureUnityGltfDefine();
+                        }
+                    }
+                }
+
+                if (isInstalling)
+                {
+                    EditorGUILayout.HelpBox("Installing UnityGLTF...", MessageType.Info);
+                }
+            }
         }
 
         private static void MarkManagerDirty(SceneSyncManager manager)
@@ -1189,6 +1241,8 @@ namespace Afjk.SceneSync.Editor
                 if (root == null || !seen.Add(root)) continue;
                 if (ShouldSkipPublishObject(root)) continue;
 
+                if (!RecommendUnityGltfForAnimatedObjectIfNeeded(root)) continue;
+
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, root);
                 if (identity == null) continue;
 
@@ -1218,6 +1272,8 @@ namespace Afjk.SceneSync.Editor
                 if (go == null || !seen.Add(go)) continue;
                 if (ShouldSkipPublishObject(go)) continue;
 
+                if (!RecommendUnityGltfForAnimatedObjectIfNeeded(go)) continue;
+
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, go);
                 if (identity == null) continue;
 
@@ -1242,6 +1298,36 @@ namespace Afjk.SceneSync.Editor
             if (identity.Temporary || identity.Origin == SceneSyncOrigin.Remote)
             {
                 Debug.Log("[SceneSync] Skipping temporary object: " + identity.gameObject.name);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool RecommendUnityGltfForAnimatedObjectIfNeeded(GameObject go)
+        {
+            if (go == null) return true;
+            if (GlbExporter.ConfiguredBackend == SceneSyncGlbExportBackend.GltfFast) return true;
+            if (!GlbExporter.ShouldRecommendUnityGltf(go)) return true;
+
+            var result = EditorUtility.DisplayDialogComplex(
+                "Scene Sync: Animation detected",
+                "This GameObject appears to contain animation.\n\n" +
+                "Scene Sync can publish static GLB with glTFast, but animations may not be exported.\n" +
+                "Install UnityGLTF to publish GLB with animation support.",
+                "Install UnityGLTF",
+                "Continue with glTFast",
+                "Cancel"
+            );
+
+            if (result == 0)
+            {
+                SceneSyncUnityGltfInstaller.InstallUnityGltf();
+                return false;
+            }
+
+            if (result == 1)
+            {
                 return true;
             }
 
