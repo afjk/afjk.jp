@@ -38,6 +38,7 @@ namespace Afjk.SceneSync.Editor
             if (_listRequest.Status == StatusCode.Success)
             {
                 _isUnityGltfPackageInstalled = _listRequest.Result.Any(package =>
+                    package.name == "org.khronos.unitygltf" ||
                     package.name == "com.khronos.unitygltf" ||
                     package.displayName.Contains("UnityGLTF") ||
                     package.packageId.Contains("KhronosGroup/UnityGLTF")

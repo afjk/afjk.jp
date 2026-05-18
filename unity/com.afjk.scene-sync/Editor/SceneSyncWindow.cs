@@ -1272,7 +1272,7 @@ namespace Afjk.SceneSync.Editor
                 if (ShouldSkipPublishObject(root)) continue;
 
                 var animationCheckResult = CheckAnimationRecommendation(root, ref skipRemainingForAnimation);
-                if (!animationCheckResult) continue;
+                if (!animationCheckResult) return;
 
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, root);
                 if (identity == null) continue;
@@ -1306,7 +1306,7 @@ namespace Afjk.SceneSync.Editor
                 if (ShouldSkipPublishObject(go)) continue;
 
                 var animationCheckResult = CheckAnimationRecommendation(go, ref skipRemainingForAnimation);
-                if (!animationCheckResult) continue;
+                if (!animationCheckResult) return;
 
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, go);
                 if (identity == null) continue;
