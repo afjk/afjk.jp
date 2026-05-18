@@ -143,6 +143,10 @@ function inferRoomFromReq(req) {
   return sanitizeRoom(ip) || 'global';
 }
 
+function shouldEnforceRoomConnectionLimit({ roomOverride }) {
+  return Boolean(roomOverride);
+}
+
 function isValidScope(scope) {
   if (scope === 'scene') return true;
   if (typeof scope === 'object' && scope !== null && !Array.isArray(scope)) {
@@ -1514,13 +1518,16 @@ function createPresenceServer() {
       return;
     }
     const roomOverride = sanitizeRoom(url.searchParams.get('room'));
+    const isInferredRoom = !roomOverride;
     const roomId = roomOverride || inferRoomFromReq(req) || 'global';
     const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
     const conn = acceptWebSocket(req, socket);
     if (!conn) return;
     const currentRoom = rooms.get(roomId);
-    if ((currentRoom?.size || 0) >= sceneSyncConfig.maxRoomConnections) {
-      sceneSyncLogger.log('room_full', { roomId, actorId, reason: 'max connections reached' });
+
+    const shouldEnforceLimit = shouldEnforceRoomConnectionLimit({ roomOverride });
+    if (shouldEnforceLimit && (currentRoom?.size || 0) >= sceneSyncConfig.maxRoomConnections) {
+      sceneSyncLogger.log('room_full', { roomId, actorId, reason: 'max connections reached', inferredRoom: isInferredRoom });
       safeSend(conn, {
         type: 'error',
         error: 'room_full',
@@ -1532,7 +1539,7 @@ function createPresenceServer() {
 
     const client = makeClient(conn, roomId);
     log('client connected', client.id, 'room', roomId);
-    sceneSyncLogger.log('ws_connect', { roomId, actorId });
+    sceneSyncLogger.log('ws_connect', { roomId, actorId, inferredRoom: isInferredRoom });
 
     conn.send({ type: 'welcome', id: client.id, room: roomId });
     broadcastPeers(roomId);
