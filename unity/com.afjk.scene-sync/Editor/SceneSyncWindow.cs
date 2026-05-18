@@ -82,6 +82,8 @@ namespace Afjk.SceneSync.Editor
                 _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
             }
 
+            SceneSyncUnityGltfInstaller.RefreshUnityGltfPackageStatus();
+
             _client = new PresenceClient();
             _client.OnConnected += () =>
             {
@@ -467,11 +469,15 @@ namespace Afjk.SceneSync.Editor
             }
 
             EditorGUILayout.HelpBox(
-                "Auto: Detects animations and uses UnityGLTF if available\n" +
-                "glTFast: Always use glTFast (no animations)\n" +
-                "UnityGltf: Always use UnityGLTF (Editor-only)",
+                "Auto: Uses glTFast for normal objects. If animation is detected and UnityGLTF is available, UnityGLTF is used.\n" +
+                "glTFast: Lightweight static GLB export. Animation is not exported.\n" +
+                "UnityGltf: Uses UnityGLTF for GLB export with animation support. Editor only.",
                 MessageType.Info
             );
+
+            GUILayout.Space(8);
+
+            DrawUnityGltfStatusSection();
 
             GUILayout.Space(8);
 
@@ -489,6 +495,80 @@ namespace Afjk.SceneSync.Editor
                 "The server may still reject uploads with its own limit.",
                 MessageType.Info
             );
+        }
+
+        private void DrawUnityGltfStatusSection()
+        {
+            GUILayout.Label("UnityGLTF", EditorStyles.boldLabel);
+
+            var packageInstalled = SceneSyncUnityGltfInstaller.IsUnityGltfPackageInstalled;
+            var isCheckingPackage = SceneSyncUnityGltfInstaller.IsCheckingPackageStatus;
+            var defineEnabled = SceneSyncUnityGltfInstaller.IsUnityGltfDefineEnabled();
+            var exporterAvailable = GlbExporter.IsUnityGltfExportAvailable;
+            var isInstalling = SceneSyncUnityGltfInstaller.IsInstalling;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                GUILayout.Label("UnityGLTF is optional. Install it to export Animator / Animation clips in GLB.", EditorStyles.wordWrappedLabel);
+                GUILayout.Label("glTFast remains the default lightweight exporter for non-animated objects.", EditorStyles.wordWrappedLabel);
+
+                GUILayout.Space(8);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    var packageStatus = isCheckingPackage ? "Checking..." : (packageInstalled ? "Installed" : "Not installed");
+                    GUILayout.Label("Package: " + packageStatus, EditorStyles.miniLabel);
+                    GUILayout.Label("Define: " + (defineEnabled ? "Enabled" : "Disabled"), EditorStyles.miniLabel);
+                    GUILayout.Label("Exporter: " + (exporterAvailable ? "Available" : "Not available"), EditorStyles.miniLabel);
+                }
+
+                GUILayout.Space(8);
+
+                using (new EditorGUI.DisabledScope(isInstalling || isCheckingPackage))
+                {
+                    if (!packageInstalled && !isCheckingPackage)
+                    {
+                        if (GUILayout.Button("Install UnityGLTF", GUILayout.Height(32)))
+                        {
+                            SceneSyncUnityGltfInstaller.InstallUnityGltf();
+                        }
+                    }
+                    else if (packageInstalled && !defineEnabled)
+                    {
+                        if (GUILayout.Button("Enable UnityGLTF Support", GUILayout.Height(32)))
+                        {
+                            SceneSyncUnityGltfInstaller.EnsureUnityGltfDefine();
+                        }
+                    }
+                    else if (defineEnabled && !exporterAvailable)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "UnityGLTF support is enabled but exporter not yet registered. " +
+                            "This may require script recompilation or restarting Unity.",
+                            MessageType.Info
+                        );
+                    }
+                    else if (exporterAvailable)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "UnityGLTF is ready. Animated GameObjects will be exported with animations.",
+                            MessageType.Info
+                        );
+                    }
+                }
+
+                if (isInstalling)
+                {
+                    EditorGUILayout.HelpBox("Installing UnityGLTF...", MessageType.Info);
+                }
+
+                GUILayout.Space(4);
+
+                if (GUILayout.Button("Refresh UnityGLTF Status", GUILayout.Height(24)))
+                {
+                    SceneSyncUnityGltfInstaller.RefreshUnityGltfPackageStatus();
+                }
+            }
         }
 
         private static void MarkManagerDirty(SceneSyncManager manager)
@@ -1183,11 +1263,16 @@ namespace Afjk.SceneSync.Editor
             }
 
             var seen = new HashSet<GameObject>();
+            var skipRemainingForAnimation = false;
+
             foreach (var selected in Selection.gameObjects)
             {
                 var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
                 if (root == null || !seen.Add(root)) continue;
                 if (ShouldSkipPublishObject(root)) continue;
+
+                var animationCheckResult = CheckAnimationRecommendation(root, ref skipRemainingForAnimation);
+                if (!animationCheckResult) return;
 
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, root);
                 if (identity == null) continue;
@@ -1213,10 +1298,15 @@ namespace Afjk.SceneSync.Editor
             }
 
             var seen = new HashSet<GameObject>();
+            var skipRemainingForAnimation = false;
+
             foreach (var go in manager.GetManagedUnityObjects())
             {
                 if (go == null || !seen.Add(go)) continue;
                 if (ShouldSkipPublishObject(go)) continue;
+
+                var animationCheckResult = CheckAnimationRecommendation(go, ref skipRemainingForAnimation);
+                if (!animationCheckResult) return;
 
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, go);
                 if (identity == null) continue;
@@ -1242,6 +1332,42 @@ namespace Afjk.SceneSync.Editor
             if (identity.Temporary || identity.Origin == SceneSyncOrigin.Remote)
             {
                 Debug.Log("[SceneSync] Skipping temporary object: " + identity.gameObject.name);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool CheckAnimationRecommendation(GameObject go, ref bool skipRemaining)
+        {
+            if (go == null) return true;
+            if (GlbExporter.ConfiguredBackend == SceneSyncGlbExportBackend.GltfFast) return true;
+            if (!GlbExporter.ShouldRecommendUnityGltf(go)) return true;
+
+            if (skipRemaining)
+            {
+                return true;
+            }
+
+            var result = EditorUtility.DisplayDialogComplex(
+                "Scene Sync: Animation detected",
+                "This GameObject appears to contain animation.\n\n" +
+                "Scene Sync can publish static GLB with glTFast, but animations may not be exported.\n" +
+                "Install UnityGLTF to publish GLB with animation support.",
+                "Install UnityGLTF",
+                "Continue with glTFast",
+                "Cancel"
+            );
+
+            if (result == 0)
+            {
+                SceneSyncUnityGltfInstaller.InstallUnityGltf();
+                return false;
+            }
+
+            if (result == 1)
+            {
+                skipRemaining = true;
                 return true;
             }
 
