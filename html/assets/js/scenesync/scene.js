@@ -4249,6 +4249,8 @@ function clearRoom() {
 
 function handleRoomFullError(data) {
   reconnectBlockedReason = 'room_full';
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   const ws = presenceState.ws;
   presenceState.ws = null;
   if (ws) {
