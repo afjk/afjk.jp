@@ -1,4 +1,5 @@
 export const URL_KIND = {
+  AUDIO: 'audio',
   VIDEO: 'video',
   VIDEO_HLS: 'video-hls',
   IMAGE: 'image',
@@ -9,6 +10,7 @@ export const URL_KIND = {
   INVALID: 'invalid',
 };
 
+const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'm4a', 'aac'];
 const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v'];
 const HLS_EXTS = ['m3u8'];
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'];
@@ -61,6 +63,7 @@ export function classifyUrl(urlString) {
   const ext = (u.pathname.split('.').pop() || '').toLowerCase();
   const host = u.host;
   const url = u.toString();
+  if (AUDIO_EXTS.includes(ext)) return { kind: URL_KIND.AUDIO, url, ext, host };
   if (VIDEO_EXTS.includes(ext)) return { kind: URL_KIND.VIDEO, url, ext, host };
   if (HLS_EXTS.includes(ext)) return { kind: URL_KIND.VIDEO_HLS, url, ext, host };
   if (IMAGE_EXTS.includes(ext)) return { kind: URL_KIND.IMAGE, url, ext, host };

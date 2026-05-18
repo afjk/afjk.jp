@@ -165,6 +165,46 @@ test('classifyUrl', async (t) => {
     assert.equal(r.kind, URL_KIND.TEXT);
     assert.equal(r.ext, 'markdown');
   });
+
+  await t.test('mp3 audio URL', () => {
+    const r = classifyUrl('https://example.com/music.mp3');
+    assert.equal(r.kind, URL_KIND.AUDIO);
+    assert.equal(r.ext, 'mp3');
+  });
+
+  await t.test('wav audio URL', () => {
+    assert.equal(classifyUrl('https://example.com/sound.wav').kind, URL_KIND.AUDIO);
+  });
+
+  await t.test('ogg audio URL', () => {
+    assert.equal(classifyUrl('https://example.com/track.ogg').kind, URL_KIND.AUDIO);
+  });
+
+  await t.test('m4a audio URL', () => {
+    assert.equal(classifyUrl('https://example.com/song.m4a').kind, URL_KIND.AUDIO);
+  });
+
+  await t.test('aac audio URL', () => {
+    assert.equal(classifyUrl('https://example.com/audio.aac').kind, URL_KIND.AUDIO);
+  });
+
+  await t.test('normal webpage is not classified as audio', () => {
+    assert.equal(classifyUrl('https://example.com/').kind, URL_KIND.WEBPAGE);
+  });
+
+  await t.test('audio URL with uppercase extension', () => {
+    assert.equal(classifyUrl('https://example.com/music.MP3').kind, URL_KIND.AUDIO);
+  });
+
+  await t.test('audio URL with mixed case extension', () => {
+    assert.equal(classifyUrl('https://example.com/song.Mp3').kind, URL_KIND.AUDIO);
+  });
+
+  await t.test('audio URL with query string', () => {
+    const r = classifyUrl('https://example.com/bgm.mp3?token=abc&version=2');
+    assert.equal(r.kind, URL_KIND.AUDIO);
+    assert.equal(r.ext, 'mp3');
+  });
 });
 
 test('parseUriList', async (t) => {

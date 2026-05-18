@@ -1268,6 +1268,14 @@ const locks = new Map();
 // objectId → wireframe mesh
 const lockOverlays = new Map();
 
+// ── BGM state ────────────────────────────────────────────────
+
+const sceneBgmState = {
+  audio: null,
+  current: null,
+  autoplayBlocked: false,
+};
+
 // ── トランスフォームツイーン（AI/GPT アニメーション） ────────
 
 const activeTransformTweens = new Map();
@@ -4435,6 +4443,12 @@ async function respondToSceneRequest(from) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     const payload = { kind: 'scene-state', envId: environmentManager.getCurrentEnvId(), objects };
 
+    // BGM state を含める
+    const bgmState = serializeSceneBgm();
+    if (bgmState) {
+      payload.bgm = bgmState;
+    }
+
     // Loom graph state を含める
     const loomGraphState = loomIntegration.exportState();
     if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
@@ -4526,6 +4540,15 @@ function handleHandoff(data) {
       const objects = payload.objects || {};
       for (const [objectId, info] of Object.entries(objects)) {
         addOrUpdateObject(objectId, info);
+      }
+
+      // BGM 状態を復元
+      if ('bgm' in payload) {
+        if (payload.bgm === null) {
+          disposeSceneBgm();
+        } else if (payload.bgm) {
+          applySceneBgm(payload.bgm);
+        }
       }
 
       // Loom graph 状態を復元
@@ -4763,6 +4786,15 @@ function handleHandoff(data) {
         }
       }
       notifySceneStateChanged('scene-env-handoff');
+      break;
+    }
+    case 'scene-bgm': {
+      if (payload.bgm === null) {
+        disposeSceneBgm();
+      } else if (payload.bgm) {
+        applySceneBgm(payload.bgm);
+      }
+      notifySceneStateChanged('scene-bgm-handoff');
       break;
     }
     case 'scene-avatar': {
@@ -5029,6 +5061,8 @@ function createAiUrlImportContext(params = {}, context = {}) {
   return {
     addOrUpdateObject,
     broadcastSceneAdd: broadcast,
+    applySceneBgm,
+    broadcastSceneBgm: broadcast,
     showToast,
     generateObjectId: (prefix) => {
       if (!customObjectIdUsed && typeof params.objectId === 'string' && params.objectId.trim()) {
@@ -5986,6 +6020,83 @@ function applyAssetDelta(obj, asset) {
     applyObjectColor(obj, asset.color);
   }
   notifySceneStateChanged('asset-delta-applied');
+}
+
+// ── BGM handling ────────────────────────────────────────
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, typeof v === 'number' ? v : 1));
+}
+
+function applySceneBgm(bgm, options = {}) {
+  disposeSceneBgm();
+
+  if (!bgm || !bgm.url) {
+    return;
+  }
+
+  const audio = new Audio();
+  audio.src = bgm.url;
+  audio.loop = bgm.loop !== false;
+  audio.volume = clamp01(bgm.volume ?? 1);
+  audio.preload = 'auto';
+
+  sceneBgmState.audio = audio;
+  sceneBgmState.current = {
+    version: bgm.version ?? 1,
+    url: bgm.url,
+    name: bgm.name ?? 'bgm',
+    loop: bgm.loop !== false,
+    volume: clamp01(bgm.volume ?? 1),
+    playback: bgm.playback ?? { mode: 'local-loop' },
+  };
+
+  audio.play().catch((err) => {
+    console.warn('[BGM] autoplay blocked:', err?.message);
+    sceneBgmState.autoplayBlocked = true;
+    showBgmUnlockUI();
+  });
+}
+
+function disposeSceneBgm() {
+  if (sceneBgmState.audio) {
+    sceneBgmState.audio.pause();
+    sceneBgmState.audio.src = '';
+    sceneBgmState.audio.load?.();
+    sceneBgmState.audio = null;
+  }
+  sceneBgmState.current = null;
+  sceneBgmState.autoplayBlocked = false;
+  hideBgmUnlockUI();
+}
+
+function serializeSceneBgm() {
+  if (!sceneBgmState.current) return null;
+  return structuredClone(sceneBgmState.current);
+}
+
+function showBgmUnlockUI() {
+  const btn = dom.bgmUnlockButton;
+  if (!btn) return;
+  btn.style.display = 'block';
+  btn.onclick = () => {
+    if (sceneBgmState.audio) {
+      sceneBgmState.audio.play().then(() => {
+        sceneBgmState.autoplayBlocked = false;
+        hideBgmUnlockUI();
+      }).catch(() => {
+        showToast?.({
+          type: 'error',
+          message: '音声を再生できません',
+        });
+      });
+    }
+  };
+}
+
+function hideBgmUnlockUI() {
+  const btn = dom.bgmUnlockButton;
+  if (btn) btn.style.display = 'none';
 }
 
 // ── Undo/Redo 処理 ──────────────────────────────────────
