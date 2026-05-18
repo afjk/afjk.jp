@@ -4054,6 +4054,7 @@ let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
 let reconnectTimer = null;
+let reconnectBlockedReason = null;
 let saveRoomSnapshotTimer = null;
 let restoreSnapshotTimer = null;
 let isRestoringRoomSnapshot = false;
@@ -4244,6 +4245,34 @@ function clearRoom() {
   history.replaceState(null, '', u.toString());
   reconnectPresence();
   notifyConnectionStateChanged('room-cleared');
+}
+
+function handleRoomFullError(data) {
+  reconnectBlockedReason = 'room_full';
+  const ws = presenceState.ws;
+  presenceState.ws = null;
+  if (ws) {
+    try { ws.close(); } catch {}
+  }
+  updateStatus(false, 'ルームが満員です');
+  remoteAvatarManager.disposeAllRemoteAvatars();
+  updatePeersList();
+  notifyConnectionStateChanged('presence-closed');
+  showRoomFullDialog();
+}
+
+function showRoomFullDialog() {
+  const dialog = document.getElementById('room-full-dialog');
+  if (dialog) {
+    dialog.style.display = 'flex';
+  }
+}
+
+function hideRoomFullDialog() {
+  const dialog = document.getElementById('room-full-dialog');
+  if (dialog) {
+    dialog.style.display = 'none';
+  }
 }
 
 function copyRoomUrl() {
@@ -4458,6 +4487,10 @@ function connectPresence() {
         handleHandoff(data);
         break;
       case 'error':
+        if (data?.error === 'room_full') {
+          handleRoomFullError(data);
+          return;
+        }
         showToast(data?.message || 'ファイルの読み込みに失敗しました。');
         break;
     }
@@ -4471,6 +4504,12 @@ function connectPresence() {
     remoteAvatarManager.disposeAllRemoteAvatars();
     updatePeersList();
     notifyConnectionStateChanged('presence-closed');
+
+    // room_full の場合は自動再接続をしない
+    if (reconnectBlockedReason === 'room_full') {
+      return;
+    }
+
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -4487,11 +4526,14 @@ function connectPresence() {
   };
 }
 
-function updateStatus(connected) {
+function updateStatus(connected, customMessage) {
   if (connected) {
     const n = presenceState.peers.length;
     dotEl.className = 'dot on';
     statusEl.innerHTML = `<span class="dot on"></span>${escapeHtml(presenceState.nickname)} · ${escapeHtml(presenceState.room || '—')} · ${n} peer${n !== 1 ? 's' : ''}`;
+  } else if (customMessage) {
+    dotEl.className = 'dot off';
+    statusEl.innerHTML = `<span class="dot off"></span>${escapeHtml(customMessage)}`;
   } else {
     dotEl.className = 'dot off';
     statusEl.innerHTML = '<span class="dot off"></span>再接続中…';
@@ -7390,6 +7432,10 @@ const sceneSyncOperatorLink = document.getElementById('scene-sync-operator-link'
 const linkIcon = document.getElementById('link-icon');
 const linkLabel = document.getElementById('link-label');
 
+const roomFullDialog = document.getElementById('room-full-dialog');
+const btnRoomFullRetry = document.getElementById('btn-room-full-retry');
+const btnRoomFullNew = document.getElementById('btn-room-full-new');
+
 let pairingCountdown = null;
 let pairingExpireTime = null;
 
@@ -9058,6 +9104,32 @@ function openHelpDialog() {
   const savedDisplayName = localStorage.getItem('sceneSync.displayName') || '';
   welcomeDialog.open('help', savedDisplayName);
 }
+
+// ── ルーム満員ダイアログ ──────────────────────────────
+
+roomFullDialog?.addEventListener('click', (event) => {
+  if (event.target === roomFullDialog) {
+    // ダイアログの背景をクリックしても何もしない（ユーザーは選択を強要される）
+  }
+});
+
+btnRoomFullRetry?.addEventListener('click', () => {
+  reconnectBlockedReason = null;
+  hideRoomFullDialog();
+  connectPresence();
+});
+
+btnRoomFullNew?.addEventListener('click', () => {
+  reconnectBlockedReason = null;
+  hideRoomFullDialog();
+  generateRoom();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && roomFullDialog?.style.display === 'flex') {
+    // room_full の場合 Escape キーで閉じられない
+  }
+});
 
 // ── 起動 ─────────────────────────────────────────────────
 
