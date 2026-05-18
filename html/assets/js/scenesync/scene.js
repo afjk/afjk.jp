@@ -1683,6 +1683,7 @@ function removeLockOverlay(objectId) {
 // objectId → { group, placeholder }
 const loadingOverlays = new Map();
 const recoveryOverlays = new Map();
+const failedOverlays = new Map();
 const temporaryImagePreviews = new Map();
 
 function createLoadingLabel(text) {
@@ -1873,7 +1874,9 @@ function addRecoveringOverlay(objectId, info) {
   const placeholder = createRecoveringPlaceholder();
   group.add(placeholder);
 
-  if (info?.position) group.position.fromArray(info.position);
+  if (info) {
+    applySceneTransform(group, info);
+  }
 
   scene.add(group);
   recoveryOverlays.set(objectId, { group, placeholder });
@@ -1894,6 +1897,41 @@ function removeRecoveringOverlay(objectId) {
   });
 
   recoveryOverlays.delete(objectId);
+}
+
+function addFailedOverlay(objectId, info) {
+  removeFailedOverlay(objectId);
+
+  const group = new THREE.Group();
+  group.userData._isFailedPlaceholder = true;
+  group.raycast = () => {};
+
+  const placeholder = createFailedPlaceholder();
+  group.add(placeholder);
+
+  if (info) {
+    applySceneTransform(group, info);
+  }
+
+  scene.add(group);
+  failedOverlays.set(objectId, { group, placeholder });
+}
+
+function removeFailedOverlay(objectId) {
+  const entry = failedOverlays.get(objectId);
+  if (!entry) return;
+
+  const { group } = entry;
+  scene.remove(group);
+  group.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
+
+  failedOverlays.delete(objectId);
 }
 
 function updateRecoveringOverlaysAnimation() {
@@ -3458,6 +3496,9 @@ function deleteObjectById(objectId, options = {}) {
   }
 
   removeLockOverlay(objectId);
+  removeLoadingOverlay(objectId);
+  removeRecoveringOverlay(objectId);
+  removeFailedOverlay(objectId);
   locks.delete(objectId);
 
   disposeObjectGlbAnimation(objectId);
@@ -5615,6 +5656,8 @@ function addOrUpdateObject(objectId, info, options = {}) {
 }
 
 function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
+  removeFailedOverlay(objectId);
+  removeRecoveringOverlay(objectId);
   addLoadingOverlay(objectId, info.name || objectId, info);
   const url = BLOB_BASE + '/' + meshPath;
   const skipFallbackOnFailure = options.skipFallbackOnFailure === true;
@@ -5714,6 +5757,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
         try {
           removeLoadingOverlay(objectId);
+          removeFailedOverlay(objectId);
           model.userData.objectId = objectId;
           model.userData.name = info.name;
           model.userData.meshPath = meshPath;
@@ -6495,23 +6539,13 @@ fileTransferAdapter.onFileReceived((event) => {
 expiredGlbRecovery.onRecoverySuccess(({ objectId, requestId }) => {
   console.log('[SceneSync] Recovery succeeded:', { objectId, requestId });
   removeRecoveringOverlay(objectId);
+  removeFailedOverlay(objectId);
 });
 
-expiredGlbRecovery.onRecoveryFailed(({ objectId, requestId, reason }) => {
+expiredGlbRecovery.onRecoveryFailed(({ objectId, requestId, reason, info }) => {
   console.log('[SceneSync] Recovery failed:', { objectId, requestId, reason });
   removeRecoveringOverlay(objectId);
-
-  const info = managedObjects.get(objectId)?.userData || {};
-  const failedGroup = new THREE.Group();
-  failedGroup.userData._isFailedPlaceholder = true;
-  failedGroup.raycast = () => {};
-
-  const placeholder = createFailedPlaceholder();
-  failedGroup.add(placeholder);
-
-  if (info?.position) failedGroup.position.fromArray(info.position);
-
-  scene.add(failedGroup);
+  addFailedOverlay(objectId, info);
 });
 
 // ── 公開 API（scene.js 内から利用） ──────────────────────

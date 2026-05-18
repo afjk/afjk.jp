@@ -8,7 +8,7 @@ async function fetchWithRetry(url, options = {}, maxAttempts = 4) {
 
   for (let i = 0; i < maxAttempts; i++) {
     if (i > 0) {
-      await new Promise(r => setTimeout(r, delays[i - 1]));
+      await new Promise(r => setTimeout(r, delays[i]));
     }
 
     try {
