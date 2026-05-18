@@ -12,6 +12,9 @@ import { validateSceneSyncPayload } from './scenesync/message-schema.mjs';
 import { createSceneSyncLogger } from './scenesync/logger.mjs';
 import { createGlbBackupManager } from './scenesync/glb-backup.mjs';
 
+// IP hash salt — stable within process lifetime if not provided
+const localIpHashSalt = randomUUID();
+
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -33,6 +36,7 @@ const rooms = new Map(); // roomId -> Map<clientId, Client>
 const roomObjectIds = new Map(); // roomId -> Set<objectId>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
+const clientsByIpHash = new Map(); // ipHash -> Set<clientId>
 
 // ── Blob Store ────────────────────────────────────────────────────────────────
 const BLOB_MAX_SIZE = sceneSyncConfig.maxUploadBytes;
@@ -127,6 +131,55 @@ function sanitizeRoom(raw) {
   if (!raw) return null;
   const cleaned = raw.toLowerCase().replace(/[^a-z0-9\-]/g, '').slice(0, 32);
   return cleaned || null;
+}
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const first = forwarded ? forwarded.split(',')[0].trim() : null;
+  return first || req.socket.remoteAddress || 'unknown';
+}
+
+function getIpHash(req, ipHashSalt) {
+  const rawIp = getClientIp(req);
+  const salt = ipHashSalt || localIpHashSalt;
+  return createHash('sha256')
+    .update(`${salt}:${rawIp}`)
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function getTotalClientCount() {
+  let total = 0;
+  rooms.forEach(room => {
+    total += room.size;
+  });
+  return total;
+}
+
+function getRoomClientCount(roomId) {
+  const room = rooms.get(roomId);
+  return room ? room.size : 0;
+}
+
+function getIpClientCount(ipHash) {
+  const clients = clientsByIpHash.get(ipHash);
+  return clients ? clients.size : 0;
+}
+
+function getTopRooms(limit = 5) {
+  const entries = Array.from(rooms.entries())
+    .map(([roomId, room]) => ({ roomId, clientCount: room.size }))
+    .sort((a, b) => b.clientCount - a.clientCount)
+    .slice(0, limit);
+  return entries;
+}
+
+function getTopIpHashes(limit = 5) {
+  const entries = Array.from(clientsByIpHash.entries())
+    .map(([ipHash, clients]) => ({ ipHash, clientCount: clients.size }))
+    .sort((a, b) => b.clientCount - a.clientCount)
+    .slice(0, limit);
+  return entries;
 }
 
 function inferRoomFromReq(req) {
@@ -376,7 +429,7 @@ function acceptWebSocket(req, socket) {
   return new WsConnection(socket);
 }
 
-function makeClient(conn, roomId) {
+function makeClient(conn, roomId, ipHash) {
   const client = {
     id: randomUUID(),
     conn,
@@ -385,11 +438,20 @@ function makeClient(conn, roomId) {
     nickname: '',
     device: '',
     streaming: false,
-    lastSeen: Date.now()
+    lastSeen: Date.now(),
+    connectedAt: Date.now(),
+    ipHash
   };
   const room = rooms.get(roomId) ?? new Map();
   room.set(client.id, client);
   rooms.set(roomId, room);
+
+  if (ipHash) {
+    const clients = clientsByIpHash.get(ipHash) ?? new Set();
+    clients.add(client.id);
+    clientsByIpHash.set(ipHash, clients);
+  }
+
   return client;
 }
 
@@ -400,6 +462,16 @@ function removeClient(client) {
   if (!room.size) {
     rooms.delete(client.roomId);
     roomObjectIds.delete(client.roomId);
+  }
+
+  if (client.ipHash) {
+    const clients = clientsByIpHash.get(client.ipHash);
+    if (clients) {
+      clients.delete(client.id);
+      if (!clients.size) {
+        clientsByIpHash.delete(client.ipHash);
+      }
+    }
   }
 }
 
@@ -1524,13 +1596,22 @@ function createPresenceServer() {
     const isInferredRoom = !roomOverride;
     const roomId = roomOverride || inferRoomFromReq(req) || 'global';
     const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+    const ipHash = getIpHash(req, sceneSyncConfig.ipHashSalt);
     const conn = acceptWebSocket(req, socket);
     if (!conn) return;
     const currentRoom = rooms.get(roomId);
 
     const shouldEnforceLimit = shouldEnforceRoomConnectionLimit({ roomOverride });
     if (shouldEnforceLimit && (currentRoom?.size || 0) >= sceneSyncConfig.maxRoomConnections) {
-      sceneSyncLogger.log('room_full', { roomId, actorId, reason: 'max connections reached', inferredRoom: isInferredRoom });
+      const ipClientCount = getIpClientCount(ipHash);
+      sceneSyncLogger.log('ws_room_full_reject', {
+        roomId,
+        ipHash,
+        roomClientCount: currentRoom?.size || 0,
+        maxRoomConnections: sceneSyncConfig.maxRoomConnections,
+        totalClientCount: getTotalClientCount(),
+        ipClientCount
+      });
       safeSend(conn, {
         type: 'error',
         error: 'room_full',
@@ -1540,9 +1621,19 @@ function createPresenceServer() {
       return;
     }
 
-    const client = makeClient(conn, roomId);
+    const client = makeClient(conn, roomId, ipHash);
     log('client connected', client.id, 'room', roomId);
-    sceneSyncLogger.log('ws_connect', { roomId, actorId, inferredRoom: isInferredRoom });
+
+    sceneSyncLogger.log('ws_connection_open', {
+      roomId,
+      clientId: client.id,
+      peerId: client.id,
+      ipHash,
+      roomClientCount: getRoomClientCount(roomId),
+      totalClientCount: getTotalClientCount(),
+      ipClientCount: getIpClientCount(ipHash),
+      roomOverride: Boolean(roomOverride)
+    });
 
     conn.send({ type: 'welcome', id: client.id, room: roomId });
     broadcastPeers(roomId);
@@ -1653,8 +1744,27 @@ function createPresenceServer() {
 
     conn.onClose = () => {
       log('client disconnected', client.id);
-      sceneSyncLogger.log('ws_disconnect', { roomId, actorId });
+      const durationMs = Date.now() - client.connectedAt;
+
+      const closeLogBase = {
+        roomId,
+        clientId: client.id,
+        peerId: client.id,
+        ipHash: client.ipHash,
+        durationMs,
+        code: 1000,
+        reason: 'closed'
+      };
+
       removeClient(client);
+
+      sceneSyncLogger.log('ws_connection_close', {
+        ...closeLogBase,
+        roomClientCount: getRoomClientCount(roomId),
+        totalClientCount: getTotalClientCount(),
+        ipClientCount: getIpClientCount(client.ipHash)
+      });
+
       broadcastPeers(roomId);
     };
   });
@@ -1669,10 +1779,30 @@ function createPresenceServer() {
     }
   }, BLOB_CLEANUP_INTERVAL);
 
+  let connectionSummaryInterval = null;
+  if (sceneSyncConfig.connectionSummaryIntervalMs > 0) {
+    connectionSummaryInterval = setInterval(() => {
+      sceneSyncLogger.log('ws_connection_summary', {
+        roomCount: rooms.size,
+        totalClientCount: getTotalClientCount(),
+        topRooms: getTopRooms(5),
+        topIpHashes: getTopIpHashes(5)
+      });
+    }, sceneSyncConfig.connectionSummaryIntervalMs);
+  }
+
   const heartbeatInterval = setInterval(() => {
     rooms.forEach(room => {
       room.forEach(client => {
         if (!client.conn.alive) {
+          const durationMs = Date.now() - client.connectedAt;
+          sceneSyncLogger.log('ws_heartbeat_terminate', {
+            roomId: client.roomId,
+            clientId: client.id,
+            peerId: client.id,
+            ipHash: client.ipHash,
+            durationMs
+          });
           client.conn.close();
           return;
         }
@@ -1685,8 +1815,10 @@ function createPresenceServer() {
   server.on('close', () => {
     clearInterval(blobCleanupInterval);
     clearInterval(heartbeatInterval);
+    if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
     rooms.clear();
     roomObjectIds.clear();
+    clientsByIpHash.clear();
     pendingSceneRequests.forEach(({ timer, resolve }) => {
       clearTimeout(timer);
       resolve({ objects: {} });
