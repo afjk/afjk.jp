@@ -1,9 +1,33 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 function todayDateString(now = new Date()) {
   return now.toISOString().slice(0, 10);
+}
+
+function createS3Client(config) {
+  if (!config.glbBackupS3Bucket) return null;
+  if (!config.glbBackupS3AccessKeyId || !config.glbBackupS3SecretAccessKey) return null;
+
+  return new S3Client({
+    region: config.glbBackupS3Region,
+    endpoint: config.glbBackupS3Endpoint || undefined,
+    credentials: {
+      accessKeyId: config.glbBackupS3AccessKeyId,
+      secretAccessKey: config.glbBackupS3SecretAccessKey,
+    },
+    forcePathStyle: true,
+  });
+}
+
+function joinS3Key(...parts) {
+  return parts
+    .filter(Boolean)
+    .map(part => String(part).replace(/^\/+|\/+$/g, ''))
+    .filter(Boolean)
+    .join('/');
 }
 
 function calculateDirectorySizeBytes(directory) {
@@ -37,6 +61,36 @@ function getFreeBytes(directory) {
   } catch {
     return null;
   }
+}
+
+async function saveToS3({ client, config, buffer, metadata, backupId, dateString }) {
+  const baseKey = joinS3Key(config.glbBackupS3Prefix, dateString);
+  const glbKey = joinS3Key(baseKey, `${backupId}.glb`);
+  const metaKey = joinS3Key(baseKey, `${backupId}.json`);
+
+  await client.send(new PutObjectCommand({
+    Bucket: config.glbBackupS3Bucket,
+    Key: glbKey,
+    Body: buffer,
+    ContentType: metadata.mimeType || 'model/gltf-binary',
+    Metadata: {
+      backupId,
+      roomId: metadata.roomId || '',
+      actorId: metadata.actorId || '',
+      blobId: metadata.blobId || '',
+      sha256: metadata.sha256 || '',
+      source: metadata.source || '',
+    },
+  }));
+
+  await client.send(new PutObjectCommand({
+    Bucket: config.glbBackupS3Bucket,
+    Key: metaKey,
+    Body: JSON.stringify(metadata, null, 2),
+    ContentType: 'application/json',
+  }));
+
+  return { glbKey, metaKey };
 }
 
 export function cleanupOldBackups({ backupDir, retentionDays = 7, now = Date.now(), log = () => {} }) {
@@ -77,13 +131,57 @@ export function createGlbBackupManager(config, logger, internals = {}) {
     : 4096;
 
   return {
-    saveAcceptedGlb({ buffer, roomId, actorId, filename = '', mimeType = '', source = 'upload', blobId = null }) {
+    async saveAcceptedGlb({ buffer, roomId, actorId, filename = '', mimeType = '', source = 'upload', blobId = null }) {
       if (!config.glbBackupEnabled) {
         logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'disabled' });
         return { saved: false, reason: 'disabled' };
       }
 
       try {
+        const driver = config.glbBackupDriver || 'local';
+
+        if (driver === 's3') {
+          const s3Client = createS3Client(config);
+          if (!s3Client) {
+            logger?.log('glb_backup_skipped', {
+              roomId,
+              actorId,
+              reason: 's3_config_missing',
+              driver: 's3',
+            });
+            return { saved: false, reason: 's3_config_missing', driver: 's3' };
+          }
+
+          const backupId = `${Date.now()}-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+          const dateString = todayDateString();
+          const sha256 = createHash('sha256').update(buffer).digest('hex');
+          const metadata = {
+            backupId,
+            timestamp: new Date().toISOString(),
+            roomId,
+            actorId,
+            filename,
+            mimeType,
+            sizeBytes: buffer.length,
+            source,
+            blobId,
+            sha256,
+          };
+
+          await saveToS3({ client: s3Client, config, buffer, metadata, backupId, dateString });
+
+          logger?.log('glb_backup_saved', {
+            roomId,
+            actorId,
+            backupId,
+            fileSize: buffer.length,
+            mimeType,
+            driver: 's3',
+          });
+          return { saved: true, backupId, driver: 's3' };
+        }
+
+        // Local driver (default)
         mkdirSync(config.glbBackupDir, { recursive: true });
 
         const totalSize = calculateDirectorySizeBytesImpl(config.glbBackupDir);

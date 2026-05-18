@@ -1049,7 +1049,7 @@ function createPresenceServer() {
         log('blob stored', id, entry.size, entry.buffer ? 'memory' : 'disk');
 
         if (isGlbLike({ filename: originalName, mimeType: contentType })) {
-          glbBackupManager.saveAcceptedGlb({
+          void glbBackupManager.saveAcceptedGlb({
             buffer,
             roomId: sanitizeRoom(getRequestUrl(req).searchParams.get('room')) || '',
             actorId,
