@@ -7267,6 +7267,7 @@ const mobileEnvOpenBtn = document.getElementById('mobile-env-open-btn');
 const mobileEnvSheetCloseBtn = document.getElementById('mobile-env-sheet-close');
 const mobileEnvSelect = document.getElementById('mobile-env-select');
 const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
+const mobileHelpBtn = document.getElementById('mobile-help-btn');
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 
 function closePasteSheet() {
@@ -7314,6 +7315,10 @@ mobileEnvSheetCloseBtn?.addEventListener('click', () => {
 mobileLinkOpenBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
   linkBtn?.click();
+});
+mobileHelpBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  openHelpDialog();
 });
 mobileDevOpenBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
