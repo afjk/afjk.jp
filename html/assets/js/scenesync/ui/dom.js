@@ -23,5 +23,6 @@ export function getSceneSyncDom() {
     dropOverlay: document.getElementById('drop-overlay'),
     deleteSkyboxBtn: document.getElementById('delete-skybox-btn'),
     bgmUnlockButton: document.getElementById('bgm-unlock-button'),
+    clearBgmButton: document.getElementById('clear-bgm-btn'),
   };
 }
