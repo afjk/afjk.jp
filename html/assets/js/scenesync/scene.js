@@ -22,6 +22,7 @@ import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
+import { normalizeDisplayName } from './utils/display-name.js';
 import { extractYaw } from './utils/math.js';
 import { broadcastObjectDelta } from './objects/object-delta.js';
 import { createXrState } from './xr/xr-state.js';
@@ -3950,11 +3951,11 @@ function randomRoomCode() {
 
 function loadInitialNickname() {
   const nameParam = new URLSearchParams(location.search).get('name');
-  if (nameParam) return nameParam.slice(0, 40);
+  if (nameParam) return normalizeDisplayName(nameParam);
   const sceneSyncName = localStorage.getItem('sceneSync.displayName');
-  if (sceneSyncName) return sceneSyncName;
+  if (sceneSyncName) return normalizeDisplayName(sceneSyncName);
   const stored = localStorage.getItem('pipe.deviceName');
-  if (stored) return stored;
+  if (stored) return normalizeDisplayName(stored);
   return 'User-' + Math.random().toString(36).slice(2, 6);
 }
 
@@ -4119,25 +4120,28 @@ function updateNicknameLabel() {
   if (nicknameLabel) nicknameLabel.textContent = presenceState.nickname;
 }
 
+function sendHelloIfConnected() {
+  const ws = presenceState.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'hello',
+      nickname: presenceState.nickname,
+      device: navigator.userAgent.slice(0, 60),
+      userId: presenceState.userId,
+    }));
+  }
+}
+
 function editNickname() {
   const next = prompt('表示名を入力してください', presenceState.nickname) || '';
-  const cleaned = next.trim().slice(0, 40);
+  const cleaned = normalizeDisplayName(next);
   if (!cleaned || cleaned === presenceState.nickname) return;
   presenceState.nickname = cleaned;
   localStorage.setItem('pipe.deviceName', cleaned);
   localStorage.setItem('sceneSync.displayName', cleaned);
   updateNicknameLabel();
   updatePeersList();
-  // 接続中なら hello を再送して即時反映
-  const ws = presenceState.ws;
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'hello',
-      nickname: cleaned,
-      device: navigator.userAgent.slice(0, 60),
-      userId: presenceState.userId,
-    }));
-  }
+  sendHelloIfConnected();
 }
 
 // ── ルーム制御 ────────────────────────────────────────
@@ -8996,15 +9000,18 @@ if (mobileEnvSelect && dom.envSelect) {
 
 const welcomeDialog = createWelcomeDialog({
   onStartInRoom: (displayName) => {
-    presenceState.nickname = displayName;
-    localStorage.setItem('sceneSync.displayName', displayName);
+    const normalized = normalizeDisplayName(displayName);
+    presenceState.nickname = normalized;
+    localStorage.setItem('sceneSync.displayName', normalized);
     localStorage.setItem('sceneSync.welcomeSeen', 'true');
     updateNicknameLabel();
     updatePeersList();
+    sendHelloIfConnected();
   },
   onCreateNewRoom: (displayName) => {
-    presenceState.nickname = displayName;
-    localStorage.setItem('sceneSync.displayName', displayName);
+    const normalized = normalizeDisplayName(displayName);
+    presenceState.nickname = normalized;
+    localStorage.setItem('sceneSync.displayName', normalized);
     localStorage.setItem('sceneSync.welcomeSeen', 'true');
     updateNicknameLabel();
     generateRoom();
@@ -9013,7 +9020,7 @@ const welcomeDialog = createWelcomeDialog({
 
 function shouldShowWelcome() {
   const welcomeSeen = localStorage.getItem('sceneSync.welcomeSeen') === 'true';
-  const displayName = localStorage.getItem('sceneSync.displayName');
+  const displayName = normalizeDisplayName(localStorage.getItem('sceneSync.displayName'));
   return !welcomeSeen || !displayName;
 }
 

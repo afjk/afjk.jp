@@ -1,8 +1,4 @@
-function normalizeDisplayName(value) {
-  return String(value || '')
-    .trim()
-    .slice(0, 32);
-}
+import { normalizeDisplayName } from '../utils/display-name.js';
 
 function validateDisplayName(name) {
   const normalized = normalizeDisplayName(name);
@@ -144,6 +140,3 @@ export function createWelcomeDialog({ onStartInRoom, onCreateNewRoom }) {
   return new WelcomeDialog({ onStartInRoom, onCreateNewRoom });
 }
 
-export function normalizeDisplayNameExport(value) {
-  return normalizeDisplayName(value);
-}

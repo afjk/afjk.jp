@@ -112,7 +112,10 @@ function log(...args) {
 
 function sanitizeName(raw) {
   if (!raw) return '';
-  return String(raw).trim().slice(0, 40);
+  return String(raw)
+    .trim()
+    .replace(/[ -]/g, '')
+    .slice(0, 32);
 }
 
 function sanitizeDevice(raw) {
