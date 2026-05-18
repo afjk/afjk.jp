@@ -15,8 +15,43 @@ namespace Afjk.SceneSync.Editor
         internal const string PackageUrl = "https://github.com/KhronosGroup/UnityGLTF.git";
 
         private static AddRequest _addRequest;
+        private static ListRequest _listRequest;
+        private static bool? _isUnityGltfPackageInstalled;
 
         public static bool IsInstalling => _addRequest != null;
+        public static bool IsCheckingPackageStatus => _listRequest != null;
+        public static bool IsUnityGltfPackageInstalled => _isUnityGltfPackageInstalled == true;
+
+        public static void RefreshUnityGltfPackageStatus()
+        {
+            if (_listRequest != null) return;
+
+            _listRequest = Client.List(true);
+            EditorApplication.update += PollPackageList;
+        }
+
+        private static void PollPackageList()
+        {
+            if (_listRequest == null) return;
+            if (!_listRequest.IsCompleted) return;
+
+            if (_listRequest.Status == StatusCode.Success)
+            {
+                _isUnityGltfPackageInstalled = _listRequest.Result.Any(package =>
+                    package.name == "com.khronos.unitygltf" ||
+                    package.displayName.Contains("UnityGLTF") ||
+                    package.packageId.Contains("KhronosGroup/UnityGLTF")
+                );
+            }
+            else
+            {
+                Debug.LogWarning("[SceneSync] Failed to check UnityGLTF package status: " + _listRequest.Error.message);
+                _isUnityGltfPackageInstalled = null;
+            }
+
+            _listRequest = null;
+            EditorApplication.update -= PollPackageList;
+        }
 
         public static bool IsUnityGltfDefineEnabled()
         {
@@ -74,6 +109,7 @@ namespace Afjk.SceneSync.Editor
             if (_addRequest.Status == StatusCode.Success)
             {
                 Debug.Log("[SceneSync] UnityGLTF installed: " + _addRequest.Result.packageId);
+                _isUnityGltfPackageInstalled = true;
                 EnsureUnityGltfDefine();
 
                 EditorUtility.DisplayDialog(
