@@ -12,6 +12,12 @@ function shouldAutoFocusInput() {
   return !window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }
 
+function formatRoomLabel(roomCode) {
+  const value = String(roomCode || '').trim();
+  if (!value) return '';
+  return value.length > 16 ? `${value.slice(0, 16)}…` : value;
+}
+
 export class WelcomeDialog {
   constructor({ onStartInRoom, onCreateNewRoom }) {
     this.onStartInRoom = onStartInRoom;
@@ -20,6 +26,8 @@ export class WelcomeDialog {
     this.el = null;
     this.inputEl = null;
     this.errorEl = null;
+    this.startButtonEl = null;
+    this.roomCode = '';
   }
 
   createDialogElement() {
@@ -59,8 +67,9 @@ export class WelcomeDialog {
     return dialog;
   }
 
-  open(mode = 'first-run', savedDisplayName = '') {
+  open(mode = 'first-run', savedDisplayName = '', options = {}) {
     this.mode = mode;
+    this.roomCode = options.roomCode || '';
 
     if (!this.el) {
       this.el = this.createDialogElement();
@@ -68,8 +77,9 @@ export class WelcomeDialog {
 
       this.inputEl = this.el.querySelector('#welcome-display-name');
       this.errorEl = this.el.querySelector('#welcome-error');
+      this.startButtonEl = this.el.querySelector('#welcome-start-room');
 
-      this.el.querySelector('#welcome-start-room').addEventListener('click', () => this.handleStartRoom());
+      this.startButtonEl.addEventListener('click', () => this.handleStartRoom());
       this.el.querySelector('#welcome-new-room').addEventListener('click', () => this.handleNewRoom());
       this.el.querySelector('#welcome-close').addEventListener('click', () => this.close());
 
@@ -85,6 +95,7 @@ export class WelcomeDialog {
       this.inputEl.focus();
     }
     this.clearError();
+    this.updateStartButtonLabel();
 
     if (mode === 'help') {
       this.el.querySelector('#welcome-close').style.display = 'block';
@@ -95,6 +106,13 @@ export class WelcomeDialog {
     }
 
     this.el.style.display = 'flex';
+  }
+
+  updateStartButtonLabel() {
+    const roomLabel = formatRoomLabel(this.roomCode);
+    this.startButtonEl.textContent = roomLabel
+      ? `このルーム（${roomLabel}）に入る`
+      : 'このルームで始める';
   }
 
   close() {
