@@ -3950,12 +3950,15 @@ function randomRoomCode() {
 }
 
 function loadInitialNickname() {
-  const nameParam = new URLSearchParams(location.search).get('name');
-  if (nameParam) return normalizeDisplayName(nameParam);
-  const sceneSyncName = localStorage.getItem('sceneSync.displayName');
-  if (sceneSyncName) return normalizeDisplayName(sceneSyncName);
-  const stored = localStorage.getItem('pipe.deviceName');
-  if (stored) return normalizeDisplayName(stored);
+  const nameParam = normalizeDisplayName(new URLSearchParams(location.search).get('name'));
+  if (nameParam) return nameParam;
+
+  const sceneSyncName = normalizeDisplayName(localStorage.getItem('sceneSync.displayName'));
+  if (sceneSyncName) return sceneSyncName;
+
+  const stored = normalizeDisplayName(localStorage.getItem('pipe.deviceName'));
+  if (stored) return stored;
+
   return 'User-' + Math.random().toString(36).slice(2, 6);
 }
 

@@ -114,7 +114,7 @@ function sanitizeName(raw) {
   if (!raw) return '';
   return String(raw)
     .trim()
-    .replace(/[ -]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
     .slice(0, 32);
 }
 
