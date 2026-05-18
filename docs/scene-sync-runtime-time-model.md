@@ -125,6 +125,46 @@ unselected:
 
 選択解除時に `runtime.startServerTime = serverNow` を設定することで、途中参加クライアントでも GLB animation / Loomlet graph を同じ時間で評価できる。
 
+### Clock sync
+
+最初は軽量な ping / pong による offset 推定でよい。
+
+```txt
+client sends time-sync-request at local time t0
+server responds with serverNow
+client receives at local time t1
+RTT = t1 - t0
+estimatedOffset = serverNow + RTT / 2 - t1
+estimatedServerNow = localNow + estimatedOffset
+```
+
+この推定を数秒〜10秒程度の間隔で更新する。
+
+### Event time
+
+Touch / click / grab / trigger などの event は、発生時刻を environment に入れる。
+
+```json
+{
+  "kind": "scene-event",
+  "eventId": "evt-001",
+  "type": "object-click",
+  "objectId": "button-1",
+  "serverTime": 1770000000000,
+  "peerId": "..."
+}
+```
+
+イベントは単なる即時 callback ではなく、時刻付きの environment fact として扱えるようにする。
+
+### OnStart
+
+`OnStart` は scene load / graph start 時に発火する local event として扱う。
+
+- Scene Sync では `OnStart` を同期 event として broadcast しない。
+- 各 client の scene load timing はずれるため、同期が必要な処理は server time / explicit event を使う。
+- `OnStart` は local 初期化や preview 用に使う。
+
 ---
 
 ## Implementation notes
@@ -135,3 +175,12 @@ unselected:
 - GLB animation は `mixer.update(delta)` だけに依存しない
 - GLB animation と Loomlet object graph は同じ runtime time model を使う
 - 将来の particles / physics / scripts / sounds も同じ `f(t)` モデルに乗せる
+- 同期が必要な animation / behavior は、将来的に server time 基準で評価する
+
+---
+
+## 関連ドキュメント
+
+- [Scene Sync Spec Index](./scene-sync-spec.md)
+- [Animation](./scene-sync-animation.md)
+- [Loom graph protocol](./scene-sync-loom-protocol.md)
