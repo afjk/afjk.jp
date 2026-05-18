@@ -39,6 +39,8 @@ import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
+import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './utils/crash-probe-helper.js';
+import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
@@ -5687,6 +5689,23 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     visualBasis: info.asset?.visualBasis,
   });
 
+  if (isGlbLoadDisabled()) {
+    console.warn('[SceneSync] GLB load disabled by ?noGlbLoad=1, creating diagnostic placeholder');
+    removeLoadingOverlay(objectId);
+    const placeholder = buildGlbDiagnosticPlaceholder(objectId, info);
+    applySceneTransform(placeholder, info);
+    if (existing) {
+      placeholder.position.copy(existing.position);
+      placeholder.quaternion.copy(existing.quaternion);
+      placeholder.scale.copy(existing.scale);
+      if (transformCtrl.object === existing) transformCtrl.detach();
+      scene.remove(existing);
+    }
+    scene.add(placeholder);
+    replaceManagedObject(objectId, placeholder, info);
+    return;
+  }
+
   (async () => {
     try {
       const incomingAssetId = info.asset?.assetId || info.assetId || null;
@@ -5768,8 +5787,21 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       const objectUrl = URL.createObjectURL(blob);
       let loadCompleted = false;
 
+      markCrashProbe('glb-load-start', {
+        objectId,
+        meshPath,
+        sizeBytes: blob.size,
+        source: 'network',
+      });
+
       glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
         try {
+          markCrashProbe('glb-load-success', {
+            objectId,
+            meshPath,
+          });
+          markCrashProbe('glb-scene-attach-start', { objectId });
+
           removeLoadingOverlay(objectId);
           removeFailedOverlay(objectId);
           model.userData.objectId = objectId;
@@ -5834,6 +5866,9 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           } catch (cacheErr) {
             console.warn('[SceneSync] Failed to cache mesh:', cacheErr);
           }
+
+          markCrashProbe('glb-scene-attach-success', { objectId });
+          clearCrashProbe('glb-object-ready');
         } finally {
           loadCompleted = true;
           URL.revokeObjectURL(objectUrl);
@@ -6106,6 +6141,22 @@ function buildDefaultBoxObject(objectId, info, color = 0x4488ff) {
   object.userData.objectId = objectId;
   applyObjectName(object, info.name);
   return object;
+}
+
+function buildGlbDiagnosticPlaceholder(objectId, info) {
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
+  const placeholder = new THREE.Mesh(geometry, material);
+  placeholder.userData.objectId = objectId;
+  placeholder.userData.name = info.name || objectId;
+  placeholder.userData.asset = cloneJsonSafe(info.asset || null);
+  placeholder.userData.meshPath = info.meshPath || info.asset?.meshPath || null;
+  placeholder.userData.metadata = {
+    ...(cloneJsonSafe(info.metadata || null) || {}),
+    glbLoadSkippedForDiagnostic: true,
+  };
+  applyObjectName(placeholder, info.name);
+  return placeholder;
 }
 
 function buildPrimitiveObject(objectId, info, asset) {
@@ -6442,7 +6493,19 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
 
   const url = URL.createObjectURL(blob);
   try {
+    markCrashProbe('glb-load-start', {
+      objectId,
+      meshPath: options.meshPath,
+      sizeBytes: blob.size,
+      source: 'cache',
+    });
+
     const gltf = await new GLTFLoader().loadAsync(url);
+    markCrashProbe('glb-load-success', {
+      objectId,
+      meshPath: options.meshPath,
+    });
+    markCrashProbe('glb-scene-attach-start', { objectId });
 
     // Apply visual-only correction for Unity-authored GLBs
     const asset = obj?.userData?.asset || info?.asset || null;
@@ -6531,6 +6594,8 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
     scene.add(wrapper);
     registerLoadedGlbAnimation(objectId, wrapper, 'glb-blob-loaded');
     notifySceneStateChanged('glb-blob-loaded');
+    markCrashProbe('glb-scene-attach-success', { objectId });
+    clearCrashProbe('glb-object-ready');
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -8580,6 +8645,11 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
   const roomId = getCurrentRoomId();
   if (!roomId) return;
 
+  if (isSnapshotRestoreDisabled()) {
+    console.warn('[SceneSync] room snapshot restore disabled by ?noRestore=1');
+    return;
+  }
+
   if (hasSnapshotRestorableObjects()) {
     console.debug('[scene-snapshot] skip restore: scene already has objects', {
       roomId,
@@ -9060,6 +9130,9 @@ function openHelpDialog() {
 }
 
 // ── 起動 ─────────────────────────────────────────────────
+
+reportPreviousCrashProbe();
+logDiagnosticFlags();
 
 nicknameChip?.addEventListener('click', editNickname);
 document.getElementById('help-btn')?.addEventListener('click', openHelpDialog);

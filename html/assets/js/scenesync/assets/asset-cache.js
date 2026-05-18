@@ -1,3 +1,6 @@
+import { markCrashProbe } from '../utils/crash-probe-helper.js';
+import { isAssetCacheReadDisabled, isAssetCacheWriteDisabled } from '../utils/diagnostic-flags.js';
+
 const DB_NAME = 'scene-sync-assets';
 const STORE_NAME = 'assets';
 const DEFAULT_MAX_GLB_SIZE = 500 * 1024 * 1024;
@@ -30,9 +33,21 @@ export function createSceneAssetCache(options = {}) {
   }
 
   async function putAsset({ assetId, meshPath, blob, source = 'recovered' }) {
+    if (isAssetCacheWriteDisabled()) {
+      console.warn('[SceneSync] asset cache write disabled by query');
+      return;
+    }
+
     if (!assetId || !blob) {
       throw new Error('putAsset requires assetId and blob');
     }
+
+    markCrashProbe('asset-cache-put-start', {
+      assetId,
+      meshPath,
+      size: blob?.size,
+      source,
+    });
 
     if (blob.size > DEFAULT_MAX_GLB_SIZE) {
       console.warn(`[AssetCache] GLB too large (${blob.size} bytes), skipping cache`);
@@ -64,11 +79,13 @@ export function createSceneAssetCache(options = {}) {
 
       req.onsuccess = () => {
         console.log(`[AssetCache] Stored asset ${assetId} (${blob.size} bytes)`);
+        markCrashProbe('asset-cache-put-success', { assetId, size: blob.size });
         resolve();
       };
 
       req.onerror = () => {
         console.warn('[AssetCache] Failed to store asset:', req.error);
+        markCrashProbe('asset-cache-put-error', { assetId, message: req.error?.message });
         reject(req.error);
       };
     });
@@ -76,6 +93,13 @@ export function createSceneAssetCache(options = {}) {
 
   async function getByAssetId(assetId) {
     if (!assetId) return null;
+
+    if (isAssetCacheReadDisabled()) {
+      console.warn('[SceneSync] asset cache read disabled by query');
+      return null;
+    }
+
+    markCrashProbe('asset-cache-get-start', { assetId });
 
     await initDb();
 
@@ -90,6 +114,10 @@ export function createSceneAssetCache(options = {}) {
           record.lastUsedAt = Date.now();
           const txWrite = db.transaction([STORE_NAME], 'readwrite');
           txWrite.objectStore(STORE_NAME).put(record);
+          markCrashProbe('asset-cache-get-success', {
+            assetId,
+            size: record?.size || record?.blob?.size || null,
+          });
         }
         resolve(record || null);
       };
@@ -103,6 +131,13 @@ export function createSceneAssetCache(options = {}) {
 
   async function getByMeshPath(meshPath) {
     if (!meshPath) return null;
+
+    if (isAssetCacheReadDisabled()) {
+      console.warn('[SceneSync] asset cache read disabled by query');
+      return null;
+    }
+
+    markCrashProbe('asset-cache-get-start', { meshPath });
 
     await initDb();
 
@@ -118,6 +153,10 @@ export function createSceneAssetCache(options = {}) {
           record.lastUsedAt = Date.now();
           const txWrite = db.transaction([STORE_NAME], 'readwrite');
           txWrite.objectStore(STORE_NAME).put(record);
+          markCrashProbe('asset-cache-get-success', {
+            meshPath,
+            size: record?.size || record?.blob?.size || null,
+          });
         }
         resolve(record || null);
       };
