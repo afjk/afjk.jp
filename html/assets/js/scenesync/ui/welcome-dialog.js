@@ -8,6 +8,10 @@ function validateDisplayName(name) {
   return { valid: true, normalized };
 }
 
+function shouldAutoFocusInput() {
+  return !window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
 export class WelcomeDialog {
   constructor({ onStartInRoom, onCreateNewRoom }) {
     this.onStartInRoom = onStartInRoom;
@@ -39,7 +43,7 @@ export class WelcomeDialog {
         <div class="welcome-form">
           <label class="form-group">
             <div class="form-label">表示名</div>
-            <input type="text" id="welcome-display-name" class="form-input" placeholder="例: Akihiro / MacBook / Unity Editor" maxlength="32">
+            <input type="text" id="welcome-display-name" class="form-input" placeholder="例: sync-san" maxlength="32">
             <div id="welcome-error" class="form-error" style="display: none;"></div>
           </label>
         </div>
@@ -77,7 +81,9 @@ export class WelcomeDialog {
     }
 
     this.inputEl.value = normalizeDisplayName(savedDisplayName);
-    this.inputEl.focus();
+    if (shouldAutoFocusInput()) {
+      this.inputEl.focus();
+    }
     this.clearError();
 
     if (mode === 'help') {
@@ -92,6 +98,9 @@ export class WelcomeDialog {
   }
 
   close() {
+    if (this.inputEl && document.activeElement === this.inputEl) {
+      this.inputEl.blur();
+    }
     if (this.el) {
       this.el.style.display = 'none';
     }
