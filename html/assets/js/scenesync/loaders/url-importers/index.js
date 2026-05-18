@@ -8,7 +8,17 @@ import { classifyUrl, URL_KIND } from '../url-classifier.js';
 /**
  * URL を分類し、対応する importer へ dispatch する。
  * @param {string} url
- * @param {object} ctx - importer context: { addOrUpdateObject, broadcastSceneAdd, showToast, generateObjectId, getSpawnTransform, THREE }
+ * @param {object} ctx - importer context with scene-object and scene-level functions:
+ *   - addOrUpdateObject: function for importing 3D objects
+ *   - broadcastSceneAdd: function for broadcasting scene-object changes
+ *   - applySceneBgm: function for applying BGM locally
+ *   - broadcastSceneBgm: function for broadcasting BGM changes
+ *   - showToast: function for displaying notifications
+ *   - generateObjectId: function for generating unique object IDs
+ *   - getSpawnTransform: function returning { position, rotation, scale }
+ *   - THREE: Three.js library reference
+ *   - GLTFLoader: Three.js GLTFLoader class (for GLB imports)
+ *   - targetKind, placementRotation, placementQuaternion, surfaceKind, etc.
  * @returns {Promise<{ objectId, payload }>}
  */
 export async function dispatchUrlImport(url, ctx) {

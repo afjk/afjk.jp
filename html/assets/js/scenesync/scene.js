@@ -5052,11 +5052,27 @@ function readQuaternionArray(value, fallback) {
   return Array.isArray(value) && value.length === 4 ? value : fallback;
 }
 
-function createAiUrlImportContext(params = {}, context = {}) {
-  const position = readVector3Array(params.position, [0, 0, 0]);
-  const rotation = readQuaternionArray(params.rotation, [0, 0, 0, 1]);
-  const scale = readVector3Array(params.scale, [1, 1, 1]);
-  let customObjectIdUsed = false;
+function createSceneUrlImportContext(options = {}) {
+  const {
+    positionArray = [0, 1, 0],
+    placementRotation = null,
+    placementQuaternion = null,
+    surfaceKind = null,
+    normalArray = null,
+    rawNormalArray = null,
+    wallSurfaceOffset = 0,
+    placementPosition = null,
+    targetKind = 'scene',
+    sourceContext = {},
+    generateObjectIdOverride = null,
+    nameOverride = null,
+    rotationOverride = null,
+    scaleOverride = null,
+  } = options;
+
+  const position = positionArray;
+  const rotation = rotationOverride || [0, 0, 0, 1];
+  const scale = scaleOverride || [1, 1, 1];
 
   return {
     addOrUpdateObject,
@@ -5064,20 +5080,41 @@ function createAiUrlImportContext(params = {}, context = {}) {
     applySceneBgm,
     broadcastSceneBgm: broadcast,
     showToast,
-    generateObjectId: (prefix) => {
-      if (!customObjectIdUsed && typeof params.objectId === 'string' && params.objectId.trim()) {
-        customObjectIdUsed = true;
-        return params.objectId.trim();
-      }
-      return generateObjectId(prefix);
-    },
+    generateObjectId: generateObjectIdOverride || ((prefix) => generateObjectId(prefix)),
     getSpawnTransform: () => ({
       position,
       rotation,
       scale,
     }),
-    nameOverride: (typeof params.name === 'string' && params.name.trim()) ? params.name.trim() : null,
+    nameOverride,
     position,
+    placementRotation,
+    placementQuaternion,
+    surfaceKind,
+    normalArray,
+    rawNormalArray,
+    wallSurfaceOffset,
+    placementPosition,
+    textImporter: (text, filename, importerContext = {}) =>
+      textImporterCallback(text, { toArray: () => position }, filename, {
+        ...sourceContext,
+        ...importerContext,
+      }),
+    THREE,
+    GLTFLoader,
+    targetKind,
+    replaceSkyboxSphereFromBlob,
+  };
+}
+
+function createAiUrlImportContext(params = {}, context = {}) {
+  const position = readVector3Array(params.position, [0, 0, 0]);
+  const rotation = readQuaternionArray(params.rotation, [0, 0, 0, 1]);
+  const scale = readVector3Array(params.scale, [1, 1, 1]);
+  let customObjectIdUsed = false;
+
+  return createSceneUrlImportContext({
+    positionArray: position,
     placementRotation: Array.isArray(context.placementRotation) ? context.placementRotation : null,
     placementQuaternion: context.placementQuaternion || null,
     surfaceKind: context.surfaceKind || null,
@@ -5085,20 +5122,19 @@ function createAiUrlImportContext(params = {}, context = {}) {
     rawNormalArray: context.rawNormalArray || null,
     wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
     placementPosition: context.placementPosition || null,
-    textImporter: (text, filename, importerContext = {}) =>
-      textImporterCallback(text, position, filename, {
-        ...context,
-        ...importerContext,
-        objectId: params.objectId,
-        name: params.name,
-        rotation,
-        scale,
-      }),
-    THREE,
-    GLTFLoader,
     targetKind: context?.targetKind || 'scene',
-    replaceSkyboxSphereFromBlob,
-  };
+    sourceContext: context,
+    generateObjectIdOverride: (prefix) => {
+      if (!customObjectIdUsed && typeof params.objectId === 'string' && params.objectId.trim()) {
+        customObjectIdUsed = true;
+        return params.objectId.trim();
+      }
+      return generateObjectId(prefix);
+    },
+    nameOverride: (typeof params.name === 'string' && params.name.trim()) ? params.name.trim() : null,
+    rotationOverride: rotation,
+    scaleOverride: scale,
+  });
 }
 
 function assertAiUrlKind(url, allowedKinds, action) {
@@ -6842,17 +6878,8 @@ async function urlImporterCallback(url, position, context = {}) {
   const effectivePlacementRotation = urlSkybox ? null : (context.placementRotation || null);
   const effectivePlacementQuaternion = urlSkybox ? null : (context.placementQuaternion || null);
 
-  const ctx = {
-    addOrUpdateObject,
-    broadcastSceneAdd: broadcast,
-    showToast,
-    generateObjectId,
-    getSpawnTransform: () => ({
-      position: positionArray,
-      rotation: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-    }),
-    position: positionArray,
+  const ctx = createSceneUrlImportContext({
+    positionArray,
     placementRotation: effectivePlacementRotation,
     placementQuaternion: effectivePlacementQuaternion,
     surfaceKind: effectiveSurfaceKind,
@@ -6860,16 +6887,9 @@ async function urlImporterCallback(url, position, context = {}) {
     rawNormalArray: context.rawNormalArray || null,
     wallSurfaceOffset: context.wallSurfaceOffset ?? 0,
     placementPosition: context.placementPosition || null,
-    textImporter: (text, filename, importerContext = {}) =>
-      textImporterCallback(text, position, filename, {
-        ...context,
-        ...importerContext,
-      }),
-    THREE,
-    GLTFLoader,
     targetKind: effectiveTargetKind,
-    replaceSkyboxSphereFromBlob,
-  };
+    sourceContext: context,
+  });
 
   await dispatchUrlImport(resolved.resolvedUrl, ctx);
 }
