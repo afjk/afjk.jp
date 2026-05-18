@@ -5690,7 +5690,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   });
 
   if (isGlbLoadDisabled()) {
-    console.warn('[SceneSync] GLB load disabled by ?noGlbLoad=1, creating diagnostic placeholder');
+    console.warn('[SceneSync] GLB load disabled by diagnostic flag, creating diagnostic placeholder');
     removeLoadingOverlay(objectId);
     const placeholder = buildGlbDiagnosticPlaceholder(objectId, info);
     applySceneTransform(placeholder, info);
@@ -6488,6 +6488,21 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
   const info = options.info || null;
   if (!obj && !info) {
     console.warn('[SceneSync] Object not found for loading recovered GLB:', objectId);
+    return;
+  }
+
+  if (isGlbLoadDisabled()) {
+    console.warn('[SceneSync] GLB blob load disabled by diagnostic flag, keeping placeholder', {
+      objectId,
+      meshPath: options.meshPath,
+      sizeBytes: blob?.size || null,
+    });
+    if (info && !obj) {
+      const placeholder = buildGlbDiagnosticPlaceholder(objectId, info);
+      applySceneTransform(placeholder, info);
+      scene.add(placeholder);
+      replaceManagedObject(objectId, placeholder, info);
+    }
     return;
   }
 
