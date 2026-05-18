@@ -190,13 +190,11 @@ dom.clearBgmButton?.addEventListener('click', () => {
     return;
   }
 
-  const previousBgm = serializeSceneBgm();
   applySceneBgm(null);
 
   const operation = {
     kind: 'scene-bgm',
     bgm: null,
-    previousBgm,
   };
   broadcast(operation);
 
@@ -6252,7 +6250,7 @@ function applyOperationToScene(operation) {
     }
     case 'scene-bgm': {
       applySceneBgm(operation.bgm ?? null);
-      notifySceneStateChanged('undo-redo-scene-bgm');
+      notifySceneStateChanged('scene-bgm-applied');
       break;
     }
   }
