@@ -1,4 +1,5 @@
 import { normalizeDisplayName } from '../utils/display-name.js';
+import { focusTextInputIfSafe, blurActiveEditableElement } from './input-focus-guard.js';
 
 function validateDisplayName(name) {
   const normalized = normalizeDisplayName(name);
@@ -6,10 +7,6 @@ function validateDisplayName(name) {
     return { valid: false, message: '表示名を入力してください。', normalized };
   }
   return { valid: true, normalized };
-}
-
-function shouldAutoFocusInput() {
-  return !window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }
 
 function formatRoomLabel(roomCode) {
@@ -91,9 +88,7 @@ export class WelcomeDialog {
     }
 
     this.inputEl.value = normalizeDisplayName(savedDisplayName);
-    if (shouldAutoFocusInput()) {
-      this.inputEl.focus();
-    }
+    focusTextInputIfSafe(this.inputEl);
     this.clearError();
     this.updateStartButtonLabel();
 
@@ -116,9 +111,7 @@ export class WelcomeDialog {
   }
 
   close() {
-    if (this.inputEl && document.activeElement === this.inputEl) {
-      this.inputEl.blur();
-    }
+    blurActiveEditableElement();
     if (this.el) {
       this.el.style.display = 'none';
     }
