@@ -1746,20 +1746,25 @@ function createPresenceServer() {
       log('client disconnected', client.id);
       const durationMs = Date.now() - client.connectedAt;
 
-      sceneSyncLogger.log('ws_connection_close', {
+      const closeLogBase = {
         roomId,
         clientId: client.id,
         peerId: client.id,
         ipHash: client.ipHash,
         durationMs,
-        roomClientCount: getRoomClientCount(roomId),
-        totalClientCount: getTotalClientCount(),
-        ipClientCount: getIpClientCount(client.ipHash),
         code: 1000,
         reason: 'closed'
-      });
+      };
 
       removeClient(client);
+
+      sceneSyncLogger.log('ws_connection_close', {
+        ...closeLogBase,
+        roomClientCount: getRoomClientCount(roomId),
+        totalClientCount: getTotalClientCount(),
+        ipClientCount: getIpClientCount(client.ipHash)
+      });
+
       broadcastPeers(roomId);
     };
   });
