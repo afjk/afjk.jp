@@ -4,6 +4,7 @@ const KNOWN_KINDS = new Set([
   'scene-remove',
   'scene-mesh',
   'scene-env',
+  'scene-bgm',
   'scene-state',
   'scene-request',
   'scene-avatar',
@@ -69,6 +70,19 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-env' && !ENV_IDS.has(payload.envId)) {
     return { ok: false, reason: 'envId is invalid' };
+  }
+
+  if (payload.kind === 'scene-bgm') {
+    if (payload.bgm === null) {
+      // bgm: null is valid (clears BGM)
+      return { ok: true };
+    }
+    if (typeof payload.bgm !== 'object' || !payload.bgm) {
+      return { ok: false, reason: 'bgm must be null or an object' };
+    }
+    if (!isReasonableString(payload.bgm.url)) {
+      return { ok: false, reason: 'bgm.url must be a reasonable string' };
+    }
   }
 
   if (payload.kind === 'scene-batch') {

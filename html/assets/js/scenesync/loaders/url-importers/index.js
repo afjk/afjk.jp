@@ -1,3 +1,4 @@
+import { importAudioUrl } from './audio.js';
 import { importVideoUrl } from './video.js';
 import { importImageUrl } from './image.js';
 import { importGlbUrl } from './glb.js';
@@ -27,6 +28,10 @@ export async function dispatchUrlImport(url, ctx) {
       message: 'URL が無効です。http(s) で始まる URL を使用してください',
     });
     return;
+  }
+
+  if (classified.kind === URL_KIND.AUDIO) {
+    return await importAudioUrl(classified.url, ctx);
   }
 
   if (classified.kind === URL_KIND.VIDEO || classified.kind === URL_KIND.VIDEO_HLS) {

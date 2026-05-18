@@ -157,6 +157,45 @@ describe('Scene Sync guard helpers', () => {
     });
     assert.equal(result.ok, true);
   });
+
+  it('accepts valid scene-bgm with bgm object', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-bgm',
+      bgm: {
+        version: 1,
+        url: 'https://example.com/music.mp3',
+        name: 'music.mp3',
+        loop: true,
+        volume: 1,
+        playback: { mode: 'local-loop' },
+      },
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it('accepts scene-bgm with bgm null', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-bgm',
+      bgm: null,
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it('rejects scene-bgm without url', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-bgm',
+      bgm: { name: 'music' },
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects scene-bgm with invalid url type', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-bgm',
+      bgm: { url: 123 },
+    });
+    assert.equal(result.ok, false);
+  });
 });
 
 describe('Scene Sync server guards', () => {
