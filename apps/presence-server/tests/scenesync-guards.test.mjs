@@ -351,10 +351,10 @@ describe('Scene Sync server guards', () => {
     assert.equal(add3.status, 429);
   });
 
-  it('enforces room connection limit', async () => {
-    const ws1 = new WebSocket(`${wsBaseUrl}?room=room-limit`);
-    const ws2 = new WebSocket(`${wsBaseUrl}?room=room-limit`);
-    const ws3 = new WebSocket(`${wsBaseUrl}?room=room-limit`);
+  it('enforces room connection limit for explicit rooms', async () => {
+    const ws1 = new WebSocket(`${wsBaseUrl}?room=room-limit-explicit`);
+    const ws2 = new WebSocket(`${wsBaseUrl}?room=room-limit-explicit`);
+    const ws3 = new WebSocket(`${wsBaseUrl}?room=room-limit-explicit`);
     const thirdEvents = [];
     ws3.on('message', (raw) => {
       thirdEvents.push(JSON.parse(raw.toString()));
@@ -379,6 +379,54 @@ describe('Scene Sync server guards', () => {
     ws1.terminate();
     ws2.terminate();
     ws3.terminate();
+  });
+
+  it('skips room connection limit for inferred rooms', async () => {
+    const wsClients = [];
+    const openEvents = [];
+
+    for (let i = 0; i < 4; i++) {
+      const ws = new WebSocket(wsBaseUrl);
+      wsClients.push(ws);
+
+      ws.on('open', () => {
+        openEvents.push({ index: i, event: 'open' });
+      });
+
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'welcome') {
+          openEvents.push({ index: i, event: 'welcome', roomId: msg.room });
+        }
+        if (msg.error === 'room_full') {
+          openEvents.push({ index: i, event: 'room_full_error' });
+        }
+      });
+
+      ws.on('close', () => {
+        openEvents.push({ index: i, event: 'close' });
+      });
+    }
+
+    await Promise.all([
+      new Promise((resolve) => wsClients[0].once('open', resolve)),
+      new Promise((resolve) => wsClients[1].once('open', resolve)),
+      new Promise((resolve) => wsClients[2].once('open', resolve)),
+      new Promise((resolve) => wsClients[3].once('open', resolve)),
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const closeEvents = openEvents.filter(e => e.event === 'close');
+    const roomFullErrors = openEvents.filter(e => e.event === 'room_full_error');
+
+    assert.equal(closeEvents.length, 0, 'no clients should have been closed by room_full');
+    assert.equal(roomFullErrors.length, 0, 'no room_full errors should be received');
+
+    const allOpen = wsClients.every(ws => ws.readyState === WebSocket.OPEN);
+    assert.equal(allOpen, true, 'all 4 clients should remain connected despite limit of 2');
+
+    wsClients.forEach(ws => ws.terminate());
   });
 });
 

@@ -1535,33 +1535,3 @@ describe('presence AI wrapper alias API', () => {
     assert.equal(body.kind, 'scene-add');
   });
 });
-
-describe('room connection limits', () => {
-  it('explicit rooms include inferredRoom: false in logs', async () => {
-    const roomId = 'explicit-log-test';
-    const ws = await connectClient(roomId);
-    try {
-      assert.equal(ws.readyState, WebSocket.OPEN);
-    } finally {
-      await closeClient(ws);
-    }
-  });
-
-  it('inferred rooms include inferredRoom: true in logs', async () => {
-    const ws = new WebSocket(wsBaseUrl);
-    const welcomePromise = waitForMessage(ws, message => message.type === 'welcome');
-    await waitForEvent(ws, 'open');
-    ws.send(JSON.stringify({
-      type: 'hello',
-      nickname: 'InferredRoomTest',
-      device: 'Test',
-    }));
-    const welcome = await welcomePromise;
-    try {
-      assert.ok(welcome.room, 'should have a room ID');
-      assert.equal(ws.readyState, WebSocket.OPEN);
-    } finally {
-      await closeClient(ws);
-    }
-  });
-});
