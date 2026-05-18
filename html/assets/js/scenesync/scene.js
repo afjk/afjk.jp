@@ -21,6 +21,8 @@ import { resolveDroppedUrl } from './loaders/url-resolver.js';
 import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
+import { createWelcomeDialog } from './ui/welcome-dialog.js';
+import { normalizeDisplayName } from './utils/display-name.js';
 import { extractYaw } from './utils/math.js';
 import { broadcastObjectDelta } from './objects/object-delta.js';
 import { createXrState } from './xr/xr-state.js';
@@ -3948,10 +3950,15 @@ function randomRoomCode() {
 }
 
 function loadInitialNickname() {
-  const nameParam = new URLSearchParams(location.search).get('name');
-  if (nameParam) return nameParam.slice(0, 40);
-  const stored = localStorage.getItem('pipe.deviceName');
+  const nameParam = normalizeDisplayName(new URLSearchParams(location.search).get('name'));
+  if (nameParam) return nameParam;
+
+  const sceneSyncName = normalizeDisplayName(localStorage.getItem('sceneSync.displayName'));
+  if (sceneSyncName) return sceneSyncName;
+
+  const stored = normalizeDisplayName(localStorage.getItem('pipe.deviceName'));
   if (stored) return stored;
+
   return 'User-' + Math.random().toString(36).slice(2, 6);
 }
 
@@ -4116,24 +4123,28 @@ function updateNicknameLabel() {
   if (nicknameLabel) nicknameLabel.textContent = presenceState.nickname;
 }
 
-function editNickname() {
-  const next = prompt('表示名を入力してください', presenceState.nickname) || '';
-  const cleaned = next.trim().slice(0, 40);
-  if (!cleaned || cleaned === presenceState.nickname) return;
-  presenceState.nickname = cleaned;
-  localStorage.setItem('pipe.deviceName', cleaned);
-  updateNicknameLabel();
-  updatePeersList();
-  // 接続中なら hello を再送して即時反映
+function sendHelloIfConnected() {
   const ws = presenceState.ws;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'hello',
-      nickname: cleaned,
+      nickname: presenceState.nickname,
       device: navigator.userAgent.slice(0, 60),
       userId: presenceState.userId,
     }));
   }
+}
+
+function editNickname() {
+  const next = prompt('表示名を入力してください', presenceState.nickname) || '';
+  const cleaned = normalizeDisplayName(next);
+  if (!cleaned || cleaned === presenceState.nickname) return;
+  presenceState.nickname = cleaned;
+  localStorage.setItem('pipe.deviceName', cleaned);
+  localStorage.setItem('sceneSync.displayName', cleaned);
+  updateNicknameLabel();
+  updatePeersList();
+  sendHelloIfConnected();
 }
 
 // ── ルーム制御 ────────────────────────────────────────
@@ -8988,12 +8999,54 @@ if (mobileEnvSelect && dom.envSelect) {
   mobileEnvSelect.value = dom.envSelect.value;
 }
 
+// ── ウェルカムダイアログ ──────────────────────────────
+
+const welcomeDialog = createWelcomeDialog({
+  onStartInRoom: (displayName) => {
+    const normalized = normalizeDisplayName(displayName);
+    presenceState.nickname = normalized;
+    localStorage.setItem('sceneSync.displayName', normalized);
+    localStorage.setItem('sceneSync.welcomeSeen', 'true');
+    updateNicknameLabel();
+    updatePeersList();
+    sendHelloIfConnected();
+  },
+  onCreateNewRoom: (displayName) => {
+    const normalized = normalizeDisplayName(displayName);
+    presenceState.nickname = normalized;
+    localStorage.setItem('sceneSync.displayName', normalized);
+    localStorage.setItem('sceneSync.welcomeSeen', 'true');
+    updateNicknameLabel();
+    generateRoom();
+  },
+});
+
+function shouldShowWelcome() {
+  const welcomeSeen = localStorage.getItem('sceneSync.welcomeSeen') === 'true';
+  const displayName = normalizeDisplayName(localStorage.getItem('sceneSync.displayName'));
+  return !welcomeSeen || !displayName;
+}
+
+function initializeWelcome() {
+  if (shouldShowWelcome()) {
+    const savedDisplayName = localStorage.getItem('sceneSync.displayName') || '';
+    welcomeDialog.open('first-run', savedDisplayName);
+  }
+}
+
+function openHelpDialog() {
+  const savedDisplayName = localStorage.getItem('sceneSync.displayName') || '';
+  welcomeDialog.open('help', savedDisplayName);
+}
+
 // ── 起動 ─────────────────────────────────────────────────
 
 nicknameChip?.addEventListener('click', editNickname);
+document.getElementById('help-btn')?.addEventListener('click', openHelpDialog);
 updateNicknameLabel();
 renderRoomSection();
 syncSceneUiState();
+initializeWelcome();
 connectPresence();
 
 // Safari / iOS: バックグラウンドから復帰時に即再接続（3秒タイマーを待たない）
