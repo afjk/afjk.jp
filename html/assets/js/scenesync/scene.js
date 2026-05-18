@@ -5068,6 +5068,7 @@ function createSceneUrlImportContext(options = {}) {
     nameOverride = null,
     rotationOverride = null,
     scaleOverride = null,
+    extraImporterContext = {},
   } = options;
 
   const position = positionArray;
@@ -5098,6 +5099,7 @@ function createSceneUrlImportContext(options = {}) {
     textImporter: (text, filename, importerContext = {}) =>
       textImporterCallback(text, { toArray: () => position }, filename, {
         ...sourceContext,
+        ...extraImporterContext,
         ...importerContext,
       }),
     THREE,
@@ -5134,6 +5136,12 @@ function createAiUrlImportContext(params = {}, context = {}) {
     nameOverride: (typeof params.name === 'string' && params.name.trim()) ? params.name.trim() : null,
     rotationOverride: rotation,
     scaleOverride: scale,
+    extraImporterContext: {
+      objectId: params.objectId,
+      name: params.name,
+      rotation,
+      scale,
+    },
   });
 }
 
