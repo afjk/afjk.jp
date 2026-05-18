@@ -1,10 +1,19 @@
 import { computeAssetId } from './asset-id.js';
 
+function cloneJsonSafe(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
 const RECOVERY_TIMEOUT_MS = 30000;
 const PEER_RETRY_INTERVAL_MS = 4000;
 const COOLDOWN_MS = 30000;
-const MAX_GLB_SIZE = 50 * 1024 * 1024;
+const DEFAULT_MAX_GLB_SIZE = 500 * 1024 * 1024;
 const MAX_ACTIVE_OUTGOING = 1;
+const MAX_OUTGOING_QUEUE = 8;
 
 function getOtherPeers(presenceState) {
   let peers = presenceState.peers;
@@ -28,9 +37,12 @@ export function createExpiredGlbRecovery({
 }) {
   const pendingRecoveries = new Map();
   const responderCooldowns = new Map();
+  const outgoingQueue = [];
+  const recoveryFailedCallbacks = [];
+  const recoverySuccessCallbacks = [];
   let activeOutgoingTransfer = null;
 
-  async function handleMissingGlb(objectId, meshPath, expectedSize, assetId) {
+  async function handleMissingGlb(objectId, meshPath, expectedSize, assetId, info = null) {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     console.log('[ExpiredGlbRecovery] Missing GLB detected:', {
@@ -46,6 +58,7 @@ export function createExpiredGlbRecovery({
       assetId: assetId || null,
       meshPath: meshPath || null,
       expectedSize: expectedSize || null,
+      info: info ? cloneJsonSafe(info) : null,
       requestedAt: Date.now(),
       requestedPeerIds: new Set(),
     };
@@ -57,9 +70,14 @@ export function createExpiredGlbRecovery({
     const peers = getOtherPeers(presenceState);
     if (peers.length === 0) {
       console.log('[ExpiredGlbRecovery] No other peers available');
-      setTimeout(() => {
-        pendingRecoveries.delete(requestId);
-      }, RECOVERY_TIMEOUT_MS);
+      pendingRecoveries.delete(requestId);
+      recoveryFailedCallbacks.forEach(cb => {
+        try {
+          cb({ objectId, requestId, reason: 'no-peers' });
+        } catch (err) {
+          console.warn('[ExpiredGlbRecovery] Error in recovery failed callback:', err);
+        }
+      });
       return;
     }
 
@@ -81,6 +99,13 @@ export function createExpiredGlbRecovery({
       if (peerIndex >= peers.length) {
         console.log('[ExpiredGlbRecovery] All peers exhausted for requestId:', requestId);
         pendingRecoveries.delete(requestId);
+        recoveryFailedCallbacks.forEach(cb => {
+          try {
+            cb({ objectId, requestId, reason: 'no-response' });
+          } catch (err) {
+            console.warn('[ExpiredGlbRecovery] Error in recovery failed callback:', err);
+          }
+        });
         return;
       }
 
@@ -111,6 +136,13 @@ export function createExpiredGlbRecovery({
       if (pendingRecoveries.has(requestId)) {
         console.log('[ExpiredGlbRecovery] Recovery timeout for requestId:', requestId);
         pendingRecoveries.delete(requestId);
+        recoveryFailedCallbacks.forEach(cb => {
+          try {
+            cb({ objectId, requestId, reason: 'timeout' });
+          } catch (err) {
+            console.warn('[ExpiredGlbRecovery] Error in recovery failed callback:', err);
+          }
+        });
       }
     }, RECOVERY_TIMEOUT_MS);
   }
@@ -129,12 +161,6 @@ export function createExpiredGlbRecovery({
       from: from.id,
     });
 
-    const obj = getObjectById(objectId);
-    if (!obj) {
-      console.log('[ExpiredGlbRecovery] Object not found locally:', objectId);
-      return;
-    }
-
     const cacheKey = assetId || meshPath;
     if (!cacheKey) {
       console.log('[ExpiredGlbRecovery] No cacheKey for matching');
@@ -148,10 +174,23 @@ export function createExpiredGlbRecovery({
       return;
     }
 
+    const request = { requestId, objectId, assetId, meshPath, expectedSize, fromPeerId: from.id };
+
     if (activeOutgoingTransfer) {
-      console.log('[ExpiredGlbRecovery] Already transferring, skipping');
+      if (outgoingQueue.length >= MAX_OUTGOING_QUEUE) {
+        console.warn('[ExpiredGlbRecovery] Outgoing queue full, dropping request', requestId);
+        return;
+      }
+      console.log('[ExpiredGlbRecovery] Queuing request for later');
+      outgoingQueue.push(request);
       return;
     }
+
+    await processOutgoingRequest(request);
+  }
+
+  async function processOutgoingRequest(request) {
+    const { requestId, objectId, assetId, meshPath, expectedSize, fromPeerId } = request;
 
     let cachedRecord = null;
     if (assetId) {
@@ -161,17 +200,20 @@ export function createExpiredGlbRecovery({
     }
 
     if (!cachedRecord || !cachedRecord.blob) {
-      console.log('[ExpiredGlbRecovery] Asset not in local cache:', cacheKey);
+      console.log('[ExpiredGlbRecovery] Asset not in local cache:', assetId || meshPath);
+      processNextOutgoingRequest();
       return;
     }
 
     const blob = cachedRecord.blob;
-    if (blob.size > MAX_GLB_SIZE) {
+    if (blob.size > DEFAULT_MAX_GLB_SIZE) {
       console.warn('[ExpiredGlbRecovery] Cached GLB too large, skipping');
+      processNextOutgoingRequest();
       return;
     }
 
-    responderCooldowns.set(cooldownKey, Date.now());
+    const cacheKey = assetId || meshPath;
+    responderCooldowns.set(`${cacheKey}-${fromPeerId}`, Date.now());
     activeOutgoingTransfer = requestId;
 
     try {
@@ -180,31 +222,40 @@ export function createExpiredGlbRecovery({
 
       console.log('[ExpiredGlbRecovery] Sending GLB to peer:', {
         requestId,
-        peerId: from.id,
+        peerId: fromPeerId,
         fileName,
         size: blob.size,
       });
 
-      await fileTransfer.sendFileToPeer(from.id, file);
+      await fileTransfer.sendFileToPeer(fromPeerId, file, { requestId, assetId, meshPath, objectId });
     } catch (err) {
       console.warn('[ExpiredGlbRecovery] Failed to send GLB:', err);
     } finally {
       activeOutgoingTransfer = null;
+      processNextOutgoingRequest();
     }
   }
 
-  async function handleReceivedFile({ file, fromPeerId, from }) {
+  function processNextOutgoingRequest() {
+    if (outgoingQueue.length > 0) {
+      const nextRequest = outgoingQueue.shift();
+      processOutgoingRequest(nextRequest);
+    }
+  }
+
+  async function handleReceivedFile({ file, fromPeerId, from, recoveryRequestId }) {
     if (!file) {
       return;
     }
 
     console.log('[ExpiredGlbRecovery] File received from peer:', {
       fromPeerId,
+      recoveryRequestId,
       fileName: file.name,
       size: file.size,
     });
 
-    if (file.size > MAX_GLB_SIZE) {
+    if (file.size > DEFAULT_MAX_GLB_SIZE) {
       console.warn('[ExpiredGlbRecovery] Received file too large, ignoring');
       return;
     }
@@ -216,16 +267,23 @@ export function createExpiredGlbRecovery({
     }
 
     let recovery = null;
-    for (const [, rec] of pendingRecoveries) {
-      if (!rec.requestedPeerIds.has(fromPeerId)) {
-        continue;
+
+    if (recoveryRequestId) {
+      recovery = pendingRecoveries.get(recoveryRequestId);
+    }
+
+    if (!recovery && fromPeerId) {
+      for (const [, rec] of pendingRecoveries) {
+        if (!rec.requestedPeerIds.has(fromPeerId)) {
+          continue;
+        }
+        recovery = rec;
+        break;
       }
-      recovery = rec;
-      break;
     }
 
     if (!recovery) {
-      console.log('[ExpiredGlbRecovery] No matching pending recovery for this file from requestedPeerIds');
+      console.log('[ExpiredGlbRecovery] No matching pending recovery for this file');
       return;
     }
 
@@ -265,7 +323,19 @@ export function createExpiredGlbRecovery({
       });
 
       console.log('[ExpiredGlbRecovery] Loading recovered GLB into object');
-      await loadGlbBlobForObject(recovery.objectId, file);
+      await loadGlbBlobForObject(recovery.objectId, file, {
+        info: recovery.info,
+        meshPath: recovery.meshPath,
+        assetId: computedAssetId || recovery.assetId,
+      });
+
+      recoverySuccessCallbacks.forEach(cb => {
+        try {
+          cb({ objectId: recovery.objectId, requestId: recovery.requestId });
+        } catch (err) {
+          console.warn('[ExpiredGlbRecovery] Error in recovery success callback:', err);
+        }
+      });
 
       showToast('GLBアセットが別の参加者から復元されました。');
     } catch (err) {
@@ -273,13 +343,21 @@ export function createExpiredGlbRecovery({
     }
   }
 
-  function canAcceptFileHandoff({ fromPeerId, filename, size, mime }) {
-    if (!fromPeerId || !filename || !size || !mime) {
+  function canAcceptFileHandoff({ fromPeerId, filename, size, mime, recoveryRequestId }) {
+    if (!filename || !size || !mime) {
       return false;
     }
 
     const isGlb = (mime === 'model/gltf-binary' || filename.toLowerCase().endsWith('.glb'));
     if (!isGlb) {
+      return false;
+    }
+
+    if (recoveryRequestId && pendingRecoveries.has(recoveryRequestId)) {
+      return true;
+    }
+
+    if (!fromPeerId) {
       return false;
     }
 
@@ -300,10 +378,24 @@ export function createExpiredGlbRecovery({
     return recovery !== null;
   }
 
+  function onRecoveryFailed(callback) {
+    if (typeof callback === 'function') {
+      recoveryFailedCallbacks.push(callback);
+    }
+  }
+
+  function onRecoverySuccess(callback) {
+    if (typeof callback === 'function') {
+      recoverySuccessCallbacks.push(callback);
+    }
+  }
+
   return {
     handleMissingGlb,
     handleSceneAssetRequest,
     handleReceivedFile,
     canAcceptFileHandoff,
+    onRecoveryFailed,
+    onRecoverySuccess,
   };
 }
