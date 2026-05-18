@@ -9,6 +9,9 @@
     "test": "node --test tests/api.test.mjs tests/inferred-room.test.mjs tests/scenesync-guards.test.mjs",
     "scenesync:cleanup-backups": "node scripts/cleanup-backups.mjs"
   },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0"
+  },
   "devDependencies": {
     "ws": "^8.18.3"
   }

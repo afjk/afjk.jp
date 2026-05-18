@@ -365,16 +365,17 @@ describe('Scene Sync logger and backup', () => {
     }
   });
 
-  it('GLB backup writes .glb and .json metadata', () => {
+  it('GLB backup writes .glb and .json metadata', async () => {
     const localBackup = path.join(tmpRoot, 'backup-write');
     const manager = createGlbBackupManager({
       glbBackupEnabled: true,
+      glbBackupDriver: 'local',
       glbBackupDir: localBackup,
       glbBackupMaxTotalBytes: 1_000_000,
       glbBackupMinFreeBytes: 0,
     }, createSceneSyncLogger({ enabled: false }));
 
-    const result = manager.saveAcceptedGlb({
+    const result = await manager.saveAcceptedGlb({
       buffer: Buffer.from('glTFpayload'),
       roomId: 'room-a',
       actorId: 'actor-a',
@@ -399,19 +400,20 @@ describe('Scene Sync logger and backup', () => {
     assert.equal(metadata.blobId, 'blob-a');
   });
 
-  it('GLB backup skips when total backup size is over limit', () => {
+  it('GLB backup skips when total backup size is over limit', async () => {
     const localBackup = path.join(tmpRoot, 'backup-skip');
     mkdirSync(localBackup, { recursive: true });
     writeFileSync(path.join(localBackup, 'existing.bin'), Buffer.alloc(32));
 
     const manager = createGlbBackupManager({
       glbBackupEnabled: true,
+      glbBackupDriver: 'local',
       glbBackupDir: localBackup,
       glbBackupMaxTotalBytes: 8,
       glbBackupMinFreeBytes: 0,
     }, createSceneSyncLogger({ enabled: false }));
 
-    const result = manager.saveAcceptedGlb({
+    const result = await manager.saveAcceptedGlb({
       buffer: Buffer.from('glTFpayload'),
       roomId: 'room-b',
       actorId: 'actor-b',
@@ -423,13 +425,14 @@ describe('Scene Sync logger and backup', () => {
     assert.equal(result.reason, 'max_total_bytes_exceeded');
   });
 
-  it('GLB backup skips when projected size would exceed max', () => {
+  it('GLB backup skips when projected size would exceed max', async () => {
     const localBackup = path.join(tmpRoot, 'backup-projected-skip');
     mkdirSync(localBackup, { recursive: true });
     writeFileSync(path.join(localBackup, 'existing.bin'), Buffer.alloc(32));
 
     const manager = createGlbBackupManager({
       glbBackupEnabled: true,
+      glbBackupDriver: 'local',
       glbBackupDir: localBackup,
       glbBackupMaxTotalBytes: 50,
       glbBackupMinFreeBytes: 0,
@@ -437,7 +440,7 @@ describe('Scene Sync logger and backup', () => {
       estimatedMetadataBytes: 16,
     });
 
-    const result = manager.saveAcceptedGlb({
+    const result = await manager.saveAcceptedGlb({
       buffer: Buffer.from('glTFpayload'),
       roomId: 'room-c',
       actorId: 'actor-c',
@@ -451,10 +454,11 @@ describe('Scene Sync logger and backup', () => {
     assert.equal(existsSync(dayDir), false);
   });
 
-  it('GLB backup skips when free disk state is unknown', () => {
+  it('GLB backup skips when free disk state is unknown', async () => {
     const localBackup = path.join(tmpRoot, 'backup-free-unknown');
     const manager = createGlbBackupManager({
       glbBackupEnabled: true,
+      glbBackupDriver: 'local',
       glbBackupDir: localBackup,
       glbBackupMaxTotalBytes: 1_000_000,
       glbBackupMinFreeBytes: 0,
@@ -462,7 +466,7 @@ describe('Scene Sync logger and backup', () => {
       getFreeBytes: () => null,
     });
 
-    const result = manager.saveAcceptedGlb({
+    const result = await manager.saveAcceptedGlb({
       buffer: Buffer.from('glTFpayload'),
       roomId: 'room-d',
       actorId: 'actor-d',
@@ -472,6 +476,28 @@ describe('Scene Sync logger and backup', () => {
 
     assert.equal(result.saved, false);
     assert.equal(result.reason, 'free_disk_unknown');
+  });
+
+  it('GLB backup s3 driver skips when s3 config is missing', async () => {
+    const manager = createGlbBackupManager({
+      glbBackupEnabled: true,
+      glbBackupDriver: 's3',
+      glbBackupS3Bucket: '',
+      glbBackupS3AccessKeyId: '',
+      glbBackupS3SecretAccessKey: '',
+    }, createSceneSyncLogger({ enabled: false }));
+
+    const result = await manager.saveAcceptedGlb({
+      buffer: Buffer.from('glTFpayload'),
+      roomId: 'room-s3-config',
+      actorId: 'actor-s3-config',
+      filename: 'box.glb',
+      mimeType: 'model/gltf-binary',
+    });
+
+    assert.equal(result.saved, false);
+    assert.equal(result.reason, 's3_config_missing');
+    assert.equal(result.driver, 's3');
   });
 
   it('cleanup deletes old backups and keeps recent backups', () => {
