@@ -31,7 +31,7 @@ export function createSceneSyncConfig(env = process.env) {
     glbBackupS3Endpoint: env.SCENE_SYNC_GLB_BACKUP_S3_ENDPOINT || '',
     glbBackupS3Region: env.SCENE_SYNC_GLB_BACKUP_S3_REGION || 'ap-northeast-1',
     glbBackupS3Bucket: env.SCENE_SYNC_GLB_BACKUP_S3_BUCKET || '',
-    glbBackupS3Prefix: env.SCENE_SYNC_GLB_BACKUP_S3_PREFIX || 'scene-sync/glb-backup',
+    glbBackupS3Prefix: env.SCENE_SYNC_GLB_BACKUP_S3_PREFIX || 'scene-sync/backups/glb',
     glbBackupS3AccessKeyId: env.SCENE_SYNC_GLB_BACKUP_S3_ACCESS_KEY_ID || '',
     glbBackupS3SecretAccessKey: env.SCENE_SYNC_GLB_BACKUP_S3_SECRET_ACCESS_KEY || '',
     uploadsPerActorPerMinute: parseIntEnv(env.SCENE_SYNC_UPLOADS_PER_ACTOR_PER_MINUTE, 10, 1),
