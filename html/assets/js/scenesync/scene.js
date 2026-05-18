@@ -9038,7 +9038,10 @@ function shouldShowWelcome() {
 function initializeWelcome() {
   if (shouldShowWelcome()) {
     const savedDisplayName = localStorage.getItem('sceneSync.displayName') || '';
-    welcomeDialog.open('first-run', savedDisplayName);
+    const explicitRoomCode = sanitizeRoomCode(new URLSearchParams(location.search).get('room'));
+    welcomeDialog.open('first-run', savedDisplayName, {
+      roomCode: explicitRoomCode || '',
+    });
   }
 }
 
