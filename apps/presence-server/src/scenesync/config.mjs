@@ -22,6 +22,8 @@ export function createSceneSyncConfig(env = process.env) {
     logDir: env.SCENE_SYNC_LOG_DIR || './logs',
     logMaxLineBytes: parseIntEnv(env.SCENE_SYNC_LOG_MAX_LINE_BYTES, 4096, 256),
     actorHashSalt: env.SCENE_SYNC_ACTOR_HASH_SALT || '',
+    ipHashSalt: env.SCENE_SYNC_IP_HASH_SALT || '',
+    connectionSummaryIntervalMs: parseIntEnv(env.SCENE_SYNC_CONNECTION_SUMMARY_INTERVAL_MS, 60000, 0),
     glbBackupEnabled: parseBoolEnv(env.SCENE_SYNC_GLB_BACKUP_ENABLED, true),
     glbBackupDriver: env.SCENE_SYNC_GLB_BACKUP_DRIVER || 'local',
     glbBackupDir: env.SCENE_SYNC_GLB_BACKUP_DIR || './scene-sync-glb-backup',
