@@ -22,6 +22,7 @@ import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
+import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
 import { normalizeDisplayName } from './utils/display-name.js';
 import { extractYaw } from './utils/math.js';
 import { broadcastObjectDelta } from './objects/object-delta.js';
@@ -7196,6 +7197,7 @@ function openSheet(id) {
 }
 
 function closeSheet(id) {
+  blurActiveEditableElement();
   const el = document.getElementById(id);
   if (!el) return;
   el.hidden = true;
@@ -7274,6 +7276,7 @@ const mobileHelpBtn = document.getElementById('mobile-help-btn');
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 
 function closePasteSheet() {
+  blurActiveEditableElement();
   if (pasteSheet) {
     pasteSheet.setAttribute('hidden', '');
   }
@@ -8113,11 +8116,14 @@ function enterSceneInspectorEditMode() {
   sceneInspectorState.diffSummary = null;
   sceneInspectorState.lastAppliedSummary = null;
   renderSceneInspector(snapshot);
-  sceneInspectorEditorEl?.focus();
-  sceneInspectorEditorEl?.setSelectionRange(0, 0);
+  const focused = focusTextInputIfSafe(sceneInspectorEditorEl);
+  if (focused) {
+    sceneInspectorEditorEl?.setSelectionRange(0, 0);
+  }
 }
 
 function exitSceneInspectorEditMode() {
+  blurActiveEditableElement();
   sceneInspectorState.isEditing = false;
   sceneInspectorState.baseSnapshot = null;
   sceneInspectorState.parsedSnapshot = null;
@@ -8150,11 +8156,14 @@ function enterSceneInspectorObjectEditMode() {
     lastAppliedSummary: null,
   };
   renderSceneInspector(snapshot);
-  sceneInspectorObjectEditorEl?.focus();
-  sceneInspectorObjectEditorEl?.setSelectionRange(0, 0);
+  const focused = focusTextInputIfSafe(sceneInspectorObjectEditorEl);
+  if (focused) {
+    sceneInspectorObjectEditorEl?.setSelectionRange(0, 0);
+  }
 }
 
 function exitSceneInspectorObjectEditMode() {
+  blurActiveEditableElement();
   resetSceneInspectorObjectEditor();
   refreshSceneInspector();
 }

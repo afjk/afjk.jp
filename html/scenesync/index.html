@@ -1022,6 +1022,17 @@
         bottom: calc(84px + var(--mobile-safe-bottom));
         z-index: 65;
       }
+
+      /* iOS Safari zoom prevention: 16px font-size prevents auto-zoom on focus */
+      .room-input,
+      .form-input,
+      .scene-inspector-editor,
+      .scene-inspector-number-input,
+      #clipboard-paste-target,
+      #mobile-env-select,
+      #env-select {
+        font-size: 16px !important;
+      }
     }
   </style>
 </head>
