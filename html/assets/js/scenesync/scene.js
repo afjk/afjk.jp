@@ -6525,11 +6525,8 @@ const expiredGlbRecovery = createExpiredGlbRecovery({
   assetCache,
   fileTransfer: fileTransferAdapter,
   presenceState,
-  broadcast,
   sendHandoff,
   loadGlbBlobForObject,
-  getObjectById,
-  showToast,
 });
 
 fileTransferAdapter.onFileReceived((event) => {

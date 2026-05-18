@@ -12,7 +12,6 @@ const RECOVERY_TIMEOUT_MS = 30000;
 const PEER_RETRY_INTERVAL_MS = 4000;
 const COOLDOWN_MS = 30000;
 const DEFAULT_MAX_GLB_SIZE = 500 * 1024 * 1024;
-const MAX_ACTIVE_OUTGOING = 1;
 const MAX_OUTGOING_QUEUE = 8;
 
 function getOtherPeers(presenceState) {
@@ -29,11 +28,8 @@ export function createExpiredGlbRecovery({
   assetCache,
   fileTransfer,
   presenceState,
-  broadcast,
   sendHandoff,
   loadGlbBlobForObject,
-  getObjectById,
-  showToast,
 }) {
   const pendingRecoveries = new Map();
   const responderCooldowns = new Map();
@@ -64,8 +60,6 @@ export function createExpiredGlbRecovery({
     };
 
     pendingRecoveries.set(requestId, recovery);
-
-    showToast('GLBアセットの期限切れ。近くの参加者に問い合わせています...');
 
     const peers = getOtherPeers(presenceState);
     if (peers.length === 0) {
@@ -346,8 +340,6 @@ export function createExpiredGlbRecovery({
           console.warn('[ExpiredGlbRecovery] Error in recovery success callback:', err);
         }
       });
-
-      showToast('GLBアセットが別の参加者から復元されました。');
     } catch (err) {
       console.warn('[ExpiredGlbRecovery] Failed to load recovered GLB:', err);
       recoveryFailedCallbacks.forEach(cb => {
