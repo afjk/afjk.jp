@@ -183,6 +183,25 @@ dom.deleteSkyboxBtn?.addEventListener('click', () => {
   notifySceneStateChanged('skybox-deleted');
 });
 
+dom.clearBgmButton?.addEventListener('click', () => {
+  if (!serializeSceneBgm()) {
+    showToast('削除するBGMはありません');
+    updateBgmControls();
+    return;
+  }
+
+  applySceneBgm(null);
+
+  const operation = {
+    kind: 'scene-bgm',
+    bgm: null,
+  };
+  broadcast(operation);
+
+  showToast('BGMを削除しました');
+  notifySceneStateChanged('bgm-cleared');
+});
+
 setupXrButtons({
   renderer,
   dom,
@@ -6076,6 +6095,7 @@ function applySceneBgm(bgm, options = {}) {
   disposeSceneBgm();
 
   if (!bgm || !bgm.url) {
+    updateBgmControls();
     return;
   }
 
@@ -6100,6 +6120,8 @@ function applySceneBgm(bgm, options = {}) {
     sceneBgmState.autoplayBlocked = true;
     showBgmUnlockUI();
   });
+
+  updateBgmControls();
 }
 
 function disposeSceneBgm() {
@@ -6112,6 +6134,7 @@ function disposeSceneBgm() {
   sceneBgmState.current = null;
   sceneBgmState.autoplayBlocked = false;
   hideBgmUnlockUI();
+  updateBgmControls();
 }
 
 function serializeSceneBgm() {
@@ -6141,6 +6164,12 @@ function showBgmUnlockUI() {
 function hideBgmUnlockUI() {
   const btn = dom.bgmUnlockButton;
   if (btn) btn.style.display = 'none';
+}
+
+function updateBgmControls() {
+  const clearButton = dom.clearBgmButton;
+  if (!clearButton) return;
+  clearButton.style.display = sceneBgmState.current ? 'block' : 'none';
 }
 
 // ── Undo/Redo 処理 ──────────────────────────────────────
@@ -6217,6 +6246,11 @@ function applyOperationToScene(operation) {
         applyOperationToScene(action);
       }
       notifySceneStateChanged('undo-redo-scene-batch');
+      break;
+    }
+    case 'scene-bgm': {
+      applySceneBgm(operation.bgm ?? null);
+      notifySceneStateChanged('scene-bgm-applied');
       break;
     }
   }
