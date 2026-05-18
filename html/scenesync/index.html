@@ -82,6 +82,17 @@
     #status .dot.on  { background: #4f4; }
     #status .dot.off { background: #f44; }
 
+    #developer-mode-indicator {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      z-index: 10;
+      background: rgba(255, 140, 0, 0.6) !important;
+    }
+    #developer-mode-indicator:hover {
+      background: rgba(255, 140, 0, 0.8) !important;
+    }
+
     /* ── 左上 設定パネル ── */
     #settings-panel {
       position: fixed;
@@ -961,6 +972,7 @@
   </div>
 
   <div id="status" role="button" aria-controls="peers-panel" aria-expanded="false"><span class="dot off"></span>接続中…</div>
+  <div id="developer-mode-indicator" hidden class="chip"><span>📟</span><span>Developer Mode · Backup OFF</span></div>
   <div id="peers-panel">
     <div id="peers-list"></div>
   </div>

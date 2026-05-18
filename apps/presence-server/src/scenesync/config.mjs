@@ -22,6 +22,8 @@ export function createSceneSyncConfig(env = process.env) {
     logDir: env.SCENE_SYNC_LOG_DIR || './logs',
     logMaxLineBytes: parseIntEnv(env.SCENE_SYNC_LOG_MAX_LINE_BYTES, 4096, 256),
     actorHashSalt: env.SCENE_SYNC_ACTOR_HASH_SALT || '',
+    developerMode: parseBoolEnv(env.SCENE_SYNC_DEVELOPER_MODE, false),
+    wasabiBackupEnabled: parseBoolEnv(env.SCENE_SYNC_WASABI_BACKUP_ENABLED, true),
     glbBackupEnabled: parseBoolEnv(env.SCENE_SYNC_GLB_BACKUP_ENABLED, true),
     glbBackupDriver: env.SCENE_SYNC_GLB_BACKUP_DRIVER || 'local',
     glbBackupDir: env.SCENE_SYNC_GLB_BACKUP_DIR || './scene-sync-glb-backup',
@@ -42,4 +44,16 @@ export function createSceneSyncConfig(env = process.env) {
   }
 
   return config;
+}
+
+export function isSceneSyncDeveloperMode(config) {
+  return config.developerMode === true;
+}
+
+export function isWasabiBackupEnabled(config) {
+  return config.wasabiBackupEnabled === true;
+}
+
+export function shouldBackupGlb(config) {
+  return isWasabiBackupEnabled(config) && !isSceneSyncDeveloperMode(config);
 }

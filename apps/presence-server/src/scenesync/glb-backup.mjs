@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { isSceneSyncDeveloperMode, isWasabiBackupEnabled, shouldBackupGlb } from './config.mjs';
 
 function todayDateString(now = new Date()) {
   return now.toISOString().slice(0, 10);
@@ -132,8 +133,20 @@ export function createGlbBackupManager(config, logger, internals = {}) {
 
   return {
     async saveAcceptedGlb({ buffer, roomId, actorId, filename = '', mimeType = '', source = 'upload', blobId = null }) {
+      // Check if backup should be skipped due to developer mode
+      if (isSceneSyncDeveloperMode(config)) {
+        logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'developer_mode', size: buffer.length });
+        return { saved: false, reason: 'developer_mode' };
+      }
+
+      // Check if backup is disabled via config
+      if (!isWasabiBackupEnabled(config)) {
+        logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'backup_disabled', size: buffer.length });
+        return { saved: false, reason: 'backup_disabled' };
+      }
+
       if (!config.glbBackupEnabled) {
-        logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'disabled' });
+        logger?.log('glb_backup_skipped', { roomId, actorId, reason: 'disabled', size: buffer.length });
         return { saved: false, reason: 'disabled' };
       }
 

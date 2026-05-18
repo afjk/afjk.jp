@@ -4,7 +4,7 @@ import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 import { encodeSession, decodeSession } from './gpt-session.mjs';
-import { createSceneSyncConfig } from './scenesync/config.mjs';
+import { createSceneSyncConfig, isSceneSyncDeveloperMode } from './scenesync/config.mjs';
 import { getActorIdFromRequest } from './scenesync/actor-id.mjs';
 import { createPerActorRateLimiter } from './scenesync/rate-limit.mjs';
 import { validateUpload, isGlbLike } from './scenesync/upload-guards.mjs';
@@ -77,6 +77,9 @@ function writeStatsFile(data) {
 }
 
 function saveStats(data) {
+  if (isSceneSyncDeveloperMode(sceneSyncConfig)) {
+    return; // Skip stats persistence in developer mode
+  }
   try {
     writeStatsFile(data);
     if (stats.logs.length >= STATS_ARCHIVE_AFTER) {
@@ -88,6 +91,9 @@ function saveStats(data) {
 }
 
 function archiveStats() {
+  if (isSceneSyncDeveloperMode(sceneSyncConfig)) {
+    return; // Skip stats archiving in developer mode
+  }
   try {
     mkdirSync(STATS_ARCHIVE_DIR, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1175,6 +1181,16 @@ function createPresenceServer() {
       } catch {}
       res.writeHead(204, CORS).end();
     });
+    return;
+  }
+
+  // GET /api/config — Server configuration for frontend
+  if (req.method === 'GET' && path === '/api/config') {
+    const configResp = {
+      developerMode: sceneSyncConfig.developerMode,
+      wasabiBackupEnabled: sceneSyncConfig.wasabiBackupEnabled,
+    };
+    res.writeHead(200, { 'content-type': 'application/json', ...CORS }).end(JSON.stringify(configResp));
     return;
   }
 

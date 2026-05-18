@@ -3855,6 +3855,28 @@ function getApiBaseUrl() {
 
 const linkManager = createLinkManager(getApiBaseUrl());
 
+async function fetchAndShowDeveloperMode() {
+  try {
+    const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    const isStaging = location.hostname === 'staging.afjk.jp';
+
+    const response = await fetch(`${getApiBaseUrl()}/config`);
+    if (!response.ok) return;
+
+    const config = await response.json();
+    const devModeIndicator = document.getElementById('developer-mode-indicator');
+
+    // Show developer mode if:
+    // 1. It's enabled on the server, AND
+    // 2. (it's localhost/staging OR server is exposing it)
+    if (config.developerMode && (isLocal || isStaging)) {
+      devModeIndicator.removeAttribute('hidden');
+    }
+  } catch (error) {
+    // Silently ignore config fetch errors
+  }
+}
+
 const presenceState = {
   ws: null,
   id: null,
@@ -8681,6 +8703,7 @@ updateNicknameLabel();
 renderRoomSection();
 syncSceneUiState();
 connectPresence();
+fetchAndShowDeveloperMode();
 
 // Safari / iOS: バックグラウンドから復帰時に即再接続（3秒タイマーを待たない）
 document.addEventListener('visibilitychange', () => {
