@@ -2,6 +2,37 @@ function generateRandomPath() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+async function fetchWithRetry(url, options = {}, maxAttempts = 4) {
+  const delays = [0, 500, 1500, 3000];
+  let lastError;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    if (i > 0) {
+      await new Promise(r => setTimeout(r, delays[i]));
+    }
+
+    try {
+      const response = await fetch(url, options);
+      if (response.ok) {
+        return response;
+      }
+
+      if (response.status >= 400 && response.status < 500) {
+        lastError = new Error(`HTTP ${response.status}`);
+        if (response.status === 404) {
+          throw lastError;
+        }
+      } else {
+        lastError = new Error(`HTTP ${response.status}`);
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('Failed to fetch after retries');
+}
+
 export function createSceneSyncFileTransferAdapter({
   presenceState,
   sendHandoff,
@@ -13,13 +44,14 @@ export function createSceneSyncFileTransferAdapter({
     : 'https://pipe.afjk.jp';
   const PIPE_DISPLAY_URL = `${location.origin}/pipe`;
 
-  async function sendFileToPeer(peerId, file) {
+  async function sendFileToPeer(peerId, file, metadata = {}) {
     if (!file || !peerId) {
       throw new Error('sendFileToPeer requires peerId and file');
     }
 
     const path = generateRandomPath();
     const fileInfo = {
+      kind: 'file',
       path,
       filename: file.name || 'file.glb',
       size: file.size,
@@ -27,15 +59,29 @@ export function createSceneSyncFileTransferAdapter({
       url: `${PIPE_DISPLAY_URL}/#${path}`,
     };
 
+    if (metadata.requestId) {
+      fileInfo.recoveryRequestId = metadata.requestId;
+    }
+    if (metadata.assetId) {
+      fileInfo.assetId = metadata.assetId;
+    }
+    if (metadata.meshPath) {
+      fileInfo.meshPath = metadata.meshPath;
+    }
+    if (metadata.objectId) {
+      fileInfo.objectId = metadata.objectId;
+    }
+
     console.log('[FileTransferAdapter] Sending file to peer:', {
       peerId,
       filename: fileInfo.filename,
       size: fileInfo.size,
+      recoveryRequestId: fileInfo.recoveryRequestId,
     });
 
     sendHandoff({
       targetId: peerId,
-      payload: { kind: 'file', ...fileInfo },
+      payload: fileInfo,
     });
 
     try {
@@ -87,10 +133,11 @@ export function createSceneSyncFileTransferAdapter({
       fromPeerId: from?.id,
       filename: payload.filename,
       size: payload.size,
+      recoveryRequestId: payload.recoveryRequestId,
     });
 
     try {
-      const response = await fetch(`${PIPING_BASE}/${payload.path}`);
+      const response = await fetchWithRetry(`${PIPING_BASE}/${payload.path}`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} fetching file`);
       }
@@ -102,11 +149,15 @@ export function createSceneSyncFileTransferAdapter({
         file,
         fromPeerId: from?.id,
         from,
+        recoveryRequestId: payload.recoveryRequestId,
+        assetId: payload.assetId,
+        meshPath: payload.meshPath,
+        objectId: payload.objectId,
       });
 
       return true;
     } catch (err) {
-      console.warn('[FileTransferAdapter] Failed to receive file:', err);
+      console.warn('[FileTransferAdapter] Failed to receive file after retries:', err);
       return false;
     }
   }

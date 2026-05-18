@@ -1,6 +1,6 @@
 const DB_NAME = 'scene-sync-assets';
 const STORE_NAME = 'assets';
-const MAX_SINGLE_GLB_SIZE = 50 * 1024 * 1024;
+const DEFAULT_MAX_GLB_SIZE = 500 * 1024 * 1024;
 
 export function createSceneAssetCache(options = {}) {
   let db = null;
@@ -34,7 +34,7 @@ export function createSceneAssetCache(options = {}) {
       throw new Error('putAsset requires assetId and blob');
     }
 
-    if (blob.size > MAX_SINGLE_GLB_SIZE) {
+    if (blob.size > DEFAULT_MAX_GLB_SIZE) {
       console.warn(`[AssetCache] GLB too large (${blob.size} bytes), skipping cache`);
       return;
     }

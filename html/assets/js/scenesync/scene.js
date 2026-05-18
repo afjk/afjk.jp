@@ -1682,6 +1682,8 @@ function removeLockOverlay(objectId) {
 
 // objectId → { group, placeholder }
 const loadingOverlays = new Map();
+const recoveryOverlays = new Map();
+const failedOverlays = new Map();
 const temporaryImagePreviews = new Map();
 
 function createLoadingLabel(text) {
@@ -1786,6 +1788,45 @@ function createLoadingPlaceholder() {
   return group;
 }
 
+function createRecoveringPlaceholder() {
+  const group = new THREE.Group();
+
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const edges = new THREE.EdgesGeometry(geo);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xffaa44,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const box = new THREE.LineSegments(edges, mat);
+  box.raycast = () => {};
+  group.add(box);
+  geo.dispose();
+
+  group.userData._animation = 'pulsing';
+  group.userData._startTime = performance.now();
+
+  return group;
+}
+
+function createFailedPlaceholder() {
+  const group = new THREE.Group();
+
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const edges = new THREE.EdgesGeometry(geo);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xff6666,
+    transparent: true,
+    opacity: 0.6,
+  });
+  const box = new THREE.LineSegments(edges, mat);
+  box.raycast = () => {};
+  group.add(box);
+  geo.dispose();
+
+  return group;
+}
+
 function addLoadingOverlay(objectId, name, info) {
   removeLoadingOverlay(objectId);
 
@@ -1821,6 +1862,93 @@ function removeLoadingOverlay(objectId) {
   });
 
   loadingOverlays.delete(objectId);
+}
+
+function addRecoveringOverlay(objectId, info) {
+  removeRecoveringOverlay(objectId);
+
+  const group = new THREE.Group();
+  group.userData._isRecoveringOverlay = true;
+  group.raycast = () => {};
+
+  const placeholder = createRecoveringPlaceholder();
+  group.add(placeholder);
+
+  if (info) {
+    applySceneTransform(group, info);
+  }
+
+  scene.add(group);
+  recoveryOverlays.set(objectId, { group, placeholder });
+}
+
+function removeRecoveringOverlay(objectId) {
+  const entry = recoveryOverlays.get(objectId);
+  if (!entry) return;
+
+  const { group } = entry;
+  scene.remove(group);
+  group.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
+
+  recoveryOverlays.delete(objectId);
+}
+
+function addFailedOverlay(objectId, info) {
+  removeFailedOverlay(objectId);
+
+  const group = new THREE.Group();
+  group.userData._isFailedPlaceholder = true;
+  group.raycast = () => {};
+
+  const placeholder = createFailedPlaceholder();
+  group.add(placeholder);
+
+  if (info) {
+    applySceneTransform(group, info);
+  }
+
+  scene.add(group);
+  failedOverlays.set(objectId, { group, placeholder });
+}
+
+function removeFailedOverlay(objectId) {
+  const entry = failedOverlays.get(objectId);
+  if (!entry) return;
+
+  const { group } = entry;
+  scene.remove(group);
+  group.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
+
+  failedOverlays.delete(objectId);
+}
+
+function updateRecoveringOverlaysAnimation() {
+  recoveryOverlays.forEach(entry => {
+    const { placeholder } = entry;
+    if (!placeholder || !placeholder.userData._animation) return;
+
+    const elapsed = performance.now() - placeholder.userData._startTime;
+    const phase = (elapsed / 1000) % 2;
+    const opacity = Math.abs(Math.sin(phase * Math.PI)) * 0.5 + 0.3;
+
+    placeholder.children.forEach(child => {
+      if (child.material && child.material.opacity !== undefined) {
+        child.material.opacity = opacity;
+      }
+    });
+  });
 }
 
 // ── GLB Animation Setup and Updates ──────────────────────
@@ -3368,6 +3496,9 @@ function deleteObjectById(objectId, options = {}) {
   }
 
   removeLockOverlay(objectId);
+  removeLoadingOverlay(objectId);
+  removeRecoveringOverlay(objectId);
+  removeFailedOverlay(objectId);
   locks.delete(objectId);
 
   disposeObjectGlbAnimation(objectId);
@@ -3727,6 +3858,8 @@ renderer.setAnimationLoop((time, frame) => {
       entry.placeholder.rotation.y += 0.02;
     }
   }
+
+  updateRecoveringOverlaysAnimation();
 
   for (const helper of selectionHelpers.values()) {
     helper.update?.();
@@ -5523,6 +5656,8 @@ function addOrUpdateObject(objectId, info, options = {}) {
 }
 
 function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
+  removeFailedOverlay(objectId);
+  removeRecoveringOverlay(objectId);
   addLoadingOverlay(objectId, info.name || objectId, info);
   const url = BLOB_BASE + '/' + meshPath;
   const skipFallbackOnFailure = options.skipFallbackOnFailure === true;
@@ -5600,20 +5735,16 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             });
             return;
           }
+
+          addRecoveringOverlay(objectId, info);
           await expiredGlbRecovery.handleMissingGlb(
             objectId,
             meshPath,
             expectedSize,
-            assetId
+            assetId,
+            info
           );
 
-          if (!existing && !skipFallbackOnFailure) {
-            replaceManagedObject(
-              objectId,
-              buildDefaultBoxObject(objectId, info, 0xffaa44),
-              info
-            );
-          }
           return;
         }
         throw new Error(`HTTP ${response.status} loading mesh`);
@@ -5626,6 +5757,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
         try {
           removeLoadingOverlay(objectId);
+          removeFailedOverlay(objectId);
           model.userData.objectId = objectId;
           model.userData.name = info.name;
           model.userData.meshPath = meshPath;
@@ -6393,15 +6525,24 @@ const expiredGlbRecovery = createExpiredGlbRecovery({
   assetCache,
   fileTransfer: fileTransferAdapter,
   presenceState,
-  broadcast,
   sendHandoff,
   loadGlbBlobForObject,
-  getObjectById,
-  showToast,
 });
 
 fileTransferAdapter.onFileReceived((event) => {
   expiredGlbRecovery.handleReceivedFile(event);
+});
+
+expiredGlbRecovery.onRecoverySuccess(({ objectId, requestId }) => {
+  console.log('[SceneSync] Recovery succeeded:', { objectId, requestId });
+  removeRecoveringOverlay(objectId);
+  removeFailedOverlay(objectId);
+});
+
+expiredGlbRecovery.onRecoveryFailed(({ objectId, requestId, reason, info }) => {
+  console.log('[SceneSync] Recovery failed:', { objectId, requestId, reason });
+  removeRecoveringOverlay(objectId);
+  addFailedOverlay(objectId, info);
 });
 
 // ── 公開 API（scene.js 内から利用） ──────────────────────

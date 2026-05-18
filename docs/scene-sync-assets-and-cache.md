@@ -300,17 +300,71 @@ Responder は `assetId` を優先して cache lookup する。なければ `mesh
 
 Responder:
 
-- active send は同時 1 件まで。
+- active send は同時 1 件まで。複数 request は queue（最大 8）に積み、順番に処理。
 - 同一 asset への応答には cooldown を設ける。
-- 50MB 超過など、client / server limit を超えるものは無視する。
+- 500MB 超過など、client / server limit を超えるものは無視する。
 - requestId 重複は一定時間無視する。
+- 復元対象の object が現在 scene に存在していなくても、asset cache に blob があれば応答する。
 
 Receiver:
 
+- file handoff に含まれた `recoveryRequestId` で pending recovery を特定する。
+- matching しない場合は fallback として `fromPeerId` で探す。
 - pending recovery がない file は無視する。
 - `assetId` が指定されていれば hash 検証する。
 - `expectedSize` があれば size 検証する。
 - MIME が GLB として妥当でない場合は無視する。
+- file fetch は retry を含む（最大 4 回、delay: 0ms, 500ms, 1500ms, 3000ms）。
+
+---
+
+## Recovery states
+
+当データの復元フロー中、以下の visual states が表示される。
+
+### `loading`
+
+通常の GLB fetch 中。中立的な見た目 + animation。
+
+### `recovering`
+
+blob fetch が 404 になり、peer recovery を開始した状態。
+
+- オレンジ色の placeholder cube。
+- pulsing animation（処理中であることを表現）。
+- text label や retry button はない。
+- timeout or peer exhausted で failed になるまで継続。
+
+### `failed`
+
+local cache と peer recovery のどちらにも asset がない最終失敗状態。
+
+- 赤色の placeholder cube。
+- animation なし（停止状態を表現）。
+- text label や retry button はない。
+- metadata（position / rotation / scale など）は保持される。
+
+---
+
+## Recovery sources
+
+Scene Sync では以下の source からのみ GLB 復元を行う。
+
+1. **自分の browser local cache（IndexedDB）**
+   - TTL 切れ後、ローカルに blob があれば復元。
+   - 再度参加時にも自動的に lookup。
+
+2. **active peer の cache**
+   - 同じ room に現在参加中の peer が、その asset を IndexedDB に持っていれば request / receive。
+   - responder が object を scene に持っていなくても、cache に blob があれば応答。
+
+### 復元不可のケース
+
+以下の場合、asset は復元不可。
+
+- local cache にもなく、active peer にも cache がない。
+- Wasabi backup など、long-term backup storage からは復元しない。
+- production debug backup は operational investigation 用であり、user-facing restore path ではない。
 
 ---
 
