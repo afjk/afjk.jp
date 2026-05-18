@@ -1,5 +1,10 @@
+export function isSafeModeEnabled() {
+  return new URLSearchParams(location.search).get('safe') === '1';
+}
+
 export function isSnapshotRestoreDisabled() {
-  return new URLSearchParams(location.search).get('noRestore') === '1';
+  const params = new URLSearchParams(location.search);
+  return isSafeModeEnabled() || params.get('noRestore') === '1';
 }
 
 export function isAssetCacheReadDisabled() {
@@ -13,17 +18,19 @@ export function isAssetCacheWriteDisabled() {
 }
 
 export function isGlbLoadDisabled() {
-  return new URLSearchParams(location.search).get('noGlbLoad') === '1';
+  const params = new URLSearchParams(location.search);
+  return isSafeModeEnabled() || params.get('noGlbLoad') === '1';
 }
 
 export function logDiagnosticFlags() {
   const params = new URLSearchParams(location.search);
   const flags = {
-    noRestore: params.get('noRestore') === '1',
+    safe: isSafeModeEnabled(),
+    noRestore: isSnapshotRestoreDisabled(),
     noAssetCache: params.get('noAssetCache') === '1',
     noAssetCacheRead: params.get('noAssetCacheRead') === '1',
     noAssetCacheWrite: params.get('noAssetCacheWrite') === '1',
-    noGlbLoad: params.get('noGlbLoad') === '1',
+    noGlbLoad: isGlbLoadDisabled(),
     probe: params.get('probe') === '1',
   };
 
