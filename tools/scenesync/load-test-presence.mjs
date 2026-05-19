@@ -104,7 +104,8 @@ class LoadTestClient {
   async connect() {
     return new Promise((resolve, reject) => {
       this.connectStartTime = performance.now();
-      const wsUrl = `${this.url}?room=${this.room}`;
+      const encodedRoom = encodeURIComponent(this.room);
+      const wsUrl = `${this.url}?room=${encodedRoom}`;
 
       try {
         this.ws = new WebSocket(wsUrl);
@@ -200,7 +201,8 @@ async function runLoadTest() {
   const wsUrl = new URL(options.url);
   const protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
   const browserUrl = `${protocol}//${wsUrl.host}`;
-  console.log(`Browser URL:\n${browserUrl}/scenesync/?room=${room}\n`);
+  const encodedRoom = encodeURIComponent(room);
+  console.log(`Browser URL:\n${browserUrl}/scenesync/?room=${encodedRoom}\n`);
 
   console.log('Scene Sync presence load test\n');
   console.log(`endpoint: ${options.url}`);
@@ -252,12 +254,16 @@ async function runLoadTest() {
 
   // Broadcast test if enabled
   let broadcastObjectId = null;
+  let broadcastSender = null;
+
   if (options.broadcast && connectedCount > 0) {
     broadcastObjectId = `load-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const broadcastInterval = setInterval(() => {
-      clients.forEach((client) => {
-        if (client.connected) {
-          client.send({
+    broadcastSender = clients.find((client) => client.connected);
+
+    if (broadcastSender) {
+      const broadcastInterval = setInterval(() => {
+        if (broadcastSender.connected) {
+          broadcastSender.send({
             type: 'broadcast',
             payload: {
               kind: 'scene-add',
@@ -274,10 +280,10 @@ async function runLoadTest() {
             },
           });
         }
-      });
-    }, options['send-interval'] || 5000);
+      }, options['send-interval'] || 5000);
 
-    setTimeout(() => clearInterval(broadcastInterval), options.duration * 1000);
+      setTimeout(() => clearInterval(broadcastInterval), options.duration * 1000);
+    }
   }
 
   // Keep connections alive
@@ -296,17 +302,13 @@ async function runLoadTest() {
   });
 
   // Clean up broadcast object if used
-  if (broadcastObjectId && connectedCount > 0) {
-    clients.forEach((client) => {
-      if (client.connected) {
-        client.send({
-          type: 'broadcast',
-          payload: {
-            kind: 'scene-remove',
-            objectId: broadcastObjectId,
-          },
-        });
-      }
+  if (broadcastObjectId && broadcastSender && broadcastSender.connected) {
+    broadcastSender.send({
+      type: 'broadcast',
+      payload: {
+        kind: 'scene-remove',
+        objectId: broadcastObjectId,
+      },
     });
   }
 
