@@ -255,19 +255,23 @@ sudo grep '"room":"load-' /var/log/scene-sync/scene-sync-$(date +%F).ndjson | jq
 
 ### connect failures が多い場合
 
+接続テストを実施:
+
+```bash
+node ../../tools/scenesync/load-test-presence.mjs \
+  --url wss://staging.afjk.jp/presence \
+  --clients 1 \
+  --duration 10 \
+  --verbose
+```
+
+確認事項:
+
 - ネットワーク接続の確認
 - WebSocket エンドポイントの接続性確認
 - サーバーのポート制限確認
 - ファイアウォール設定確認
-
-```bash
-# 接続テスト
-curl -i -N -H "Connection: Upgrade" \
-  -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" \
-  -H "Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==" \
-  "wss://staging.afjk.jp/presence?room=test"
-```
+- DNS 解決確認
 
 ### unexpected closes が発生する場合
 

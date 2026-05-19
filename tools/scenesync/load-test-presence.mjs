@@ -98,6 +98,7 @@ class LoadTestClient {
     this.messageCount = 0;
     this.closeCode = null;
     this.closeReason = null;
+    this.roomFull = false;
   }
 
   async connect() {
@@ -129,6 +130,9 @@ class LoadTestClient {
           const message = JSON.parse(data.toString());
           if (message.type === 'welcome') {
             resolve();
+          } else if (message.type === 'error' && message.error === 'room_full') {
+            this.roomFull = true;
+            reject(new Error(`room_full for client ${this.id}`));
           } else {
             this.messageCount++;
           }
@@ -193,7 +197,9 @@ async function runLoadTest() {
     console.warn('Use a unique room name for release/load testing.');
   }
 
-  const browserUrl = options.url.replace(/\/+$/, '').replace(/^wss?:\/\//, 'https://');
+  const wsUrl = new URL(options.url);
+  const protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
+  const browserUrl = `${protocol}//${wsUrl.host}`;
   console.log(`Browser URL:\n${browserUrl}/scenesync/?room=${room}\n`);
 
   console.log('Scene Sync presence load test\n');
@@ -220,8 +226,7 @@ async function runLoadTest() {
         console.log(`  Client ${i} connected (${client.connectLatency}ms)`);
       }
     } catch (err) {
-      const errMsg = err.message || '';
-      if (errMsg.includes('room_full') || errMsg.includes('1008')) {
+      if (client.roomFull) {
         roomFullRejections++;
       } else {
         connectFailures++;
@@ -253,16 +258,19 @@ async function runLoadTest() {
       clients.forEach((client) => {
         if (client.connected) {
           client.send({
-            kind: 'scene-add',
-            objectId: broadcastObjectId,
-            name: 'Load Test Object',
-            position: [0, 0.5, 0],
-            rotation: [0, 0, 0, 1],
-            scale: [1, 1, 1],
-            asset: {
-              type: 'primitive',
-              primitive: 'sphere',
-              color: '#ff00ff',
+            type: 'broadcast',
+            payload: {
+              kind: 'scene-add',
+              objectId: broadcastObjectId,
+              name: 'Load Test Object',
+              position: [0, 0.5, 0],
+              rotation: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+              asset: {
+                type: 'primitive',
+                primitive: 'sphere',
+                color: '#ff00ff',
+              },
             },
           });
         }
@@ -292,8 +300,11 @@ async function runLoadTest() {
     clients.forEach((client) => {
       if (client.connected) {
         client.send({
-          kind: 'scene-remove',
-          objectId: broadcastObjectId,
+          type: 'broadcast',
+          payload: {
+            kind: 'scene-remove',
+            objectId: broadcastObjectId,
+          },
         });
       }
     });
@@ -340,7 +351,8 @@ async function runLoadTest() {
     hasFailure = true;
   }
   if (unexpectedCloses > 0) {
-    result = 'WARN';
+    result = 'FAIL';
+    hasFailure = true;
   }
 
   console.log(`Result: ${result}`);
