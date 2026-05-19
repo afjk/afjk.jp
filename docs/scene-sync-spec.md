@@ -4,6 +4,7 @@ Scene Sync 仕様の入口です。詳細仕様は以下に分冊します。
 
 - [API / Protocol](./scene-sync-api-protocol.md)
 - [Asset / Blob / Cache](./scene-sync-assets-and-cache.md)
+- [Safe Mode / Diagnostic Flags](./scene-sync-safe-mode-and-diagnostics.md)
 - [座標系と visualBasis](./scene-sync-coordinate-system.md)
 - [Web UI / UX](./scene-sync-web-ux.md)
 - [Unity オーサリングモデル](./scene-sync-unity-authoring.md)
