@@ -101,6 +101,7 @@ export async function buildExportPackage({
   envId,
   blobBase,
   envOrigin = location.origin,
+  assetCache = null,
 }) {
   // 1. Build SceneDocument from current state
   let sceneDocument;
@@ -120,6 +121,7 @@ export async function buildExportPackage({
       sceneDocument,
       blobBase,
       envOrigin,
+      assetCache,
     });
 
   // 3. Fetch viewer source files

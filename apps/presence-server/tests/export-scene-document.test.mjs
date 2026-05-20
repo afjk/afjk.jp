@@ -196,6 +196,87 @@ test('createSceneDocumentFromSceneSyncState', async (t) => {
     );
   });
 
+  await t.test('includes assetId in mesh asset entry when present', () => {
+    const managedObjects = new Map();
+    managedObjects.set('model-1', makeMockObject('model-1', {
+      asset: {
+        type: 'mesh',
+        meshPath: 'abc123',
+        assetId: 'asset-456',
+      },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const obj = doc.objects.find(o => o.id === 'model-1');
+    assert.ok(obj, 'object should be in output');
+    assert.equal(obj.asset.assetId, 'asset-456');
+    assert.equal(obj.asset.meshPath, 'abc123');
+  });
+
+  await t.test('reads assetId from userData.scenesync.assetId', () => {
+    const managedObjects = new Map();
+    managedObjects.set('model-nested', makeMockObject('model-nested', {
+      asset: { type: 'mesh', meshPath: 'path1' },
+    }));
+
+    const obj = managedObjects.get('model-nested');
+    obj.userData.scenesync = { assetId: 'from-scenesync' };
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const docObj = doc.objects.find(o => o.id === 'model-nested');
+    assert.equal(docObj.asset.assetId, 'from-scenesync');
+  });
+
+  await t.test('prefers asset.assetId over userData paths', () => {
+    const managedObjects = new Map();
+    managedObjects.set('model-pref', makeMockObject('model-pref', {
+      asset: {
+        type: 'mesh',
+        meshPath: 'path1',
+        assetId: 'from-asset',
+      },
+    }));
+
+    const obj = managedObjects.get('model-pref');
+    obj.userData.assetId = 'from-userdata';
+    obj.userData.scenesync = { assetId: 'from-scenesync' };
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const docObj = doc.objects.find(o => o.id === 'model-pref');
+    assert.equal(docObj.asset.assetId, 'from-asset');
+  });
+
+  await t.test('includes null assetId when not present', () => {
+    const managedObjects = new Map();
+    managedObjects.set('model-no-id', makeMockObject('model-no-id', {
+      asset: { type: 'mesh', meshPath: 'path1' },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const docObj = doc.objects.find(o => o.id === 'model-no-id');
+    assert.equal(docObj.asset.assetId, null);
+  });
+
   await t.test('excludes objects with null asset (no renderable representation)', () => {
     const managedObjects = new Map();
     managedObjects.set('no-asset', makeMockObject('no-asset', { asset: null }));

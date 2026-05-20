@@ -41,12 +41,14 @@ function buildAssetEntry(obj) {
 
   // mesh / image / text → all stored as GLB via meshPath
   const meshPath = obj.userData?.meshPath || asset.meshPath || null;
+  const assetId = asset.assetId || obj.userData?.assetId || obj.userData?.scenesync?.assetId || null;
 
   return {
     type: 'mesh',
     // path will be filled by collect-export-assets.js
     path: null,
     meshPath,
+    assetId,
     mime: asset.mime || 'model/gltf-binary',
     visualBasis: asset.visualBasis || null,
     originalName: asset.originalName || null,
