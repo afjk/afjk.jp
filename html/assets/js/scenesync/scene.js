@@ -7271,7 +7271,7 @@ window.__sceneSyncDebug = {
 };
 
 function isMobileUi() {
-  return window.matchMedia('(max-width: 720px), (hover: none) and (pointer: coarse)').matches;
+  return isSceneSyncMobileDevice();
 }
 
 function isDevUiEnabled() {
