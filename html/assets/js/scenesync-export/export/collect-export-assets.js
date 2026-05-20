@@ -31,9 +31,10 @@ async function tryFetch(url) {
 }
 
 async function tryGetCachedAssetBuffer({ assetCache, assetId, meshPath }) {
-  if (!assetCache) return null;
+  if (!assetCache) return { found: false, hasError: false };
 
   let record = null;
+  let hasError = false;
 
   try {
     if (assetId && typeof assetCache.getByAssetId === 'function') {
@@ -45,14 +46,16 @@ async function tryGetCachedAssetBuffer({ assetCache, assetId, meshPath }) {
     }
   } catch (err) {
     console.warn('[Export] IndexedDB asset cache lookup failed:', err);
-    return null;
+    return { found: false, hasError: true };
   }
 
   const blob = record?.blob;
-  if (!blob) return null;
+  if (!blob) return { found: false, hasError: false };
 
   try {
     return {
+      found: true,
+      hasError: false,
       buffer: await blob.arrayBuffer(),
       mime: record.mime || blob.type || 'model/gltf-binary',
       size: record.size || blob.size || null,
@@ -60,7 +63,7 @@ async function tryGetCachedAssetBuffer({ assetCache, assetId, meshPath }) {
     };
   } catch (err) {
     console.warn('[Export] Failed to read cached asset blob:', err);
-    return null;
+    return { found: false, hasError: true };
   }
 }
 
@@ -119,7 +122,7 @@ export async function collectExportAssets({
       // Try IndexedDB cache as fallback
       const cachedAsset = await tryGetCachedAssetBuffer({ assetCache, assetId, meshPath });
 
-      if (cachedAsset) {
+      if (cachedAsset.found) {
         files[zipPath] = cachedAsset.buffer;
         assetManifest.push({
           id: obj.id,
@@ -138,7 +141,7 @@ export async function collectExportAssets({
           kind: 'mesh',
           assetId: assetId || null,
           meshPath: meshPath || null,
-          reason: 'blob-fetch-and-cache-miss',
+          reason: cachedAsset.hasError ? 'blob-fetch-and-cache-error' : 'blob-fetch-and-cache-miss',
         });
         updatedObjects.push({ ...obj, asset: { ...obj.asset, path: null, meshPath: undefined, assetId: undefined } });
       }

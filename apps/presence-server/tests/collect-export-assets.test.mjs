@@ -394,7 +394,7 @@ test('collectExportAssets', async (t) => {
     }
   });
 
-  await t.test('cache fallback gracefully handles cache errors', async () => {
+  await t.test('cache fallback records cache-error when lookup throws', async () => {
     const restore = mockFetch({});
 
     try {
@@ -422,7 +422,7 @@ test('collectExportAssets', async (t) => {
       });
 
       assert.equal(result.missingAssets.length, 1);
-      assert.equal(result.missingAssets[0].reason, 'blob-fetch-and-cache-miss');
+      assert.equal(result.missingAssets[0].reason, 'blob-fetch-and-cache-error', 'should record cache-error when lookup throws');
     } finally {
       restore();
     }
@@ -451,6 +451,50 @@ test('collectExportAssets', async (t) => {
       assert.equal(result.missingAssets.length, 0);
       assert.equal(result.assetManifest.length, 1);
       assert.equal(result.assetManifest[0].source, 'blob');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('distinguishes between cache-miss and cache-error in reason', async () => {
+    const restore = mockFetch({});
+
+    try {
+      // Test cache-miss (lookups return null)
+      const missCache = {
+        getByAssetId: async () => null,
+        getByMeshPath: async () => null,
+      };
+
+      const doc = makeSceneDoc([{
+        id: 'obj-miss',
+        asset: { type: 'mesh', meshPath: 'path1', assetId: 'asset-123', mime: 'model/gltf-binary' },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const resultMiss = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: missCache,
+      });
+
+      assert.equal(resultMiss.missingAssets[0].reason, 'blob-fetch-and-cache-miss');
+
+      // Test cache-error (lookup throws)
+      const errorCache = {
+        getByAssetId: async () => { throw new Error('DB error'); },
+        getByMeshPath: async () => { throw new Error('DB error'); },
+      };
+
+      const resultError = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: errorCache,
+      });
+
+      assert.equal(resultError.missingAssets[0].reason, 'blob-fetch-and-cache-error');
     } finally {
       restore();
     }
