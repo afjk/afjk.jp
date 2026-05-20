@@ -42,6 +42,7 @@ import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
 import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './utils/crash-probe-helper.js';
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
+import { buildExportPackage } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
@@ -9344,6 +9345,40 @@ window.addEventListener('pageshow', (e) => {
   }
   connectPresence();
 });
+// ── Export ────────────────────────────────────────────────
+
+async function triggerExport() {
+  showToast('Exporting…');
+
+  try {
+    const { missingAssets } = await buildExportPackage({
+      managedObjects,
+      bgmState: serializeSceneBgm(),
+      envId: environmentManager.getCurrentEnvId(),
+      blobBase: BLOB_BASE,
+      envOrigin: location.origin,
+    });
+
+    if (missingAssets.length > 0) {
+      showToast('Exported with missing assets', 4000);
+    } else {
+      showToast('Exported');
+    }
+  } catch (err) {
+    console.error('[Export] failed:', err);
+    showToast('Export failed');
+  }
+}
+
+const exportBtn = document.getElementById('export-btn');
+exportBtn?.addEventListener('click', triggerExport);
+
+const mobileExportBtn = document.getElementById('mobile-export-btn');
+mobileExportBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  triggerExport();
+});
+
 environmentManager.loadEnvironment('outdoor_day', {
   source: 'init',
   broadcastChange: false,
