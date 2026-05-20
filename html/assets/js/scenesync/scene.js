@@ -7528,6 +7528,12 @@ function formatTime(ms) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+function clearPairingCountdown() {
+  if (pairingCountdown) clearInterval(pairingCountdown);
+  pairingCountdown = null;
+  pairingExpireTime = null;
+}
+
 function clearPairingAutoCloseTimer() {
   if (!pairingAutoCloseTimer) return;
   clearTimeout(pairingAutoCloseTimer);
@@ -8922,9 +8928,16 @@ function showPairingDialogLinked(expiresAtMs, { autoClose = false } = {}) {
   btnRevokeLink.style.display = 'inline-block';
   pairingStepCode.style.display = 'none';
   pairingStepLinked.style.display = 'block';
+
+  const autoCloseNote = document.getElementById('pairing-auto-close-note');
+  if (autoCloseNote) {
+    autoCloseNote.style.display = autoClose ? 'block' : 'none';
+  }
+
   pairingDialog.style.display = 'flex';
 
   if (autoClose) {
+    clearPairingCountdown();
     scheduleClosePairingDialogAfterLinked();
   }
 }
@@ -8959,9 +8972,7 @@ async function startPairing() {
 }
 
 function cancelPairing() {
-  if (pairingCountdown) clearInterval(pairingCountdown);
-  pairingCountdown = null;
-  pairingExpireTime = null;
+  clearPairingCountdown();
   clearPairingAutoCloseTimer();
   pairingDialog.style.display = 'none';
 }
