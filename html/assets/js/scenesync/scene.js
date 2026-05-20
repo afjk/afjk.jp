@@ -7378,19 +7378,6 @@ function getDefaultImportPosition() {
   );
 }
 
-function isSupportedMobileImageFile(file) {
-  if (!file) return false;
-
-  const supportedMimes = new Set([
-    'image/png',
-    'image/jpeg',
-    'image/webp',
-  ]);
-
-  const supportedExts = /\.(png|jpe?g|webp)$/i;
-  return supportedMimes.has(file.type) || supportedExts.test(file.name || '');
-}
-
 const clipboardImportManager = new ClipboardImportManager({
   container: document,
   getDefaultPosition: getDefaultImportPosition,
@@ -7460,23 +7447,16 @@ dom.mobileImageInput?.addEventListener('change', (event) => {
   const input = event.target;
   const file = input?.files?.[0];
 
-  if (!file) {
-    if (input) input.value = '';
-    return;
+  if (file) {
+    dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
+      console.warn('[mobile-image-input] failed to add image:', error);
+      showToast(error?.message || '画像の追加に失敗しました');
+    });
   }
 
-  if (!isSupportedMobileImageFile(file)) {
-    showToast('PNG / JPEG / WebP の画像を選択してください');
+  if (input) {
     input.value = '';
-    return;
   }
-
-  dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
-    console.warn('[mobile-image-input] failed to add image:', error);
-    showToast(error?.message || '画像の追加に失敗しました');
-  }).finally(() => {
-    input.value = '';
-  });
 });
 mobileRoomOpenBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
