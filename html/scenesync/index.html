@@ -24,6 +24,23 @@
       display: none;
     }
 
+    /* ── Device mode based visibility ── */
+    body.scene-sync-device-mobile .mobile-only {
+      display: initial;
+    }
+
+    body.scene-sync-device-mobile .mobile-hidden {
+      display: none !important;
+    }
+
+    body.scene-sync-device-mobile .mobile-collapsible-row {
+      display: none !important;
+    }
+
+    body.scene-sync-device-mobile #mode {
+      display: none !important;
+    }
+
     /* ── 共通 chip スタイル ── */
     .chip {
       display: inline-flex;
@@ -929,22 +946,6 @@
         --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
       }
 
-      .mobile-only {
-        display: initial;
-      }
-
-      .mobile-hidden {
-        display: none !important;
-      }
-
-      .mobile-collapsible-row {
-        display: none !important;
-      }
-
-      #mode {
-        display: none !important;
-      }
-
       #settings-panel {
         top: calc(10px + var(--mobile-safe-top));
         left: 10px;
@@ -990,10 +991,6 @@
         top: calc(54px + var(--mobile-safe-top));
         right: 10px;
         max-width: calc(100vw - 20px);
-      }
-
-      #paste-btn {
-        display: none !important;
       }
 
       #add-btn {
