@@ -655,6 +655,12 @@
     .pairing-buttons .chip {
       flex: 1;
     }
+    .pairing-note {
+      margin: 10px 0 0;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #cfcfcf !important;
+    }
 
     body.scene-sync-device-desktop #mobile-toolbar {
       display: none !important;
@@ -1063,6 +1069,9 @@
         <div id="pairing-step-code">
           <p>次のコードを AI に入力してください:</p>
           <button id="pairing-code" class="pairing-code" type="button" title="クリックしてコピー">------</button>
+          <p class="pairing-note">
+            リンク中はScene Syncのページを開いたままにしてください。
+          </p>
           <div class="pairing-actions">
             <button id="btn-copy-pairing-code" class="chip" type="button">コードをコピー</button>
             <a id="scene-sync-operator-link" class="chip" href="#" target="_blank" rel="noopener noreferrer">Scene Sync Operator</a>
@@ -1070,8 +1079,10 @@
           <div id="pairing-timer">5:00</div>
         </div>
         <div id="pairing-step-linked" style="display:none;">
-          <p>✓ AI とリンクしました</p>
-          <p id="pairing-expires-at"></p>
+          <p>✓ リンクしました</p>
+          <p class="pairing-note" id="pairing-auto-close-note">
+            このダイアログは自動で閉じます。
+          </p>
         </div>
         <div id="pairing-error" style="display:none;" class="pairing-error"></div>
         <div class="pairing-buttons">

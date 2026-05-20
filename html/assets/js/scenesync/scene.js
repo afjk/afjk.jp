@@ -7519,12 +7519,25 @@ const btnRoomFullNew = document.getElementById('btn-room-full-new');
 
 let pairingCountdown = null;
 let pairingExpireTime = null;
+let pairingAutoCloseTimer = null;
 
 function formatTime(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function clearPairingCountdown() {
+  if (pairingCountdown) clearInterval(pairingCountdown);
+  pairingCountdown = null;
+  pairingExpireTime = null;
+}
+
+function clearPairingAutoCloseTimer() {
+  if (!pairingAutoCloseTimer) return;
+  clearTimeout(pairingAutoCloseTimer);
+  pairingAutoCloseTimer = null;
 }
 
 function updatePairingTimer() {
@@ -7543,6 +7556,17 @@ function showPairingDialogCode() {
   pairingStepCode.style.display = 'block';
   pairingStepLinked.style.display = 'none';
   pairingDialog.style.display = 'flex';
+}
+
+function scheduleClosePairingDialogAfterLinked() {
+  clearPairingAutoCloseTimer();
+
+  pairingAutoCloseTimer = window.setTimeout(() => {
+    pairingAutoCloseTimer = null;
+    if (pairingDialog) {
+      pairingDialog.style.display = 'none';
+    }
+  }, 2000);
 }
 
 async function copyText(text, successMessage = 'コピーしました') {
@@ -8898,16 +8922,24 @@ function setSceneInspectorOpen(nextOpen) {
   }
 }
 
-function showPairingDialogLinked(expiresAtMs) {
+function showPairingDialogLinked(expiresAtMs, { autoClose = false } = {}) {
   btnCancelPairing.textContent = '閉じる';
   btnCancelPairing.style.display = 'inline-block';
   btnRevokeLink.style.display = 'inline-block';
   pairingStepCode.style.display = 'none';
   pairingStepLinked.style.display = 'block';
-  const expiresAt = new Date(expiresAtMs);
-  document.getElementById('pairing-expires-at').textContent =
-    `有効期限: ${expiresAt.toLocaleDateString()} ${expiresAt.toLocaleTimeString()}`;
+
+  const autoCloseNote = document.getElementById('pairing-auto-close-note');
+  if (autoCloseNote) {
+    autoCloseNote.style.display = autoClose ? 'block' : 'none';
+  }
+
   pairingDialog.style.display = 'flex';
+
+  if (autoClose) {
+    clearPairingCountdown();
+    scheduleClosePairingDialogAfterLinked();
+  }
 }
 
 async function startPairing() {
@@ -8940,14 +8972,14 @@ async function startPairing() {
 }
 
 function cancelPairing() {
-  if (pairingCountdown) clearInterval(pairingCountdown);
-  pairingCountdown = null;
-  pairingExpireTime = null;
+  clearPairingCountdown();
+  clearPairingAutoCloseTimer();
   pairingDialog.style.display = 'none';
 }
 
 async function revokeLink() {
   try {
+    clearPairingAutoCloseTimer();
     await presenceState.linkManager.revoke();
     cancelPairing();
     updateLinkButtonState();
@@ -9129,6 +9161,18 @@ document.addEventListener('keydown', (event) => {
 
 presenceState.linkManager.onStatusChange = () => {
   updateLinkButtonState();
+
+  if (!presenceState.linkManager.isLinked()) {
+    clearPairingAutoCloseTimer();
+    return;
+  }
+
+  const dialogOpen = pairingDialog?.style.display === 'flex';
+  const wasWaitingForCode = pairingStepCode?.style.display !== 'none';
+
+  if (dialogOpen && wasWaitingForCode) {
+    showPairingDialogLinked(presenceState.linkManager.expiresAt, { autoClose: true });
+  }
 };
 
 setSceneInspectorOpen(false);
