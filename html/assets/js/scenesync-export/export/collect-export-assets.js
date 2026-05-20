@@ -30,10 +30,45 @@ async function tryFetch(url) {
   }
 }
 
+async function tryGetCachedAssetBuffer({ assetCache, assetId, meshPath }) {
+  if (!assetCache) return null;
+
+  let record = null;
+
+  try {
+    if (assetId && typeof assetCache.getByAssetId === 'function') {
+      record = await assetCache.getByAssetId(assetId);
+    }
+
+    if (!record && meshPath && typeof assetCache.getByMeshPath === 'function') {
+      record = await assetCache.getByMeshPath(meshPath);
+    }
+  } catch (err) {
+    console.warn('[Export] IndexedDB asset cache lookup failed:', err);
+    return null;
+  }
+
+  const blob = record?.blob;
+  if (!blob) return null;
+
+  try {
+    return {
+      buffer: await blob.arrayBuffer(),
+      mime: record.mime || blob.type || 'model/gltf-binary',
+      size: record.size || blob.size || null,
+      source: 'indexeddb',
+    };
+  } catch (err) {
+    console.warn('[Export] Failed to read cached asset blob:', err);
+    return null;
+  }
+}
+
 export async function collectExportAssets({
   sceneDocument,
   blobBase,
   envOrigin,
+  assetCache = null,
 }) {
   const files = {};
   const assetManifest = [];
@@ -60,6 +95,7 @@ export async function collectExportAssets({
     }
 
     const meshPath = obj.asset.meshPath;
+    const assetId = obj.asset.assetId;
     const mime = obj.asset.mime || 'model/gltf-binary';
     const ext = extensionFor(mime, 'glb');
     const baseName = sanitizeFilename(obj.asset.originalName?.replace(/\.[^.]+$/, '') || obj.id);
@@ -70,18 +106,42 @@ export async function collectExportAssets({
       fetchUrl = `${blobBase}/${meshPath}`;
     }
 
-    const buffer = await tryFetch(fetchUrl);
+    const blobBuffer = await tryFetch(fetchUrl);
 
-    if (buffer) {
-      files[zipPath] = buffer;
-      assetManifest.push({ id: obj.id, kind: 'mesh', path: zipPath, status: 'included' });
+    if (blobBuffer) {
+      files[zipPath] = blobBuffer;
+      assetManifest.push({ id: obj.id, kind: 'mesh', path: zipPath, status: 'included', source: 'blob' });
       updatedObjects.push({
         ...obj,
-        asset: { ...obj.asset, path: zipPath, meshPath: undefined },
+        asset: { ...obj.asset, path: zipPath, meshPath: undefined, assetId: undefined },
       });
     } else {
-      missingAssets.push({ id: obj.id, kind: 'mesh', path: meshPath, reason: 'fetch-failed' });
-      updatedObjects.push({ ...obj, asset: { ...obj.asset, path: null, meshPath: undefined } });
+      // Try IndexedDB cache as fallback
+      const cachedAsset = await tryGetCachedAssetBuffer({ assetCache, assetId, meshPath });
+
+      if (cachedAsset) {
+        files[zipPath] = cachedAsset.buffer;
+        assetManifest.push({
+          id: obj.id,
+          kind: 'mesh',
+          path: zipPath,
+          status: 'included',
+          source: 'indexeddb',
+        });
+        updatedObjects.push({
+          ...obj,
+          asset: { ...obj.asset, path: zipPath, meshPath: undefined, assetId: undefined },
+        });
+      } else {
+        missingAssets.push({
+          id: obj.id,
+          kind: 'mesh',
+          assetId: assetId || null,
+          meshPath: meshPath || null,
+          reason: 'blob-fetch-and-cache-miss',
+        });
+        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: null, meshPath: undefined, assetId: undefined } });
+      }
     }
   }
 

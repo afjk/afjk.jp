@@ -83,7 +83,7 @@ test('collectExportAssets', async (t) => {
 
       assert.equal(result.missingAssets.length, 1);
       assert.equal(result.missingAssets[0].id, 'obj-missing');
-      assert.equal(result.missingAssets[0].reason, 'fetch-failed');
+      assert.equal(result.missingAssets[0].reason, 'blob-fetch-and-cache-miss');
     } finally {
       restore();
     }
@@ -198,6 +198,259 @@ test('collectExportAssets', async (t) => {
       assert.equal(result.assetManifest.length, 1);
       assert.equal(result.assetManifest[0].id, 'obj-a');
       assert.equal(result.assetManifest[0].status, 'included');
+      assert.equal(result.assetManifest[0].source, 'blob');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('includes source field in assetManifest', async () => {
+    const buf = new ArrayBuffer(4);
+    const restore = mockFetch({
+      'http://blob/path1': buf,
+    });
+
+    try {
+      const doc = makeSceneDoc([{
+        id: 'obj-a',
+        asset: { type: 'mesh', meshPath: 'path1', mime: 'model/gltf-binary' },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+      });
+
+      assert.equal(result.assetManifest[0].source, 'blob');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('blob fetch success includes assetId in SceneDocument', async () => {
+    const buf = new ArrayBuffer(4);
+    const restore = mockFetch({
+      'http://blob/path1': buf,
+    });
+
+    try {
+      const doc = makeSceneDoc([{
+        id: 'obj-with-id',
+        asset: {
+          type: 'mesh',
+          meshPath: 'path1',
+          assetId: 'asset-123',
+          mime: 'model/gltf-binary',
+        },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+      });
+
+      const obj = result.document.objects[0];
+      assert.equal(obj.asset.assetId, undefined, 'assetId should be removed from exported asset');
+      assert.ok(obj.asset.path.startsWith('assets/'));
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('IndexedDB fallback by assetId succeeds when blob fetch fails', async () => {
+    const restore = mockFetch({});
+
+    try {
+      const cachedBlob = new Blob([new ArrayBuffer(8)], { type: 'model/gltf-binary' });
+      const mockCache = {
+        getByAssetId: async (id) => {
+          if (id === 'asset-123') {
+            return {
+              assetId: 'asset-123',
+              meshPath: 'path1',
+              blob: cachedBlob,
+              mime: 'model/gltf-binary',
+              size: 8,
+            };
+          }
+          return null;
+        },
+        getByMeshPath: async () => null,
+      };
+
+      const doc = makeSceneDoc([{
+        id: 'obj-cached',
+        asset: {
+          type: 'mesh',
+          meshPath: 'path1',
+          assetId: 'asset-123',
+          mime: 'model/gltf-binary',
+        },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: mockCache,
+      });
+
+      assert.equal(result.missingAssets.length, 0, 'no missing assets');
+      assert.equal(result.assetManifest.length, 1);
+      assert.equal(result.assetManifest[0].status, 'included');
+      assert.equal(result.assetManifest[0].source, 'indexeddb');
+      assert.ok(result.files[result.document.objects[0].asset.path]);
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('IndexedDB fallback by meshPath succeeds when assetId lookup fails', async () => {
+    const restore = mockFetch({});
+
+    try {
+      const cachedBlob = new Blob([new ArrayBuffer(12)], { type: 'model/gltf-binary' });
+      const mockCache = {
+        getByAssetId: async () => null,
+        getByMeshPath: async (path) => {
+          if (path === 'path1') {
+            return {
+              assetId: 'asset-123',
+              meshPath: 'path1',
+              blob: cachedBlob,
+              mime: 'model/gltf-binary',
+              size: 12,
+            };
+          }
+          return null;
+        },
+      };
+
+      const doc = makeSceneDoc([{
+        id: 'obj-cached-by-path',
+        asset: {
+          type: 'mesh',
+          meshPath: 'path1',
+          assetId: 'unknown-id',
+          mime: 'model/gltf-binary',
+        },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: mockCache,
+      });
+
+      assert.equal(result.missingAssets.length, 0);
+      assert.equal(result.assetManifest.length, 1);
+      assert.equal(result.assetManifest[0].source, 'indexeddb');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('missing asset recorded with blob-fetch-and-cache-miss when both fail', async () => {
+    const restore = mockFetch({});
+
+    try {
+      const mockCache = {
+        getByAssetId: async () => null,
+        getByMeshPath: async () => null,
+      };
+
+      const doc = makeSceneDoc([{
+        id: 'obj-missing-both',
+        asset: {
+          type: 'mesh',
+          meshPath: 'path1',
+          assetId: 'asset-123',
+          mime: 'model/gltf-binary',
+        },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: mockCache,
+      });
+
+      assert.equal(result.missingAssets.length, 1);
+      assert.equal(result.missingAssets[0].id, 'obj-missing-both');
+      assert.equal(result.missingAssets[0].assetId, 'asset-123');
+      assert.equal(result.missingAssets[0].meshPath, 'path1');
+      assert.equal(result.missingAssets[0].reason, 'blob-fetch-and-cache-miss');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('cache fallback gracefully handles cache errors', async () => {
+    const restore = mockFetch({});
+
+    try {
+      const mockCache = {
+        getByAssetId: async () => { throw new Error('IndexedDB error'); },
+        getByMeshPath: async () => { throw new Error('IndexedDB error'); },
+      };
+
+      const doc = makeSceneDoc([{
+        id: 'obj-cache-error',
+        asset: {
+          type: 'mesh',
+          meshPath: 'path1',
+          assetId: 'asset-123',
+          mime: 'model/gltf-binary',
+        },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: mockCache,
+      });
+
+      assert.equal(result.missingAssets.length, 1);
+      assert.equal(result.missingAssets[0].reason, 'blob-fetch-and-cache-miss');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('works with null assetCache without error', async () => {
+    const buf = new ArrayBuffer(4);
+    const restore = mockFetch({
+      'http://blob/path1': buf,
+    });
+
+    try {
+      const doc = makeSceneDoc([{
+        id: 'obj-a',
+        asset: { type: 'mesh', meshPath: 'path1', assetId: 'asset-123', mime: 'model/gltf-binary' },
+        position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], visible: true,
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: 'http://blob',
+        envOrigin: null,
+        assetCache: null,
+      });
+
+      assert.equal(result.missingAssets.length, 0);
+      assert.equal(result.assetManifest.length, 1);
+      assert.equal(result.assetManifest[0].source, 'blob');
     } finally {
       restore();
     }

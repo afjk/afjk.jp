@@ -9357,6 +9357,7 @@ async function triggerExport() {
       envId: environmentManager.getCurrentEnvId(),
       blobBase: BLOB_BASE,
       envOrigin: location.origin,
+      assetCache,
     });
 
     if (missingAssets.length > 0) {
