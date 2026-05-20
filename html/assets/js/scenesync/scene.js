@@ -9348,7 +9348,7 @@ window.addEventListener('pageshow', (e) => {
 // ── Export ────────────────────────────────────────────────
 
 async function triggerExport() {
-  showToast('Exporting…');
+  showToast('Exporting...');
 
   try {
     const { missingAssets } = await buildExportPackage({

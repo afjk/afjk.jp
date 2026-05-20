@@ -195,4 +195,87 @@ test('createSceneDocumentFromSceneSyncState', async (t) => {
       /managedObjects must be a Map/
     );
   });
+
+  await t.test('excludes objects with null asset (no renderable representation)', () => {
+    const managedObjects = new Map();
+    managedObjects.set('no-asset', makeMockObject('no-asset', { asset: null }));
+    managedObjects.set('has-asset', makeMockObject('has-asset', {
+      asset: { type: 'primitive', primitive: 'box', color: '#fff' },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    assert.equal(doc.objects.some(o => o.id === 'no-asset'), false, 'asset-less object must be excluded');
+    assert.equal(doc.objects.some(o => o.id === 'has-asset'), true);
+  });
+});
+
+test('isValidSceneDocument validation', async (t) => {
+  await t.test('accepts a well-formed document', () => {
+    assert.ok(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 1,
+      units: 'meters',
+      objects: [{
+        id: 'obj-1',
+        position: [0, 0, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      }],
+      skybox: null,
+      bgm: null,
+    }));
+  });
+
+  await t.test('rejects non-string object id', () => {
+    assert.equal(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 1,
+      objects: [{ id: 123, position: [0,0,0], rotation: [0,0,0,1], scale: [1,1,1] }],
+    }), false);
+  });
+
+  await t.test('rejects object with wrong-length position', () => {
+    assert.equal(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 1,
+      objects: [{ id: 'x', position: [0, 0], rotation: [0,0,0,1], scale: [1,1,1] }],
+    }), false);
+  });
+
+  await t.test('rejects object with wrong-length rotation', () => {
+    assert.equal(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 1,
+      objects: [{ id: 'x', position: [0,0,0], rotation: [0,0,1], scale: [1,1,1] }],
+    }), false);
+  });
+
+  await t.test('rejects object with non-number in scale', () => {
+    assert.equal(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 1,
+      objects: [{ id: 'x', position: [0,0,0], rotation: [0,0,0,1], scale: [1,'x',1] }],
+    }), false);
+  });
+
+  await t.test('rejects wrong format string', () => {
+    assert.equal(isValidSceneDocument({
+      format: 'wrong-format',
+      version: 1,
+      objects: [],
+    }), false);
+  });
+
+  await t.test('rejects wrong version', () => {
+    assert.equal(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 2,
+      objects: [],
+    }), false);
+  });
 });

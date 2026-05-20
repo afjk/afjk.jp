@@ -95,6 +95,8 @@ export function createSceneDocumentFromSceneSyncState({
     if (role && SKIP_ROLES.has(role)) continue;
 
     const asset = buildAssetEntry(obj);
+    // Skip objects that have no renderable asset representation
+    if (!asset) continue;
 
     const docObj = {
       id: objectId,
