@@ -1,27 +1,143 @@
 export function generateReadme() {
   return `# Scene Sync Export
 
-This package contains an exported Scene Sync scene.
+Scene Sync からエクスポートされたシーンが含まれています。
 
-## Preview locally
+## 開き方
 
-1. Unzip this package.
-2. Open a terminal in this folder.
-3. Run:
+\`index.html\` を直接ダブルクリックして開くと、ブラウザの制限により 3Dモデルや \`scene.json\` を読み込めないことがあります。
+
+展開したフォルダでローカルサーバーを起動してください。
+
+1. ZIP を展開します。
+2. 展開したフォルダでターミナルを開きます。
+3. 次のコマンドを実行します。
 
    python3 -m http.server 8080
 
-4. Open:
+4. ブラウザで以下を開きます。
 
    http://localhost:8080
 
-## Notes
+## Windows の場合
 
-- This is a read-only exported scene.
-- Editing and multi-user sync are not included.
-- Some browsers may require a local server instead of opening \`index.html\` directly.
-- Device-specific immersive viewing may be available when supported by the browser.
-- The initial export viewer may require an internet connection to load viewer dependencies.
-- A future version may bundle these dependencies for offline use.
+\`python3\` が使えない場合は、次のどちらかを試してください。
+
+   python -m http.server 8080
+
+または:
+
+   py -m http.server 8080
+
+## 補足
+
+- これは読み取り専用のエクスポートです。
+- 共同編集や同期機能は含まれていません。
+- 初期版の viewer は、一部の依存ファイルを読み込むためにインターネット接続が必要です。
+- WebXR（VR/AR）機能はブラウザとデバイスに対応している場合に利用可能です。
 `;
+}
+
+export function generateReadmeHtml() {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scene Sync Export の開き方</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 32px 20px;
+      background: #111;
+      color: #f5f5f5;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.7;
+    }
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 16px;
+    }
+    h2 {
+      font-size: 18px;
+      margin-top: 28px;
+      margin-bottom: 10px;
+    }
+    code {
+      background: rgba(255,255,255,0.12);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      overflow-x: auto;
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.1);
+      line-height: 1.5;
+    }
+    a {
+      color: #8ab4ff;
+    }
+    .note {
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(255, 184, 77, 0.12);
+      border: 1px solid rgba(255, 184, 77, 0.28);
+      margin-bottom: 16px;
+    }
+    ol, ul {
+      margin-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Scene Sync Export の開き方</h1>
+
+    <div class="note">
+      この Export は、<code>index.html</code> を直接ダブルクリックして開くと、
+      ブラウザの制限により 3Dモデルやシーンファイルを読み込めないことがあります。
+    </div>
+
+    <h2>ローカルサーバーで見る方法</h2>
+    <ol>
+      <li>ZIP を展開します。</li>
+      <li>展開したフォルダでターミナルを開きます。</li>
+      <li>次のコマンドを実行します。</li>
+    </ol>
+
+    <pre><code>python3 -m http.server 8080</code></pre>
+
+    <p>そのあと、ブラウザで次のURLを開いてください。</p>
+
+    <pre><code>http://localhost:8080</code></pre>
+
+    <h2>Windows の場合</h2>
+    <p><code>python3</code> が使えない場合は、次のどちらかを試してください。</p>
+
+    <pre><code>python -m http.server 8080</code></pre>
+
+    <p>または:</p>
+
+    <pre><code>py -m http.server 8080</code></pre>
+
+    <h2>補足</h2>
+    <ul>
+      <li>これは読み取り専用のエクスポートです。</li>
+      <li>共同編集や同期機能は含まれていません。</li>
+      <li>初期版の viewer は、一部の依存ファイルを読み込むためにインターネット接続が必要です。</li>
+      <li>WebXR（VR/AR）機能はブラウザとデバイスに対応している場合に利用可能です。</li>
+    </ul>
+
+    <p style="margin-top: 28px; font-size: 14px; color: rgba(255,255,255,0.6);">
+      サーバー起動後は <a href="./index.html">index.html</a> を開いて表示できます。
+    </p>
+  </main>
+</body>
+</html>`;
 }
