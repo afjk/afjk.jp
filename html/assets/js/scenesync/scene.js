@@ -23,6 +23,7 @@ import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
 import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
+import { applySceneSyncDeviceMode, isSceneSyncMobileDevice } from './ui/device-mode.js';
 import { normalizeDisplayName } from './utils/display-name.js';
 import { extractYaw } from './utils/math.js';
 import { broadcastObjectDelta } from './objects/object-delta.js';
@@ -54,6 +55,7 @@ const {
   pmremGenerator,
 } = threeApp;
 const dom = getSceneSyncDom();
+applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
   dracoPath: '/draco/',
   maxDimension: 10,
@@ -3606,7 +3608,14 @@ const btnDelete = document.getElementById('btn-delete');
 const btnDeselect = document.getElementById('btn-deselect');
 
 function showToolbar() {
-  if (toolbar) toolbar.style.display = 'flex';
+  if (!toolbar) return;
+
+  if (!isSceneSyncMobileDevice()) {
+    toolbar.style.display = 'none';
+    return;
+  }
+
+  toolbar.style.display = 'flex';
 }
 
 function hideToolbar() {
