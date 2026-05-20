@@ -656,36 +656,8 @@
       flex: 1;
     }
 
-    /* ── クリップボード貼り付けUI ── */
-    #paste-btn {
-      position: fixed;
-      bottom: 72px;
-      right: 12px;
-      width: 44px;
-      height: 44px;
-      border-radius: 50%;
-      background: rgba(68, 136, 255, 0.6);
-      border: none;
-      color: #fff;
-      font-size: 20px;
-      cursor: pointer;
-      z-index: 11;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(6px);
-      transition: background 0.2s;
-    }
-    #paste-btn:hover {
-      background: rgba(68, 136, 255, 0.8);
-    }
-    body.scene-sync-device-desktop #mobile-toolbar,
-    body.scene-sync-device-desktop #paste-btn {
+    body.scene-sync-device-desktop #mobile-toolbar {
       display: none !important;
-    }
-
-    body.scene-sync-device-mobile #paste-btn {
-      display: flex;
     }
     .mobile-sheet {
       position: fixed;
@@ -1206,7 +1178,6 @@
     </div>
   </aside>
   <button id="add-btn" title="GLB/画像を追加">＋</button>
-  <button id="paste-btn" title="クリップボードから追加">📋</button>
   <input type="file" id="file-input" style="display:none">
   <input
     type="file"
