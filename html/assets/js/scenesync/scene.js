@@ -7385,11 +7385,26 @@ pasteBtn?.addEventListener('click', pasteFromClipboardAtDefaultPosition);
 mobileActionSheetCloseBtn?.addEventListener('click', closeMobileActionSheet);
 mobileAddImageBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
-  dom.fileInput?.click();
+  dom.mobileImageInput?.click();
 });
 mobilePasteBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
   pasteFromClipboardAtDefaultPosition();
+});
+dom.mobileImageInput?.addEventListener('change', (event) => {
+  const input = event.target;
+  const file = input?.files?.[0];
+
+  if (file) {
+    dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
+      console.warn('[mobile-image-input] failed to add image:', error);
+      showToast(error?.message || '画像の追加に失敗しました');
+    });
+  }
+
+  if (input) {
+    input.value = '';
+  }
 });
 mobileRoomOpenBtn?.addEventListener('click', () => {
   closeMobileActionSheet();

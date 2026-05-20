@@ -20,6 +20,7 @@ export function getSceneSyncDom() {
     peersPanel: document.getElementById('peers-panel'),
     peersList: document.getElementById('peers-list'),
     fileInput: document.getElementById('file-input'),
+    mobileImageInput: document.getElementById('mobile-image-input'),
     dropOverlay: document.getElementById('drop-overlay'),
     deleteSkyboxBtn: document.getElementById('delete-skybox-btn'),
     bgmUnlockButton: document.getElementById('bgm-unlock-button'),

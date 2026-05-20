@@ -1208,6 +1208,12 @@
   <button id="add-btn" title="GLB/画像を追加">＋</button>
   <button id="paste-btn" title="クリップボードから追加">📋</button>
   <input type="file" id="file-input" style="display:none">
+  <input
+    type="file"
+    id="mobile-image-input"
+    accept="image/png,image/jpeg,image/webp"
+    style="display:none"
+  >
   <div id="drop-overlay">GLB / 画像 / テキストをドロップして追加</div>
   <div id="paste-sheet" hidden>
     <div id="paste-sheet-panel">
@@ -1226,7 +1232,7 @@
         <button id="mobile-action-sheet-close" class="chip" type="button">閉じる</button>
       </div>
       <div class="mobile-sheet-actions">
-        <button id="mobile-add-image-btn" class="chip primary" type="button">ファイルを追加</button>
+        <button id="mobile-add-image-btn" class="chip primary" type="button">画像を追加</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
         <button id="mobile-room-open-btn" class="chip" type="button">ルーム設定</button>
         <button id="mobile-env-open-btn" class="chip" type="button">環境設定</button>
