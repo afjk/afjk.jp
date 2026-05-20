@@ -152,6 +152,30 @@ function updateEnvironmentMenuSkyboxControls() {
   if (dom.deleteSkyboxBtn) {
     dom.deleteSkyboxBtn.hidden = !hasSkybox;
   }
+  const mobileDeleteSkyboxBtn = document.getElementById('mobile-delete-skybox-btn');
+  if (mobileDeleteSkyboxBtn) {
+    mobileDeleteSkyboxBtn.hidden = !hasSkybox;
+  }
+}
+
+function removeSkyboxSpheres() {
+  const skyObjects = getSkySphereObjects();
+
+  if (skyObjects.length === 0) {
+    showToast('削除できる背景画像がありません');
+    return false;
+  }
+
+  const count = skyObjects.length;
+  for (const obj of skyObjects) {
+    deleteObjectById(obj.objectId);
+  }
+
+  showToast('背景画像を削除しました');
+  updateEnvironmentMenuSkyboxControls();
+  notifySceneStateChanged('skybox-removed');
+
+  return true;
 }
 
 function syncSceneUiState() {
@@ -167,27 +191,7 @@ dom.envSelect?.addEventListener('change', () => {
 });
 
 dom.deleteSkyboxBtn?.addEventListener('click', () => {
-  const skyObjects = getSkySphereObjects();
-
-  if (skyObjects.length === 0) {
-    showToast('削除するSkyboxはありません');
-    updateEnvironmentMenuSkyboxControls();
-    return;
-  }
-
-  const count = skyObjects.length;
-  for (const obj of skyObjects) {
-    deleteObjectById(obj.objectId);
-  }
-
-  showToast(
-    count === 1
-      ? 'Skyboxを削除しました'
-      : `Skyboxを${count}個削除しました`
-  );
-
-  updateEnvironmentMenuSkyboxControls();
-  notifySceneStateChanged('skybox-deleted');
+  removeSkyboxSpheres();
 });
 
 dom.clearBgmButton?.addEventListener('click', () => {
@@ -7360,6 +7364,8 @@ const mobileRoomSheetCloseBtn = document.getElementById('mobile-room-sheet-close
 const mobileEnvOpenBtn = document.getElementById('mobile-env-open-btn');
 const mobileEnvSheetCloseBtn = document.getElementById('mobile-env-sheet-close');
 const mobileEnvSelect = document.getElementById('mobile-env-select');
+const mobileSetSkyboxBtn = document.getElementById('mobile-set-skybox-btn');
+const mobileDeleteSkyboxBtn = document.getElementById('mobile-delete-skybox-btn');
 const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
 const mobileHelpBtn = document.getElementById('mobile-help-btn');
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
@@ -7426,6 +7432,35 @@ dom.mobileGlbInput?.addEventListener('change', (event) => {
     input.value = '';
   }
 });
+const mobileSkyboxImageInput = document.getElementById('mobile-skybox-image-input');
+mobileSkyboxImageInput?.addEventListener('change', async (event) => {
+  const input = event.target;
+  const file = input?.files?.[0];
+
+  try {
+    if (file) {
+      showToast('背景画像を準備中…');
+
+      await imageImporterCallback(file, getDefaultImportPosition(), {
+        targetKind: 'sky',
+        surfaceKind: 'skybox',
+        upness: 1,
+        metadata: {
+          source: 'mobile-background-sheet',
+        },
+      });
+
+      closeSheet('mobile-env-sheet');
+    }
+  } catch (error) {
+    console.warn('[mobile-skybox-input] failed to set skybox:', error);
+    showToast(error?.message || '背景画像の設定に失敗しました');
+  } finally {
+    if (input) {
+      input.value = '';
+    }
+  }
+});
 mobileRoomOpenBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
   openMobileRoomSheet();
@@ -7440,6 +7475,16 @@ mobileEnvOpenBtn?.addEventListener('click', () => {
 });
 mobileEnvSheetCloseBtn?.addEventListener('click', () => {
   closeSheet('mobile-env-sheet');
+});
+mobileSetSkyboxBtn?.addEventListener('click', () => {
+  const mobileSkboxImageInput = document.getElementById('mobile-skybox-image-input');
+  mobileSkboxImageInput?.click();
+});
+mobileDeleteSkyboxBtn?.addEventListener('click', () => {
+  const removed = removeSkyboxSpheres();
+  if (removed) {
+    closeSheet('mobile-env-sheet');
+  }
 });
 mobileLinkOpenBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
