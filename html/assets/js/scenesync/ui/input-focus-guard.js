@@ -1,3 +1,6 @@
+// This is an input-behavior guard, not a mobile device detector.
+// Do not use this to decide whether mobile-only UI should be shown.
+// Use device-mode.js (isSceneSyncMobileDevice) for mobile UI visibility.
 export function isTouchLikeDevice() {
   return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }

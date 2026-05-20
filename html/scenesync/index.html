@@ -662,6 +662,11 @@
     #paste-btn:hover {
       background: rgba(68, 136, 255, 0.8);
     }
+    body.scene-sync-device-desktop #mobile-toolbar,
+    body.scene-sync-device-desktop #paste-btn {
+      display: none !important;
+    }
+
     @media (hover: none) and (pointer: coarse) and (max-width: 1024px) {
       #mobile-toolbar {
         display: flex;
