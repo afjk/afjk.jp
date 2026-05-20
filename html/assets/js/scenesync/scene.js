@@ -4833,6 +4833,13 @@ function handleHandoff(data) {
       if (payload.asset) {
         applyAssetDelta(obj, payload.asset);
       }
+      if (payload.animation && typeof payload.animation === 'object') {
+        applyObjectAnimationDelta(obj, payload.animation);
+        console.debug('[scene-delta] animation applied', {
+          objectId: payload.objectId,
+          animation: payload.animation,
+        });
+      }
 
       // Handle transform updates (animated or immediate)
       if (shouldAnimateTransform && (
