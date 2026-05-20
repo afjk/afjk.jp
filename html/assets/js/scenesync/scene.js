@@ -166,7 +166,6 @@ function removeSkyboxSpheres() {
     return false;
   }
 
-  const count = skyObjects.length;
   for (const obj of skyObjects) {
     deleteObjectById(obj.objectId);
   }
@@ -7477,8 +7476,7 @@ mobileEnvSheetCloseBtn?.addEventListener('click', () => {
   closeSheet('mobile-env-sheet');
 });
 mobileSetSkyboxBtn?.addEventListener('click', () => {
-  const mobileSkboxImageInput = document.getElementById('mobile-skybox-image-input');
-  mobileSkboxImageInput?.click();
+  mobileSkyboxImageInput?.click();
 });
 mobileDeleteSkyboxBtn?.addEventListener('click', () => {
   const removed = removeSkyboxSpheres();
