@@ -667,13 +667,8 @@
       display: none !important;
     }
 
-    @media (hover: none) and (pointer: coarse) and (max-width: 1024px) {
-      #mobile-toolbar {
-        display: flex;
-      }
-      #paste-btn {
-        display: flex;
-      }
+    body.scene-sync-device-mobile #paste-btn {
+      display: flex;
     }
     .mobile-sheet {
       position: fixed;
