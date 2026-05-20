@@ -11,9 +11,10 @@ export function generateManifest({
   ];
 
   if (cdnDependent) {
-    // TODO: bundle three.js into the ZIP for offline use
+    // TODO: bundle viewer dependencies (three.js, addons, Draco, JSZip) into the ZIP for offline use
     notes.push(
-      'This viewer requires an internet connection to load three.js from cdn.jsdelivr.net.'
+      'This initial export may require an internet connection to load viewer dependencies' +
+      ' such as three.js, Three.js addons, Draco decoder, and JSZip from cdn.jsdelivr.net.'
     );
   }
 

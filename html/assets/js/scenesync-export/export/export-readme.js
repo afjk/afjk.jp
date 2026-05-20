@@ -21,5 +21,7 @@ This package contains an exported Scene Sync scene.
 - Editing and multi-user sync are not included.
 - Some browsers may require a local server instead of opening \`index.html\` directly.
 - Device-specific immersive viewing may be available when supported by the browser.
+- The initial export viewer may require an internet connection to load viewer dependencies.
+- A future version may bundle these dependencies for offline use.
 `;
 }
