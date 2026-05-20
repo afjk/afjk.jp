@@ -4245,9 +4245,6 @@ function generateRoom() {
   applyRoomCode(randomRoomCode());
 }
 
-function joinRoom(code) {
-  applyRoomCode(code);
-}
 
 function clearRoom() {
   activeRoomCode = null;
@@ -4333,39 +4330,12 @@ function renderMobileRoomActions() {
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
   createBtn.className = 'chip primary';
-  createBtn.textContent = 'ルームを作成';
+  createBtn.textContent = '新しいルームを作成';
   createBtn.addEventListener('click', () => {
     generateRoom();
     closeMobileRoomSheet();
   });
   container.appendChild(createBtn);
-
-  const joinGroup = document.createElement('div');
-  joinGroup.className = 'join-group';
-
-  const input = document.createElement('input');
-  input.className = 'room-input';
-  input.placeholder = 'コードを入力';
-  input.inputMode = 'text';
-  input.autocomplete = 'off';
-  input.maxLength = 24;
-  input.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') return;
-    joinRoom(input.value);
-    closeMobileRoomSheet();
-  });
-
-  const joinBtn = document.createElement('button');
-  joinBtn.type = 'button';
-  joinBtn.className = 'chip';
-  joinBtn.textContent = '参加';
-  joinBtn.addEventListener('click', () => {
-    joinRoom(input.value);
-    closeMobileRoomSheet();
-  });
-
-  joinGroup.append(input, joinBtn);
-  container.appendChild(joinGroup);
 }
 
 function renderRoomSection() {
@@ -4406,28 +4376,6 @@ function renderRoomSection() {
     genBtn.title = '新しいルームを作成';
     genBtn.addEventListener('click', generateRoom);
     roomSectionEl.appendChild(genBtn);
-
-    const joinGroup = document.createElement('div');
-    joinGroup.className = 'join-group';
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'room-input';
-    input.placeholder = 'コードを入力';
-    input.maxLength = 24;
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') joinRoom(input.value);
-    });
-    joinGroup.appendChild(input);
-
-    const joinBtn = document.createElement('button');
-    joinBtn.type = 'button';
-    joinBtn.className = 'chip';
-    joinBtn.textContent = '参加';
-    joinBtn.addEventListener('click', () => joinRoom(input.value));
-    joinGroup.appendChild(joinBtn);
-
-    roomSectionEl.appendChild(joinGroup);
   }
 
   renderMobileRoomActions();
