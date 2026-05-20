@@ -1038,9 +1038,9 @@
       </select>
     </div>
     <div class="row mobile-collapsible-row">
-      <button id="delete-skybox-btn" class="chip" type="button" title="Skyboxを削除" hidden>
+      <button id="delete-skybox-btn" class="chip" type="button" title="背景画像を削除" hidden>
         <span>🗑️</span>
-        <span>Skyboxを削除</span>
+        <span>背景画像を削除</span>
       </button>
       <button id="clear-bgm-btn" class="chip" type="button" title="BGMを削除" hidden>
         <span>🔇</span>
@@ -1209,6 +1209,12 @@
     id="mobile-glb-input"
     style="display:none"
   >
+  <input
+    type="file"
+    id="mobile-skybox-image-input"
+    accept="image/png,image/jpeg,image/webp"
+    style="display:none"
+  >
   <div id="drop-overlay">GLB / 画像 / テキストをドロップして追加</div>
   <div id="paste-sheet" hidden>
     <div id="paste-sheet-panel">
@@ -1231,7 +1237,7 @@
         <button id="mobile-add-glb-btn" class="chip" type="button">ファイルを追加</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
         <button id="mobile-room-open-btn" class="chip" type="button">ルーム設定</button>
-        <button id="mobile-env-open-btn" class="chip" type="button">環境設定</button>
+        <button id="mobile-env-open-btn" class="chip" type="button">背景</button>
         <button id="mobile-link-open-btn" class="chip" type="button">AIにリンク</button>
         <button id="mobile-help-btn" class="chip" type="button">ヘルプ</button>
         <button id="mobile-dev-open-btn" class="chip" type="button" hidden>Dev</button>
@@ -1255,7 +1261,7 @@
     <div class="mobile-sheet-panel">
       <div class="mobile-sheet-handle"></div>
       <div class="mobile-sheet-header">
-        <h2>環境</h2>
+        <h2>背景</h2>
         <button id="mobile-env-sheet-close" class="chip" type="button">閉じる</button>
       </div>
       <select id="mobile-env-select" class="chip">
@@ -1265,6 +1271,14 @@
         <option value="indoor_warm">室内 暖色</option>
         <option value="studio">Studio</option>
       </select>
+      <div class="mobile-sheet-actions mobile-background-actions">
+        <button id="mobile-set-skybox-btn" class="chip primary" type="button">
+          画像を背景に設定
+        </button>
+        <button id="mobile-delete-skybox-btn" class="chip danger" type="button" hidden>
+          背景画像を削除
+        </button>
+      </div>
     </div>
   </div>
   <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
