@@ -7353,6 +7353,7 @@ const clipboardPasteTarget = document.getElementById('clipboard-paste-target');
 const pasteSheetClose = document.getElementById('paste-sheet-close');
 const mobileActionSheetCloseBtn = document.getElementById('mobile-action-sheet-close');
 const mobileAddImageBtn = document.getElementById('mobile-add-image-btn');
+const mobileAddGlbBtn = document.getElementById('mobile-add-glb-btn');
 const mobilePasteBtn = document.getElementById('mobile-paste-btn');
 const mobileRoomOpenBtn = document.getElementById('mobile-room-open-btn');
 const mobileRoomSheetCloseBtn = document.getElementById('mobile-room-sheet-close');
@@ -7387,6 +7388,10 @@ mobileAddImageBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
   dom.mobileImageInput?.click();
 });
+mobileAddGlbBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  dom.mobileGlbInput?.click();
+});
 mobilePasteBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
   pasteFromClipboardAtDefaultPosition();
@@ -7399,6 +7404,21 @@ dom.mobileImageInput?.addEventListener('change', (event) => {
     dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
       console.warn('[mobile-image-input] failed to add image:', error);
       showToast(error?.message || '画像の追加に失敗しました');
+    });
+  }
+
+  if (input) {
+    input.value = '';
+  }
+});
+dom.mobileGlbInput?.addEventListener('change', (event) => {
+  const input = event.target;
+  const file = input?.files?.[0];
+
+  if (file) {
+    dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
+      console.warn('[mobile-glb-input] failed to add GLB:', error);
+      showToast(error?.message || '3Dモデルの追加に失敗しました');
     });
   }
 
