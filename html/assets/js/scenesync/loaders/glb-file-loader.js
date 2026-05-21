@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { normalizeGlbForSceneSync } from './glb-normalizer.js';
 
 function toVector3(position) {
   if (!position) return null;
@@ -139,16 +140,63 @@ export class GLBFileLoader {
       throw new Error('必要なパラメータが不足しています');
     }
 
-    const objectURL = URL.createObjectURL(file);
+    let normalizedFile = file;
+    let normalizedArrayBuffer = null;
+    let normalizationInfo = {
+      changed: false,
+      warnings: [],
+    };
+
+    try {
+      // Normalize GLB if it uses Spec/Gloss materials
+      const normalized = await normalizeGlbForSceneSync(file);
+      normalizationInfo = {
+        changed: normalized.changed,
+        warnings: normalized.warnings || [],
+      };
+
+      if (normalized.changed) {
+        // Create a new File from the converted ArrayBuffer
+        normalizedFile = new File(
+          [normalized.arrayBuffer],
+          file.name,
+          { type: 'model/gltf-binary' }
+        );
+        normalizedArrayBuffer = normalized.arrayBuffer;
+        console.info('[glb-loader] GLB normalized for Scene Sync');
+      }
+    } catch (error) {
+      // If normalization fails, fall back to original file
+      console.warn('[glb-loader] GLB normalization failed, using original file', error);
+      normalizationInfo.error = error.message;
+    }
+
+    const objectURL = URL.createObjectURL(normalizedFile);
 
     try {
       const model = await this.loadFromUrl(objectURL, position, scene, null, asset);
       const metadata = model.userData?.scenesync?.glbMetadata;
       if (metadata) {
-        metadata.fileName = file.name;
+        metadata.fileName = file.name; // Keep original name
         metadata.fileSize = file.size;
         metadata.source = 'file';
+        metadata.normalized = normalizationInfo.changed;
+        if (normalizationInfo.changed) {
+          metadata.normalizedFrom = ['KHR_materials_pbrSpecularGlossiness'];
+        }
+        if (normalizationInfo.warnings?.length > 0) {
+          metadata.normalizationWarnings = normalizationInfo.warnings;
+        }
+        if (normalizationInfo.error) {
+          metadata.normalizationError = normalizationInfo.error;
+        }
       }
+
+      // Store normalized ArrayBuffer in userData for later use
+      if (normalizedArrayBuffer) {
+        model.userData.normalizedGlbArrayBuffer = normalizedArrayBuffer;
+      }
+
       if (onLoaded) {
         await onLoaded(model, metadata);
       }

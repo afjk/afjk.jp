@@ -5206,7 +5206,19 @@ async function uploadGlbFromUrl(url, params = {}) {
   selectManagedObject(model);
   notifySceneStateChanged('glb-uploaded-from-url');
 
-  const arrayBuffer = await blob.arrayBuffer();
+  // Use normalized ArrayBuffer if available, otherwise use original blob
+  const arrayBuffer = model.userData.normalizedGlbArrayBuffer
+    ? model.userData.normalizedGlbArrayBuffer
+    : await blob.arrayBuffer();
+
+  // Show feedback if GLB was normalized
+  const metadata = model.userData?.scenesync?.glbMetadata;
+  if (metadata?.normalized) {
+    showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
+  } else if (metadata?.normalizationError) {
+    showToast('このモデルのマテリアル変換に失敗しました。表示が正しくない可能性があります');
+  }
+
   await uploadAndBroadcast(
     model.userData.objectId,
     file.name,
@@ -7254,7 +7266,19 @@ const dragDropManager = new DragDropManager({
     selectManagedObject(model);
     notifySelectionChanged('drag-drop-object-selected');
 
-    const arrayBuffer = await file.arrayBuffer();
+    // Show feedback if GLB was normalized
+    const metadata = model.userData?.scenesync?.glbMetadata;
+    if (metadata?.normalized) {
+      showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
+    } else if (metadata?.normalizationError) {
+      showToast('このモデルのマテリアル変換に失敗しました。表示が正しくない可能性があります');
+    }
+
+    // Use normalized ArrayBuffer if available, otherwise use original file
+    const arrayBuffer = model.userData.normalizedGlbArrayBuffer
+      ? model.userData.normalizedGlbArrayBuffer
+      : await file.arrayBuffer();
+
     await uploadAndBroadcast(
       model.userData.objectId,
       file.name,
