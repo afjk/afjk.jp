@@ -4,6 +4,7 @@ import { createSceneDocumentFromSceneSyncState } from '../../../html/assets/js/s
 import { collectExportAssets } from '../../../html/assets/js/scenesync-export/export/collect-export-assets.js';
 import { generateManifest } from '../../../html/assets/js/scenesync-export/export/export-manifest.js';
 import { generateReadme, generateReadmeHtml } from '../../../html/assets/js/scenesync-export/export/export-readme.js';
+import { generateExportIndexHtml } from '../../../html/assets/js/scenesync-export/export/build-export-package.js';
 import { isValidSceneDocument } from '../../../html/assets/js/scenesync-export/viewer/scene-document.js';
 
 // Simulate the core export package logic (without JSZip / DOM)
@@ -53,14 +54,16 @@ test('export package construction', async (t) => {
     assert.equal(doc.skybox?.envId, 'outdoor_day');
   });
 
-  await t.test('ZIP must contain index.html, README.md, manifest.json, scene.json', () => {
+  await t.test('ZIP must contain index.html, README.md, README.html, manifest.json, scene.json', () => {
     // These are the required file names verified by name presence
-    const requiredFiles = ['index.html', 'README.md', 'manifest.json', 'scene.json'];
+    const requiredFiles = ['index.html', 'README.md', 'README.html', 'manifest.json', 'scene.json'];
     for (const f of requiredFiles) {
       assert.ok(typeof f === 'string', `${f} should be a string key`);
     }
     // This test verifies our naming conventions are consistent
     assert.ok(generateReadme().includes('Scene Sync Export'));
+    assert.ok(generateReadmeHtml().includes('Scene Sync Export'));
+    assert.ok(generateExportIndexHtml().includes('index.html'));
   });
 
   await t.test('viewer/ directory files are defined in VIEWER_SOURCES', () => {
@@ -205,32 +208,29 @@ test('static viewer loading', async (t) => {
     assert.equal(resolver.resolveAsset({ path: null }), null);
   });
 
-  await t.test('file protocol warning check is a simple string comparison', () => {
-    // The viewer shows a warning when protocol === 'file:'
-    const isFileProcol = (proto) => proto === 'file:';
-    assert.ok(isFileProcol('file:'));
-    assert.equal(isFileProcol('http:'), false);
-    assert.equal(isFileProcol('https:'), false);
+  await t.test('index.html template includes inline file protocol detection script', () => {
+    const html = generateExportIndexHtml();
+    assert.ok(html.includes(`location.protocol === 'file:'`));
+    assert.ok(html.includes('file-protocol-warning'));
+    assert.ok(html.includes('このままでは表示できません'));
+    assert.ok(html.includes('README.html'));
+    assert.ok(html.includes('python3 -m http.server 8080'));
   });
 
-  await t.test('index.html template includes inline file protocol detection script', async () => {
-    // This test uses a mock to capture INDEX_HTML_TEMPLATE
-    const { buildExportPackage } = await import(
-      '../../../html/assets/js/scenesync-export/export/build-export-package.js'
-    );
-    // We can't directly access INDEX_HTML_TEMPLATE, but we can test the static viewer
-    // The script should check location.protocol === 'file:'
-    // Verified through code review: inline script is present before module script
-    const hasInlineCheck = `location.protocol === 'file:'`;
-    assert.ok(typeof hasInlineCheck === 'string', 'inline file protocol check is present');
+  await t.test('file protocol warning script runs before module script', () => {
+    const html = generateExportIndexHtml();
+    const protocolCheckIndex = html.indexOf(`location.protocol === 'file:'`);
+    const moduleScriptIndex = html.indexOf('viewer/viewer.js');
+    assert.ok(protocolCheckIndex > 0, 'protocol check script exists');
+    assert.ok(moduleScriptIndex > 0, 'module script exists');
+    assert.ok(protocolCheckIndex < moduleScriptIndex, 'protocol check runs before module script');
   });
 
-  await t.test('file protocol warning text is in Japanese', async () => {
-    // The warning message should be in Japanese to help local users
-    // This would be verified in the index.html template
-    const japaneseWarnings = ['このままでは表示できません', '直接開くと'];
-    for (const text of japaneseWarnings) {
-      assert.ok(typeof text === 'string' && text.length > 0);
-    }
+  await t.test('index.html template is valid HTML with Japanese locale', () => {
+    const html = generateExportIndexHtml();
+    assert.ok(html.includes('<!DOCTYPE html>'));
+    assert.ok(html.includes('<html lang="ja">'));
+    assert.ok(html.includes('<meta charset="UTF-8">'));
+    assert.ok(html.includes('<canvas id="viewer-canvas"></canvas>'));
   });
 });

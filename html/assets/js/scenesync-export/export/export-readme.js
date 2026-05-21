@@ -13,21 +13,29 @@ Scene Sync からエクスポートされたシーンが含まれています。
 2. 展開したフォルダでターミナルを開きます。
 3. 次のコマンドを実行します。
 
-   python3 -m http.server 8080
+~~~
+python3 -m http.server 8080
+~~~
 
 4. ブラウザで以下を開きます。
 
-   http://localhost:8080
+~~~
+http://localhost:8080
+~~~
 
 ## Windows の場合
 
 \`python3\` が使えない場合は、次のどちらかを試してください。
 
-   python -m http.server 8080
+~~~
+python -m http.server 8080
+~~~
 
 または:
 
-   py -m http.server 8080
+~~~
+py -m http.server 8080
+~~~
 
 ## 補足
 

@@ -71,6 +71,10 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
 </body>
 </html>`;
 
+export function generateExportIndexHtml() {
+  return INDEX_HTML_TEMPLATE;
+}
+
 async function loadJSZip() {
   if (typeof globalThis.JSZip !== 'undefined') return globalThis.JSZip;
 
