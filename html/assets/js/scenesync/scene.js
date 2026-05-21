@@ -5298,6 +5298,46 @@ function createSceneUrlImportContext(options = {}) {
     GLTFLoader,
     targetKind,
     replaceSkyboxSphereFromBlob,
+    /**
+     * Spec/Gloss変換後GLBをpresence blobへアップロードしてasset cacheへも記録する。
+     * URL import時に normalization.changed === true の場合に使う。
+     * @param {ArrayBuffer} arrayBuffer - 変換後GLB
+     * @param {string} name - 表示名
+     * @returns {Promise<{ meshPath: string, assetId: string|null, size: number }>}
+     */
+    uploadGlbAsset: async (arrayBuffer, name) => {
+      const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
+      const meshPath = generateRandomPath();
+      let assetId = null;
+
+      try {
+        assetId = await computeAssetId(arrayBuffer);
+        await assetCache.putAsset({
+          assetId,
+          meshPath: null,
+          blob: uploadBlob,
+          source: 'url-normalized',
+        });
+      } catch {}
+
+      const uploadRes = await fetch(`${BLOB_BASE}/${meshPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'model/gltf-binary' },
+        body: arrayBuffer,
+      });
+
+      if (!uploadRes.ok) {
+        let errPayload = null;
+        try { errPayload = await uploadRes.json(); } catch {}
+        throw new Error(errPayload?.message || `Upload failed: ${uploadRes.status}`);
+      }
+
+      if (assetId) {
+        try { await assetCache.rememberMeshPathAlias(assetId, meshPath); } catch {}
+      }
+
+      return { meshPath, assetId, size: arrayBuffer.byteLength };
+    },
   };
 }
 

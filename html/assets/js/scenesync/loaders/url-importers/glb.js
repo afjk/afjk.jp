@@ -154,6 +154,39 @@ export async function importGlbUrl(url, ctx) {
       });
     }
 
+    // 変換後GLBがある場合はpresence blobへuploadしてから broadcast する。
+    // これにより他クライアント・後参加者・reload・exportすべてが変換後GLBを参照できる。
+    let asset = { type: 'mesh', source: 'url', url };
+    let uploadSucceeded = false;
+
+    if (normalization?.changed && ctx.uploadGlbAsset) {
+      try {
+        const { meshPath, assetId, size } = await ctx.uploadGlbAsset(
+          normalization.arrayBuffer,
+          displayName,
+        );
+        asset = {
+          type: 'mesh',
+          source: 'carrier',
+          assetId: assetId || null,
+          meshPath,
+          size,
+          mime: 'model/gltf-binary',
+          originalName: displayName,
+        };
+        // ローカルモデルのuserDataにも記録（export / snapshot用）
+        model.userData.meshPath = meshPath;
+        model.userData.assetId = assetId;
+        model.userData.asset = { ...asset };
+        uploadSucceeded = true;
+        console.info('[glb-url] Uploaded normalized GLB to presence blob', { meshPath, assetId });
+      } catch (uploadError) {
+        // upload失敗時は元URLで共有（表示は変換済み、共有は元URL）
+        console.warn('[glb-url] Failed to upload normalized GLB, sharing original URL', uploadError);
+        ctx.showToast('変換済みGLBのアップロードに失敗しました。元URLで共有されます');
+      }
+    }
+
     const payload = {
       kind: 'scene-add',
       objectId,
@@ -161,8 +194,12 @@ export async function importGlbUrl(url, ctx) {
       position: spawnTransform.position,
       rotation: spawnTransform.rotation,
       scale: spawnTransform.scale,
-      asset: { type: 'mesh', source: 'url', url },
+      asset,
     };
+
+    if (asset.meshPath) {
+      payload.meshPath = asset.meshPath;
+    }
 
     if (animations.length > 0) {
       payload.animation = { enabled: true, clip: 0, mode: 'loop', speed: 1 };
@@ -174,7 +211,8 @@ export async function importGlbUrl(url, ctx) {
     ctx.addOrUpdateObject(objectId, payload, { prebuiltGlbModel: model });
 
     // 正規化の結果をトーストで通知
-    if (normalization?.changed) {
+    // upload失敗時はすでにtoastを出しているので重複させない
+    if (normalization?.changed && uploadSucceeded) {
       ctx.showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
     } else if (normalization?.skipped) {
       ctx.showToast('このモデルはScene Syncで正しく表示できない可能性があるマテリアルを使用しています');
