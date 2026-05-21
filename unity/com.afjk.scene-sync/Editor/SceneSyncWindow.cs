@@ -73,6 +73,7 @@ namespace Afjk.SceneSync.Editor
         private bool _showQuickGuide = false;
         private bool _showManagedUnityObjects = true;
         private Vector2 _scrollPosition;
+        private bool _isSceneSwitching = false;
 
         private void OnEnable()
         {
@@ -117,12 +118,16 @@ namespace Afjk.SceneSync.Editor
 
             EditorApplication.update += EditorUpdate;
             EditorApplication.hierarchyChanged += OnHierarchyChanged;
+            EditorSceneManager.sceneClosing += OnSceneClosing;
+            EditorSceneManager.sceneOpened += OnSceneOpened;
         }
 
         private void OnDisable()
         {
             EditorApplication.update -= EditorUpdate;
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
+            EditorSceneManager.sceneClosing -= OnSceneClosing;
+            EditorSceneManager.sceneOpened -= OnSceneOpened;
             _client?.Disconnect();
         }
 
@@ -714,6 +719,12 @@ namespace Afjk.SceneSync.Editor
 
         private void OnHierarchyChanged()
         {
+            if (_isSceneSwitching)
+            {
+                Debug.Log("[SceneSync] OnHierarchyChanged: scene switching in progress, skipping");
+                return;
+            }
+
             if (!_connected) return;
             var currentIds = new HashSet<string>();
             var currentInstanceIds = new HashSet<int>();
@@ -794,6 +805,43 @@ namespace Afjk.SceneSync.Editor
                 _instanceToObjectId.Remove(key);
 
             _knownObjectIds = currentIds;
+        }
+
+        private void OnSceneClosing(Scene scene, bool removingScene)
+        {
+            Debug.Log("[SceneSync] OnSceneClosing: scene=" + scene.name + ", connected=" + _connected);
+            _isSceneSwitching = true;
+
+            if (!_connected)
+            {
+                return;
+            }
+
+            Debug.Log("[SceneSync] Lifecycle disconnect: clearing tracking state without sending scene-remove");
+            _connected = false;
+            _client?.Disconnect();
+
+            // Clear Editor Window tracking state (but do NOT call ClearTemporaryObjects)
+            _knownObjectIds.Clear();
+            _managedObjects.Clear();
+            _instanceToObjectId.Clear();
+            _meshPaths.Clear();
+            _locks.Clear();
+            _currentlyLockedObjectId = null;
+            _sceneReceived = false;
+            _firstPeersReceived = false;
+            _lastSnapshots.Clear();
+
+            Repaint();
+        }
+
+        private void OnSceneOpened(Scene scene, OpenSceneMode mode)
+        {
+            Debug.Log("[SceneSync] OnSceneOpened: scene=" + scene.name + ", mode=" + mode);
+            _isSceneSwitching = false;
+
+            // Restore _connected from _client state
+            // (The next manual Connect action will establish a fresh connection)
         }
 
         private void RebindPublishedUnityObjects()
