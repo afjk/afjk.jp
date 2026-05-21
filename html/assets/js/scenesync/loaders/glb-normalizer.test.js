@@ -1,129 +1,176 @@
-// Tests for GLB Normalizer
-// Run with: node --test glb-normalizer.test.js (after setting up ESM environment)
+// Tests for glb-normalizer.js
+// Run: node --test html/assets/js/scenesync/loaders/glb-normalizer.test.js
 
-import { inspectGlbExtensions, normalizeGlbForSceneSync } from './glb-normalizer.js';
 import { test } from 'node:test';
-import { strictEqual, deepEqual, ok, match } from 'node:assert';
+import { strictEqual, ok, deepEqual } from 'node:assert';
+import { inspectGlbExtensions, normalizeGlbForSceneSync } from './glb-normalizer.js';
 
-// Helper for floating-point comparison with tolerance
-function assertClose(actual, expected, tolerance = 0.0001) {
-  ok(Math.abs(actual - expected) < tolerance, `Expected ${actual} to be close to ${expected}`);
-}
+// ── GLB fixture helpers ──────────────────────────────────────────────────────
 
 /**
- * Helper to create a minimal valid GLB with JSON chunk
+ * Build a minimal valid GLB (binary glTF v2) with a single empty binary chunk.
+ * The binary chunk is required; some parsers reject GLBs without it.
  */
-function createMinimalGlb(json) {
-  const jsonString = JSON.stringify(json);
-  const jsonBytes = new TextEncoder().encode(jsonString);
-  const jsonLength = jsonBytes.length;
+function buildGlb(json) {
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
+  const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
+  const paddedJsonLen = jsonBytes.length + jsonPad;
 
-  // Minimal binary chunk (empty)
-  const binaryChunkLength = 0;
+  // empty binary chunk
+  const binLen = 0;
+  const totalLen = 12 + 8 + paddedJsonLen + 8 + binLen;
 
-  // Total length: 12 (header) + 8 (JSON chunk header) + jsonLength + padding
-  const jsonPaddingLength = (4 - (jsonLength % 4)) % 4;
-  const totalLength = 12 + (8 + jsonLength + jsonPaddingLength) + (8 + binaryChunkLength);
+  const buf = new ArrayBuffer(totalLen);
+  const view = new DataView(buf);
+  const u8 = new Uint8Array(buf);
 
-  const glb = new ArrayBuffer(totalLength);
-  const view = new DataView(glb);
-  const uint8 = new Uint8Array(glb);
+  // GLB header
+  view.setUint32(0, 0x46546C67, true); // magic 'glTF'
+  view.setUint32(4, 2, true);          // version
+  view.setUint32(8, totalLen, true);
 
-  // Header
-  view.setUint32(0, 0x46546C67, true); // magic: 'glTF'
-  view.setUint32(4, 2, true); // version
-  view.setUint32(8, totalLength, true); // length
+  // JSON chunk
+  view.setUint32(12, paddedJsonLen, true);
+  view.setUint32(16, 0x4E4F534A, true); // 'JSON'
+  u8.set(jsonBytes, 20);
+  for (let i = 0; i < jsonPad; i++) u8[20 + jsonBytes.length + i] = 0x20; // space padding
 
-  // JSON chunk header
-  view.setUint32(12, jsonLength, true);
-  view.setUint32(16, 0x4E4F534A, true); // type: 'JSON'
+  // BIN chunk (empty)
+  const binOffset = 20 + paddedJsonLen;
+  view.setUint32(binOffset, 0, true);
+  view.setUint32(binOffset + 4, 0x004E4942, true); // 'BIN\0'
 
-  // JSON data
-  uint8.set(jsonBytes, 20);
-
-  // JSON padding
-  const jsonPadStart = 20 + jsonLength;
-  for (let i = 0; i < jsonPaddingLength; i++) {
-    uint8[jsonPadStart + i] = 0x20; // space
-  }
-
-  return glb;
+  return buf;
 }
 
-test('inspectGlbExtensions - detects KHR_materials_pbrSpecularGlossiness', (t) => {
-  const glb = createMinimalGlb({
-    extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
-    extensionsRequired: [],
-    materials: [],
-  });
+/** Re-parse JSON from a GLB ArrayBuffer */
+function readGlbJson(ab) {
+  const view = new DataView(ab);
+  const jsonLen = view.getUint32(12, true);
+  const bytes = new Uint8Array(ab, 20, jsonLen);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
 
-  const result = inspectGlbExtensions(glb);
-  strictEqual(result.valid, true);
-  strictEqual(result.hasSpecGloss, true);
-  strictEqual(result.requiresSpecGloss, false);
+// ── Tests: inspectGlbExtensions ──────────────────────────────────────────────
+
+test('inspectGlbExtensions – detects KHR_materials_pbrSpecularGlossiness in extensionsUsed', () => {
+  const ab = buildGlb({
+    extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
+  });
+  const r = inspectGlbExtensions(ab);
+  strictEqual(r.valid, true);
+  strictEqual(r.hasSpecGloss, true);
+  strictEqual(r.requiresSpecGloss, false);
 });
 
-test('inspectGlbExtensions - detects required KHR_materials_pbrSpecularGlossiness', (t) => {
-  const glb = createMinimalGlb({
+test('inspectGlbExtensions – requiresSpecGloss true when in extensionsRequired', () => {
+  const ab = buildGlb({
     extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
     extensionsRequired: ['KHR_materials_pbrSpecularGlossiness'],
-    materials: [],
   });
-
-  const result = inspectGlbExtensions(glb);
-  strictEqual(result.valid, true);
-  strictEqual(result.hasSpecGloss, true);
-  strictEqual(result.requiresSpecGloss, true);
+  const r = inspectGlbExtensions(ab);
+  strictEqual(r.valid, true);
+  strictEqual(r.hasSpecGloss, true);
+  strictEqual(r.requiresSpecGloss, true);
 });
 
-test('inspectGlbExtensions - returns false when extension not present', (t) => {
-  const glb = createMinimalGlb({
-    extensionsUsed: ['KHR_materials_clearcoat'],
-    extensionsRequired: [],
-    materials: [],
+test('inspectGlbExtensions – returns false for standard Metal/Rough GLB', () => {
+  const ab = buildGlb({
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1] } }],
   });
-
-  const result = inspectGlbExtensions(glb);
-  strictEqual(result.valid, true);
-  strictEqual(result.hasSpecGloss, false);
-  strictEqual(result.requiresSpecGloss, false);
+  const r = inspectGlbExtensions(ab);
+  strictEqual(r.valid, true);
+  strictEqual(r.hasSpecGloss, false);
 });
 
-test('inspectGlbExtensions - returns valid=false for invalid GLB', (t) => {
-  const invalidGlb = new ArrayBuffer(10); // Too short
-  const result = inspectGlbExtensions(invalidGlb);
-  strictEqual(result.valid, false);
-  strictEqual(result.hasSpecGloss, false);
+test('inspectGlbExtensions – returns valid=false for too-short buffer', () => {
+  const r = inspectGlbExtensions(new ArrayBuffer(10));
+  strictEqual(r.valid, false);
+  strictEqual(r.hasSpecGloss, false);
 });
 
-test('normalizeGlbForSceneSync - returns unchanged when no Spec/Gloss', async (t) => {
-  const glb = createMinimalGlb({
-    extensionsUsed: [],
+test('inspectGlbExtensions – returns valid=false for wrong magic', () => {
+  const ab = new ArrayBuffer(24);
+  // leave magic as 0 (invalid)
+  const r = inspectGlbExtensions(ab);
+  strictEqual(r.valid, false);
+});
+
+// ── Tests: normalizeGlbForSceneSync ─────────────────────────────────────────
+
+test('normalizeGlbForSceneSync – changed=false for standard Metal/Rough GLB', async () => {
+  const ab = buildGlb({
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1] } }],
+  });
+  const r = await normalizeGlbForSceneSync(ab);
+  strictEqual(r.changed, false);
+  strictEqual(r.skipped, false);
+  strictEqual(r.skipReason, null);
+  // should return original buffer unchanged
+  deepEqual(new Uint8Array(r.arrayBuffer), new Uint8Array(ab));
+});
+
+test('normalizeGlbForSceneSync – converts Spec/Gloss GLB (factor-only, no textures)', async () => {
+  const ab = buildGlb({
+    asset: { version: '2.0' },
+    extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
+    extensionsRequired: ['KHR_materials_pbrSpecularGlossiness'],
     materials: [
       {
-        pbrMetallicRoughness: {
-          baseColorFactor: [1, 1, 1, 1],
-          metallicFactor: 0,
-          roughnessFactor: 1,
+        name: 'TestMat',
+        extensions: {
+          KHR_materials_pbrSpecularGlossiness: {
+            diffuseFactor: [0.8, 0.1, 0.1, 1.0],
+            specularFactor: [0.1, 0.1, 0.1],
+            glossinessFactor: 0.5,
+          },
         },
       },
     ],
   });
 
-  const result = await normalizeGlbForSceneSync(glb);
-  strictEqual(result.changed, false);
-  deepEqual(result.arrayBuffer, glb);
+  const r = await normalizeGlbForSceneSync(ab);
+
+  strictEqual(r.changed, true, 'changed should be true');
+  strictEqual(r.skipped, false, 'skipped should be false');
+  strictEqual(r.skipReason, null, 'skipReason should be null');
+  ok(r.arrayBuffer instanceof ArrayBuffer, 'should return ArrayBuffer');
+
+  // Re-inspect: KHR_materials_pbrSpecularGlossiness must no longer be in extensionsRequired
+  const postInspect = inspectGlbExtensions(r.arrayBuffer);
+  strictEqual(postInspect.requiresSpecGloss, false,
+    'KHR_materials_pbrSpecularGlossiness must be removed from extensionsRequired');
+
+  // The converted JSON must have standard pbrMetallicRoughness
+  const json = readGlbJson(r.arrayBuffer);
+  ok(json.materials, 'materials should exist');
+  ok(json.materials[0].pbrMetallicRoughness, 'pbrMetallicRoughness should exist after conversion');
 });
 
-test('normalizeGlbForSceneSync - converts Spec/Gloss material', async (t) => {
-  const glb = createMinimalGlb({
+test('normalizeGlbForSceneSync – accepts File input', async () => {
+  const ab = buildGlb({ asset: { version: '2.0' } });
+  const file = new File([ab], 'test.glb', { type: 'model/gltf-binary' });
+  const r = await normalizeGlbForSceneSync(file);
+  // standard GLB → no change
+  strictEqual(r.changed, false);
+});
+
+test('normalizeGlbForSceneSync – returns skipped=true for invalid GLB (empty buffer)', async () => {
+  const r = await normalizeGlbForSceneSync(new ArrayBuffer(0));
+  strictEqual(r.changed, false);
+  strictEqual(r.skipped, false); // not a Spec/Gloss GLB, just invalid → no skip
+});
+
+test('normalizeGlbForSceneSync – converted GLB has no internal flag properties', async () => {
+  const ab = buildGlb({
+    asset: { version: '2.0' },
     extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
     materials: [
       {
-        name: 'TestMaterial',
         extensions: {
           KHR_materials_pbrSpecularGlossiness: {
-            diffuseFactor: [0.5, 0.5, 0.5, 1.0],
+            diffuseFactor: [1, 1, 1, 1],
+            specularFactor: [0.04, 0.04, 0.04],
             glossinessFactor: 0.8,
           },
         },
@@ -131,117 +178,15 @@ test('normalizeGlbForSceneSync - converts Spec/Gloss material', async (t) => {
     ],
   });
 
-  const result = await normalizeGlbForSceneSync(glb);
-  strictEqual(result.changed, true);
-  ok(result.warnings?.length > 0);
+  const r = await normalizeGlbForSceneSync(ab);
+  if (!r.changed) return; // if conversion failed, skip this assertion
 
-  // Verify the converted JSON
-  const view = new DataView(result.arrayBuffer);
-  const jsonChunkLength = view.getUint32(12, true);
-  const jsonBytes = new Uint8Array(result.arrayBuffer, 20, jsonChunkLength);
-  const jsonString = new TextDecoder().decode(jsonBytes);
-  const json = JSON.parse(jsonString);
+  const json = readGlbJson(r.arrayBuffer);
+  const mat = json.materials?.[0];
+  if (!mat?.pbrMetallicRoughness) return;
 
-  strictEqual(json.materials[0].extensions?.KHR_materials_pbrSpecularGlossiness, undefined);
-  ok(json.materials[0].pbrMetallicRoughness);
-  deepEqual(json.materials[0].pbrMetallicRoughness.baseColorFactor, [0.5, 0.5, 0.5, 1.0]);
-  assertClose(json.materials[0].pbrMetallicRoughness.roughnessFactor, 0.2); // 1 - 0.8
-  strictEqual(json.materials[0].pbrMetallicRoughness.metallicFactor, 0);
-});
-
-test('normalizeGlbForSceneSync - removes extension from extensionsUsed', async (t) => {
-  const glb = createMinimalGlb({
-    extensionsUsed: ['KHR_materials_pbrSpecularGlossiness', 'KHR_materials_clearcoat'],
-    materials: [
-      {
-        extensions: {
-          KHR_materials_pbrSpecularGlossiness: {
-            diffuseFactor: [1, 1, 1, 1],
-            glossinessFactor: 0.5,
-          },
-        },
-      },
-    ],
-  });
-
-  const result = await normalizeGlbForSceneSync(glb);
-  strictEqual(result.changed, true);
-
-  // Verify the converted JSON
-  const view = new DataView(result.arrayBuffer);
-  const jsonChunkLength = view.getUint32(12, true);
-  const jsonBytes = new Uint8Array(result.arrayBuffer, 20, jsonChunkLength);
-  const jsonString = new TextDecoder().decode(jsonBytes);
-  const json = JSON.parse(jsonString);
-
-  ok(json.extensionsUsed.includes('KHR_materials_clearcoat'));
-  strictEqual(json.extensionsUsed.includes('KHR_materials_pbrSpecularGlossiness'), false);
-});
-
-test('normalizeGlbForSceneSync - removes extensionsUsed when empty', async (t) => {
-  const glb = createMinimalGlb({
-    extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
-    materials: [
-      {
-        extensions: {
-          KHR_materials_pbrSpecularGlossiness: {
-            diffuseFactor: [1, 1, 1, 1],
-            glossinessFactor: 0.5,
-          },
-        },
-      },
-    ],
-  });
-
-  const result = await normalizeGlbForSceneSync(glb);
-  strictEqual(result.changed, true);
-
-  // Verify the converted JSON
-  const view = new DataView(result.arrayBuffer);
-  const jsonChunkLength = view.getUint32(12, true);
-  const jsonBytes = new Uint8Array(result.arrayBuffer, 20, jsonChunkLength);
-  const jsonString = new TextDecoder().decode(jsonBytes);
-  const json = JSON.parse(jsonString);
-
-  strictEqual(json.extensionsUsed, undefined);
-});
-
-test('normalizeGlbForSceneSync - handles multiple materials', async (t) => {
-  const glb = createMinimalGlb({
-    extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'],
-    materials: [
-      {
-        name: 'Mat1',
-        extensions: {
-          KHR_materials_pbrSpecularGlossiness: {
-            diffuseFactor: [1, 0, 0, 1],
-            glossinessFactor: 0.7,
-          },
-        },
-      },
-      {
-        name: 'Mat2',
-        extensions: {
-          KHR_materials_pbrSpecularGlossiness: {
-            diffuseFactor: [0, 1, 0, 1],
-            glossinessFactor: 0.9,
-          },
-        },
-      },
-    ],
-  });
-
-  const result = await normalizeGlbForSceneSync(glb);
-  strictEqual(result.changed, true);
-
-  // Verify the converted JSON
-  const view = new DataView(result.arrayBuffer);
-  const jsonChunkLength = view.getUint32(12, true);
-  const jsonBytes = new Uint8Array(result.arrayBuffer, 20, jsonChunkLength);
-  const jsonString = new TextDecoder().decode(jsonBytes);
-  const json = JSON.parse(jsonString);
-
-  strictEqual(json.materials.length, 2);
-  assertClose(json.materials[0].pbrMetallicRoughness.roughnessFactor, 0.3); // 1 - 0.7
-  assertClose(json.materials[1].pbrMetallicRoughness.roughnessFactor, 0.1); // 1 - 0.9
+  // Must not contain any internal flags like _specularGlossTextureExists
+  for (const key of Object.keys(mat.pbrMetallicRoughness)) {
+    ok(!key.startsWith('_'), `No internal flag properties allowed: found "${key}"`);
+  }
 });

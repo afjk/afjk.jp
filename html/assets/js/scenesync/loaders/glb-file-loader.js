@@ -142,33 +142,23 @@ export class GLBFileLoader {
 
     let normalizedFile = file;
     let normalizedArrayBuffer = null;
-    let normalizationInfo = {
-      changed: false,
-      warnings: [],
-    };
+    let normalized = { changed: false, skipped: false, skipReason: null, warnings: [] };
 
     try {
-      // Normalize GLB if it uses Spec/Gloss materials
-      const normalized = await normalizeGlbForSceneSync(file);
-      normalizationInfo = {
-        changed: normalized.changed,
-        warnings: normalized.warnings || [],
-      };
+      normalized = await normalizeGlbForSceneSync(file);
 
       if (normalized.changed) {
-        // Create a new File from the converted ArrayBuffer
         normalizedFile = new File(
           [normalized.arrayBuffer],
           file.name,
-          { type: 'model/gltf-binary' }
+          { type: 'model/gltf-binary' },
         );
         normalizedArrayBuffer = normalized.arrayBuffer;
-        console.info('[glb-loader] GLB normalized for Scene Sync');
+        console.info('[glb-loader] GLB normalized (Spec/Gloss → Metal/Rough)');
       }
     } catch (error) {
-      // If normalization fails, fall back to original file
-      console.warn('[glb-loader] GLB normalization failed, using original file', error);
-      normalizationInfo.error = error.message;
+      console.warn('[glb-loader] normalizeGlbForSceneSync threw unexpectedly', error);
+      normalized = { changed: false, skipped: true, skipReason: 'unexpectedError', warnings: [error.message], error };
     }
 
     const objectURL = URL.createObjectURL(normalizedFile);
@@ -177,22 +167,16 @@ export class GLBFileLoader {
       const model = await this.loadFromUrl(objectURL, position, scene, null, asset);
       const metadata = model.userData?.scenesync?.glbMetadata;
       if (metadata) {
-        metadata.fileName = file.name; // Keep original name
+        metadata.fileName = file.name;
         metadata.fileSize = file.size;
         metadata.source = 'file';
-        metadata.normalized = normalizationInfo.changed;
-        if (normalizationInfo.changed) {
-          metadata.normalizedFrom = ['KHR_materials_pbrSpecularGlossiness'];
-        }
-        if (normalizationInfo.warnings?.length > 0) {
-          metadata.normalizationWarnings = normalizationInfo.warnings;
-        }
-        if (normalizationInfo.error) {
-          metadata.normalizationError = normalizationInfo.error;
-        }
+        metadata.normalized = normalized.changed;
+        metadata.normalizedFrom = normalized.changed ? ['KHR_materials_pbrSpecularGlossiness'] : [];
+        metadata.normalizationSkipped = normalized.skipped === true;
+        metadata.normalizationSkipReason = normalized.skipReason ?? null;
+        metadata.normalizationWarnings = normalized.warnings ?? [];
       }
 
-      // Store normalized ArrayBuffer in userData for later use
       if (normalizedArrayBuffer) {
         model.userData.normalizedGlbArrayBuffer = normalizedArrayBuffer;
       }
