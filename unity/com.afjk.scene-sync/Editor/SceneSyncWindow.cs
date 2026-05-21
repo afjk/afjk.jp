@@ -809,16 +809,14 @@ namespace Afjk.SceneSync.Editor
 
         private void OnSceneClosing(Scene scene, bool removingScene)
         {
+            Debug.Log("[SceneSync] OnSceneClosing: scene=" + scene.name + ", connected=" + _connected);
+            _isSceneSwitching = true;
+
             if (!_connected)
             {
-                Debug.Log("[SceneSync] OnSceneClosing: not connected, no action needed. scene=" + scene.name);
                 return;
             }
 
-            Debug.Log("[SceneSync] OnSceneClosing: scene switching in progress. scene=" + scene.name);
-            _isSceneSwitching = true;
-
-            // Lifecycle disconnect: do not send scene-remove messages
             Debug.Log("[SceneSync] Lifecycle disconnect: clearing tracking state without sending scene-remove");
             _connected = false;
             _client?.Disconnect();
