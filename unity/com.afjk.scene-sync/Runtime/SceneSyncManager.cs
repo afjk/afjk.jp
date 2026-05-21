@@ -133,6 +133,22 @@ namespace Afjk.SceneSync
             }
         }
 
+        private void OnEnable()
+        {
+            if (_isApplicationQuitting) return;
+
+            if (_isShuttingDown)
+            {
+                _isShuttingDown = false;
+                Debug.Log("[SceneSync] Lifecycle reconnect: recovered from disable");
+
+                if (_autoConnect)
+                {
+                    _ = Connect();
+                }
+            }
+        }
+
         private void OnDisable()
         {
             BeginLifecycleDisconnect("OnDisable");
@@ -162,6 +178,9 @@ namespace Afjk.SceneSync
 
         public async System.Threading.Tasks.Task Connect()
         {
+            if (_isApplicationQuitting) return;
+
+            _isShuttingDown = false;
             await _client.ConnectAsync(_presenceUrl, _room, _nickname);
         }
 
