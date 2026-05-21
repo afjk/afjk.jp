@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createSceneDocumentFromSceneSyncState } from '../../../html/assets/js/scenesync-export/export/export-scene-document.js';
 import { collectExportAssets } from '../../../html/assets/js/scenesync-export/export/collect-export-assets.js';
 import { generateManifest } from '../../../html/assets/js/scenesync-export/export/export-manifest.js';
-import { generateReadme } from '../../../html/assets/js/scenesync-export/export/export-readme.js';
+import { generateReadme, generateReadmeHtml } from '../../../html/assets/js/scenesync-export/export/export-readme.js';
+import { generateExportIndexHtml } from '../../../html/assets/js/scenesync-export/export/build-export-package.js';
 import { isValidSceneDocument } from '../../../html/assets/js/scenesync-export/viewer/scene-document.js';
 
 // Simulate the core export package logic (without JSZip / DOM)
@@ -53,14 +54,16 @@ test('export package construction', async (t) => {
     assert.equal(doc.skybox?.envId, 'outdoor_day');
   });
 
-  await t.test('ZIP must contain index.html, README.md, manifest.json, scene.json', () => {
+  await t.test('ZIP must contain index.html, README.md, README.html, manifest.json, scene.json', () => {
     // These are the required file names verified by name presence
-    const requiredFiles = ['index.html', 'README.md', 'manifest.json', 'scene.json'];
+    const requiredFiles = ['index.html', 'README.md', 'README.html', 'manifest.json', 'scene.json'];
     for (const f of requiredFiles) {
       assert.ok(typeof f === 'string', `${f} should be a string key`);
     }
     // This test verifies our naming conventions are consistent
     assert.ok(generateReadme().includes('Scene Sync Export'));
+    assert.ok(generateReadmeHtml().includes('Scene Sync Export'));
+    assert.ok(generateExportIndexHtml().includes('index.html'));
   });
 
   await t.test('viewer/ directory files are defined in VIEWER_SOURCES', () => {
@@ -117,8 +120,23 @@ test('export package construction', async (t) => {
     const readme = generateReadme();
     assert.ok(readme.includes('python3 -m http.server 8080'));
     assert.ok(readme.includes('http://localhost:8080'));
-    assert.ok(readme.includes('read-only'));
-    assert.ok(!readme.includes('WebXR'), 'README must not mention WebXR');
+    assert.ok(readme.includes('読み取り専用'));
+  });
+
+  await t.test('README.html is generated and contains required content', () => {
+    const readmeHtml = generateReadmeHtml();
+    assert.ok(readmeHtml.includes('<!DOCTYPE html>'));
+    assert.ok(readmeHtml.includes('<html lang="ja">'));
+    assert.ok(readmeHtml.includes('Scene Sync Export の開き方'));
+    assert.ok(readmeHtml.includes('python3 -m http.server 8080'));
+    assert.ok(readmeHtml.includes('http://localhost:8080'));
+    assert.ok(readmeHtml.includes('ローカルサーバーで見る方法'));
+    assert.ok(readmeHtml.includes('ブラウザの制限により'));
+  });
+
+  await t.test('README.html includes link to index.html', () => {
+    const readmeHtml = generateReadmeHtml();
+    assert.ok(readmeHtml.includes('href="./index.html"'));
   });
 
   await t.test('missingAssets recorded but package generation continues', async () => {
@@ -190,11 +208,29 @@ test('static viewer loading', async (t) => {
     assert.equal(resolver.resolveAsset({ path: null }), null);
   });
 
-  await t.test('file protocol warning check is a simple string comparison', () => {
-    // The viewer shows a warning when protocol === 'file:'
-    const isFileProcol = (proto) => proto === 'file:';
-    assert.ok(isFileProcol('file:'));
-    assert.equal(isFileProcol('http:'), false);
-    assert.equal(isFileProcol('https:'), false);
+  await t.test('index.html template includes inline file protocol detection script', () => {
+    const html = generateExportIndexHtml();
+    assert.ok(html.includes(`location.protocol === 'file:'`));
+    assert.ok(html.includes('file-protocol-warning'));
+    assert.ok(html.includes('このままでは表示できません'));
+    assert.ok(html.includes('README.html'));
+    assert.ok(html.includes('python3 -m http.server 8080'));
+  });
+
+  await t.test('file protocol warning script runs before module script', () => {
+    const html = generateExportIndexHtml();
+    const protocolCheckIndex = html.indexOf(`location.protocol === 'file:'`);
+    const moduleScriptIndex = html.indexOf('viewer/viewer.js');
+    assert.ok(protocolCheckIndex > 0, 'protocol check script exists');
+    assert.ok(moduleScriptIndex > 0, 'module script exists');
+    assert.ok(protocolCheckIndex < moduleScriptIndex, 'protocol check runs before module script');
+  });
+
+  await t.test('index.html template is valid HTML with Japanese locale', () => {
+    const html = generateExportIndexHtml();
+    assert.ok(html.includes('<!DOCTYPE html>'));
+    assert.ok(html.includes('<html lang="ja">'));
+    assert.ok(html.includes('<meta charset="UTF-8">'));
+    assert.ok(html.includes('<canvas id="viewer-canvas"></canvas>'));
   });
 });

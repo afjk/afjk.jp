@@ -1,7 +1,7 @@
 import { createSceneDocumentFromSceneSyncState } from './export-scene-document.js';
 import { collectExportAssets } from './collect-export-assets.js';
 import { generateManifest } from './export-manifest.js';
-import { generateReadme } from './export-readme.js';
+import { generateReadme, generateReadmeHtml } from './export-readme.js';
 
 // These viewer source files are fetched from the current origin and bundled into the ZIP
 const VIEWER_SOURCES = [
@@ -13,7 +13,7 @@ const VIEWER_SOURCES = [
 ];
 
 const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -27,6 +27,16 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
   }
   <\/script>
   <link rel="stylesheet" href="viewer/viewer.css">
+  <script>
+    if (location.protocol === 'file:') {
+      window.addEventListener('DOMContentLoaded', function () {
+        var warning = document.getElementById('file-protocol-warning');
+        var loading = document.getElementById('loading-overlay');
+        if (warning) warning.classList.remove('hidden');
+        if (loading) loading.classList.add('hidden');
+      });
+    }
+  <\/script>
 </head>
 <body>
   <canvas id="viewer-canvas"></canvas>
@@ -34,11 +44,22 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
     <div id="loading-overlay">Loading scene…</div>
     <div id="file-protocol-warning" class="hidden">
       <div>
-        <p>⚠️ This viewer requires a local web server.</p>
+        <h1 style="font-size:20px;margin-bottom:12px;">このままでは表示できません</h1>
+        <p>
+          <code>index.html</code> を直接開くと、ブラウザの制限により
+          3Dモデルやシーンファイルを読み込めないことがあります。
+        </p>
         <p style="margin-top:12px;font-size:14px;">
-          Unzip this package, open a terminal in that folder, and run:<br>
-          <code style="margin-top:8px;display:inline-block;padding:4px 10px;background:rgba(255,255,255,.15);border-radius:4px;">python3 -m http.server 8080</code><br>
-          then open <code style="padding:2px 6px;background:rgba(255,255,255,.15);border-radius:4px;">http://localhost:8080</code>
+          ZIPを展開したフォルダで、次のコマンドを実行してください。
+        </p>
+        <code style="margin-top:8px;display:inline-block;padding:4px 10px;background:rgba(255,255,255,.15);border-radius:4px;">python3 -m http.server 8080</code>
+        <p style="margin-top:12px;font-size:14px;">
+          そのあと、ブラウザで
+          <code style="padding:2px 6px;background:rgba(255,255,255,.15);border-radius:4px;">http://localhost:8080</code>
+          を開いてください。
+        </p>
+        <p style="margin-top:16px;font-size:14px;">
+          詳しくは <a href="./README.html" style="color:#8ab4ff;">README.html</a> を見てください。
         </p>
       </div>
     </div>
@@ -49,6 +70,10 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
   <script type="module" src="viewer/viewer.js"><\/script>
 </body>
 </html>`;
+
+export function generateExportIndexHtml() {
+  return INDEX_HTML_TEMPLATE;
+}
 
 async function loadJSZip() {
   if (typeof globalThis.JSZip !== 'undefined') return globalThis.JSZip;
@@ -148,6 +173,7 @@ export async function buildExportPackage({
   // 6. Add static files
   zip.file('index.html', INDEX_HTML_TEMPLATE);
   zip.file('README.md', generateReadme());
+  zip.file('README.html', generateReadmeHtml());
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
   zip.file('scene.json', JSON.stringify(updatedDoc, null, 2));
 
