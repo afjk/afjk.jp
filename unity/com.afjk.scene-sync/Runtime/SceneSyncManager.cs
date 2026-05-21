@@ -39,6 +39,9 @@ namespace Afjk.SceneSync
         private double _lastTime;
         private Material _runtimeFallbackImportMaterial;
 
+        private bool _isShuttingDown = false;
+        private bool _isApplicationQuitting = false;
+
         // Expired GLB recovery caches
         private Dictionary<string, byte[]> _assetIdCache = new Dictionary<string, byte[]>(); // assetId → glb bytes
         private Dictionary<string, byte[]> _meshPathCache = new Dictionary<string, byte[]>(); // meshPath → glb bytes
@@ -130,8 +133,30 @@ namespace Afjk.SceneSync
             }
         }
 
+        private void OnDisable()
+        {
+            BeginLifecycleDisconnect("OnDisable");
+        }
+
         private void OnDestroy()
         {
+            BeginLifecycleDisconnect("OnDestroy");
+        }
+
+        private void OnApplicationQuit()
+        {
+            _isApplicationQuitting = true;
+            BeginLifecycleDisconnect("OnApplicationQuit");
+        }
+
+        private void BeginLifecycleDisconnect(string reason)
+        {
+            if (_isShuttingDown) return;
+            _isShuttingDown = true;
+
+            Debug.Log("[SceneSync] Lifecycle disconnect: reason=" + reason);
+
+            _connected = false;
             _client?.Disconnect();
         }
 
@@ -142,6 +167,9 @@ namespace Afjk.SceneSync
 
         public void Disconnect()
         {
+            if (_isShuttingDown) return;
+
+            Debug.Log("[SceneSync] User disconnect requested");
             ClearTemporaryObjects();
             _client?.Disconnect();
         }
@@ -318,7 +346,7 @@ namespace Afjk.SceneSync
 
         public async System.Threading.Tasks.Task SyncAllMeshes()
         {
-            if (!_connected) return;
+            if (_isShuttingDown || !_connected) return;
 
             var rootObjects = GetAllSyncTargets();
 
@@ -454,7 +482,7 @@ namespace Afjk.SceneSync
 
         private void Update()
         {
-            if (!_connected) return;
+            if (_isShuttingDown || !_connected || !gameObject.activeInHierarchy) return;
 
             var currentTime = Time.realtimeSinceStartup;
             var deltaTime = currentTime - _lastTime;
@@ -470,7 +498,7 @@ namespace Afjk.SceneSync
                     selectionId = _selectedObject.GetInstanceID().ToString();
             }
 
-            if (selectionId != _currentlyLockedObjectId)
+            if (selectionId != _currentlyLockedObjectId && _connected)
             {
                 // 前の選択をアンロック
                 if (_currentlyLockedObjectId != null)
@@ -499,6 +527,7 @@ namespace Afjk.SceneSync
 
         private void SendTransformDelta()
         {
+            if (_isShuttingDown || !_connected) return;
             if (_selectedObject == null) return;
 
             // メッシュを持たない && Web 由来でもないオブジェクトは同期しない
@@ -571,7 +600,7 @@ namespace Afjk.SceneSync
 
         private void DetectHierarchyChanges()
         {
-            if (!_connected) return;
+            if (_isShuttingDown || !_connected || !gameObject.activeInHierarchy) return;
             var currentIds = new HashSet<string>();
             var currentInstanceIds = new HashSet<int>();
 
@@ -665,6 +694,8 @@ namespace Afjk.SceneSync
 
         private async System.Threading.Tasks.Task SendSceneAdd(GameObject go)
         {
+            if (_isShuttingDown || !_connected) return;
+
             var sendObjectId = go.GetInstanceID().ToString();
             Debug.Log("[SceneSync] SendSceneAdd: objectId=" + sendObjectId + ", name=" + go.name
                 + ", remoteRemoved=" + _remoteRemovedUnityObjectIds.Contains(sendObjectId)
@@ -702,6 +733,8 @@ namespace Afjk.SceneSync
                 await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
             }
 
+            if (_isShuttingDown || !_connected) return;
+
             var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
             var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
@@ -717,6 +750,8 @@ namespace Afjk.SceneSync
 
         private async System.Threading.Tasks.Task SendSceneRemove(string objectId)
         {
+            if (_isShuttingDown || !_connected) return;
+
             var payload = "{\"kind\":\"scene-remove\",\"objectId\":\"" + objectId + "\"}";
             await _client.Broadcast(payload);
             OnObjectRemoved?.Invoke(objectId);
