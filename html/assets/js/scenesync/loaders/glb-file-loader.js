@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { normalizeGlbForSceneSync } from './glb-normalizer.js';
 
 function toVector3(position) {
   if (!position) return null;
@@ -139,7 +140,28 @@ export class GLBFileLoader {
       throw new Error('必要なパラメータが不足しています');
     }
 
-    const objectURL = URL.createObjectURL(file);
+    let normalizedFile = file;
+    let normalizedArrayBuffer = null;
+    let normalized = { changed: false, skipped: false, skipReason: null, warnings: [] };
+
+    try {
+      normalized = await normalizeGlbForSceneSync(file);
+
+      if (normalized.changed) {
+        normalizedFile = new File(
+          [normalized.arrayBuffer],
+          file.name,
+          { type: 'model/gltf-binary' },
+        );
+        normalizedArrayBuffer = normalized.arrayBuffer;
+        console.info('[glb-loader] GLB normalized (Spec/Gloss → Metal/Rough)');
+      }
+    } catch (error) {
+      console.warn('[glb-loader] normalizeGlbForSceneSync threw unexpectedly', error);
+      normalized = { changed: false, skipped: true, skipReason: 'unexpectedError', warnings: [error.message], error };
+    }
+
+    const objectURL = URL.createObjectURL(normalizedFile);
 
     try {
       const model = await this.loadFromUrl(objectURL, position, scene, null, asset);
@@ -148,7 +170,17 @@ export class GLBFileLoader {
         metadata.fileName = file.name;
         metadata.fileSize = file.size;
         metadata.source = 'file';
+        metadata.normalized = normalized.changed;
+        metadata.normalizedFrom = normalized.changed ? ['KHR_materials_pbrSpecularGlossiness'] : [];
+        metadata.normalizationSkipped = normalized.skipped === true;
+        metadata.normalizationSkipReason = normalized.skipReason ?? null;
+        metadata.normalizationWarnings = normalized.warnings ?? [];
       }
+
+      if (normalizedArrayBuffer) {
+        model.userData.normalizedGlbArrayBuffer = normalizedArrayBuffer;
+      }
+
       if (onLoaded) {
         await onLoaded(model, metadata);
       }

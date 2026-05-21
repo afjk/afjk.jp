@@ -5206,7 +5206,19 @@ async function uploadGlbFromUrl(url, params = {}) {
   selectManagedObject(model);
   notifySceneStateChanged('glb-uploaded-from-url');
 
-  const arrayBuffer = await blob.arrayBuffer();
+  // 変換後 ArrayBuffer を優先（upload / broadcast / cache すべてに変換後を使う）
+  const arrayBuffer = model.userData.normalizedGlbArrayBuffer
+    ? model.userData.normalizedGlbArrayBuffer
+    : await blob.arrayBuffer();
+
+  // 正規化の結果をトーストで通知
+  const metadata = model.userData?.scenesync?.glbMetadata;
+  if (metadata?.normalized) {
+    showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
+  } else if (metadata?.normalizationSkipped) {
+    showToast('このモデルはScene Syncで正しく表示できない可能性があるマテリアルを使用しています');
+  }
+
   await uploadAndBroadcast(
     model.userData.objectId,
     file.name,
@@ -5286,6 +5298,46 @@ function createSceneUrlImportContext(options = {}) {
     GLTFLoader,
     targetKind,
     replaceSkyboxSphereFromBlob,
+    /**
+     * Spec/Gloss変換後GLBをpresence blobへアップロードしてasset cacheへも記録する。
+     * URL import時に normalization.changed === true の場合に使う。
+     * @param {ArrayBuffer} arrayBuffer - 変換後GLB
+     * @param {string} name - 表示名
+     * @returns {Promise<{ meshPath: string, assetId: string|null, size: number }>}
+     */
+    uploadGlbAsset: async (arrayBuffer, name) => {
+      const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
+      const meshPath = generateRandomPath();
+      let assetId = null;
+
+      try {
+        assetId = await computeAssetId(arrayBuffer);
+        await assetCache.putAsset({
+          assetId,
+          meshPath: null,
+          blob: uploadBlob,
+          source: 'url-normalized',
+        });
+      } catch {}
+
+      const uploadRes = await fetch(`${BLOB_BASE}/${meshPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'model/gltf-binary' },
+        body: arrayBuffer,
+      });
+
+      if (!uploadRes.ok) {
+        let errPayload = null;
+        try { errPayload = await uploadRes.json(); } catch {}
+        throw new Error(errPayload?.message || `Upload failed: ${uploadRes.status}`);
+      }
+
+      if (assetId) {
+        try { await assetCache.rememberMeshPathAlias(assetId, meshPath); } catch {}
+      }
+
+      return { meshPath, assetId, size: arrayBuffer.byteLength };
+    },
   };
 }
 
@@ -7254,7 +7306,19 @@ const dragDropManager = new DragDropManager({
     selectManagedObject(model);
     notifySelectionChanged('drag-drop-object-selected');
 
-    const arrayBuffer = await file.arrayBuffer();
+    // 正規化の結果をトーストで通知
+    const metadata = model.userData?.scenesync?.glbMetadata;
+    if (metadata?.normalized) {
+      showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
+    } else if (metadata?.normalizationSkipped) {
+      showToast('このモデルはScene Syncで正しく表示できない可能性があるマテリアルを使用しています');
+    }
+
+    // 変換後 ArrayBuffer を優先（upload / broadcast / cache すべてに変換後を使う）
+    const arrayBuffer = model.userData.normalizedGlbArrayBuffer
+      ? model.userData.normalizedGlbArrayBuffer
+      : await file.arrayBuffer();
+
     await uploadAndBroadcast(
       model.userData.objectId,
       file.name,

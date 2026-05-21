@@ -1,8 +1,11 @@
+import { normalizeGlbForSceneSync } from '../glb-normalizer.js';
+
 /**
  * GLB (binary glTF) をフェッチして GLTFLoader で読み込む。
+ * KHR_materials_pbrSpecularGlossiness を含む場合は metalRough() で変換する。
  * @param {string} url
  * @param {object} opts - { THREE, GLTFLoader, timeoutMs = 30000 }
- * @returns {Promise<{ model: THREE.Group, sizeBytes: number, contentType: string }>}
+ * @returns {Promise<{ model: THREE.Group, sizeBytes: number, contentType: string, normalization: object }>}
  */
 export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000 } = {}) {
   if (!THREE || !GLTFLoader) {
@@ -55,12 +58,26 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
     throw new Error('GLB ファイルが大きすぎます (上限 50 MB)');
   }
 
+  // KHR_materials_pbrSpecularGlossiness を検出したら metalRough() で変換
+  let normalization = { changed: false, skipped: false, skipReason: null, warnings: [] };
+  let parseBuffer = arrayBuffer;
+  try {
+    const n = await normalizeGlbForSceneSync(arrayBuffer);
+    normalization = n;
+    if (n.changed) {
+      parseBuffer = n.arrayBuffer;
+    }
+  } catch (error) {
+    console.warn('[glb-url] normalizeGlbForSceneSync threw unexpectedly', error);
+    normalization = { changed: false, skipped: true, skipReason: 'unexpectedError', warnings: [error.message] };
+  }
+
   // GLTFLoader で parse
   let gltf;
   try {
     const loader = new GLTFLoader();
     gltf = await new Promise((resolve, reject) => {
-      loader.parse(arrayBuffer, '', resolve, reject);
+      loader.parse(parseBuffer, '', resolve, reject);
     });
   } catch (err) {
     throw new Error(`GLB ファイルの解析に失敗しました: ${err?.message || '不明なエラー'}`);
@@ -77,11 +94,20 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
     animationState,
   };
 
+  // 変換後の ArrayBuffer を保持（upload/broadcast 用）
+  if (normalization.changed) {
+    gltf.scene.userData.normalizedGlbArrayBuffer = normalization.arrayBuffer;
+    gltf.scene.userData.normalization = normalization;
+  } else {
+    gltf.scene.userData.normalization = normalization;
+  }
+
   return {
     model: gltf.scene,
     animations,
     sizeBytes: arrayBuffer.byteLength,
     contentType,
+    normalization,
   };
 }
 
@@ -93,7 +119,7 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
  */
 export async function importGlbUrl(url, ctx) {
   try {
-    const { model, animations } = await loadGlbFromUrl(url, {
+    const { model, animations, normalization } = await loadGlbFromUrl(url, {
       THREE: ctx.THREE,
       GLTFLoader: ctx.GLTFLoader,
     });
@@ -128,6 +154,39 @@ export async function importGlbUrl(url, ctx) {
       });
     }
 
+    // 変換後GLBがある場合はpresence blobへuploadしてから broadcast する。
+    // これにより他クライアント・後参加者・reload・exportすべてが変換後GLBを参照できる。
+    let asset = { type: 'mesh', source: 'url', url };
+    let uploadSucceeded = false;
+
+    if (normalization?.changed && ctx.uploadGlbAsset) {
+      try {
+        const { meshPath, assetId, size } = await ctx.uploadGlbAsset(
+          normalization.arrayBuffer,
+          displayName,
+        );
+        asset = {
+          type: 'mesh',
+          source: 'carrier',
+          assetId: assetId || null,
+          meshPath,
+          size,
+          mime: 'model/gltf-binary',
+          originalName: displayName,
+        };
+        // ローカルモデルのuserDataにも記録（export / snapshot用）
+        model.userData.meshPath = meshPath;
+        model.userData.assetId = assetId;
+        model.userData.asset = { ...asset };
+        uploadSucceeded = true;
+        console.info('[glb-url] Uploaded normalized GLB to presence blob', { meshPath, assetId });
+      } catch (uploadError) {
+        // upload失敗時は元URLで共有（表示は変換済み、共有は元URL）
+        console.warn('[glb-url] Failed to upload normalized GLB, sharing original URL', uploadError);
+        ctx.showToast('変換済みGLBのアップロードに失敗しました。元URLで共有されます');
+      }
+    }
+
     const payload = {
       kind: 'scene-add',
       objectId,
@@ -135,8 +194,12 @@ export async function importGlbUrl(url, ctx) {
       position: spawnTransform.position,
       rotation: spawnTransform.rotation,
       scale: spawnTransform.scale,
-      asset: { type: 'mesh', source: 'url', url },
+      asset,
     };
+
+    if (asset.meshPath) {
+      payload.meshPath = asset.meshPath;
+    }
 
     if (animations.length > 0) {
       payload.animation = { enabled: true, clip: 0, mode: 'loop', speed: 1 };
@@ -146,6 +209,14 @@ export async function importGlbUrl(url, ctx) {
 
     // ローカルにも反映: prebuilt model を渡してロードを省略
     ctx.addOrUpdateObject(objectId, payload, { prebuiltGlbModel: model });
+
+    // 正規化の結果をトーストで通知
+    // upload失敗時はすでにtoastを出しているので重複させない
+    if (normalization?.changed && uploadSucceeded) {
+      ctx.showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
+    } else if (normalization?.skipped) {
+      ctx.showToast('このモデルはScene Syncで正しく表示できない可能性があるマテリアルを使用しています');
+    }
 
     return { objectId, payload };
   } catch (err) {
