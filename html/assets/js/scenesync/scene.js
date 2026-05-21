@@ -7314,9 +7314,9 @@ const dragDropManager = new DragDropManager({
   onLoadEnd: async ({ objectId, source }) => {
     if (!objectId) return;
     removeLoadingOverlay(objectId);
-    if (source === 'image') {
-      removeTemporaryImagePreview(objectId);
-    }
+    // Image preview cleanup is intentionally skipped here.
+    // It is handed off to loadMeshObject() via options.previewObjectId
+    // and must happen only after the final GLB object has been displayed.
   },
   onLoaded: async (model, file) => {
     managedObjects.set(model.userData.objectId, model);
