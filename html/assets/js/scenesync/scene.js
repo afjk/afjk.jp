@@ -5680,6 +5680,12 @@ function normalizeSceneAsset(asset, payload = {}) {
   return asset;
 }
 
+function cleanupPreviewForLoadedObject(options = {}) {
+  if (!options.previewObjectId) return;
+  removeTemporaryImagePreview(options.previewObjectId);
+  removeLoadingOverlay(options.previewObjectId);
+}
+
 function addOrUpdateObject(objectId, info, options = {}) {
   const existing = managedObjects.get(objectId);
   let asset = info.asset;
@@ -5767,6 +5773,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     }
     scene.add(placeholder);
     replaceManagedObject(objectId, placeholder, info);
+    cleanupPreviewForLoadedObject(options);
     return;
   }
 
@@ -5799,6 +5806,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             assetId: cachedRecord.assetId || incomingAssetId || null,
           });
           removeLoadingOverlay(objectId);
+          cleanupPreviewForLoadedObject(options);
           return;
         }
       } catch (cacheErr) {
@@ -5830,6 +5838,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
               meshPath,
               assetId: cachedBeforeRecovery.assetId || assetId || null,
             });
+            cleanupPreviewForLoadedObject(options);
             return;
           }
 
@@ -5841,6 +5850,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             assetId,
             info
           );
+          cleanupPreviewForLoadedObject(options);
 
           return;
         }
@@ -5908,6 +5918,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           }
 
           replaceManagedObject(objectId, model, info);
+          cleanupPreviewForLoadedObject(options);
 
           try {
             let assetId = incomingAssetId;
@@ -5945,6 +5956,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         } else if (!suppressSnapshotSaveOnFailure) {
           notifySceneStateChanged('mesh-load-failed');
         }
+        cleanupPreviewForLoadedObject(options);
         loadCompleted = true;
         URL.revokeObjectURL(objectUrl);
       });
@@ -5956,6 +5968,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       } else if (!suppressSnapshotSaveOnFailure) {
         notifySceneStateChanged('mesh-load-failed');
       }
+      cleanupPreviewForLoadedObject(options);
     }
   })();
 }
@@ -6831,11 +6844,11 @@ async function uploadCarrierGlb(arrayBuffer) {
 
 // Skybox管理のためのヘルパー関数
 
-function applySceneActionLocally(action) {
+function applySceneActionLocally(action, options = {}) {
   if (!action) return;
 
   if (action.kind === 'scene-add') {
-    addOrUpdateObject(action.objectId, action);
+    addOrUpdateObject(action.objectId, action, options);
     return;
   }
 
@@ -6853,7 +6866,8 @@ function applySceneActionLocally(action) {
 
   if (action.kind === 'scene-batch') {
     for (const child of action.actions || []) {
-      applySceneActionLocally(child);
+      const childOptions = child.kind === 'scene-add' ? options : {};
+      applySceneActionLocally(child, childOptions);
     }
     return;
   }
@@ -6979,7 +6993,7 @@ async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context 
   );
 
   // ローカルに適用
-  applySceneActionLocally(batchEntry.forward);
+  applySceneActionLocally(batchEntry.forward, { previewObjectId: context.tempObjectId });
 
   // リモートに同期
   broadcast(batchEntry.forward);
@@ -7022,11 +7036,14 @@ async function imageImporterCallback(file, position, context = {}) {
 
   console.debug('[image-import] start', logContext);
 
+  let previewHandedOff = false;
+
   try {
     if (isSkyTarget) {
       const result = await replaceSkyboxSphereFromBlob(file, file.name || 'skybox', {
         ...logContext,
       });
+      previewHandedOff = true;
       console.debug('[image-import] final object added', {
         ...logContext,
         objectId: result?.objectId,
@@ -7108,7 +7125,8 @@ async function imageImporterCallback(file, position, context = {}) {
     };
 
     broadcast(payload);
-    addOrUpdateObject(objectId, payload);
+    addOrUpdateObject(objectId, payload, { previewObjectId: tempObjectId });
+    previewHandedOff = true;
     console.debug('[image-import] final object added', {
       ...logContext,
       objectId,
@@ -7122,7 +7140,7 @@ async function imageImporterCallback(file, position, context = {}) {
     });
     throw error;
   } finally {
-    if (tempObjectId) {
+    if (tempObjectId && !previewHandedOff) {
       removeTemporaryImagePreview(tempObjectId);
       removeLoadingOverlay(tempObjectId);
     }
