@@ -13,6 +13,7 @@ import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-dr
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
+import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
 import { buildImageSkySphereGlb } from './loaders/image-to-sky-sphere.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
@@ -7518,15 +7519,28 @@ const mobileSkyboxImageInput = document.getElementById('mobile-skybox-image-inpu
 mobileSkyboxImageInput?.addEventListener('change', async (event) => {
   const input = event.target;
   const file = input?.files?.[0];
+  let tempObjectId = null;
 
   try {
     if (file) {
-      showToast('背景画像を準備中…');
+      tempObjectId = generateTemporaryImageObjectId();
+      const position = getDefaultImportPosition();
 
-      await imageImporterCallback(file, getDefaultImportPosition(), {
+      addLoadingOverlay(tempObjectId, 'Skybox画像を準備中…', {
+        position: position?.toArray?.(),
+      });
+
+      showTemporaryImagePreview(tempObjectId, file, position, {
+        targetKind: 'sky',
+        placementQuaternion: null,
+        placementRotation: null,
+      });
+
+      await imageImporterCallback(file, position, {
         targetKind: 'sky',
         surfaceKind: 'skybox',
         upness: 1,
+        tempObjectId,
         metadata: {
           source: 'mobile-background-sheet',
         },
@@ -7537,6 +7551,10 @@ mobileSkyboxImageInput?.addEventListener('change', async (event) => {
   } catch (error) {
     console.warn('[mobile-skybox-input] failed to set skybox:', error);
     showToast(error?.message || '背景画像の設定に失敗しました');
+    if (tempObjectId) {
+      removeTemporaryImagePreview(tempObjectId);
+      removeLoadingOverlay(tempObjectId);
+    }
   } finally {
     if (input) {
       input.value = '';
