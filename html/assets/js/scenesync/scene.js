@@ -3118,6 +3118,51 @@ async function createPastePreviewObject(clip) {
   return preview;
 }
 
+function createPrebuiltModelFromSource(source) {
+  if (!source) return null;
+
+  const cloned = source.clone(true);
+  cloned.userData = {
+    ...(cloned.userData || {}),
+  };
+
+  if (source.userData?.scenesync?.animations) {
+    cloned.userData.scenesync = {
+      ...(cloned.userData.scenesync || {}),
+      animations: source.userData.scenesync.animations,
+    };
+  }
+
+  if (source.userData?.scenesync?.animationState) {
+    cloned.userData.scenesync = {
+      ...(cloned.userData.scenesync || {}),
+      animationState: structuredClone(source.userData.scenesync.animationState),
+    };
+  }
+
+  if (source.userData?.animationState) {
+    cloned.userData.animationState = structuredClone(source.userData.animationState);
+  }
+
+  if (source.userData?.asset) {
+    cloned.userData.asset = structuredClone(source.userData.asset);
+  }
+
+  if (source.userData?.meshPath) {
+    cloned.userData.meshPath = source.userData.meshPath;
+  }
+
+  if (source.userData?.assetId) {
+    cloned.userData.assetId = source.userData.assetId;
+  }
+
+  if (source.userData?.runtime) {
+    cloned.userData.runtime = structuredClone(source.userData.runtime);
+  }
+
+  return cloned;
+}
+
 function getPointerPlacementFromEvent(event = null) {
   if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
     return null;
@@ -3245,8 +3290,11 @@ function duplicateSelectedObject() {
     metadata: newMetadata,
   };
 
+  const prebuiltModel = meshPath ? createPrebuiltModelFromSource(source) : null;
+
   addOrUpdateObject(newObjectId, payload, {
     source: 'local-copy',
+    prebuiltGlbModel: prebuiltModel,
   });
 
   presenceState.historyManager?.push(
@@ -5696,6 +5744,10 @@ function addOrUpdateObject(objectId, info, options = {}) {
           return;
         }
         if (asset.meshPath) {
+          if (options.prebuiltGlbModel) {
+            usePrebuiltMeshObject(objectId, info, options.prebuiltGlbModel, existing);
+            return;
+          }
           loadMeshObject(objectId, info, asset.meshPath, existing, options);
           return;
         }
@@ -5958,6 +6010,60 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       }
     }
   })();
+}
+
+function usePrebuiltMeshObject(objectId, info, prebuiltModel, existing) {
+  removeFailedOverlay(objectId);
+  removeRecoveringOverlay(objectId);
+  removeLoadingOverlay(objectId);
+
+  prebuiltModel.userData.objectId = objectId;
+  prebuiltModel.userData.name = info.name;
+  prebuiltModel.userData.meshPath = info.meshPath || prebuiltModel.userData.meshPath;
+  prebuiltModel.userData.asset = cloneJsonSafe(info.asset || null);
+
+  console.debug('[scene-glb-clone] Using prebuilt model for fast-path clone', {
+    objectId,
+    meshPath: prebuiltModel.userData.meshPath,
+    visualBasis: info.asset?.visualBasis,
+  });
+
+  if (existing) {
+    prebuiltModel.position.copy(existing.position);
+    prebuiltModel.quaternion.copy(existing.quaternion);
+    prebuiltModel.scale.copy(existing.scale);
+    if (transformCtrl.object === existing) transformCtrl.detach();
+    scene.remove(existing);
+  }
+
+  applySceneTransform(prebuiltModel, info);
+
+  if (info.runtime) {
+    prebuiltModel.userData.runtime = {
+      ...(prebuiltModel.userData.runtime || {}),
+      ...info.runtime,
+      startLocalTime: performance.now(),
+    };
+  }
+
+  if (info.animation) {
+    prebuiltModel.userData.animationState = {
+      ...(prebuiltModel.userData.animationState || {}),
+      ...info.animation,
+    };
+
+    prebuiltModel.userData.scenesync = {
+      ...prebuiltModel.userData.scenesync,
+      animationState: prebuiltModel.userData.animationState,
+    };
+  }
+
+  replaceManagedObject(objectId, prebuiltModel, info);
+
+  console.debug('[scene-glb-clone] Prebuilt model attached to scene', {
+    objectId,
+    hasAnimations: !!prebuiltModel.userData.scenesync?.animations,
+  });
 }
 
 function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
