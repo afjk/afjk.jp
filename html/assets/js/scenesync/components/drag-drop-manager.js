@@ -116,6 +116,7 @@ export class DragDropManager {
       urlImporter,
       wallSurfaceOffset = 0.01,
       THREE: ThreeModule,
+      getReplaceTargetForContent = null,
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -136,6 +137,7 @@ export class DragDropManager {
     this.imageImporter = imageImporter;
     this.textImporter = textImporter;
     this.urlImporter = urlImporter;
+    this.getReplaceTargetForContent = getReplaceTargetForContent;
     this.wallSurfaceOffset = wallSurfaceOffset;
     this.getPlacementTargets = getPlacementTargets;
     this.THREE = ThreeModule || (globalThis.THREE || {});
@@ -459,7 +461,6 @@ export class DragDropManager {
     }
 
     if (this.imageImporter && isSupportedImageFile(file)) {
-      const objectId = generateTemporaryImageObjectId();
       // Skybox intent takes priority for images when looking up.
       const imageSkybox =
         normalized.upness !== undefined &&
@@ -468,13 +469,27 @@ export class DragDropManager {
       const effectiveSurfaceKind = imageSkybox ? 'skybox' : surfaceKind;
       const effectiveSurfaceQuaternion = imageSkybox ? null : surfaceQuaternion;
       const effectivePlacementRotation = effectiveSurfaceQuaternion?.toArray?.() || null;
+
+      // Determine replacement target BEFORE calling onLoadStart
+      let replaceTargetObjectId = null;
+      if (effectiveTargetKind !== 'sky') {
+        replaceTargetObjectId = this.getReplaceTargetForContent?.('image', {
+          hitObjectId: normalized.hitObjectId,
+          targetKind: effectiveTargetKind,
+          source: 'file',
+          file,
+        }) || null;
+      }
+
+      const isReplacement = !!replaceTargetObjectId;
+      const objectId = isReplacement ? null : generateTemporaryImageObjectId();
       const loadInfo = {
         objectId,
         file,
         position: normalized.position,
         source: 'image',
         targetKind: effectiveTargetKind,
-        temporary: true,
+        temporary: !isReplacement,
         normal: normalized.normal,
         normalArray: normalized.normalArray,
         surfaceKind: effectiveSurfaceKind,
@@ -484,7 +499,7 @@ export class DragDropManager {
 
       const toastMessage = effectiveTargetKind === 'sky'
         ? 'Skybox画像を準備中…'
-        : '画像を準備中…';
+        : (isReplacement ? '画像を差し替え中…' : '画像を準備中…');
       this.showToast?.(toastMessage);
       console.debug('[drag-drop] image placement', {
         targetKind: effectiveTargetKind,
@@ -492,8 +507,12 @@ export class DragDropManager {
         surfaceKind: effectiveSurfaceKind,
         placementRotation: effectivePlacementRotation,
         skyboxOverride: imageSkybox,
+        isReplacement,
+        replaceTargetObjectId,
       });
-      if (this.onLoadStart) {
+
+      // Only call onLoadStart for new additions, not replacements
+      if (!isReplacement && this.onLoadStart) {
         Promise.resolve(this.onLoadStart(loadInfo)).catch((error) => {
           console.warn('[drag-drop] image onLoadStart failed:', error);
         });
@@ -511,7 +530,9 @@ export class DragDropManager {
           surfaceKind: effectiveSurfaceKind,
           placementQuaternion: effectiveSurfaceQuaternion,
           placementRotation: effectivePlacementRotation,
-          tempObjectId: objectId,
+          tempObjectId: isReplacement ? null : objectId,
+          replaceTargetObjectId,
+          isReplacement,
         });
       } catch (error) {
         console.warn('[drag-drop] image import failed:', error);
