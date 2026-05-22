@@ -6384,7 +6384,17 @@ async function showLocalImageReplacementPreview(objectId, file) {
     return null;
   }
 
-  const texture = new THREE.TextureLoader().load(objectUrl);
+  let texture;
+  try {
+    texture = await new Promise((resolve, reject) => {
+      new THREE.TextureLoader().load(objectUrl, resolve, undefined, reject);
+    });
+  } catch (error) {
+    console.warn('[image-import] failed to load replacement preview texture:', error);
+    URL.revokeObjectURL(objectUrl);
+    return null;
+  }
+
   texture.colorSpace = THREE.SRGBColorSpace;
 
   const material = new THREE.MeshBasicMaterial({
