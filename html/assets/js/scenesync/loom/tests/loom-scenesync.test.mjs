@@ -686,17 +686,22 @@ describe('LoomSceneSync - exportState / importState with bases', () => {
 
     adapter.importState(behaviorState);
 
-    // After importState, object should be at the base position (not the moved exported position)
+    // Step 1: importState resets the object position to the pre-behavior base.
     assert.strictEqual(positions.get('box-1').x, 0, 'position restored to base x');
     assert.strictEqual(positions.get('box-1').y, 0.5, 'position restored to base y');
     assert.strictEqual(positions.get('box-1').z, 0, 'position restored to base z');
 
-    // Evaluate via evaluateObjectGraphAt so _evaluationContext.time is set for serverClock
-    // Evaluate at t=0: sin(0) = 0, so offset x = 0
-    adapter.evaluateObjectGraphAt('box-1', 0, { reason: 'test' });
-    assert.strictEqual(positions.get('box-1').x, 0, 'at t=0, sin=0, x offset = 0');
+    // Step 2: _handleGraphSet (called inside importState) calls _restoreBehaviorBasesForScope,
+    // which deletes the imported bases from behaviorBases. The position is already correct, so
+    // the deletion is safe — the mechanism relies on position reset, not pre-seeded bases.
+    assert.strictEqual(adapter.behaviorBases.size, 0, 'behaviorBases cleared by _handleGraphSet after graph import');
 
-    // Evaluate at t=0.25: sin(2π*0.25) = 1
+    // Step 3: first evaluation re-captures the restored base position and applies offset from it.
+    // At t=0: sin(0) = 0, so x stays at base (0).
+    adapter.evaluateObjectGraphAt('box-1', 0, { reason: 'test' });
+    assert.strictEqual(positions.get('box-1').x, 0, 'at t=0, sin=0, x offset = 0 from restored base');
+
+    // t=0.25: sin(2π*0.25) = 1, so x = base(0) + 1 = 1 — NOT exported_pos(0.99) + 1.
     adapter.evaluateObjectGraphAt('box-1', 0.25, { reason: 'test' });
     const pos = positions.get('box-1');
     assert.ok(Math.abs(pos.x - 1) < 0.001, `at t=0.25, x should be ~1 (got ${pos.x})`);

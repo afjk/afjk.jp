@@ -4,7 +4,7 @@ import { createSceneDocumentFromSceneSyncState } from '../../../html/assets/js/s
 import { collectExportAssets } from '../../../html/assets/js/scenesync-export/export/collect-export-assets.js';
 import { generateManifest } from '../../../html/assets/js/scenesync-export/export/export-manifest.js';
 import { generateReadme, generateReadmeHtml } from '../../../html/assets/js/scenesync-export/export/export-readme.js';
-import { generateExportIndexHtml } from '../../../html/assets/js/scenesync-export/export/build-export-package.js';
+import { generateExportIndexHtml, VIEWER_SOURCES } from '../../../html/assets/js/scenesync-export/export/build-export-package.js';
 import { isValidSceneDocument } from '../../../html/assets/js/scenesync-export/viewer/scene-document.js';
 
 // Simulate the core export package logic (without JSZip / DOM)
@@ -81,17 +81,24 @@ test('export package construction', async (t) => {
     }
   });
 
-  await t.test('ZIP includes Loomlet runtime files under viewer/loom/', async () => {
-    // Verify loom runtime source paths exist on the filesystem
-    const { readFileSync } = await import('node:fs');
-    const loomJs = readFileSync(
-      new URL('../../../html/assets/js/scenesync/loom/loom.js', import.meta.url)
-    );
-    const loomSyncJs = readFileSync(
-      new URL('../../../html/assets/js/scenesync/loom/loom-scenesync.js', import.meta.url)
-    );
-    assert.ok(loomJs.length > 0, 'loom.js should be non-empty');
-    assert.ok(loomSyncJs.length > 0, 'loom-scenesync.js should be non-empty');
+  await t.test('VIEWER_SOURCES dest paths include viewer/loom/loom.js and viewer/loom/loom-scenesync.js', () => {
+    const destPaths = VIEWER_SOURCES.map(s => s.dest);
+    assert.ok(destPaths.includes('viewer/loom/loom.js'),
+      `VIEWER_SOURCES should contain viewer/loom/loom.js (got: ${destPaths.join(', ')})`);
+    assert.ok(destPaths.includes('viewer/loom/loom-scenesync.js'),
+      `VIEWER_SOURCES should contain viewer/loom/loom-scenesync.js (got: ${destPaths.join(', ')})`);
+  });
+
+  await t.test('VIEWER_SOURCES loom entries maintain relative import compatibility', () => {
+    // loom-scenesync.js imports "./loom.js" — both must be under viewer/loom/ for this to work
+    const loomEntry = VIEWER_SOURCES.find(s => s.dest === 'viewer/loom/loom.js');
+    const loomSyncEntry = VIEWER_SOURCES.find(s => s.dest === 'viewer/loom/loom-scenesync.js');
+    assert.ok(loomEntry, 'viewer/loom/loom.js entry must exist in VIEWER_SOURCES');
+    assert.ok(loomSyncEntry, 'viewer/loom/loom-scenesync.js entry must exist in VIEWER_SOURCES');
+    // Both must reside in the same directory so './loom.js' import resolves correctly
+    const loomDir = loomEntry.dest.split('/').slice(0, -1).join('/');
+    const loomSyncDir = loomSyncEntry.dest.split('/').slice(0, -1).join('/');
+    assert.equal(loomDir, loomSyncDir, 'loom.js and loom-scenesync.js must be in the same directory');
   });
 
   await t.test('scene.json includes behaviors when behaviorState provided', async () => {

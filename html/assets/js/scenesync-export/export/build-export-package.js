@@ -4,7 +4,7 @@ import { generateManifest } from './export-manifest.js';
 import { generateReadme, generateReadmeHtml } from './export-readme.js';
 
 // These viewer source files are fetched from the current origin and bundled into the ZIP
-const VIEWER_SOURCES = [
+export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/static-viewer-entry.js', dest: 'viewer/viewer.js' },
   { src: '/assets/js/scenesync-export/viewer/create-viewer-core.js', dest: 'viewer/create-viewer-core.js' },
   { src: '/assets/js/scenesync-export/viewer/static-asset-resolver.js', dest: 'viewer/static-asset-resolver.js' },

@@ -624,9 +624,10 @@ export class LoomSceneSync {
   importState(state) {
     if (!state || typeof state !== 'object') return;
 
-    // Restore behavior bases first so sceneOffsetPosition won't double-apply the offset.
-    // Each entry resets the object position to the pre-behavior base and pre-seeds behaviorBases
-    // so the first evaluation uses the correct base rather than re-capturing the moved position.
+    // Restore objects to their exported base position before graph import.
+    // _handleGraphSet() may clear these entries via _restoreBehaviorBasesForScope() while
+    // replacing graphs, but the first evaluation will re-capture the restored base position.
+    // This prevents sceneOffsetPosition from using the already-offset exported position as base.
     if (state.bases && typeof state.bases === 'object') {
       for (const [key, base] of Object.entries(state.bases)) {
         if (!base || typeof base.position !== 'object') continue;

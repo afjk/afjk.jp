@@ -212,7 +212,7 @@ export async function createViewerCore({
     dispose() {
       dracoLoader.dispose();
       bgmAudio?.pause();
-      loomAdapter?.stop();
+      loomAdapter?.dispose?.();
     },
   };
 
