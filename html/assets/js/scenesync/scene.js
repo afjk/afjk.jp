@@ -5594,13 +5594,6 @@ function setObjectAnimationClipByAiCommand(params = {}) {
 
 // ── AI Command: Media/Text Replace ───────────────────────────────────
 
-function canReplaceContent(object, inputKind) {
-  if (!object) return false;
-  const metadata = object.userData?.metadata || {};
-  const accepts = metadata.accepts || [];
-  return accepts.includes(inputKind);
-}
-
 function resolveReplaceTargetObjectId({ objectId, inputKind }) {
   if (objectId) {
     const target = managedObjects.get(objectId);
