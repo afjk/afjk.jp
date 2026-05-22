@@ -5842,13 +5842,13 @@ function addOrUpdateObject(objectId, info, options = {}) {
         break;
       case 'video':
         if (asset.url) {
-          loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle);
+          loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle, options);
           return;
         }
         break;
       case 'image':
         if (asset.url) {
-          loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle);
+          loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle, options);
           return;
         }
         break;
@@ -6110,7 +6110,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   })();
 }
 
-function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
+function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const promise = prebuilt
     ? Promise.resolve(prebuilt)
@@ -6141,19 +6141,22 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
     }
 
     replaceManagedObject(objectId, group, info);
+    cleanupPreviewForLoadedObject(options);
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
     if (!existing) {
       const failedInfo = { ...info, name: `${info.name || objectId} (動画読み込み失敗)` };
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xff4444), failedInfo);
+      cleanupPreviewForLoadedObject(options);
       return;
     }
+    cleanupPreviewForLoadedObject(options);
     notifySceneStateChanged('video-load-failed');
   });
 }
 
-function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
+function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
 
   const promise = prebuilt
@@ -6206,6 +6209,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
     }
 
     replaceManagedObject(objectId, group, info);
+    cleanupPreviewForLoadedObject(options);
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
@@ -6215,6 +6219,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
     });
     const failedInfo = { ...info, name: `${info.name || objectId} (load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
+    cleanupPreviewForLoadedObject(options);
     notifySceneStateChanged('image-load-failed');
   });
 }
