@@ -23,6 +23,11 @@ export async function importVideoUrl(url, ctx) {
       rotation: spawnTransform.rotation,
       scale: spawnTransform.scale,
       asset: { type: 'video', source: 'url', url },
+      metadata: {
+        role: 'media-panel',
+        accepts: ['image', 'video'],
+        fit: 'contain',
+      },
     };
 
     ctx.broadcastSceneAdd(payload);
