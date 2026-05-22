@@ -13,6 +13,7 @@ import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-dr
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
+import { createImageCanvasForScene } from './loaders/image-optimizer.js';
 import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
 import { buildImageSkySphereGlb } from './loaders/image-to-sky-sphere.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
@@ -222,6 +223,14 @@ const BLOB_BASE = location.hostname === 'localhost'
   ? 'http://localhost:8787/blob'
   : `${location.origin}/presence/blob`;
 const SCENE_SYNC_OPERATOR_URL = 'https://chatgpt.com/g/g-69eac2f9af04819193334b81da1b7993-scene-sync-operator';
+
+const FONT_PRESETS = {
+  'system-sans': 'system-ui, -apple-system, "Segoe UI", sans-serif',
+  'serif': 'Georgia, "Times New Roman", serif',
+  'monospace': '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+  'japanese-sans': 'system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif',
+  'japanese-serif': '"Hiragino Mincho ProN", "Yu Mincho", serif',
+};
 
 // ── XR コントローラー ──────────────────────────────────────
 // XR セッションへ入るためのモード状態
@@ -4784,6 +4793,24 @@ function handleHandoff(data) {
       if (typeof payload.name === 'string') applyObjectName(obj, payload.name);
       if (typeof payload.visible === 'boolean') applyObjectVisibility(obj, payload.visible);
       if (payload.asset) {
+        const newAssetType = payload.asset.type;
+        if (newAssetType === 'image' || newAssetType === 'video' || newAssetType === 'text') {
+          // Full re-render for content type changes (image/video/text)
+          const mergedInfo = {
+            objectId: payload.objectId,
+            name: typeof payload.name === 'string' ? payload.name : (obj.userData?.name || payload.objectId),
+            position: Array.isArray(payload.position) ? payload.position : obj.position.toArray(),
+            rotation: Array.isArray(payload.rotation) ? payload.rotation : obj.quaternion.toArray(),
+            scale: Array.isArray(payload.scale) ? payload.scale : obj.scale.toArray(),
+            asset: payload.asset,
+            metadata: payload.metadata
+              ? { ...(obj.userData?.metadata || {}), ...payload.metadata }
+              : obj.userData?.metadata,
+          };
+          addOrUpdateObject(payload.objectId, mergedInfo);
+          notifySceneStateChanged('scene-delta-content-replace');
+          break;
+        }
         applyAssetDelta(obj, payload.asset);
       }
       if (payload.animation && typeof payload.animation === 'object') {
@@ -5719,6 +5746,9 @@ function addOrUpdateObject(objectId, info, options = {}) {
           return;
         }
         break;
+      case 'text':
+        loadTextObject(objectId, info, asset, existing);
+        return;
       default:
         console.warn(`unsupported asset type: ${asset.type}`);
         replaceManagedObject(objectId, buildUnsupportedAssetObject(objectId, info), info);
@@ -5982,12 +6012,19 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null) {
 
   promise.then((bundle) => {
     removeLoadingOverlay(objectId);
-    const { group } = createVideoPlaneGroup(bundle, THREE);
+    const { group, material, texture } = createVideoPlaneGroup(bundle, THREE);
     group.userData.objectId = objectId;
     group.userData.name = info.name;
     group.userData.video = bundle.video;
     group.userData.assetType = 'video';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
+
+    group.userData.disposable = () => {
+      bundle.video?.pause?.();
+      bundle.video && (bundle.video.src = '');
+      texture.dispose();
+      material.dispose();
+    };
 
     if (existing) {
       group.position.copy(existing.position);
@@ -6074,6 +6111,209 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null) {
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
     notifySceneStateChanged('image-load-failed');
   });
+}
+
+function loadTextObject(objectId, info, asset, existing) {
+  const textPromise = (asset.source === 'url' && asset.url)
+    ? fetch(asset.url, { mode: 'cors' }).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+    : Promise.resolve(asset.text || '');
+
+  textPromise.then((text) => {
+    const fontFamily = FONT_PRESETS[asset.fontFamily] || FONT_PRESETS['system-sans'];
+    const fontSize = typeof asset.fontSize === 'number' ? asset.fontSize : 32;
+    const fontWeight = asset.fontWeight || 'normal';
+    const fontStyle = asset.fontStyle || 'normal';
+    const color = asset.color || '#ffffff';
+    const bgColor = asset.backgroundColor || 'rgba(0,0,0,0.65)';
+    const align = asset.align || 'center';
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
+    ctx.fillStyle = color;
+    ctx.textAlign = align === 'left' ? 'left' : align === 'right' ? 'right' : 'center';
+    ctx.textBaseline = 'middle';
+
+    const lines = text.split('\n');
+    const lineHeight = fontSize * 1.4;
+    const totalHeight = lines.length * lineHeight;
+    const startY = (canvas.height - totalHeight) / 2 + lineHeight / 2;
+    const x = align === 'left' ? 20 : align === 'right' ? canvas.width - 20 : canvas.width / 2;
+
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], x, startY + i * lineHeight, canvas.width - 40);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+
+    const aspect = canvas.width / canvas.height;
+    const maxEdge = 2;
+    const width = aspect >= 1 ? maxEdge : Math.max(maxEdge * aspect, 0.1);
+    const height = aspect >= 1 ? Math.max(maxEdge / aspect, 0.1) : maxEdge;
+
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = height / 2;
+
+    const group = new THREE.Group();
+    group.add(mesh);
+
+    group.userData.objectId = objectId;
+    group.userData.name = info.name;
+    group.userData.assetType = 'text';
+    if (info.asset) group.userData.asset = structuredClone(info.asset);
+
+    group.userData.disposable = () => {
+      texture.dispose();
+      geometry.dispose();
+      material.dispose();
+    };
+
+    if (existing) {
+      group.position.copy(existing.position);
+      group.quaternion.copy(existing.quaternion);
+      group.scale.copy(existing.scale);
+      if (transformCtrl.object === existing) transformCtrl.detach();
+      scene.remove(existing);
+    }
+
+    replaceManagedObject(objectId, group, info);
+  }).catch((err) => {
+    console.warn('Failed to load text object for', objectId, ':', err);
+    const failedInfo = { ...info, name: `${info.name || objectId} (text load failed)` };
+    replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0x996633), failedInfo);
+  });
+}
+
+function canReplaceContent(object, inputKind) {
+  if (!object) return false;
+
+  const assetType = object.userData?.asset?.type || object.userData?.assetType;
+  const role = object.userData?.metadata?.role;
+  const accepts = object.userData?.metadata?.accepts;
+
+  if (Array.isArray(accepts)) {
+    return accepts.includes(inputKind);
+  }
+
+  if (role === 'media-panel') {
+    return inputKind === 'image' || inputKind === 'video';
+  }
+
+  if (assetType === 'image' || assetType === 'video') {
+    return inputKind === 'image' || inputKind === 'video';
+  }
+
+  if (role === 'text-panel' || assetType === 'text') {
+    return inputKind === 'text';
+  }
+
+  return false;
+}
+
+function getReplaceTarget(inputKind, hitObjectId = null) {
+  if (hitObjectId) {
+    const hitObj = managedObjects.get(hitObjectId);
+    if (canReplaceContent(hitObj, inputKind)) return hitObj;
+  }
+
+  const selected = getSelectedObjects();
+  if (selected.length === 1 && canReplaceContent(selected[0], inputKind)) {
+    return selected[0];
+  }
+
+  return null;
+}
+
+async function replaceObjectContent(objectId, input) {
+  const existing = managedObjects.get(objectId);
+  if (!existing) return;
+
+  const existingMeta = existing.userData?.metadata || {};
+  let newAsset;
+  let metaRole, metaAccepts, metaFit;
+
+  if (input.kind === 'image' || input.kind === 'video') {
+    newAsset = {
+      type: input.kind,
+      source: input.source || 'url',
+      url: input.url,
+      ...(input.mime ? { mime: input.mime } : {}),
+      ...(input.width ? { width: input.width } : {}),
+      ...(input.height ? { height: input.height } : {}),
+      ...(input.assetId ? { assetId: input.assetId } : {}),
+    };
+    metaRole = existingMeta.role || 'media-panel';
+    metaAccepts = existingMeta.accepts || ['image', 'video'];
+    metaFit = existingMeta.fit || 'contain';
+  } else if (input.kind === 'text') {
+    const existingAsset = existing.userData?.asset || {};
+    newAsset = {
+      type: 'text',
+      source: input.source || 'inline',
+      ...(input.url ? { url: input.url } : {}),
+      ...(input.text !== undefined ? { text: input.text } : {}),
+      format: input.format || 'plain',
+      fontFamily: input.fontFamily || existingAsset.fontFamily || 'system-sans',
+      fontSize: input.fontSize || existingAsset.fontSize || 32,
+      fontWeight: input.fontWeight || existingAsset.fontWeight || 'normal',
+      fontStyle: input.fontStyle || existingAsset.fontStyle || 'normal',
+      color: input.color || existingAsset.color || '#ffffff',
+      backgroundColor: input.backgroundColor || existingAsset.backgroundColor || 'rgba(0,0,0,0.65)',
+      align: input.align || existingAsset.align || 'center',
+    };
+    metaRole = existingMeta.role || 'text-panel';
+    metaAccepts = existingMeta.accepts || ['text'];
+  } else {
+    return;
+  }
+
+  const newMetadata = {
+    ...existingMeta,
+    role: metaRole,
+    accepts: metaAccepts,
+    ...(metaFit !== undefined ? { fit: metaFit } : {}),
+  };
+
+  const deltaPayload = {
+    kind: 'scene-delta',
+    objectId,
+    asset: newAsset,
+    metadata: newMetadata,
+  };
+
+  broadcast(deltaPayload);
+
+  const mergedInfo = {
+    objectId,
+    name: existing.userData?.name || objectId,
+    position: existing.position.toArray(),
+    rotation: existing.quaternion.toArray(),
+    scale: existing.scale.toArray(),
+    asset: newAsset,
+    metadata: newMetadata,
+  };
+  addOrUpdateObject(objectId, mergedInfo);
+
+  showToast(input.kind === 'text' ? 'テキストを差し替えました' : 'メディアを差し替えました');
 }
 
 function disposeMaterial(material) {
@@ -7052,42 +7292,39 @@ async function imageImporterCallback(file, position, context = {}) {
       return result;
     }
 
-    const buildStart = performance.now();
-    let optimizationInfo = null;
-    console.debug('[image-import] build glb start', logContext);
-    const arrayBuffer = await buildPlaneGlbFromImage(file, {
-      THREE,
-      GLTFExporter,
-      maxPixel: 2048,
-      onOptimized: (info) => {
-        optimizationInfo = info;
-      },
-    });
-    console.debug('[image-import] build glb complete', {
+    // Optimize image and upload as raw blob (not GLB)
+    const optimizeStart = performance.now();
+    console.debug('[image-import] optimize start', logContext);
+    const optimized = await createImageCanvasForScene(file, { maxPixel: 2048, label: file.name });
+    console.debug('[image-import] optimize complete', {
       ...logContext,
-      ms: Math.round(performance.now() - buildStart),
-    });
-    console.debug('[image-import] optimized', {
-      ...logContext,
-      originalWidth: optimizationInfo?.originalWidth,
-      originalHeight: optimizationInfo?.originalHeight,
-      textureWidth: optimizationInfo?.textureWidth,
-      textureHeight: optimizationInfo?.textureHeight,
-      resized: optimizationInfo?.resized,
-      optimizeMs: optimizationInfo?.durationMs,
+      ms: Math.round(performance.now() - optimizeStart),
+      originalWidth: optimized.originalWidth,
+      originalHeight: optimized.originalHeight,
+      textureWidth: optimized.textureWidth,
+      textureHeight: optimized.textureHeight,
+      resized: optimized.resized,
     });
 
+    const imageBlob = await new Promise((resolve, reject) => {
+      optimized.canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error('canvas.toBlob failed'))),
+        'image/jpeg',
+        0.92,
+      );
+    });
+
+    // TODO: presence blobs have a server-side TTL; long-lived rooms may see broken image URLs.
+    // Future: cache the blob in IndexedDB and re-upload on session reconnect if the URL 404s.
     const uploadStart = performance.now();
     console.debug('[image-import] upload start', logContext);
-    const meshPath = await uploadCarrierGlb(arrayBuffer);
+    const uploaded = await uploadBlobToStore(imageBlob, 'image/jpeg', '.jpg');
     console.debug('[image-import] upload complete', {
       ...logContext,
       ms: Math.round(performance.now() - uploadStart),
-      meshPath,
+      url: uploaded.url,
     });
 
-    const objectId = `img-${meshPath.slice(0, 8)}`;
-    const displayName = `image: ${file.name}`.slice(0, 60);
     const positionArray = (position && typeof position.toArray === 'function')
       ? position.toArray()
       : [0, 1, 0];
@@ -7098,6 +7335,34 @@ async function imageImporterCallback(file, position, context = {}) {
       ? placementQuaternion.toArray()
       : [0, 0, 0, 1];
 
+    const newAsset = {
+      type: 'image',
+      source: 'blob',
+      url: uploaded.url,
+      mime: 'image/jpeg',
+      width: optimized.textureWidth,
+      height: optimized.textureHeight,
+    };
+
+    // Check for replace target
+    const replaceTarget = getReplaceTarget('image', context.hitObjectId);
+    if (replaceTarget) {
+      const targetId = replaceTarget.userData.objectId;
+      console.debug('[image-import] replacing existing object', { ...logContext, targetId });
+      await replaceObjectContent(targetId, {
+        kind: 'image',
+        source: 'blob',
+        url: uploaded.url,
+        mime: 'image/jpeg',
+        width: optimized.textureWidth,
+        height: optimized.textureHeight,
+      });
+      return { objectId: targetId };
+    }
+
+    const objectId = generateObjectId('img');
+    const displayName = `image: ${file.name}`.slice(0, 60);
+
     const payload = {
       kind: 'scene-add',
       objectId,
@@ -7105,18 +7370,20 @@ async function imageImporterCallback(file, position, context = {}) {
       position: positionArray,
       rotation,
       scale: [1, 1, 1],
-      asset: { type: 'mesh', meshPath },
+      asset: newAsset,
       metadata: {
         ...existingMetadata,
-        role: 'image-plane',
+        role: 'media-panel',
+        accepts: ['image', 'video'],
+        fit: 'contain',
         image: {
-          originalWidth: optimizationInfo?.originalWidth,
-          originalHeight: optimizationInfo?.originalHeight,
-          textureWidth: optimizationInfo?.textureWidth,
-          textureHeight: optimizationInfo?.textureHeight,
-          originalBytes: optimizationInfo?.originalBytes,
-          maxPixel: optimizationInfo?.maxPixel,
-          optimized: !!optimizationInfo?.resized,
+          originalWidth: optimized.originalWidth,
+          originalHeight: optimized.originalHeight,
+          textureWidth: optimized.textureWidth,
+          textureHeight: optimized.textureHeight,
+          originalBytes: file.size,
+          maxPixel: 2048,
+          optimized: optimized.resized,
         },
         placement: {
           surfaceKind: context.surfaceKind || 'unknown',
@@ -7156,20 +7423,7 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
   const existingMetadata = (context.metadata && typeof context.metadata === 'object')
     ? context.metadata
     : {};
-  const { arrayBuffer } = await buildTextPlaneGlb(text, {
-    THREE,
-    GLTFExporter,
-    markdown: /\.(md|markdown)$/i.test(filename),
-  });
 
-  const meshPath = await uploadCarrierGlb(arrayBuffer);
-
-  const objectId = (typeof context.objectId === 'string' && context.objectId.trim())
-    ? context.objectId.trim()
-    : `txt-${meshPath.slice(0, 8)}`;
-  const displayName = (typeof context.name === 'string' && context.name.trim())
-    ? context.name.trim().slice(0, 60)
-    : `text: ${filename}`.slice(0, 60);
   const positionArray = (position && typeof position.toArray === 'function')
     ? position.toArray()
     : [0, 1, 0];
@@ -7181,6 +7435,40 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     : readQuaternionArray(context.rotation, [0, 0, 0, 1]);
   const scale = readVector3Array(context.scale, [1, 1, 1]);
 
+  const newAsset = {
+    type: 'text',
+    source: 'inline',
+    text,
+    format: /\.(md|markdown)$/i.test(filename) ? 'markdown' : 'plain',
+    fontFamily: 'system-sans',
+    fontSize: 32,
+    fontWeight: 'normal',
+    fontStyle: 'normal',
+    color: '#ffffff',
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    align: 'center',
+  };
+
+  // Check for replace target
+  const replaceTarget = getReplaceTarget('text', context.hitObjectId);
+  if (replaceTarget) {
+    const targetId = replaceTarget.userData.objectId;
+    await replaceObjectContent(targetId, {
+      kind: 'text',
+      source: 'inline',
+      text,
+      format: newAsset.format,
+    });
+    return { objectId: targetId };
+  }
+
+  const objectId = (typeof context.objectId === 'string' && context.objectId.trim())
+    ? context.objectId.trim()
+    : generateObjectId('txt');
+  const displayName = (typeof context.name === 'string' && context.name.trim())
+    ? context.name.trim().slice(0, 60)
+    : `text: ${filename}`.slice(0, 60);
+
   const payload = {
     kind: 'scene-add',
     objectId,
@@ -7188,9 +7476,11 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     position: positionArray,
     rotation,
     scale,
-    asset: { type: 'mesh', meshPath },
+    asset: newAsset,
     metadata: {
       ...existingMetadata,
+      role: 'text-panel',
+      accepts: ['text'],
       placement: {
         surfaceKind: context.surfaceKind || 'unknown',
         normal: context.normalArray || null,
@@ -7199,8 +7489,6 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
   };
 
   broadcast(payload);
-
-  // ローカルにも反映
   addOrUpdateObject(objectId, payload);
 
   return { objectId, payload };
@@ -7234,6 +7522,27 @@ async function urlImporterCallback(url, position, context = {}) {
     isImageUrl &&
     context.upness !== undefined &&
     context.upness > SKY_DROP_UPNESS_THRESHOLD;
+
+  // Auto-replace detection (not for skybox targets)
+  if (!urlSkybox) {
+    let inputKind = null;
+    if (urlKind === URL_KIND.IMAGE) inputKind = 'image';
+    else if (urlKind === URL_KIND.VIDEO || urlKind === URL_KIND.VIDEO_HLS) inputKind = 'video';
+    else if (urlKind === URL_KIND.TEXT) inputKind = 'text';
+
+    if (inputKind) {
+      const replaceTarget = getReplaceTarget(inputKind, context.hitObjectId);
+      if (replaceTarget) {
+        await replaceObjectContent(replaceTarget.userData.objectId, {
+          kind: inputKind,
+          source: 'url',
+          url: resolved.resolvedUrl,
+        });
+        return;
+      }
+    }
+  }
+
   const effectiveTargetKind = urlSkybox ? 'sky' : (context?.targetKind || 'scene');
   const effectiveSurfaceKind = urlSkybox ? 'skybox' : (context.surfaceKind || null);
   const effectivePlacementRotation = urlSkybox ? null : (context.placementRotation || null);

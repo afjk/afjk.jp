@@ -7,6 +7,15 @@ function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
 }
 
+function findManagedObjectId(hitObject) {
+  let obj = hitObject;
+  while (obj) {
+    if (obj.userData?.objectId) return obj.userData.objectId;
+    obj = obj.parent;
+  }
+  return null;
+}
+
 function isSupportedImageFile(file) {
   if (!file) return false;
   const supportedMimes = ['image/png', 'image/jpeg', 'image/webp'];
@@ -331,12 +340,14 @@ export class DragDropManager {
 
     const debugTargetKind = hit ? 'scene-hit' : 'scene-fallback';
 
+    const hitObjectId = hit ? findManagedObjectId(hit.object) : null;
+
     this.lastDropDetection = {
       ...this.lastDropDetection,
       hit: !!hit,
       hitObject: hit?.object?.name || null,
       hitObjectType: hit?.object?.type || null,
-      hitObjectId: hit?.object?.userData?.objectId || null,
+      hitObjectId: hitObjectId || null,
       hitDistance: hit?.distance ?? null,
       upness: rayInfo.upness,
       threshold: SKY_DROP_UPNESS_THRESHOLD,
@@ -366,7 +377,7 @@ export class DragDropManager {
         hitPoint: hit.point.toArray(),
         placementPosition: (placementPosition || hit.point).toArray(),
         targetKind: 'scene',
-        hitObjectId: hit.object?.userData?.objectId || null,
+        hitObjectId: hitObjectId || null,
         clientX: event.clientX,
         clientY: event.clientY,
         upness: rayInfo.upness,

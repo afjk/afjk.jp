@@ -39,7 +39,49 @@ function buildAssetEntry(obj) {
     };
   }
 
-  // mesh / image / text → all stored as GLB via meshPath
+  if (asset.type === 'image') {
+    return {
+      type: 'image',
+      source: asset.source || 'url',
+      url: asset.url || null,
+      path: null, // filled by collect-export-assets.js
+      mime: asset.mime || 'image/jpeg',
+    };
+  }
+
+  if (asset.type === 'video') {
+    return {
+      type: 'video',
+      source: asset.source || 'url',
+      url: asset.url || null,
+      path: null, // filled by collect-export-assets.js
+      mime: asset.mime || 'video/mp4',
+    };
+  }
+
+  if (asset.type === 'text') {
+    const entry = {
+      type: 'text',
+      source: asset.source || 'inline',
+      format: asset.format || 'plain',
+      fontFamily: asset.fontFamily || 'system-sans',
+      fontSize: asset.fontSize || 32,
+      fontWeight: asset.fontWeight || 'normal',
+      fontStyle: asset.fontStyle || 'normal',
+      color: asset.color || '#ffffff',
+      backgroundColor: asset.backgroundColor || 'rgba(0,0,0,0.65)',
+      align: asset.align || 'center',
+    };
+    if (asset.source === 'inline') {
+      entry.text = asset.text || '';
+    } else {
+      entry.url = asset.url || null;
+      entry.path = null; // filled by collect-export-assets.js
+    }
+    return entry;
+  }
+
+  // mesh → GLB via meshPath
   const meshPath = obj.userData?.meshPath || asset.meshPath || null;
   const assetId = asset.assetId || obj.userData?.assetId || obj.userData?.scenesync?.assetId || null;
 

@@ -160,6 +160,9 @@ export async function importImageUrl(url, ctx) {
       asset: { type: 'image', source: 'url', url },
       metadata: {
         ...existingMetadata,
+        role: 'media-panel',
+        accepts: ['image', 'video'],
+        fit: 'contain',
         placement: {
           surfaceKind: ctx.surfaceKind || null,
           normal: ctx.normalArray || null,

@@ -1306,7 +1306,14 @@ namespace Afjk.SceneSync
             }
             else
             {
-                // メッシュなしの場合は Cube を作成
+                // Extract asset type for diagnostic logging
+                var assetTypeMatch = System.Text.RegularExpressions.Regex.Match(
+                    raw, "\"asset\"\\s*:\\s*\\{[^}]*\"type\"\\s*:\\s*\"([^\"]+)\"");
+                var assetType = assetTypeMatch.Success ? assetTypeMatch.Groups[1].Value : "unknown";
+
+                // image / video / text are browser-only assets; Unity shows a Cube placeholder
+                Debug.Log("[SceneSync] scene-add: assetType=" + assetType + " (no meshPath) → Cube placeholder for objectId=" + objectId);
+
                 var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 go.name = name;
                 ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
