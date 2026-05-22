@@ -1043,6 +1043,90 @@ server.registerTool(
   }
 )
 
+// scene_sync_replace_media
+server.registerTool(
+  'scene_sync_replace_media',
+  {
+    title: 'Replace media panel content',
+    description: 'Replace the content of a media panel with an image or video URL. If objectId is omitted, the currently selected object is used.',
+    inputSchema: z.object({
+      objectId: z.string().optional().describe('Target object ID. If omitted, the single selected object is used.'),
+      url: z.string().url().describe('Image or video URL.'),
+      mediaType: z.enum(['image', 'video']).describe('Type of the URL media.'),
+      name: z.string().optional().describe('Optional new object name.')
+    })
+  },
+  async ({ objectId, url, mediaType, name }) => {
+    try {
+      const response = await runAiCommand('replaceMediaFromUrl', {
+        objectId,
+        url,
+        mediaType,
+        name
+      }, { timeout: 30000 })
+
+      return jsonResult({
+        ...response,
+        ok: true,
+        action: 'replaceMediaFromUrl'
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_replace_text
+server.registerTool(
+  'scene_sync_replace_text',
+  {
+    title: 'Replace text panel content',
+    description: 'Replace the text content of a text panel. If objectId is omitted, the currently selected object is used.',
+    inputSchema: z.object({
+      objectId: z.string().optional().describe('Target object ID. If omitted, the single selected object is used.'),
+      text: z.string().describe('New text content.'),
+      name: z.string().optional().describe('Optional new object name.'),
+      fontFamily: z.enum(['system-sans', 'serif', 'monospace', 'japanese-sans', 'japanese-serif']).optional().describe('Optional font preset.'),
+      fontSize: z.number().optional().describe('Optional font size in pixels.'),
+      fontWeight: z.union([z.string(), z.number()]).optional().describe('Optional font weight.'),
+      fontStyle: z.enum(['normal', 'italic']).optional().describe('Optional font style.'),
+      color: z.string().optional().describe('Optional text color.'),
+      backgroundColor: z.string().optional().describe('Optional background color.'),
+      align: z.enum(['left', 'center', 'right']).optional().describe('Optional text alignment.')
+    })
+  },
+  async ({ objectId, text, name, fontFamily, fontSize, fontWeight, fontStyle, color, backgroundColor, align }) => {
+    try {
+      const response = await runAiCommand('replaceTextContent', {
+        objectId,
+        text,
+        name,
+        fontFamily,
+        fontSize,
+        fontWeight,
+        fontStyle,
+        color,
+        backgroundColor,
+        align
+      }, { timeout: 30000 })
+
+      return jsonResult({
+        ...response,
+        ok: true,
+        action: 'replaceTextContent'
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
 // Optional raw broadcast tool
 if (process.env.SCENE_SYNC_ENABLE_RAW_TOOLS === 'true') {
   server.registerTool(

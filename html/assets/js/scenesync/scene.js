@@ -5592,6 +5592,43 @@ function setObjectAnimationClipByAiCommand(params = {}) {
   };
 }
 
+// ── AI Command: Media/Text Replace ───────────────────────────────────
+
+function canReplaceContent(object, inputKind) {
+  if (!object) return false;
+  const metadata = object.userData?.metadata || {};
+  const accepts = metadata.accepts || [];
+  return accepts.includes(inputKind);
+}
+
+function resolveReplaceTargetObjectId({ objectId, inputKind }) {
+  if (objectId) {
+    const target = managedObjects.get(objectId);
+    if (!target) {
+      throw new Error(`Object not found: ${objectId}`);
+    }
+    if (!canReplaceContent(target, inputKind)) {
+      throw new Error(`Target object does not accept ${inputKind} content.`);
+    }
+    return objectId;
+  }
+
+  const selectedObjects = getSelectedObjects();
+  if (selectedObjects.length === 0) {
+    throw new Error('No target object. Select one replaceable object or provide objectId.');
+  }
+  if (selectedObjects.length > 1) {
+    throw new Error('Select exactly one replaceable object.');
+  }
+
+  const selected = selectedObjects[0];
+  if (!canReplaceContent(selected, inputKind)) {
+    throw new Error(`Selected object does not accept ${inputKind} content.`);
+  }
+
+  return selected.userData.objectId;
+}
+
 async function handleAiCommand(from, payload) {
   const requestId = payload.requestId || `req-${Date.now()}`;
 
@@ -5666,6 +5703,82 @@ async function handleAiCommand(from, payload) {
       case 'setAnimationClip':
         result = setObjectAnimationClipByAiCommand(payload.params || {});
         break;
+      case 'replaceMediaFromUrl': {
+        const params = payload.params || {};
+        const { url, mediaType, name } = params;
+
+        if (!url) {
+          result = { ok: false, error: 'url is required.' };
+          break;
+        }
+        if (!mediaType || !['image', 'video'].includes(mediaType)) {
+          result = { ok: false, error: 'mediaType must be "image" or "video".' };
+          break;
+        }
+
+        try {
+          const targetObjectId = resolveReplaceTargetObjectId({ objectId: params.objectId, inputKind: mediaType });
+          await replaceObjectContent(targetObjectId, {
+            kind: mediaType,
+            source: 'url',
+            url,
+            name,
+          });
+
+          const targetObj = managedObjects.get(targetObjectId);
+          result = {
+            ok: true,
+            action: 'replaceMediaFromUrl',
+            objectId: targetObjectId,
+            assetType: mediaType,
+            url,
+            ...(name ? { name } : {}),
+          };
+        } catch (e) {
+          result = { ok: false, error: e.message };
+        }
+        break;
+      }
+      case 'replaceTextContent': {
+        const params = payload.params || {};
+        const { text, objectId } = params;
+
+        if (text === undefined || text === null) {
+          result = { ok: false, error: 'text is required.' };
+          break;
+        }
+
+        try {
+          const targetObjectId = resolveReplaceTargetObjectId({ objectId, inputKind: 'text' });
+          await replaceObjectContent(targetObjectId, {
+            kind: 'text',
+            source: 'inline',
+            text: String(text),
+            fontFamily: params.fontFamily,
+            fontSize: params.fontSize,
+            fontWeight: params.fontWeight,
+            fontStyle: params.fontStyle,
+            color: params.color,
+            backgroundColor: params.backgroundColor,
+            align: params.align,
+            name: params.name,
+          });
+
+          const targetObj = managedObjects.get(targetObjectId);
+          const asset = targetObj?.userData?.asset || {};
+          result = {
+            ok: true,
+            action: 'replaceTextContent',
+            objectId: targetObjectId,
+            assetType: 'text',
+            textLength: String(text).length,
+            ...(params.name ? { name: params.name } : {}),
+          };
+        } catch (e) {
+          result = { ok: false, error: e.message };
+        }
+        break;
+      }
       default:
         result = { ok: false, error: `unsupported ai-command action: ${payload.action}` };
         break;

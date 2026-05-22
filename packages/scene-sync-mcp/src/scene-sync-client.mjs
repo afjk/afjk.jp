@@ -88,4 +88,12 @@ export class SceneSyncClient {
       clearTimeout(timeoutId)
     }
   }
+
+  async replaceMediaFromUrl(roomId, sessionId, params) {
+    return this.aiCommand(roomId, sessionId, 'replaceMediaFromUrl', params)
+  }
+
+  async replaceTextContent(roomId, sessionId, params) {
+    return this.aiCommand(roomId, sessionId, 'replaceTextContent', params)
+  }
 }
