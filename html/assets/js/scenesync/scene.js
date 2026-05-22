@@ -5819,9 +5819,17 @@ function normalizeSceneAsset(asset, payload = {}) {
 }
 
 function cleanupPreviewForLoadedObject(options = {}) {
-  if (!options.previewObjectId) return;
-  removeTemporaryImagePreview(options.previewObjectId);
-  removeLoadingOverlay(options.previewObjectId);
+  if (options.previewObjectId) {
+    removeTemporaryImagePreview(options.previewObjectId);
+    removeLoadingOverlay(options.previewObjectId);
+  }
+
+  if (options.localReplacementObjectId) {
+    clearLocalImageReplacementPreview(
+      options.localReplacementObjectId,
+      options.localReplacementPreviewToken || null
+    );
+  }
 }
 
 function addOrUpdateObject(objectId, info, options = {}) {
@@ -6453,7 +6461,7 @@ function isCurrentLocalImageReplacementPreview(objectId, token) {
   return pendingMediaReplacementPreviews.get(objectId)?.token === token;
 }
 
-async function replaceObjectContent(objectId, input) {
+async function replaceObjectContent(objectId, input, options = {}) {
   const existing = managedObjects.get(objectId);
   if (!existing) return;
 
@@ -6527,7 +6535,7 @@ async function replaceObjectContent(objectId, input) {
     asset: newAsset,
     metadata: newMetadata,
   };
-  addOrUpdateObject(objectId, mergedInfo);
+  addOrUpdateObject(objectId, mergedInfo, options);
 
   showToast(input.kind === 'text' ? 'テキストを差し替えました' : 'メディアを差し替えました');
 }
@@ -7499,19 +7507,24 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
       return { objectId, stale: true };
     }
 
-    await replaceObjectContent(objectId, {
-      kind: 'image',
-      source: 'blob',
-      url: uploadedUrl.url,
-      mime: 'image/jpeg',
-      width: optimized.textureWidth,
-      height: optimized.textureHeight,
-      name: file.name,
-    });
-
-    if (preview) {
-      clearLocalImageReplacementPreview(objectId, preview.token);
-    }
+    await replaceObjectContent(
+      objectId,
+      {
+        kind: 'image',
+        source: 'blob',
+        url: uploadedUrl.url,
+        mime: 'image/jpeg',
+        width: optimized.textureWidth,
+        height: optimized.textureHeight,
+        name: file.name,
+      },
+      preview
+        ? {
+            localReplacementObjectId: objectId,
+            localReplacementPreviewToken: preview.token,
+          }
+        : {}
+    );
 
     return {
       objectId,
@@ -7535,7 +7548,7 @@ async function imageImporterCallback(file, position, context = {}) {
     throw new Error('この画像は非常に大きいため処理できません');
   }
 
-  const { targetKind = 'scene', tempObjectId, replaceTargetObjectId, isReplacement } = context;
+  const { targetKind = 'scene', tempObjectId, replaceTargetObjectId } = context;
   const isSkyTarget = targetKind === 'sky';
   const existingMetadata = (context.metadata && typeof context.metadata === 'object')
     ? context.metadata
