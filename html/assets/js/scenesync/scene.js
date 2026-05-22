@@ -6399,9 +6399,15 @@ async function replaceObjectContent(objectId, input) {
     ...(metaFit !== undefined ? { fit: metaFit } : {}),
   };
 
+  const nextName =
+    typeof input.name === 'string' && input.name.trim()
+      ? input.name.trim()
+      : existing.userData?.name || objectId;
+
   const deltaPayload = {
     kind: 'scene-delta',
     objectId,
+    ...(input.name ? { name: nextName } : {}),
     asset: newAsset,
     metadata: newMetadata,
   };
@@ -6410,7 +6416,7 @@ async function replaceObjectContent(objectId, input) {
 
   const mergedInfo = {
     objectId,
-    name: existing.userData?.name || objectId,
+    name: nextName,
     position: existing.position.toArray(),
     rotation: existing.quaternion.toArray(),
     scale: existing.scale.toArray(),

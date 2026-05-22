@@ -35,11 +35,10 @@ function getSession() {
 
 // Helper to check aiCommand response for errors
 function assertAiCommandOk(response) {
-  if (response?.error) {
-    if (typeof response.error === 'object') {
-      throw response.error
-    }
-    throw new Error(response.error)
+  const nested = response?.result
+  const error = response?.error || nested?.error
+  if (response?.ok === false || nested?.ok === false || error) {
+    throw new Error(error || 'ai-command failed')
   }
 
   return response
@@ -1067,7 +1066,6 @@ server.registerTool(
 
       return jsonResult({
         ...response,
-        ok: true,
         action: 'replaceMediaFromUrl'
       })
     } catch (e) {
@@ -1115,7 +1113,6 @@ server.registerTool(
 
       return jsonResult({
         ...response,
-        ok: true,
         action: 'replaceTextContent'
       })
     } catch (e) {
