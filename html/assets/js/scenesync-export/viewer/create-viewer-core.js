@@ -149,6 +149,7 @@ export async function createViewerCore({
         const geo = new THREE.PlaneGeometry(w, h);
         const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
         const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.y = h / 2; // align origin to bottom edge, matching web runtime
 
         const group = new THREE.Group();
         group.add(mesh);
@@ -170,19 +171,31 @@ export async function createViewerCore({
 
       try {
         const video = document.createElement('video');
-        video.src = assetPath;
         video.crossOrigin = 'anonymous';
         video.loop = true;
         video.muted = true;
         video.playsInline = true;
-        video.autoplay = true;
+        video.preload = 'metadata';
+
+        // Wait for real dimensions before building geometry
+        await new Promise((resolve, reject) => {
+          video.addEventListener('loadedmetadata', resolve, { once: true });
+          video.addEventListener('error', () => reject(new Error('video load error')), { once: true });
+          video.src = assetPath;
+        });
+
+        const aspect = (video.videoWidth / video.videoHeight) || (16 / 9);
+        const maxEdge = 2;
+        const videoW = aspect >= 1 ? maxEdge : Math.max(maxEdge * aspect, 0.1);
+        const videoH = aspect >= 1 ? Math.max(maxEdge / aspect, 0.1) : maxEdge;
 
         const texture = new THREE.VideoTexture(video);
         texture.colorSpace = THREE.SRGBColorSpace;
 
-        const geo = new THREE.PlaneGeometry(2, 1.125); // default 16:9
+        const geo = new THREE.PlaneGeometry(videoW, videoH);
         const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
         const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.y = videoH / 2; // align origin to bottom edge, matching web runtime
 
         const group = new THREE.Group();
         group.add(mesh);
@@ -191,6 +204,7 @@ export async function createViewerCore({
         scene.add(group);
         objectMap.set(entry.id, group);
 
+        video.autoplay = true;
         video.play().catch(() => {});
       } catch {
         onMissingAsset?.({ id: entry.id, kind: 'video', path: assetPath });
@@ -252,6 +266,7 @@ export async function createViewerCore({
       const geo = new THREE.PlaneGeometry(2, 0.5); // 4:1 canvas aspect (1024×256)
       const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: true });
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.y = 0.5 / 2; // align origin to bottom edge, matching web runtime
 
       const group = new THREE.Group();
       group.add(mesh);
