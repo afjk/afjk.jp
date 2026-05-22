@@ -341,6 +341,57 @@ Input:
 
 Returns the last N history entries from the browser.
 
+### scene_sync_replace_media
+
+Replace the content of a media panel with an image or video URL. If `objectId` is omitted, the currently selected object is used.
+
+Input:
+```json
+{
+  "objectId": "media-panel-1",
+  "url": "https://example.com/image.png",
+  "mediaType": "image",
+  "name": "Updated Image"
+}
+```
+
+Or for video:
+```json
+{
+  "url": "https://example.com/video.mp4",
+  "mediaType": "video"
+}
+```
+
+Fields: `url` (required), `mediaType` (required, "image" or "video"), `objectId` (optional), `name` (optional).
+
+Notes:
+- Image and video media panels can be interchanged.
+- The URL must be accessible from the browser.
+- CORS headers may be required.
+
+### scene_sync_replace_text
+
+Replace the text content of a text panel. If `objectId` is omitted, the currently selected object is used.
+
+Input:
+```json
+{
+  "objectId": "text-panel-1",
+  "text": "Hello Scene Sync",
+  "fontFamily": "system-sans",
+  "fontSize": 32,
+  "color": "#ffffff",
+  "align": "center"
+}
+```
+
+Fields: `text` (required), `objectId` (optional), `name` (optional), `fontFamily` (optional, "system-sans" / "serif" / "monospace" / "japanese-sans" / "japanese-serif"), `fontSize` (optional, pixels), `fontWeight` (optional), `fontStyle` (optional, "normal" / "italic"), `color` (optional), `backgroundColor` (optional), `align` (optional, "left" / "center" / "right").
+
+Notes:
+- Unspecified text styling fields inherit from the existing asset.
+- If no existing styling exists, default values are used.
+
 ### scene_sync_set_animation_clip
 
 Switch an animated GLB object to a specific animation clip by name or index.
