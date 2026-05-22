@@ -84,5 +84,5 @@ const isDirectExecution = process.argv[1] && fileURLToPath(import.meta.url) === 
 
 if (isDirectExecution) {
   const exitCode = await runCli()
-  process.exit(exitCode)
+  process.exitCode = exitCode
 }
