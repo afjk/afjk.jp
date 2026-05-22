@@ -1302,6 +1302,10 @@ managedObjects.set('sample-cube', sampleCube);
 const selectedObjectIds = new Set();
 const selectionHelpers = new Map();
 
+// Local image replacement preview management
+// objectId → { token, objectUrl, overlayObject, cleanup }
+const pendingMediaReplacementPreviews = new Map();
+
 // objectId → lockOwnerId
 const locks = new Map();
 
@@ -5815,9 +5819,17 @@ function normalizeSceneAsset(asset, payload = {}) {
 }
 
 function cleanupPreviewForLoadedObject(options = {}) {
-  if (!options.previewObjectId) return;
-  removeTemporaryImagePreview(options.previewObjectId);
-  removeLoadingOverlay(options.previewObjectId);
+  if (options.previewObjectId) {
+    removeTemporaryImagePreview(options.previewObjectId);
+    removeLoadingOverlay(options.previewObjectId);
+  }
+
+  if (options.localReplacementObjectId) {
+    clearLocalImageReplacementPreview(
+      options.localReplacementObjectId,
+      options.localReplacementPreviewToken || null
+    );
+  }
 }
 
 function addOrUpdateObject(objectId, info, options = {}) {
@@ -6354,7 +6366,102 @@ function getReplaceTarget(inputKind, hitObjectId = null) {
   return null;
 }
 
-async function replaceObjectContent(objectId, input) {
+function findPrimaryMediaMesh(root) {
+  let found = null;
+  root.traverse((child) => {
+    if (found) return;
+    if (child.isMesh && child.geometry) {
+      found = child;
+    }
+  });
+  return found;
+}
+
+async function showLocalImageReplacementPreview(objectId, file) {
+  const target = managedObjects.get(objectId);
+  if (!target) return null;
+
+  clearLocalImageReplacementPreview(objectId);
+
+  const token = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  const objectUrl = URL.createObjectURL(file);
+
+  const baseMesh = findPrimaryMediaMesh(target);
+  if (!baseMesh) {
+    URL.revokeObjectURL(objectUrl);
+    return null;
+  }
+
+  let texture;
+  try {
+    texture = await new Promise((resolve, reject) => {
+      new THREE.TextureLoader().load(objectUrl, resolve, undefined, reject);
+    });
+  } catch (error) {
+    console.warn('[image-import] failed to load replacement preview texture:', error);
+    URL.revokeObjectURL(objectUrl);
+    return null;
+  }
+
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    side: THREE.DoubleSide,
+  });
+
+  const overlay = new THREE.Mesh(baseMesh.geometry.clone(), material);
+  overlay.position.copy(baseMesh.position);
+  overlay.rotation.copy(baseMesh.rotation);
+  overlay.scale.copy(baseMesh.scale);
+
+  overlay.position.z += 0.002;
+  overlay.renderOrder = (baseMesh.renderOrder || 0) + 1;
+
+  overlay.userData.localReplacementPreview = true;
+  overlay.userData.ignoreSceneExport = true;
+
+  baseMesh.parent.add(overlay);
+
+  const cleanup = () => {
+    if (overlay.parent) overlay.parent.remove(overlay);
+    overlay.geometry?.dispose?.();
+    overlay.material?.map?.dispose?.();
+    overlay.material?.dispose?.();
+    URL.revokeObjectURL(objectUrl);
+  };
+
+  pendingMediaReplacementPreviews.set(objectId, {
+    token,
+    objectUrl,
+    overlayObject: overlay,
+    cleanup,
+  });
+
+  return { token, objectUrl };
+}
+
+function clearLocalImageReplacementPreview(objectId, token = null) {
+  const preview = pendingMediaReplacementPreviews.get(objectId);
+  if (!preview) return;
+
+  if (token && preview.token !== token) return;
+
+  try {
+    preview.cleanup?.();
+  } catch (error) {
+    console.warn('[image-import] failed to cleanup local replacement preview:', error);
+  }
+
+  pendingMediaReplacementPreviews.delete(objectId);
+}
+
+function isCurrentLocalImageReplacementPreview(objectId, token) {
+  return pendingMediaReplacementPreviews.get(objectId)?.token === token;
+}
+
+async function replaceObjectContent(objectId, input, options = {}) {
   const existing = managedObjects.get(objectId);
   if (!existing) return;
 
@@ -6428,7 +6535,7 @@ async function replaceObjectContent(objectId, input) {
     asset: newAsset,
     metadata: newMetadata,
   };
-  addOrUpdateObject(objectId, mergedInfo);
+  addOrUpdateObject(objectId, mergedInfo, options);
 
   showToast(input.kind === 'text' ? 'テキストを差し替えました' : 'メディアを差し替えました');
 }
@@ -7374,12 +7481,74 @@ async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context 
   };
 }
 
+async function replaceImageFileOptimistically(objectId, file, context = {}) {
+  const preview = await showLocalImageReplacementPreview(objectId, file);
+
+  try {
+    // Optimize and upload
+    const optimized = await createImageCanvasForScene(file, {
+      maxPixel: 2048,
+      label: file.name,
+    });
+
+    const imageBlob = await new Promise((resolve, reject) => {
+      optimized.canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error('canvas.toBlob failed'))),
+        'image/jpeg',
+        0.92,
+      );
+    });
+
+    const uploadedUrl = await uploadBlobToStore(imageBlob, 'image/jpeg', '.jpg');
+
+    // Check if this preview is still current
+    if (preview && !isCurrentLocalImageReplacementPreview(objectId, preview.token)) {
+      console.debug('[image-import] stale image replacement ignored', { objectId });
+      return { objectId, stale: true };
+    }
+
+    await replaceObjectContent(
+      objectId,
+      {
+        kind: 'image',
+        source: 'blob',
+        url: uploadedUrl.url,
+        mime: 'image/jpeg',
+        width: optimized.textureWidth,
+        height: optimized.textureHeight,
+        name: file.name,
+      },
+      preview
+        ? {
+            localReplacementObjectId: objectId,
+            localReplacementPreviewToken: preview.token,
+          }
+        : {}
+    );
+
+    return {
+      objectId,
+      url: uploadedUrl.url,
+    };
+  } catch (error) {
+    if (preview) {
+      clearLocalImageReplacementPreview(objectId, preview.token);
+    }
+
+    const replacementError = new Error(
+      error?.message || '画像の差し替えに失敗しました'
+    );
+    replacementError.original = error;
+    throw replacementError;
+  }
+}
+
 async function imageImporterCallback(file, position, context = {}) {
   if (file.size > ABSOLUTE_IMAGE_FILE_LIMIT_BYTES) {
     throw new Error('この画像は非常に大きいため処理できません');
   }
 
-  const { targetKind = 'scene', tempObjectId } = context;
+  const { targetKind = 'scene', tempObjectId, replaceTargetObjectId } = context;
   const isSkyTarget = targetKind === 'sky';
   const existingMetadata = (context.metadata && typeof context.metadata === 'object')
     ? context.metadata
@@ -7409,7 +7578,35 @@ async function imageImporterCallback(file, position, context = {}) {
       return result;
     }
 
-    // Optimize image and upload as raw blob (not GLB)
+    // Determine replacement target early
+    const effectiveReplaceTargetId = replaceTargetObjectId || null;
+    const effectiveReplaceTarget = effectiveReplaceTargetId
+      ? managedObjects.get(effectiveReplaceTargetId)
+      : getReplaceTarget('image', context.hitObjectId || null);
+
+    if (effectiveReplaceTarget) {
+      const targetId = effectiveReplaceTarget.userData.objectId;
+      console.debug('[image-import] replacing existing object (optimistic)', { ...logContext, targetId });
+      try {
+        const result = await replaceImageFileOptimistically(targetId, file, context);
+        previewHandedOff = true;
+        console.debug('[image-import] optimistic replacement complete', {
+          ...logContext,
+          targetId,
+          result,
+        });
+        return result;
+      } catch (error) {
+        console.warn('[image-import] optimistic replacement failed', {
+          ...logContext,
+          targetId,
+          error,
+        });
+        throw error;
+      }
+    }
+
+    // Optimize image and upload as raw blob (not GLB) - for new additions
     const optimizeStart = performance.now();
     console.debug('[image-import] optimize start', logContext);
     const optimized = await createImageCanvasForScene(file, { maxPixel: 2048, label: file.name });
@@ -7460,22 +7657,6 @@ async function imageImporterCallback(file, position, context = {}) {
       width: optimized.textureWidth,
       height: optimized.textureHeight,
     };
-
-    // Check for replace target
-    const replaceTarget = getReplaceTarget('image', context.hitObjectId);
-    if (replaceTarget) {
-      const targetId = replaceTarget.userData.objectId;
-      console.debug('[image-import] replacing existing object', { ...logContext, targetId });
-      await replaceObjectContent(targetId, {
-        kind: 'image',
-        source: 'blob',
-        url: uploaded.url,
-        mime: 'image/jpeg',
-        width: optimized.textureWidth,
-        height: optimized.textureHeight,
-      });
-      return { objectId: targetId };
-    }
 
     const objectId = generateObjectId('img');
     const displayName = `image: ${file.name}`.slice(0, 60);
@@ -7711,6 +7892,12 @@ const dragDropManager = new DragDropManager({
       }
     });
     return targets;
+  },
+  getReplaceTargetForContent: (inputKind, context = {}) => {
+    if (context.targetKind === 'sky') return null;
+
+    const target = getReplaceTarget(inputKind, context.hitObjectId || null);
+    return target?.userData?.objectId || null;
   },
   onLoadStart: async ({
     objectId,
