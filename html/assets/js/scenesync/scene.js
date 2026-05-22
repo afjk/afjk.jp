@@ -9451,6 +9451,7 @@ async function triggerExport() {
   showToast('Exporting...');
 
   try {
+    const behaviorState = loomIntegration?.exportState?.() ?? null;
     const { missingAssets } = await buildExportPackage({
       managedObjects,
       bgmState: serializeSceneBgm(),
@@ -9458,6 +9459,7 @@ async function triggerExport() {
       blobBase: BLOB_BASE,
       envOrigin: location.origin,
       assetCache,
+      behaviorState,
     });
 
     if (missingAssets.length > 0) {

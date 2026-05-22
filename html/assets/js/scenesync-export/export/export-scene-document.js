@@ -81,6 +81,7 @@ export function createSceneDocumentFromSceneSyncState({
   managedObjects,
   bgmState,
   envId,
+  behaviorState = null,
 }) {
   if (!(managedObjects instanceof Map)) {
     throw new Error('managedObjects must be a Map');
@@ -118,7 +119,7 @@ export function createSceneDocumentFromSceneSyncState({
     objects.push(docObj);
   }
 
-  return {
+  const doc = {
     format: SCENE_DOCUMENT_FORMAT,
     version: SCENE_DOCUMENT_VERSION,
     units: 'meters',
@@ -126,4 +127,10 @@ export function createSceneDocumentFromSceneSyncState({
     skybox: buildSkyboxEntry(envId),
     bgm: buildBgmEntry(bgmState),
   };
+
+  if (behaviorState) {
+    doc.behaviors = JSON.parse(JSON.stringify(behaviorState));
+  }
+
+  return doc;
 }

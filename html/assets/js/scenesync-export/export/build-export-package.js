@@ -10,6 +10,9 @@ const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/static-asset-resolver.js', dest: 'viewer/static-asset-resolver.js' },
   { src: '/assets/js/scenesync-export/viewer/scene-document.js', dest: 'viewer/scene-document.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
+  // Loomlet behavior graph runtime (relative imports preserved inside viewer/loom/)
+  { src: '/assets/js/scenesync/loom/loom.js', dest: 'viewer/loom/loom.js' },
+  { src: '/assets/js/scenesync/loom/loom-scenesync.js', dest: 'viewer/loom/loom-scenesync.js' },
 ];
 
 const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
@@ -127,6 +130,7 @@ export async function buildExportPackage({
   blobBase,
   envOrigin = location.origin,
   assetCache = null,
+  behaviorState = null,
 }) {
   // 1. Build SceneDocument from current state
   let sceneDocument;
@@ -135,6 +139,7 @@ export async function buildExportPackage({
       managedObjects,
       bgmState,
       envId,
+      behaviorState,
     });
   } catch (err) {
     throw new Error(`SceneDocument generation failed: ${err.message}`);

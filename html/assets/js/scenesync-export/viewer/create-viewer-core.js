@@ -4,6 +4,8 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { isValidSceneDocument } from './scene-document.js';
 import { createStaticAssetResolver } from './static-asset-resolver.js';
+import { Loom } from './loom/loom.js';
+import { LoomSceneSync } from './loom/loom-scenesync.js';
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
 
@@ -77,6 +79,7 @@ export async function createViewerCore({
   const resolver = createStaticAssetResolver();
   const mixers = [];
   const clock = new THREE.Clock();
+  const objectMap = new Map();
 
   // Ambient + directional lights as fallback
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -124,6 +127,7 @@ export async function createViewerCore({
       applyTransform(mesh, entry);
       mesh.userData.objectId = entry.id;
       scene.add(mesh);
+      objectMap.set(entry.id, mesh);
     } else {
       const assetPath = resolver.resolveAsset(assetDef);
       if (!assetPath) {
@@ -145,6 +149,7 @@ export async function createViewerCore({
         applyTransform(wrapper, entry);
         wrapper.userData.objectId = entry.id;
         scene.add(wrapper);
+        objectMap.set(entry.id, wrapper);
 
         if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(wrapper);
@@ -174,10 +179,30 @@ export async function createViewerCore({
     }
   }
 
+  // Loomlet behavior graph runtime
+  let loomAdapter = null;
+  if (sceneDoc.behaviors) {
+    loomAdapter = new LoomSceneSync({
+      LoomClass: Loom,
+      send: () => {},
+      getServerTime: () => performance.now() / 1000,
+      getObjectRuntimeTime: (_objectId, now) => now / 1000,
+      resolveTarget: (targetId) => objectMap.get(targetId) || null,
+      isObjectBeingEdited: () => false,
+    });
+
+    loomAdapter.importState(sceneDoc.behaviors);
+    loomAdapter.start();
+  }
+
   const api = {
     update() {
       const delta = clock.getDelta();
       for (const m of mixers) m.update(delta);
+
+      if (loomAdapter) {
+        loomAdapter.tickObjectGraphs(performance.now());
+      }
     },
 
     getBgmAudio() {
@@ -187,6 +212,7 @@ export async function createViewerCore({
     dispose() {
       dracoLoader.dispose();
       bgmAudio?.pause();
+      loomAdapter?.stop();
     },
   };
 

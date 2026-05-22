@@ -606,11 +606,47 @@ export class LoomSceneSync {
       }
     }
 
+    // Export behavior bases so sceneOffsetPosition can be restored correctly on import
+    if (this.behaviorBases.size > 0) {
+      state.bases = {};
+      for (const [key, base] of this.behaviorBases) {
+        state.bases[key] = {
+          scopeKey: base.scopeKey,
+          target: base.target,
+          position: { x: base.position.x, y: base.position.y, z: base.position.z },
+        };
+      }
+    }
+
     return state;
   }
 
   importState(state) {
     if (!state || typeof state !== 'object') return;
+
+    // Restore behavior bases first so sceneOffsetPosition won't double-apply the offset.
+    // Each entry resets the object position to the pre-behavior base and pre-seeds behaviorBases
+    // so the first evaluation uses the correct base rather than re-capturing the moved position.
+    if (state.bases && typeof state.bases === 'object') {
+      for (const [key, base] of Object.entries(state.bases)) {
+        if (!base || typeof base.position !== 'object') continue;
+        const { x, y, z } = base.position;
+        if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') continue;
+
+        const obj = this.resolveTarget(base.target);
+        if (obj?.position && typeof obj.position.set === 'function') {
+          obj.position.set(x, y, z);
+          const cloned = typeof obj.position.clone === 'function'
+            ? obj.position.clone()
+            : { x, y, z };
+          this.behaviorBases.set(key, {
+            scopeKey: base.scopeKey,
+            target: base.target,
+            position: cloned,
+          });
+        }
+      }
+    }
 
     if (state.scene) {
       try {

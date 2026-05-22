@@ -81,6 +81,66 @@ test('export package construction', async (t) => {
     }
   });
 
+  await t.test('ZIP includes Loomlet runtime files under viewer/loom/', async () => {
+    // Verify loom runtime source paths exist on the filesystem
+    const { readFileSync } = await import('node:fs');
+    const loomJs = readFileSync(
+      new URL('../../../html/assets/js/scenesync/loom/loom.js', import.meta.url)
+    );
+    const loomSyncJs = readFileSync(
+      new URL('../../../html/assets/js/scenesync/loom/loom-scenesync.js', import.meta.url)
+    );
+    assert.ok(loomJs.length > 0, 'loom.js should be non-empty');
+    assert.ok(loomSyncJs.length > 0, 'loom-scenesync.js should be non-empty');
+  });
+
+  await t.test('scene.json includes behaviors when behaviorState provided', async () => {
+    const managedObjects = new Map();
+    managedObjects.set('box-1', makeMockObject('box-1', {
+      asset: { type: 'primitive', primitive: 'box', color: '#4488ff' },
+    }));
+
+    const behaviorState = {
+      scene: null,
+      objects: {
+        'box-1': {
+          nodes: [
+            { id: 't', type: 'serverClock', params: {} },
+            { id: 'set', type: 'sceneSetPosition', params: { target: 'box-1' } },
+          ],
+          edges: [{ from: 't.t', to: 'set.x' }],
+        },
+      },
+    };
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+      behaviorState,
+    });
+
+    assert.ok(isValidSceneDocument(doc), 'document with behaviors should be valid');
+    assert.ok(doc.behaviors, 'behaviors should be present in scene.json');
+    assert.ok(doc.behaviors.objects['box-1'], 'object behavior should be present');
+  });
+
+  await t.test('scene.json is still valid without behaviors (v1 compatibility)', async () => {
+    const managedObjects = new Map();
+    managedObjects.set('box-1', makeMockObject('box-1', {
+      asset: { type: 'primitive', primitive: 'box', color: '#4488ff' },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: 'outdoor_day',
+    });
+
+    assert.ok(isValidSceneDocument(doc), 'document without behaviors should still be valid');
+    assert.equal('behaviors' in doc, false, 'behaviors should not be present');
+  });
+
   await t.test('assets/ directory path format is correct', async () => {
     const buf = new ArrayBuffer(4);
     const restore = mockFetch({

@@ -1,5 +1,7 @@
 export const SCENE_DOCUMENT_FORMAT = 'scene-sync-export-scene';
-export const SCENE_DOCUMENT_VERSION = 1;
+export const SCENE_DOCUMENT_VERSION = 2;
+
+const SUPPORTED_VERSIONS = new Set([1, 2]);
 
 function isNumberArray(arr, length) {
   return Array.isArray(arr) && arr.length >= length && arr.every(v => typeof v === 'number');
@@ -18,7 +20,7 @@ function isValidObject(obj) {
 export function isValidSceneDocument(doc) {
   if (doc == null) return false;
   if (doc.format !== SCENE_DOCUMENT_FORMAT) return false;
-  if (doc.version !== SCENE_DOCUMENT_VERSION) return false;
+  if (!SUPPORTED_VERSIONS.has(doc.version)) return false;
   if (!Array.isArray(doc.objects)) return false;
   if (!doc.objects.every(isValidObject)) return false;
   return true;

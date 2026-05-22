@@ -571,3 +571,178 @@ describe('LoomSceneSync - sceneOffsetPosition', () => {
     assert.strictEqual(pos.z, -2, 'z should remain unchanged');
   });
 });
+
+describe('LoomSceneSync - exportState / importState with bases', () => {
+  function makePositionTracker(objectId, initial) {
+    const positions = new Map();
+    positions.set(objectId, { ...initial });
+
+    const resolveTarget = (targetId) => {
+      const pos = positions.get(targetId);
+      if (!pos) return null;
+      return {
+        position: {
+          get x() { return positions.get(targetId).x; },
+          get y() { return positions.get(targetId).y; },
+          get z() { return positions.get(targetId).z; },
+          set(x, y, z) { positions.set(targetId, { x, y, z }); },
+          clone() { const p = positions.get(targetId); return { x: p.x, y: p.y, z: p.z }; },
+          copy(other) { positions.set(targetId, { x: other.x, y: other.y, z: other.z }); },
+        },
+      };
+    };
+
+    return { positions, resolveTarget };
+  }
+
+  it('exportState includes bases when sceneOffsetPosition has run', () => {
+    const { positions, resolveTarget } = makePositionTracker('box-1', { x: 0, y: 0.5, z: 0 });
+
+    const adapter = new LoomSceneSync({
+      LoomClass: Loom,
+      send: () => {},
+      getServerTime: () => 0,
+      resolveTarget,
+    });
+
+    adapter.handleMessage({
+      type: 'scene-graph-set',
+      scope: { object: 'box-1' },
+      graph: {
+        nodes: [{ id: 'off', type: 'sceneOffsetPosition', params: { y: 1 } }],
+        edges: [],
+      },
+    });
+
+    // Evaluate to capture base and apply offset
+    adapter._objectGraphs.get('box-1').evaluateAt(0);
+    assert.strictEqual(positions.get('box-1').y, 1.5, 'offset applied');
+
+    const state = adapter.exportState();
+    assert.ok(state.bases, 'bases should be exported');
+    const baseEntry = Object.values(state.bases)[0];
+    assert.strictEqual(baseEntry.target, 'box-1');
+    assert.strictEqual(baseEntry.position.y, 0.5, 'base y should be original pre-behavior value');
+  });
+
+  it('exportState has no bases when no sceneOffsetPosition has run', () => {
+    const adapter = new LoomSceneSync({
+      LoomClass: Loom,
+      send: () => {},
+      getServerTime: () => 0,
+      resolveTarget: () => null,
+    });
+
+    adapter.handleMessage({
+      type: 'scene-graph-set',
+      scope: { object: 'box-1' },
+      graph: {
+        nodes: [{ id: 'set', type: 'sceneSetPosition', params: { target: 'box-1' } }],
+        edges: [],
+      },
+    });
+
+    const state = adapter.exportState();
+    assert.equal('bases' in state, false, 'bases should not be present when no offset behavior ran');
+  });
+
+  it('importState with bases restores object to base position and prevents double-apply', () => {
+    // Simulate what the viewer sees: object loaded at "moved" export position
+    const exportedPos = { x: 0.99, y: 0.5, z: 0 }; // sin(some t) ≈ 0.99
+    const { positions, resolveTarget } = makePositionTracker('box-1', { ...exportedPos });
+
+    // Build a behavior state as if exportState() was called mid-animation
+    const behaviorState = {
+      scene: null,
+      objects: {
+        'box-1': {
+          nodes: [
+            { id: 't', type: 'serverClock', params: {} },
+            { id: 'sine', type: 'sine', params: { freq: 1, amplitude: 1, phase: 0, offset: 0 } },
+            { id: 'set', type: 'sceneOffsetPosition', params: {} },
+          ],
+          edges: [
+            { from: 't.t', to: 'sine.t' },
+            { from: 'sine.out', to: 'set.x' },
+          ],
+        },
+      },
+      // Original pre-behavior base position
+      bases: {
+        'object:box-1:box-1': {
+          scopeKey: 'object:box-1',
+          target: 'box-1',
+          position: { x: 0, y: 0.5, z: 0 },
+        },
+      },
+    };
+
+    const adapter = new LoomSceneSync({
+      LoomClass: Loom,
+      send: () => {},
+      getServerTime: () => 0,
+      resolveTarget,
+    });
+
+    adapter.importState(behaviorState);
+
+    // After importState, object should be at the base position (not the moved exported position)
+    assert.strictEqual(positions.get('box-1').x, 0, 'position restored to base x');
+    assert.strictEqual(positions.get('box-1').y, 0.5, 'position restored to base y');
+    assert.strictEqual(positions.get('box-1').z, 0, 'position restored to base z');
+
+    // Evaluate via evaluateObjectGraphAt so _evaluationContext.time is set for serverClock
+    // Evaluate at t=0: sin(0) = 0, so offset x = 0
+    adapter.evaluateObjectGraphAt('box-1', 0, { reason: 'test' });
+    assert.strictEqual(positions.get('box-1').x, 0, 'at t=0, sin=0, x offset = 0');
+
+    // Evaluate at t=0.25: sin(2π*0.25) = 1
+    adapter.evaluateObjectGraphAt('box-1', 0.25, { reason: 'test' });
+    const pos = positions.get('box-1');
+    assert.ok(Math.abs(pos.x - 1) < 0.001, `at t=0.25, x should be ~1 (got ${pos.x})`);
+    assert.strictEqual(pos.y, 0.5, 'y unchanged by x-axis offset behavior');
+  });
+
+  it('importState without bases does not crash', () => {
+    const adapter = new LoomSceneSync({
+      LoomClass: Loom,
+      send: () => {},
+      getServerTime: () => 0,
+      resolveTarget: () => null,
+    });
+
+    assert.doesNotThrow(() => {
+      adapter.importState({
+        scene: null,
+        objects: {},
+      });
+    });
+  });
+
+  it('importState with sceneSetPosition (no offset) works without bases', () => {
+    const { positions, resolveTarget } = makePositionTracker('box-1', { x: 0, y: 0, z: 0 });
+
+    const adapter = new LoomSceneSync({
+      LoomClass: Loom,
+      send: () => {},
+      getServerTime: () => 0,
+      resolveTarget,
+    });
+
+    adapter.importState({
+      scene: null,
+      objects: {
+        'box-1': {
+          nodes: [
+            { id: 'cx', type: 'constant', params: { value: 5 } },
+            { id: 'set', type: 'sceneSetPosition', params: {} },
+          ],
+          edges: [{ from: 'cx.out', to: 'set.x' }],
+        },
+      },
+    });
+
+    adapter._objectGraphs.get('box-1').evaluateAt(0);
+    assert.strictEqual(positions.get('box-1').x, 5, 'sceneSetPosition sets x to 5');
+  });
+});

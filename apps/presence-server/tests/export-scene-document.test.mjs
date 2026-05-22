@@ -352,11 +352,119 @@ test('isValidSceneDocument validation', async (t) => {
     }), false);
   });
 
-  await t.test('rejects wrong version', () => {
+  await t.test('rejects unsupported version', () => {
     assert.equal(isValidSceneDocument({
       format: 'scene-sync-export-scene',
-      version: 2,
+      version: 3,
       objects: [],
     }), false);
+  });
+
+  await t.test('accepts v1 document (backward compatibility)', () => {
+    assert.ok(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 1,
+      units: 'meters',
+      objects: [],
+    }));
+  });
+
+  await t.test('accepts v2 document', () => {
+    assert.ok(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 2,
+      units: 'meters',
+      objects: [],
+    }));
+  });
+
+  await t.test('accepts v2 document with behaviors', () => {
+    assert.ok(isValidSceneDocument({
+      format: 'scene-sync-export-scene',
+      version: 2,
+      units: 'meters',
+      objects: [],
+      behaviors: {
+        scene: null,
+        objects: {},
+      },
+    }));
+  });
+});
+
+test('createSceneDocumentFromSceneSyncState with behaviorState', async (t) => {
+  await t.test('includes behaviors when behaviorState is provided', () => {
+    const managedObjects = new Map();
+    managedObjects.set('box-1', makeMockObject('box-1', {
+      asset: { type: 'primitive', primitive: 'box', color: '#ff0000' },
+    }));
+
+    const behaviorState = {
+      scene: null,
+      objects: {
+        'box-1': {
+          nodes: [{ id: 'c', type: 'constant', params: { value: 1 } }],
+          edges: [],
+        },
+      },
+    };
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+      behaviorState,
+    });
+
+    assert.ok(doc.behaviors, 'behaviors should be present');
+    assert.ok(doc.behaviors.objects['box-1'], 'object graph should be in behaviors');
+    assert.equal(doc.version, SCENE_DOCUMENT_VERSION);
+  });
+
+  await t.test('omits behaviors when behaviorState is null', () => {
+    const managedObjects = new Map();
+    managedObjects.set('box-1', makeMockObject('box-1', {
+      asset: { type: 'primitive', primitive: 'box', color: '#ff0000' },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+      behaviorState: null,
+    });
+
+    assert.equal('behaviors' in doc, false, 'behaviors should not be present when null');
+  });
+
+  await t.test('omits behaviors when behaviorState is omitted', () => {
+    const managedObjects = new Map();
+    managedObjects.set('box-1', makeMockObject('box-1', {
+      asset: { type: 'primitive', primitive: 'box', color: '#ff0000' },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    assert.equal('behaviors' in doc, false, 'behaviors should not be present when omitted');
+  });
+
+  await t.test('behaviors is a deep clone of behaviorState', () => {
+    const managedObjects = new Map();
+
+    const behaviorState = { scene: null, objects: { 'box-1': { nodes: [], edges: [] } } };
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+      behaviorState,
+    });
+
+    behaviorState.objects['box-1'].nodes.push({ id: 'mutated' });
+    assert.equal(doc.behaviors.objects['box-1'].nodes.length, 0, 'behaviors should be a deep clone');
   });
 });
