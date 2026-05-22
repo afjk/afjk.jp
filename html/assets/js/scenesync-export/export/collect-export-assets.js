@@ -89,11 +89,77 @@ export async function collectExportAssets({
     return path;
   }
 
-  // Collect mesh assets
+  function videoExtFor(mime) {
+    if (!mime) return 'mp4';
+    if (mime.includes('webm')) return 'webm';
+    if (mime.includes('ogg')) return 'ogv';
+    return 'mp4';
+  }
+
+  // Collect mesh / image / video / text assets
   const updatedObjects = [];
   for (const obj of sceneDocument.objects) {
     if (!obj.asset || obj.asset.type === 'primitive') {
       updatedObjects.push(obj);
+      continue;
+    }
+
+    if (obj.asset.type === 'image') {
+      const imageUrl = obj.asset.url;
+      if (!imageUrl) { updatedObjects.push(obj); continue; }
+
+      const ext = extensionFor(obj.asset.mime || 'image/jpeg', 'jpg');
+      const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
+      const buffer = await tryFetch(imageUrl);
+      if (buffer) {
+        files[zipPath] = buffer;
+        assetManifest.push({ id: obj.id, kind: 'image', path: zipPath, status: 'included' });
+        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: zipPath } });
+      } else {
+        missingAssets.push({ id: obj.id, kind: 'image', url: imageUrl, reason: 'fetch-failed' });
+        updatedObjects.push(obj); // keep url as fallback for static-asset-resolver
+      }
+      continue;
+    }
+
+    if (obj.asset.type === 'video') {
+      const videoUrl = obj.asset.url;
+      if (!videoUrl) { updatedObjects.push(obj); continue; }
+
+      const ext = videoExtFor(obj.asset.mime);
+      const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
+      const buffer = await tryFetch(videoUrl);
+      if (buffer) {
+        files[zipPath] = buffer;
+        assetManifest.push({ id: obj.id, kind: 'video', path: zipPath, status: 'included' });
+        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: zipPath } });
+      } else {
+        // Videos often have CORS restrictions; keep url so static viewer can stream
+        missingAssets.push({ id: obj.id, kind: 'video', url: videoUrl, reason: 'fetch-failed' });
+        updatedObjects.push(obj);
+      }
+      continue;
+    }
+
+    if (obj.asset.type === 'text') {
+      if (obj.asset.source === 'inline') {
+        // Text is embedded in scene.json — no file needed
+        updatedObjects.push(obj);
+        continue;
+      }
+      const textUrl = obj.asset.url;
+      if (!textUrl) { updatedObjects.push(obj); continue; }
+
+      const zipPath = uniquePath(sanitizeFilename(obj.id), 'txt');
+      const buffer = await tryFetch(textUrl);
+      if (buffer) {
+        files[zipPath] = buffer;
+        assetManifest.push({ id: obj.id, kind: 'text', path: zipPath, status: 'included' });
+        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: zipPath } });
+      } else {
+        missingAssets.push({ id: obj.id, kind: 'text', url: textUrl, reason: 'fetch-failed' });
+        updatedObjects.push(obj);
+      }
       continue;
     }
 

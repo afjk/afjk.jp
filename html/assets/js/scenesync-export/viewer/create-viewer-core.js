@@ -128,6 +128,137 @@ export async function createViewerCore({
       mesh.userData.objectId = entry.id;
       scene.add(mesh);
       objectMap.set(entry.id, mesh);
+    } else if (assetDef.type === 'image') {
+      const assetPath = resolver.resolveAsset(assetDef);
+      if (!assetPath) {
+        onMissingAsset?.({ id: entry.id, kind: 'image', reason: 'no path or url' });
+        loaded++;
+        onProgress?.(loaded / total);
+        continue;
+      }
+
+      try {
+        const texture = await new THREE.TextureLoader().loadAsync(assetPath);
+        texture.colorSpace = THREE.SRGBColorSpace;
+
+        const aspect = (texture.image.width / texture.image.height) || 1;
+        const maxEdge = 2;
+        const w = aspect >= 1 ? maxEdge : Math.max(maxEdge * aspect, 0.1);
+        const h = aspect >= 1 ? Math.max(maxEdge / aspect, 0.1) : maxEdge;
+
+        const geo = new THREE.PlaneGeometry(w, h);
+        const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(geo, mat);
+
+        const group = new THREE.Group();
+        group.add(mesh);
+        applyTransform(group, entry);
+        group.userData.objectId = entry.id;
+        scene.add(group);
+        objectMap.set(entry.id, group);
+      } catch {
+        onMissingAsset?.({ id: entry.id, kind: 'image', path: assetPath });
+      }
+    } else if (assetDef.type === 'video') {
+      const assetPath = resolver.resolveAsset(assetDef);
+      if (!assetPath) {
+        onMissingAsset?.({ id: entry.id, kind: 'video', reason: 'no path or url' });
+        loaded++;
+        onProgress?.(loaded / total);
+        continue;
+      }
+
+      try {
+        const video = document.createElement('video');
+        video.src = assetPath;
+        video.crossOrigin = 'anonymous';
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.autoplay = true;
+
+        const texture = new THREE.VideoTexture(video);
+        texture.colorSpace = THREE.SRGBColorSpace;
+
+        const geo = new THREE.PlaneGeometry(2, 1.125); // default 16:9
+        const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(geo, mat);
+
+        const group = new THREE.Group();
+        group.add(mesh);
+        applyTransform(group, entry);
+        group.userData.objectId = entry.id;
+        scene.add(group);
+        objectMap.set(entry.id, group);
+
+        video.play().catch(() => {});
+      } catch {
+        onMissingAsset?.({ id: entry.id, kind: 'video', path: assetPath });
+      }
+    } else if (assetDef.type === 'text') {
+      const FONT_PRESETS = {
+        'system-sans':    'system-ui, -apple-system, "Segoe UI", sans-serif',
+        'serif':          'Georgia, "Times New Roman", serif',
+        'monospace':      '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+        'japanese-sans':  'system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif',
+        'japanese-serif': '"Hiragino Mincho ProN", "Yu Mincho", serif',
+      };
+
+      let text = '';
+      if (assetDef.source === 'inline') {
+        text = assetDef.text || '';
+      } else {
+        const assetPath = resolver.resolveAsset(assetDef);
+        if (assetPath) {
+          try {
+            const res = await fetch(assetPath);
+            if (res.ok) text = await res.text();
+          } catch {}
+        }
+      }
+
+      const fontSize = assetDef.fontSize || 32;
+      const fontFamily = FONT_PRESETS[assetDef.fontFamily] || FONT_PRESETS['system-sans'];
+      const fontWeight = assetDef.fontWeight || 'normal';
+      const fontStyle = assetDef.fontStyle || 'normal';
+      const color = assetDef.color || '#ffffff';
+      const bgColor = assetDef.backgroundColor || 'rgba(0,0,0,0.65)';
+      const align = assetDef.align || 'center';
+
+      const cw = 1024, ch = 256;
+      const canvas = document.createElement('canvas');
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx2d = canvas.getContext('2d');
+
+      ctx2d.clearRect(0, 0, cw, ch);
+      ctx2d.fillStyle = bgColor;
+      ctx2d.fillRect(0, 0, cw, ch);
+
+      ctx2d.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
+      ctx2d.fillStyle = color;
+      ctx2d.textAlign = align === 'left' ? 'left' : align === 'right' ? 'right' : 'center';
+      ctx2d.textBaseline = 'middle';
+
+      const lines = text.split('\n');
+      const lineHeight = fontSize * 1.2;
+      const startY = (ch - lines.length * lineHeight) / 2 + lineHeight / 2;
+      const x = align === 'left' ? 20 : align === 'right' ? cw - 20 : cw / 2;
+      for (let i = 0; i < lines.length; i++) {
+        ctx2d.fillText(lines[i], x, startY + i * lineHeight);
+      }
+
+      const texture = new THREE.CanvasTexture(canvas);
+      const geo = new THREE.PlaneGeometry(2, 0.5); // 4:1 canvas aspect (1024×256)
+      const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: true });
+      const mesh = new THREE.Mesh(geo, mat);
+
+      const group = new THREE.Group();
+      group.add(mesh);
+      applyTransform(group, entry);
+      group.userData.objectId = entry.id;
+      scene.add(group);
+      objectMap.set(entry.id, group);
     } else {
       const assetPath = resolver.resolveAsset(assetDef);
       if (!assetPath) {

@@ -7314,6 +7314,8 @@ async function imageImporterCallback(file, position, context = {}) {
       );
     });
 
+    // TODO: presence blobs have a server-side TTL; long-lived rooms may see broken image URLs.
+    // Future: cache the blob in IndexedDB and re-upload on session reconnect if the URL 404s.
     const uploadStart = performance.now();
     console.debug('[image-import] upload start', logContext);
     const uploaded = await uploadBlobToStore(imageBlob, 'image/jpeg', '.jpg');
