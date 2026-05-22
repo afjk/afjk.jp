@@ -606,11 +606,48 @@ export class LoomSceneSync {
       }
     }
 
+    // Export behavior bases so sceneOffsetPosition can be restored correctly on import
+    if (this.behaviorBases.size > 0) {
+      state.bases = {};
+      for (const [key, base] of this.behaviorBases) {
+        state.bases[key] = {
+          scopeKey: base.scopeKey,
+          target: base.target,
+          position: { x: base.position.x, y: base.position.y, z: base.position.z },
+        };
+      }
+    }
+
     return state;
   }
 
   importState(state) {
     if (!state || typeof state !== 'object') return;
+
+    // Restore objects to their exported base position before graph import.
+    // _handleGraphSet() may clear these entries via _restoreBehaviorBasesForScope() while
+    // replacing graphs, but the first evaluation will re-capture the restored base position.
+    // This prevents sceneOffsetPosition from using the already-offset exported position as base.
+    if (state.bases && typeof state.bases === 'object') {
+      for (const [key, base] of Object.entries(state.bases)) {
+        if (!base || typeof base.position !== 'object') continue;
+        const { x, y, z } = base.position;
+        if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') continue;
+
+        const obj = this.resolveTarget(base.target);
+        if (obj?.position && typeof obj.position.set === 'function') {
+          obj.position.set(x, y, z);
+          const cloned = typeof obj.position.clone === 'function'
+            ? obj.position.clone()
+            : { x, y, z };
+          this.behaviorBases.set(key, {
+            scopeKey: base.scopeKey,
+            target: base.target,
+            position: cloned,
+          });
+        }
+      }
+    }
 
     if (state.scene) {
       try {
