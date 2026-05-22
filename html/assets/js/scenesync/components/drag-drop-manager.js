@@ -497,10 +497,15 @@ export class DragDropManager {
         placementQuaternion: effectiveSurfaceQuaternion,
       };
 
-      const toastMessage = effectiveTargetKind === 'sky'
-        ? 'Skybox画像を準備中…'
-        : (isReplacement ? '画像を差し替え中…' : '画像を準備中…');
-      this.showToast?.(toastMessage);
+      // Only show toast for new additions and skybox
+      // (replacements show local preview immediately, so toast is unnecessary)
+      const shouldShowToast = effectiveTargetKind === 'sky' || !isReplacement;
+      if (shouldShowToast) {
+        const toastMessage = effectiveTargetKind === 'sky'
+          ? 'Skybox画像を準備中…'
+          : '画像を準備中…';
+        this.showToast?.(toastMessage);
+      }
       console.debug('[drag-drop] image placement', {
         targetKind: effectiveTargetKind,
         normal: normalized.normalArray,

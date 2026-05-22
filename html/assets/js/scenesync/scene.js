@@ -7522,7 +7522,11 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
       clearLocalImageReplacementPreview(objectId, preview.token);
     }
 
-    throw error;
+    const replacementError = new Error(
+      error?.message || '画像の差し替えに失敗しました'
+    );
+    replacementError.original = error;
+    throw replacementError;
   }
 }
 
