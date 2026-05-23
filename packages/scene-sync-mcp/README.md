@@ -5,6 +5,7 @@ An MCP server for controlling [afjk.jp](https://afjk.jp) Scene Sync from Claude 
 Scene Sync is a real-time 3D scene synchronization system. This MCP server lets AI models:
 - Redeem pairing codes to link to a user's Scene Sync room
 - Add and manipulate 3D objects (boxes, spheres, primitives, and image/video/text/GLB assets from URL)
+- Replace existing media/text panels with new content (with Undo/Redo support)
 - Inspect camera pose
 - Access browser operation history (undo/redo)
 - Focus the camera on objects
