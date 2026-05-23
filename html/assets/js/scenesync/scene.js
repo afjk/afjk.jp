@@ -1293,7 +1293,7 @@ const sampleCube = new THREE.Mesh(sampleGeo, sampleMat);
 sampleCube.position.set(0, 0.5, 0);
 sampleCube.userData.objectId = 'sample-cube';
 sampleCube.userData.name = 'Sample Cube';
-const color = sampleMat.color?.getStyle?.() ?? '#4488ff';
+const color = `#${sampleMat.color.getHexString()}`;
 sampleCube.userData.asset = {
   type: 'primitive',
   primitive: 'box',
