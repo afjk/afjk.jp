@@ -1301,6 +1301,7 @@ const managedObjects = new Map();
 managedObjects.set('sample-cube', sampleCube);
 const selectedObjectIds = new Set();
 const selectionHelpers = new Map();
+const removedObjectIds = new Set();
 
 // Local image replacement preview management
 // objectId → { token, objectUrl, overlayObject, cleanup }
@@ -3548,6 +3549,7 @@ function deleteObjectById(objectId, options = {}) {
     }
   });
   managedObjects.delete(objectId);
+  removedObjectIds.add(objectId);
   selectedObjectIds.delete(objectId);
   removeSelectionHelper(objectId);
 
@@ -5858,6 +5860,7 @@ function cleanupPreviewForLoadedObject(options = {}) {
 }
 
 function addOrUpdateObject(objectId, info, options = {}) {
+  removedObjectIds.delete(objectId);
   const existing = managedObjects.get(objectId);
   let asset = info.asset;
   asset = normalizeSceneAsset(asset, info);
@@ -6091,6 +6094,11 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             scene.remove(existing);
           }
 
+          if (removedObjectIds.has(objectId)) {
+            cleanupPreviewForLoadedObject(options);
+            return;
+          }
+
           replaceManagedObject(objectId, model, info);
           cleanupPreviewForLoadedObject(options);
 
@@ -6125,6 +6133,12 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       }, info.asset).catch((err) => {
         removeLoadingOverlay(objectId);
         console.warn('Failed to load mesh for', objectId, ':', err);
+        if (removedObjectIds.has(objectId)) {
+          cleanupPreviewForLoadedObject(options);
+          loadCompleted = true;
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
         if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
         } else if (!suppressSnapshotSaveOnFailure) {
@@ -6137,6 +6151,10 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     } catch (err) {
       removeLoadingOverlay(objectId);
       console.warn('Failed to fetch mesh for', objectId, ':', err);
+      if (removedObjectIds.has(objectId)) {
+        cleanupPreviewForLoadedObject(options);
+        return;
+      }
       if (!existing && !skipFallbackOnFailure) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
       } else if (!suppressSnapshotSaveOnFailure) {
@@ -6177,11 +6195,21 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
       scene.remove(existing);
     }
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      return;
+    }
+
     replaceManagedObject(objectId, group, info);
     cleanupPreviewForLoadedObject(options);
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
+    if (removedObjectIds.has(objectId)) {
+      cleanupPreviewForLoadedObject(options);
+      return;
+    }
     if (!existing) {
       const failedInfo = { ...info, name: `${info.name || objectId} (動画読み込み失敗)` };
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xff4444), failedInfo);
@@ -6245,11 +6273,21 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
       scene.remove(existing);
     }
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      return;
+    }
+
     replaceManagedObject(objectId, group, info);
     cleanupPreviewForLoadedObject(options);
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
+    if (removedObjectIds.has(objectId)) {
+      cleanupPreviewForLoadedObject(options);
+      return;
+    }
     showToast({
       type: 'error',
       message: `画像の読み込みに失敗しました: ${err?.message || 'CORS エラーの可能性'}`,
@@ -6343,9 +6381,17 @@ function loadTextObject(objectId, info, asset, existing) {
       scene.remove(existing);
     }
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      return;
+    }
+
     replaceManagedObject(objectId, group, info);
   }).catch((err) => {
     console.warn('Failed to load text object for', objectId, ':', err);
+    if (removedObjectIds.has(objectId)) {
+      return;
+    }
     const failedInfo = { ...info, name: `${info.name || objectId} (text load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0x996633), failedInfo);
   });
@@ -7358,18 +7404,6 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
     model.userData.asset = { ...asset };
     model.userData.meshPath = actualMeshPath;
 
-    const historyEntry = HistoryManager.createAddEntry(
-      objectId,
-      asset,
-      model.position.toArray(),
-      model.quaternion.toArray(),
-      model.scale.toArray(),
-      name,
-      actualMeshPath
-    );
-    presenceState.historyManager.push(historyEntry);
-    notifySceneStateChanged('object-uploaded');
-
     console.log('[SceneSync] broadcast scene-add', { objectId, meshPath: actualMeshPath, assetId });
 
     const sceneAddPayload = {
@@ -7382,6 +7416,11 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       asset: { ...asset },
       meshPath: actualMeshPath,
     };
+
+    presenceState.historyManager.push(
+      HistoryManager.createSceneAddEntry(sceneAddPayload)
+    );
+    notifySceneStateChanged('object-uploaded');
 
     broadcast(sceneAddPayload);
   } finally {
@@ -7813,6 +7852,9 @@ async function imageImporterCallback(file, position, context = {}) {
 
     broadcast(payload);
     addOrUpdateObject(objectId, payload, { previewObjectId: tempObjectId });
+    presenceState.historyManager?.push(
+      HistoryManager.createSceneAddEntry(payload)
+    );
     temporaryPreviewHandedOffToFinalLoader = true;
     console.debug('[image-import] final object added', {
       ...logContext,
@@ -7909,6 +7951,9 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
 
   broadcast(payload);
   addOrUpdateObject(objectId, payload);
+  presenceState.historyManager?.push(
+    HistoryManager.createSceneAddEntry(payload)
+  );
 
   return { objectId, payload };
 }
