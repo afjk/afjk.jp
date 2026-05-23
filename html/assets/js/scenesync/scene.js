@@ -7563,14 +7563,14 @@ async function imageImporterCallback(file, position, context = {}) {
 
   console.debug('[image-import] start', logContext);
 
-  let previewHandedOff = false;
+  let temporaryPreviewHandedOffToFinalLoader = false;
 
   try {
     if (isSkyTarget) {
       const result = await replaceSkyboxSphereFromBlob(file, file.name || 'skybox', {
         ...logContext,
       });
-      previewHandedOff = true;
+      temporaryPreviewHandedOffToFinalLoader = true;
       console.debug('[image-import] final object added', {
         ...logContext,
         objectId: result?.objectId,
@@ -7585,11 +7585,27 @@ async function imageImporterCallback(file, position, context = {}) {
       : getReplaceTarget('image', context.hitObjectId || null);
 
     if (effectiveReplaceTarget) {
+      if (tempObjectId) {
+        // DragDropManager could not determine replacement target upfront, so a new-addition
+        // temporary preview was created. Clean it up now before proceeding with replacement.
+        console.debug('[image-import] cleanup unexpected temporary preview before replacement', {
+          ...logContext,
+          targetId: effectiveReplaceTarget.userData.objectId,
+          tempObjectId,
+        });
+        removeTemporaryImagePreview(tempObjectId);
+        removeLoadingOverlay(tempObjectId);
+      }
+
       const targetId = effectiveReplaceTarget.userData.objectId;
-      console.debug('[image-import] replacing existing object (optimistic)', { ...logContext, targetId });
+      console.debug('[image-import] replacing existing object (optimistic)', {
+        ...logContext,
+        targetId,
+      });
       try {
         const result = await replaceImageFileOptimistically(targetId, file, context);
-        previewHandedOff = true;
+        // Do NOT set temporaryPreviewHandedOffToFinalLoader = true here.
+        // Replacement uses localReplacementPreview, not the new-addition temporary preview.
         console.debug('[image-import] optimistic replacement complete', {
           ...logContext,
           targetId,
@@ -7692,7 +7708,7 @@ async function imageImporterCallback(file, position, context = {}) {
 
     broadcast(payload);
     addOrUpdateObject(objectId, payload, { previewObjectId: tempObjectId });
-    previewHandedOff = true;
+    temporaryPreviewHandedOffToFinalLoader = true;
     console.debug('[image-import] final object added', {
       ...logContext,
       objectId,
@@ -7706,7 +7722,7 @@ async function imageImporterCallback(file, position, context = {}) {
     });
     throw error;
   } finally {
-    if (tempObjectId && !previewHandedOff) {
+    if (tempObjectId && !temporaryPreviewHandedOffToFinalLoader) {
       removeTemporaryImagePreview(tempObjectId);
       removeLoadingOverlay(tempObjectId);
     }
