@@ -166,6 +166,36 @@ export class HistoryManager {
       },
     };
   }
+
+  static createContentReplaceEntry(objectId, name, before, after) {
+    return {
+      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: Date.now(),
+      summary: `Replaced content of ${name || objectId}`,
+      forward: {
+        kind: 'scene-delta',
+        objectId,
+        ...(after.name !== undefined ? { name: after.name } : {}),
+        ...(after.position ? { position: after.position } : {}),
+        ...(after.rotation ? { rotation: after.rotation } : {}),
+        ...(after.scale ? { scale: after.scale } : {}),
+        ...(after.asset !== undefined ? { asset: after.asset } : {}),
+        ...(after.metadata !== undefined ? { metadata: after.metadata } : {}),
+        ...(after.visible !== undefined ? { visible: after.visible } : {}),
+      },
+      backward: {
+        kind: 'scene-delta',
+        objectId,
+        ...(before.name !== undefined ? { name: before.name } : {}),
+        ...(before.position ? { position: before.position } : {}),
+        ...(before.rotation ? { rotation: before.rotation } : {}),
+        ...(before.scale ? { scale: before.scale } : {}),
+        ...(before.asset !== undefined ? { asset: before.asset } : {}),
+        ...(before.metadata !== undefined ? { metadata: before.metadata } : {}),
+        ...(before.visible !== undefined ? { visible: before.visible } : {}),
+      },
+    };
+  }
 }
 
 export function createHistoryManager() {

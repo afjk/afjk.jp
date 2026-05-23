@@ -4800,6 +4800,8 @@ function handleHandoff(data) {
         const newAssetType = payload.asset.type;
         if (newAssetType === 'image' || newAssetType === 'video' || newAssetType === 'text') {
           // Full re-render for content type changes (image/video/text)
+          const beforeSnapshot = createContentReplaceSnapshot(obj, payload.objectId);
+          const hasPayloadMetadata = Object.prototype.hasOwnProperty.call(payload, 'metadata');
           const mergedInfo = {
             objectId: payload.objectId,
             name: typeof payload.name === 'string' ? payload.name : (obj.userData?.name || payload.objectId),
@@ -4807,11 +4809,34 @@ function handleHandoff(data) {
             rotation: Array.isArray(payload.rotation) ? payload.rotation : obj.quaternion.toArray(),
             scale: Array.isArray(payload.scale) ? payload.scale : obj.scale.toArray(),
             asset: payload.asset,
-            metadata: payload.metadata
-              ? { ...(obj.userData?.metadata || {}), ...payload.metadata }
+            metadata: hasPayloadMetadata
+              ? cloneJsonSafe(payload.metadata)
               : obj.userData?.metadata,
           };
           addOrUpdateObject(payload.objectId, mergedInfo);
+
+          if (shouldTrackHistory && isOnBehalfOf && beforeSnapshot) {
+            const afterSnapshot = {
+              objectId: payload.objectId,
+              name: mergedInfo.name,
+              position: mergedInfo.position,
+              rotation: mergedInfo.rotation,
+              scale: mergedInfo.scale,
+              visible: mergedInfo.visible ?? true,
+              asset: cloneJsonSafe(mergedInfo.asset),
+              metadata: cloneJsonSafe(mergedInfo.metadata || null),
+            };
+
+            presenceState.historyManager?.push(
+              HistoryManager.createContentReplaceEntry(
+                payload.objectId,
+                mergedInfo.name || payload.objectId,
+                beforeSnapshot,
+                afterSnapshot
+              )
+            );
+          }
+
           notifySceneStateChanged('scene-delta-content-replace');
           break;
         }
@@ -6461,9 +6486,28 @@ function isCurrentLocalImageReplacementPreview(objectId, token) {
   return pendingMediaReplacementPreviews.get(objectId)?.token === token;
 }
 
+function createContentReplaceSnapshot(obj, fallbackObjectId = null) {
+  if (!obj) return null;
+
+  const objectId = obj.userData?.objectId || fallbackObjectId;
+
+  return {
+    objectId,
+    name: obj.userData?.name || obj.name || objectId,
+    position: obj.position.toArray(),
+    rotation: obj.quaternion.toArray(),
+    scale: obj.scale.toArray(),
+    visible: obj.visible !== false,
+    asset: cloneJsonSafe(obj.userData?.asset || null),
+    metadata: cloneJsonSafe(obj.userData?.metadata || null),
+  };
+}
+
 async function replaceObjectContent(objectId, input, options = {}) {
   const existing = managedObjects.get(objectId);
   if (!existing) return;
+
+  const beforeSnapshot = createContentReplaceSnapshot(existing, objectId);
 
   const existingMeta = existing.userData?.metadata || {};
   let newAsset;
@@ -6532,10 +6576,33 @@ async function replaceObjectContent(objectId, input, options = {}) {
     position: existing.position.toArray(),
     rotation: existing.quaternion.toArray(),
     scale: existing.scale.toArray(),
+    visible: existing.visible !== false,
     asset: newAsset,
     metadata: newMetadata,
   };
-  addOrUpdateObject(objectId, mergedInfo, options);
+  addOrUpdateObject(objectId, mergedInfo, { ...options, pushHistory: false });
+
+  if (beforeSnapshot && options.pushHistory !== false) {
+    const afterSnapshot = {
+      objectId,
+      name: nextName,
+      position: existing.position.toArray(),
+      rotation: existing.quaternion.toArray(),
+      scale: existing.scale.toArray(),
+      visible: existing.visible !== false,
+      asset: cloneJsonSafe(newAsset),
+      metadata: cloneJsonSafe(newMetadata),
+    };
+
+    presenceState.historyManager?.push(
+      HistoryManager.createContentReplaceEntry(
+        objectId,
+        nextName,
+        beforeSnapshot,
+        afterSnapshot
+      )
+    );
+  }
 
   showToast(input.kind === 'text' ? 'テキストを差し替えました' : 'メディアを差し替えました');
 }
@@ -6957,6 +7024,44 @@ function applyOperationToScene(operation) {
     case 'scene-delta': {
       const obj = managedObjects.get(operation.objectId);
       if (obj) {
+        const isContentAsset =
+          operation.asset &&
+          ['image', 'video', 'text'].includes(operation.asset.type);
+
+        if (isContentAsset) {
+          const hasMetadata = Object.prototype.hasOwnProperty.call(operation, 'metadata');
+          const mergedInfo = {
+            objectId: operation.objectId,
+            name: typeof operation.name === 'string'
+              ? operation.name
+              : (obj.userData?.name || operation.objectId),
+            position: Array.isArray(operation.position)
+              ? operation.position
+              : obj.position.toArray(),
+            rotation: Array.isArray(operation.rotation)
+              ? operation.rotation
+              : obj.quaternion.toArray(),
+            scale: Array.isArray(operation.scale)
+              ? operation.scale
+              : obj.scale.toArray(),
+            visible: typeof operation.visible === 'boolean'
+              ? operation.visible
+              : obj.visible !== false,
+            asset: cloneJsonSafe(operation.asset),
+            metadata: hasMetadata
+              ? cloneJsonSafe(operation.metadata)
+              : cloneJsonSafe(obj.userData?.metadata || null),
+          };
+
+          addOrUpdateObject(operation.objectId, mergedInfo, {
+            source: 'undo-redo-content-replace',
+            pushHistory: false,
+          });
+
+          notifySceneStateChanged('undo-redo-content-replace');
+          break;
+        }
+
         if (typeof operation.name === 'string') applyObjectName(obj, operation.name);
         applyTransform(obj, operation);
         if (typeof operation.visible === 'boolean') applyObjectVisibility(obj, operation.visible);
