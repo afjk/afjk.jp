@@ -205,10 +205,14 @@ export async function importGlbUrl(url, ctx) {
       payload.animation = { enabled: true, clip: 0, mode: 'loop', speed: 1 };
     }
 
-    ctx.broadcastSceneAdd(payload);
+    const addOptions = { prebuiltGlbModel: model };
 
-    // ローカルにも反映: prebuilt model を渡してロードを省略
-    ctx.addOrUpdateObject(objectId, payload, { prebuiltGlbModel: model });
+    if (typeof ctx.commitSceneAdd === 'function') {
+      ctx.commitSceneAdd(payload, addOptions);
+    } else {
+      ctx.broadcastSceneAdd(payload);
+      ctx.addOrUpdateObject(objectId, payload, addOptions);
+    }
 
     // 正規化の結果をトーストで通知
     // upload失敗時はすでにtoastを出しているので重複させない
