@@ -4801,6 +4801,7 @@ function handleHandoff(data) {
         if (newAssetType === 'image' || newAssetType === 'video' || newAssetType === 'text') {
           // Full re-render for content type changes (image/video/text)
           const beforeSnapshot = createContentReplaceSnapshot(obj, payload.objectId);
+          const hasPayloadMetadata = Object.prototype.hasOwnProperty.call(payload, 'metadata');
           const mergedInfo = {
             objectId: payload.objectId,
             name: typeof payload.name === 'string' ? payload.name : (obj.userData?.name || payload.objectId),
@@ -4808,8 +4809,8 @@ function handleHandoff(data) {
             rotation: Array.isArray(payload.rotation) ? payload.rotation : obj.quaternion.toArray(),
             scale: Array.isArray(payload.scale) ? payload.scale : obj.scale.toArray(),
             asset: payload.asset,
-            metadata: payload.metadata
-              ? { ...(obj.userData?.metadata || {}), ...payload.metadata }
+            metadata: hasPayloadMetadata
+              ? cloneJsonSafe(payload.metadata)
               : obj.userData?.metadata,
           };
           addOrUpdateObject(payload.objectId, mergedInfo);
@@ -6575,6 +6576,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
     position: existing.position.toArray(),
     rotation: existing.quaternion.toArray(),
     scale: existing.scale.toArray(),
+    visible: existing.visible !== false,
     asset: newAsset,
     metadata: newMetadata,
   };
@@ -7027,6 +7029,7 @@ function applyOperationToScene(operation) {
           ['image', 'video', 'text'].includes(operation.asset.type);
 
         if (isContentAsset) {
+          const hasMetadata = Object.prototype.hasOwnProperty.call(operation, 'metadata');
           const mergedInfo = {
             objectId: operation.objectId,
             name: typeof operation.name === 'string'
@@ -7045,11 +7048,8 @@ function applyOperationToScene(operation) {
               ? operation.visible
               : obj.visible !== false,
             asset: cloneJsonSafe(operation.asset),
-            metadata: operation.metadata
-              ? {
-                  ...(cloneJsonSafe(obj.userData?.metadata || {}) || {}),
-                  ...(cloneJsonSafe(operation.metadata) || {}),
-                }
+            metadata: hasMetadata
+              ? cloneJsonSafe(operation.metadata)
               : cloneJsonSafe(obj.userData?.metadata || null),
           };
 
