@@ -5397,6 +5397,16 @@ function createSceneUrlImportContext(options = {}) {
 
       return { meshPath, assetId, size: arrayBuffer.byteLength };
     },
+    commitSceneAdd: (payload, options = {}) => {
+      broadcast(payload);
+      addOrUpdateObject(payload.objectId, payload, options);
+
+      if (options.pushHistory !== false) {
+        presenceState.historyManager?.push(
+          HistoryManager.createSceneAddEntry(payload)
+        );
+      }
+    },
   };
 }
 

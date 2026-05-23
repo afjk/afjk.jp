@@ -182,10 +182,16 @@ export async function importImageUrl(url, ctx) {
       wallSurfaceOffset: ctx.wallSurfaceOffset ?? 0,
     });
 
-    ctx.broadcastSceneAdd(payload);
+    const addOptions = {
+      prebuiltImageBundle: { texture, width, height, aspect },
+    };
 
-    // ローカルにも反映: prebuilt texture を渡してロードを省略
-    ctx.addOrUpdateObject(objectId, payload, { prebuiltImageBundle: { texture, width, height, aspect } });
+    if (typeof ctx.commitSceneAdd === 'function') {
+      ctx.commitSceneAdd(payload, addOptions);
+    } else {
+      ctx.broadcastSceneAdd(payload);
+      ctx.addOrUpdateObject(objectId, payload, addOptions);
+    }
 
     return { objectId, payload };
   } catch (err) {

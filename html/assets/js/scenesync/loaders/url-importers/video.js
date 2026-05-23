@@ -30,10 +30,14 @@ export async function importVideoUrl(url, ctx) {
       },
     };
 
-    ctx.broadcastSceneAdd(payload);
+    const addOptions = { prebuiltVideoBundle: bundle };
 
-    // ローカルにも反映: prebuilt bundle を渡してロードを省略
-    ctx.addOrUpdateObject(objectId, payload, { prebuiltVideoBundle: bundle });
+    if (typeof ctx.commitSceneAdd === 'function') {
+      ctx.commitSceneAdd(payload, addOptions);
+    } else {
+      ctx.broadcastSceneAdd(payload);
+      ctx.addOrUpdateObject(objectId, payload, addOptions);
+    }
 
     return { objectId, payload };
   } catch (err) {

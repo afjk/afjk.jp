@@ -47,8 +47,12 @@ export async function importTextUrl(url, ctx) {
       },
     };
 
-    ctx.broadcastSceneAdd(payload);
-    ctx.addOrUpdateObject(objectId, payload);
+    if (typeof ctx.commitSceneAdd === 'function') {
+      ctx.commitSceneAdd(payload);
+    } else {
+      ctx.broadcastSceneAdd(payload);
+      ctx.addOrUpdateObject(objectId, payload);
+    }
 
     return { objectId, payload };
   } catch (err) {
