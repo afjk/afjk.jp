@@ -183,14 +183,8 @@ paths:
       summary: Request a browser-only action from the linked peer
       description: |
         Stable AI tool mapping: `scene_sync_ai_command`.
-        Use this for browser-only actions such as current selection queries, camera queries,
-        focus, undo/redo, screenshots, URL-based GLB import, URL-based image/video/text import,
-        skybox updates, and GLB animation clip switching. Use action `getSelection` to retrieve the objects currently
-        selected by the linked browser user. Selection is browser-local/session-local and
-        is not part of the shared scene snapshot. For `focusObject`, always send
-        `params.objectId`. Do not call `focusObject` without an object id.
-        For URL-based imports and skybox changes, confirm the result with
-        `/room/{roomId}/scene` when deduplication or placement accuracy matters.
+        Browser-side action: selection, camera, focus, undo/redo, screenshots, imports, replace, skybox, animation.
+        For accuracy, confirm URL imports with `/room/{roomId}/scene`.
       parameters:
         - in: path
           name: roomId
@@ -223,6 +217,8 @@ paths:
                     - addImageFromUrl
                     - addVideoFromUrl
                     - addTextFromUrl
+                    - replaceMediaFromUrl
+                    - replaceTextContent
                     - setSkyboxFromImageUrl
                     - setAnimationClip
                 params:
@@ -241,6 +237,8 @@ paths:
                     - $ref: '#/components/schemas/ScreenshotParams'
                     - $ref: '#/components/schemas/UploadGlbFromUrlParams'
                     - $ref: '#/components/schemas/UrlImportParams'
+                    - $ref: '#/components/schemas/ReplaceMediaFromUrlParams'
+                    - $ref: '#/components/schemas/ReplaceTextContentParams'
                     - $ref: '#/components/schemas/SetSkyboxFromImageUrlParams'
                     - $ref: '#/components/schemas/SetAnimationClipParams'
                 targetPeerId:
@@ -283,6 +281,23 @@ paths:
                     url: https://example.com/reference.jpg
                     objectId: ref-image-1
                     position: [0, 1.2, -1.5]
+              replaceMediaFromUrl:
+                summary: Replace selected media
+                value:
+                  sessionId: v1.example
+                  action: replaceMediaFromUrl
+                  params:
+                    url: https://example.com/replacement.jpg
+                    mediaType: image
+              replaceTextContent:
+                summary: Replace selected text
+                value:
+                  sessionId: v1.example
+                  action: replaceTextContent
+                  params:
+                    text: Hello Scene Sync
+                    fontSize: 32
+                    align: center
               setSkyboxFromImageUrl:
                 summary: Replace the skybox from an image URL
                 value:
@@ -610,6 +625,76 @@ components:
         objectId: minotauros-001
         clipName: laugh
         mode: loop
+    ReplaceMediaFromUrlParams:
+      type: object
+      required: [url, mediaType]
+      additionalProperties: false
+      properties:
+        objectId:
+          type: string
+          description: Existing media panel id. If omitted, the current browser selection is used.
+        url:
+          type: string
+          format: uri
+          description: Browser-accessible image or video URL.
+        mediaType:
+          type: string
+          enum: [image, video]
+          description: Replacement media type.
+        name:
+          type: string
+          description: Optional object name.
+      example:
+        objectId: media-panel-1
+        url: https://example.com/replacement.jpg
+        mediaType: image
+        name: Updated Image
+    ReplaceTextContentParams:
+      type: object
+      required: [text]
+      additionalProperties: false
+      properties:
+        objectId:
+          type: string
+          description: Existing text panel id. If omitted, the current browser selection is used.
+        text:
+          type: string
+          description: Replacement text content.
+        name:
+          type: string
+          description: Optional object name.
+        fontFamily:
+          type: string
+          enum: [system-sans, serif, monospace, japanese-sans, japanese-serif]
+          description: Text font family.
+        fontSize:
+          type: number
+          minimum: 1
+          description: Font size in pixels.
+        fontWeight:
+          type: string
+          description: CSS font weight.
+        fontStyle:
+          type: string
+          enum: [normal, italic]
+          description: Text font style.
+        color:
+          type: string
+          description: Text color, such as #ffffff.
+        backgroundColor:
+          type: string
+          description: Background color, such as #000000.
+        align:
+          type: string
+          enum: [left, center, right]
+          description: Text alignment.
+      example:
+        objectId: text-panel-1
+        text: Hello Scene Sync
+        fontFamily: system-sans
+        fontSize: 32
+        color: '#ffffff'
+        align: center
     SceneState:
       type: object
       properties:

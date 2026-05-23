@@ -1,6 +1,6 @@
 {
   "name": "@afjk/scene-sync-mcp",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "MCP server for afjk.jp Scene Sync",
   "type": "module",
   "repository": {
