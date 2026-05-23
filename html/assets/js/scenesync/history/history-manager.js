@@ -196,6 +196,30 @@ export class HistoryManager {
       },
     };
   }
+
+  static createSceneAddEntry(payload) {
+    return {
+      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: Date.now(),
+      summary: `Added ${payload.name || payload.objectId}`,
+      forward: {
+        kind: 'scene-add',
+        objectId: payload.objectId,
+        ...(payload.name !== undefined ? { name: payload.name } : {}),
+        ...(payload.position ? { position: payload.position } : {}),
+        ...(payload.rotation ? { rotation: payload.rotation } : {}),
+        ...(payload.scale ? { scale: payload.scale } : {}),
+        ...(payload.asset !== undefined ? { asset: payload.asset } : {}),
+        ...(payload.metadata !== undefined ? { metadata: payload.metadata } : {}),
+        ...(payload.visible !== undefined ? { visible: payload.visible } : {}),
+        ...(payload.meshPath !== undefined ? { meshPath: payload.meshPath } : {}),
+      },
+      backward: {
+        kind: 'scene-remove',
+        objectId: payload.objectId,
+      },
+    };
+  }
 }
 
 export function createHistoryManager() {
