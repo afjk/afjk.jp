@@ -161,6 +161,16 @@ The result includes:
 
 Do not say that selected objects cannot be retrieved. Use `getSelection`.
 
+### Replace existing media/text
+
+When the user asks to change, replace, update, edit, or modify the currently selected media/text panel, use `replaceMediaFromUrl` or `replaceTextContent`.
+
+Use `addImageFromUrl`, `addVideoFromUrl`, or `addTextFromUrl` only when the user asks to create or add a new panel.
+
+If `objectId` is omitted, replace actions use the linked browser's current selection.
+
+Do not use replace actions for GLB/model objects. Only image/video media panels and text panels can be replaced.
+
 `focusObject` のときは `params.objectId` を必ず入れる:
 
 ```json
@@ -198,6 +208,8 @@ Implemented actions:
 - `addImageFromUrl`
 - `addVideoFromUrl`
 - `addTextFromUrl`
+- `replaceMediaFromUrl`
+- `replaceTextContent`
 - `setSkyboxFromImageUrl`
 - `setAnimationClip`
 
