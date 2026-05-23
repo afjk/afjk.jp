@@ -6133,6 +6133,12 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       }, info.asset).catch((err) => {
         removeLoadingOverlay(objectId);
         console.warn('Failed to load mesh for', objectId, ':', err);
+        if (removedObjectIds.has(objectId)) {
+          cleanupPreviewForLoadedObject(options);
+          loadCompleted = true;
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
         if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
         } else if (!suppressSnapshotSaveOnFailure) {
@@ -6145,6 +6151,10 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     } catch (err) {
       removeLoadingOverlay(objectId);
       console.warn('Failed to fetch mesh for', objectId, ':', err);
+      if (removedObjectIds.has(objectId)) {
+        cleanupPreviewForLoadedObject(options);
+        return;
+      }
       if (!existing && !skipFallbackOnFailure) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
       } else if (!suppressSnapshotSaveOnFailure) {
@@ -6186,6 +6196,7 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
     }
 
     if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
       cleanupPreviewForLoadedObject(options);
       return;
     }
@@ -6195,6 +6206,10 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
+    if (removedObjectIds.has(objectId)) {
+      cleanupPreviewForLoadedObject(options);
+      return;
+    }
     if (!existing) {
       const failedInfo = { ...info, name: `${info.name || objectId} (動画読み込み失敗)` };
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xff4444), failedInfo);
@@ -6259,6 +6274,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
     }
 
     if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
       cleanupPreviewForLoadedObject(options);
       return;
     }
@@ -6268,6 +6284,10 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
+    if (removedObjectIds.has(objectId)) {
+      cleanupPreviewForLoadedObject(options);
+      return;
+    }
     showToast({
       type: 'error',
       message: `画像の読み込みに失敗しました: ${err?.message || 'CORS エラーの可能性'}`,
@@ -6362,6 +6382,7 @@ function loadTextObject(objectId, info, asset, existing) {
     }
 
     if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
       return;
     }
 
