@@ -7642,6 +7642,59 @@ async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context 
   };
 }
 
+function getOptimizedImageOutputFormat(file) {
+  const inputType = String(file?.type || '').toLowerCase();
+  const name = String(file?.name || '').toLowerCase();
+
+  const isJpeg =
+    inputType === 'image/jpeg' ||
+    inputType === 'image/jpg' ||
+    /\.(jpe?g)$/.test(name);
+
+  if (isJpeg) {
+    return {
+      mime: 'image/jpeg',
+      extension: '.jpg',
+      quality: 0.92,
+    };
+  }
+
+  const isPngOrWebp =
+    inputType === 'image/png' ||
+    inputType === 'image/webp' ||
+    /\.(png|webp)$/.test(name);
+
+  if (isPngOrWebp) {
+    return {
+      mime: 'image/png',
+      extension: '.png',
+      quality: undefined,
+    };
+  }
+
+  return {
+    mime: 'image/png',
+    extension: '.png',
+    quality: undefined,
+  };
+}
+
+function canvasToBlob(canvas, mime, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('canvas.toBlob failed'));
+        }
+      },
+      mime,
+      quality,
+    );
+  });
+}
+
 async function replaceImageFileOptimistically(objectId, file, context = {}) {
   const preview = await showLocalImageReplacementPreview(objectId, file);
 
@@ -7652,15 +7705,14 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
       label: file.name,
     });
 
-    const imageBlob = await new Promise((resolve, reject) => {
-      optimized.canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error('canvas.toBlob failed'))),
-        'image/jpeg',
-        0.92,
-      );
-    });
+    const outputFormat = getOptimizedImageOutputFormat(file);
+    const imageBlob = await canvasToBlob(
+      optimized.canvas,
+      outputFormat.mime,
+      outputFormat.quality,
+    );
 
-    const uploadedUrl = await uploadBlobToStore(imageBlob, 'image/jpeg', '.jpg');
+    const uploadedUrl = await uploadBlobToStore(imageBlob, outputFormat.mime, outputFormat.extension);
 
     // Check if this preview is still current
     if (preview && !isCurrentLocalImageReplacementPreview(objectId, preview.token)) {
@@ -7674,7 +7726,7 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
         kind: 'image',
         source: 'blob',
         url: uploadedUrl.url,
-        mime: 'image/jpeg',
+        mime: outputFormat.mime,
         width: optimized.textureWidth,
         height: optimized.textureHeight,
         name: file.name,
@@ -7797,19 +7849,18 @@ async function imageImporterCallback(file, position, context = {}) {
       resized: optimized.resized,
     });
 
-    const imageBlob = await new Promise((resolve, reject) => {
-      optimized.canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error('canvas.toBlob failed'))),
-        'image/jpeg',
-        0.92,
-      );
-    });
+    const outputFormat = getOptimizedImageOutputFormat(file);
+    const imageBlob = await canvasToBlob(
+      optimized.canvas,
+      outputFormat.mime,
+      outputFormat.quality,
+    );
 
     // TODO: presence blobs have a server-side TTL; long-lived rooms may see broken image URLs.
     // Future: cache the blob in IndexedDB and re-upload on session reconnect if the URL 404s.
     const uploadStart = performance.now();
     console.debug('[image-import] upload start', logContext);
-    const uploaded = await uploadBlobToStore(imageBlob, 'image/jpeg', '.jpg');
+    const uploaded = await uploadBlobToStore(imageBlob, outputFormat.mime, outputFormat.extension);
     console.debug('[image-import] upload complete', {
       ...logContext,
       ms: Math.round(performance.now() - uploadStart),
@@ -7830,7 +7881,7 @@ async function imageImporterCallback(file, position, context = {}) {
       type: 'image',
       source: 'blob',
       url: uploaded.url,
-      mime: 'image/jpeg',
+      mime: outputFormat.mime,
       width: optimized.textureWidth,
       height: optimized.textureHeight,
     };
