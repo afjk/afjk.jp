@@ -194,11 +194,11 @@ export class DragDropManager {
     );
   }
 
-  _fallbackScenePositionFromEvent(event) {
-    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+  _fallbackScenePositionFromClientPoint(clientX, clientY) {
+    if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
       return this.coordinateTransformer.screenToWorld(
-        event.clientX,
-        event.clientY,
+        clientX,
+        clientY,
         this.renderer.domElement
       );
     }
@@ -206,12 +206,16 @@ export class DragDropManager {
     return this._defaultDropPosition();
   }
 
-  _createDropRay(event) {
+  _fallbackScenePositionFromEvent(event) {
+    return this._fallbackScenePositionFromClientPoint(event?.clientX, event?.clientY);
+  }
+
+  _createDropRayFromClientPoint(clientX, clientY) {
     const rect = this.renderer.domElement.getBoundingClientRect();
 
     const ndc = new this.THREE.Vector2(
-      ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
     );
 
     const raycaster = new this.THREE.Raycaster();
@@ -226,6 +230,10 @@ export class DragDropManager {
       ndc,
       upness,
     };
+  }
+
+  _createDropRay(event) {
+    return this._createDropRayFromClientPoint(event.clientX, event.clientY);
   }
 
   _findPlacementHit(raycaster) {
@@ -310,8 +318,8 @@ export class DragDropManager {
     return null;
   }
 
-  _dropPositionFromEvent(event) {
-    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+  _dropPositionFromClientPoint(clientX, clientY) {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
       return {
         position: this._defaultDropPosition(),
         targetKind: 'scene',
@@ -321,7 +329,7 @@ export class DragDropManager {
       };
     }
 
-    const rayInfo = this._createDropRay(event);
+    const rayInfo = this._createDropRayFromClientPoint(clientX, clientY);
     const hit = this._findPlacementHit(rayInfo.raycaster);
     const hitNormal = hit ? this._getWorldNormalFromHit(hit) : null;
     const surfaceKind = this._getSurfaceKind(hitNormal);
@@ -354,8 +362,8 @@ export class DragDropManager {
       upness: rayInfo.upness,
       threshold: SKY_DROP_UPNESS_THRESHOLD,
       targetKind: debugTargetKind,
-      clientX: event.clientX,
-      clientY: event.clientY,
+      clientX,
+      clientY,
       normal: orientedNormal?.toArray?.() || null,
       rawNormal: hitNormal?.toArray?.() || null,
       surfaceKind,
@@ -380,8 +388,8 @@ export class DragDropManager {
         placementPosition: (placementPosition || hit.point).toArray(),
         targetKind: 'scene',
         hitObjectId: hitObjectId || null,
-        clientX: event.clientX,
-        clientY: event.clientY,
+        clientX,
+        clientY,
         upness: rayInfo.upness,
       };
     }
@@ -397,25 +405,36 @@ export class DragDropManager {
       fallbackDistance: groundPoint ? null : 1.5,
       placementPosition: fallbackPosition.toArray(),
       upness: rayInfo.upness,
-      clientX: event.clientX,
-      clientY: event.clientY,
+      clientX,
+      clientY,
     };
 
     return {
       position: fallbackPosition,
       targetKind: 'scene',
-      clientX: event.clientX,
-      clientY: event.clientY,
+      clientX,
+      clientY,
       upness: rayInfo.upness,
       fallbackKind: groundPoint ? 'ground-plane' : 'camera-near',
     };
+  }
+
+  _dropPositionFromEvent(event) {
+    return this._dropPositionFromClientPoint(event?.clientX, event?.clientY);
+  }
+
+  getPlacementFromClientPoint(clientX, clientY) {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+      return null;
+    }
+    return this._dropPositionFromClientPoint(clientX, clientY);
   }
 
   getPlacementFromPointerEvent(event) {
     if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
       return null;
     }
-    return this._dropPositionFromEvent(event);
+    return this.getPlacementFromClientPoint(event.clientX, event.clientY);
   }
 
   async _loadFile(file, position) {
