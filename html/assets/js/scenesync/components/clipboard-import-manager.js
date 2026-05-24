@@ -18,6 +18,11 @@ function defaultIsEditingTarget(target) {
   return false;
 }
 
+function getPlacementPosition(placement) {
+  if (placement?.position) return placement.position;
+  return placement;
+}
+
 export class ClipboardImportManager {
   constructor(options) {
     const {
@@ -78,11 +83,13 @@ export class ClipboardImportManager {
     return true;
   }
 
-  async importPayload(payload, position) {
+  async importPayload(payload, placement) {
+    const position = getPlacementPosition(placement);
+
     switch (payload.kind) {
       case 'file':
         try {
-          await this.handleFile(payload.file, position);
+          await this.handleFile(payload.file, placement);
         } catch (err) {
           console.warn('[clipboard] file import failed:', err);
           this.showToast?.(err?.message || 'ファイルの読み込みに失敗しました');
@@ -92,7 +99,7 @@ export class ClipboardImportManager {
       case 'url':
         try {
           this.showToast?.('クリップボードからURLを読み込みます');
-          await this.handleUrl(payload.url, position);
+          await this.handleUrl(payload.url, position, placement);
         } catch (err) {
           console.warn('[clipboard] url import failed:', err);
           this.showToast?.(err?.message || 'URLの追加に失敗しました');
@@ -101,7 +108,7 @@ export class ClipboardImportManager {
 
       case 'text':
         try {
-          await this.handleText(payload.text, position, payload.filename);
+          await this.handleText(payload.text, position, payload.filename, placement);
           this.showToast?.('クリップボードからテキストを追加しました');
         } catch (err) {
           console.warn('[clipboard] text import failed:', err);
