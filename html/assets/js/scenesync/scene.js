@@ -8355,7 +8355,11 @@ async function pasteFromClipboardAtDefaultPosition() {
   return null;
 }
 
-pasteBtn?.addEventListener('click', pasteFromClipboardAtDefaultPosition);
+pasteBtn?.addEventListener('click', () => {
+  pasteFromClipboardAtDefaultPosition().catch((error) => {
+    console.warn('[paste] failed:', error);
+  });
+});
 mobileActionSheetCloseBtn?.addEventListener('click', closeMobileActionSheet);
 mobileAddImageBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
@@ -8367,7 +8371,9 @@ mobileAddGlbBtn?.addEventListener('click', () => {
 });
 mobilePasteBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
-  pasteFromClipboardAtDefaultPosition();
+  pasteFromClipboardAtDefaultPosition().catch((error) => {
+    console.warn('[mobile-paste] failed:', error);
+  });
 });
 dom.mobileImageInput?.addEventListener('change', (event) => {
   const input = event.target;
