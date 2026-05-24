@@ -8047,8 +8047,12 @@ async function urlImporterCallback(url, position, context = {}) {
     ? position.toArray()
     : [0, 1, 0];
 
+  // Classify and normalize URL (e.g., GitHub blob -> raw)
+  const classified = classifyUrl(resolved.resolvedUrl);
+  const normalizedUrl = classified.url || resolved.resolvedUrl;
+  const urlKind = classified.kind;
+
   // Skybox intent takes priority for image URLs when looking up.
-  const urlKind = classifyUrl(resolved.resolvedUrl)?.kind;
   const isImageUrl = urlKind === URL_KIND.IMAGE;
   const urlSkybox =
     isImageUrl &&
@@ -8068,7 +8072,10 @@ async function urlImporterCallback(url, position, context = {}) {
         await replaceObjectContent(replaceTarget.userData.objectId, {
           kind: inputKind,
           source: 'url',
-          url: resolved.resolvedUrl,
+          url: normalizedUrl,
+          ...(inputKind === 'text' && /\.(md|markdown)(?:$|[?#])/i.test(normalizedUrl)
+            ? { format: 'markdown' }
+            : {}),
         });
         return;
       }
@@ -8093,7 +8100,7 @@ async function urlImporterCallback(url, position, context = {}) {
     sourceContext: context,
   });
 
-  await dispatchUrlImport(resolved.resolvedUrl, ctx);
+  await dispatchUrlImport(normalizedUrl, ctx);
 }
 
 const dragDropManager = new DragDropManager({
@@ -8325,15 +8332,41 @@ function closePasteSheet() {
   }
 }
 
-function pasteFromClipboardAtDefaultPosition() {
-  showToast('クリップボードを読み込みます…');
-  return clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext())
-    .catch(() => {
-      showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
-    });
+function openPasteSheet() {
+  if (!pasteSheet) return;
+  pasteSheet.removeAttribute('hidden');
+  requestAnimationFrame(() => {
+    clipboardPasteTarget?.focus?.();
+  });
 }
 
-pasteBtn?.addEventListener('click', pasteFromClipboardAtDefaultPosition);
+async function pasteFromClipboardAtDefaultPosition() {
+  showToast('クリップボードを読み込みます…');
+  const result = await clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext())
+    .catch((error) => {
+      console.warn('[clipboard] navigator clipboard paste failed:', error);
+      return null;
+    });
+
+  if (result) {
+    return result;
+  }
+
+  if (isMobileUi()) {
+    openPasteSheet();
+    showToast('枠内を長押しして貼り付けてください');
+    return null;
+  }
+
+  showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
+  return null;
+}
+
+pasteBtn?.addEventListener('click', () => {
+  pasteFromClipboardAtDefaultPosition().catch((error) => {
+    console.warn('[paste] failed:', error);
+  });
+});
 mobileActionSheetCloseBtn?.addEventListener('click', closeMobileActionSheet);
 mobileAddImageBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
@@ -8345,7 +8378,9 @@ mobileAddGlbBtn?.addEventListener('click', () => {
 });
 mobilePasteBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
-  pasteFromClipboardAtDefaultPosition();
+  pasteFromClipboardAtDefaultPosition().catch((error) => {
+    console.warn('[mobile-paste] failed:', error);
+  });
 });
 dom.mobileImageInput?.addEventListener('change', (event) => {
   const input = event.target;

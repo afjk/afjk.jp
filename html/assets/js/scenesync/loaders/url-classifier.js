@@ -37,6 +37,28 @@ function classifyTwitterImageUrl(u) {
   return null;
 }
 
+export function normalizeGitHubBlobUrl(urlString) {
+  try {
+    const u = new URL(urlString);
+    if (u.hostname !== 'github.com') return urlString;
+
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length < 5) return urlString;
+    if (parts[2] !== 'blob') return urlString;
+
+    const owner = parts[0];
+    const repo = parts[1];
+    const ref = parts[3];
+    const filePath = parts.slice(4).join('/');
+
+    if (!owner || !repo || !ref || !filePath) return urlString;
+
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filePath}`;
+  } catch {
+    return urlString;
+  }
+}
+
 /**
  * URL 文字列を分類する純関数。
  * @param {string} urlString
@@ -50,9 +72,12 @@ export function classifyUrl(urlString) {
   if (!/^https?:\/\//i.test(trimmed)) {
     return { kind: URL_KIND.INVALID, url: null, ext: '', host: '' };
   }
+
+  const normalized = normalizeGitHubBlobUrl(trimmed);
+
   let u;
   try {
-    u = new URL(trimmed);
+    u = new URL(normalized);
   } catch {
     return { kind: URL_KIND.INVALID, url: null, ext: '', host: '' };
   }
@@ -62,7 +87,7 @@ export function classifyUrl(urlString) {
 
   const ext = (u.pathname.split('.').pop() || '').toLowerCase();
   const host = u.host;
-  const url = u.toString();
+  const url = normalized;
   if (AUDIO_EXTS.includes(ext)) return { kind: URL_KIND.AUDIO, url, ext, host };
   if (VIDEO_EXTS.includes(ext)) return { kind: URL_KIND.VIDEO, url, ext, host };
   if (HLS_EXTS.includes(ext)) return { kind: URL_KIND.VIDEO_HLS, url, ext, host };
