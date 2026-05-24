@@ -8047,8 +8047,12 @@ async function urlImporterCallback(url, position, context = {}) {
     ? position.toArray()
     : [0, 1, 0];
 
+  // Classify and normalize URL (e.g., GitHub blob -> raw)
+  const classified = classifyUrl(resolved.resolvedUrl);
+  const normalizedUrl = classified.url || resolved.resolvedUrl;
+  const urlKind = classified.kind;
+
   // Skybox intent takes priority for image URLs when looking up.
-  const urlKind = classifyUrl(resolved.resolvedUrl)?.kind;
   const isImageUrl = urlKind === URL_KIND.IMAGE;
   const urlSkybox =
     isImageUrl &&
@@ -8068,7 +8072,10 @@ async function urlImporterCallback(url, position, context = {}) {
         await replaceObjectContent(replaceTarget.userData.objectId, {
           kind: inputKind,
           source: 'url',
-          url: resolved.resolvedUrl,
+          url: normalizedUrl,
+          ...(inputKind === 'text' && /\.(md|markdown)(?:$|[?#])/i.test(normalizedUrl)
+            ? { format: 'markdown' }
+            : {}),
         });
         return;
       }
@@ -8093,7 +8100,7 @@ async function urlImporterCallback(url, position, context = {}) {
     sourceContext: context,
   });
 
-  await dispatchUrlImport(resolved.resolvedUrl, ctx);
+  await dispatchUrlImport(normalizedUrl, ctx);
 }
 
 const dragDropManager = new DragDropManager({
