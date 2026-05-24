@@ -2982,7 +2982,7 @@ function updateTextPanelScroll(objectId, deltaY) {
 
 function handleTextPanelWheel(event) {
   // Only scroll text panels, not camera, if overflow
-  if (transformCtrl.object) return; // Transform priority
+  if (isDragging) return; // Transform drag priority
   if (event.ctrlKey || event.metaKey) return; // Allow pinch-zoom
 
   const rect = renderer.domElement.getBoundingClientRect();
