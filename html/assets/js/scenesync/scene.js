@@ -7644,8 +7644,14 @@ async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context 
 
 function getOptimizedImageOutputFormat(file) {
   const inputType = String(file?.type || '').toLowerCase();
+  const name = String(file?.name || '').toLowerCase();
 
-  if (inputType === 'image/jpeg' || inputType === 'image/jpg') {
+  const isJpeg =
+    inputType === 'image/jpeg' ||
+    inputType === 'image/jpg' ||
+    /\.(jpe?g)$/.test(name);
+
+  if (isJpeg) {
     return {
       mime: 'image/jpeg',
       extension: '.jpg',
@@ -7653,7 +7659,12 @@ function getOptimizedImageOutputFormat(file) {
     };
   }
 
-  if (inputType === 'image/png' || inputType === 'image/webp') {
+  const isPngOrWebp =
+    inputType === 'image/png' ||
+    inputType === 'image/webp' ||
+    /\.(png|webp)$/.test(name);
+
+  if (isPngOrWebp) {
     return {
       mime: 'image/png',
       extension: '.png',
