@@ -5,6 +5,7 @@
 import {
   parseClipboardDataTransfer,
   parseNavigatorClipboardItems,
+  createPlainTextClipboardPayload,
 } from '../loaders/clipboard-parser.js';
 
 function defaultIsEditingTarget(target) {
@@ -139,7 +140,7 @@ export class ClipboardImportManager {
         const isUrl = text.trim().startsWith('http://') || text.trim().startsWith('https://');
         const payload = isUrl
           ? { kind: 'url', url: text.trim() }
-          : { kind: 'text', text, filename: 'clipboard.txt' };
+          : createPlainTextClipboardPayload(text);
         return await this.importPayload(payload, position || this._resolvePosition());
       } catch (err) {
         console.warn('[clipboard] navigator.clipboard.readText failed:', err);

@@ -14,6 +14,44 @@ function isLikelyHttpUrl(text) {
   }
 }
 
+export function looksLikeMarkdownText(text) {
+  if (!text || typeof text !== 'string') return false;
+
+  const value = text.slice(0, 20000);
+  const lines = value.split(/\r?\n/);
+  let score = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^#{1,6}\s+\S/.test(trimmed)) score += 2;
+    if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) score += 3;
+    if (/^[-*+]\s+\S/.test(trimmed)) score += 1;
+    if (/^\d+\.\s+\S/.test(trimmed)) score += 1;
+    if (/^>\s+\S/.test(trimmed)) score += 1;
+    if (/\[[^\]]+\]\([^)]+\)/.test(trimmed)) score += 1;
+    if (/!\[[^\]]*\]\([^)]+\)/.test(trimmed)) score += 2;
+    if (/^\|.+\|$/.test(trimmed)) score += 1;
+    if (/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(trimmed)) score += 3;
+    if (score >= 3) return true;
+  }
+
+  return false;
+}
+
+export function createPlainTextClipboardPayload(text) {
+  const sliced = String(text || '').slice(0, MAX_TEXT_LENGTH);
+
+  if (!sliced) {
+    return { kind: 'empty' };
+  }
+
+  return {
+    kind: 'text',
+    text: sliced,
+    filename: looksLikeMarkdownText(sliced) ? 'clipboard.md' : 'clipboard.txt',
+  };
+}
+
 function extractHtmlUrls(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
@@ -85,10 +123,7 @@ export function parseClipboardDataTransfer(dataTransfer) {
     }
 
     // 優先順位6: 通常テキスト
-    const text = plainText.slice(0, MAX_TEXT_LENGTH);
-    if (text) {
-      return { kind: 'text', text, filename: 'clipboard.txt' };
-    }
+    return createPlainTextClipboardPayload(plainText);
   }
 
   return { kind: 'empty' };
@@ -157,10 +192,7 @@ export async function parseNavigatorClipboardItems(items) {
           return { kind: 'url', url: trimmed };
         }
 
-        const sliced = text.slice(0, MAX_TEXT_LENGTH);
-        if (sliced) {
-          return { kind: 'text', text: sliced, filename: 'clipboard.txt' };
-        }
+        return createPlainTextClipboardPayload(text);
       } catch (err) {
         console.warn('[clipboard] text extraction failed:', err);
       }

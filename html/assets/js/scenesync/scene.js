@@ -8325,12 +8325,34 @@ function closePasteSheet() {
   }
 }
 
-function pasteFromClipboardAtDefaultPosition() {
+function openPasteSheet() {
+  if (!pasteSheet) return;
+  pasteSheet.removeAttribute('hidden');
+  requestAnimationFrame(() => {
+    clipboardPasteTarget?.focus?.();
+  });
+}
+
+async function pasteFromClipboardAtDefaultPosition() {
   showToast('クリップボードを読み込みます…');
-  return clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext())
-    .catch(() => {
-      showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
+  const result = await clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext())
+    .catch((error) => {
+      console.warn('[clipboard] navigator clipboard paste failed:', error);
+      return null;
     });
+
+  if (result) {
+    return result;
+  }
+
+  if (isMobileUi()) {
+    openPasteSheet();
+    showToast('枠内を長押しして貼り付けてください');
+    return null;
+  }
+
+  showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
+  return null;
 }
 
 pasteBtn?.addEventListener('click', pasteFromClipboardAtDefaultPosition);
