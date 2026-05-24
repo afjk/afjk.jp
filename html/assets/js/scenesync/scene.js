@@ -8269,9 +8269,15 @@ function getCenterRayPlacementContext() {
     || getDefaultImportPosition();
 }
 
+function getClipboardPlacementContext() {
+  return isSceneSyncMobileDevice()
+    ? getCenterRayPlacementContext()
+    : getDefaultImportPosition();
+}
+
 const clipboardImportManager = new ClipboardImportManager({
   container: document,
-  getDefaultPosition: getDefaultImportPosition,
+  getDefaultPosition: getClipboardPlacementContext,
   showToast,
   isEditingTarget: (target) => {
     const el = target instanceof Element ? target : null;
@@ -8283,9 +8289,9 @@ const clipboardImportManager = new ClipboardImportManager({
 
     return false;
   },
-  handleFile: (file, position) => dragDropManager.handleFile(file, position),
-  handleUrl: (url, position) => urlImporterCallback(url, position),
-  handleText: (text, position, filename) => textImporterCallback(text, position, filename),
+  handleFile: (file, placement) => dragDropManager.handleFile(file, placement),
+  handleUrl: (url, position, placement) => urlImporterCallback(url, position, placement),
+  handleText: (text, position, filename, placement) => textImporterCallback(text, position, filename, placement),
 });
 
 // ── クリップボード貼り付けUI のイベントバインディング ─────────────────
@@ -8321,7 +8327,7 @@ function closePasteSheet() {
 
 function pasteFromClipboardAtDefaultPosition() {
   showToast('クリップボードを読み込みます…');
-  return clipboardImportManager.pasteFromNavigatorClipboard(getDefaultImportPosition())
+  return clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext())
     .catch(() => {
       showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
     });
@@ -8488,7 +8494,7 @@ if (clipboardPasteTarget) {
   clipboardPasteTarget.addEventListener('paste', async (event) => {
     const handled = await clipboardImportManager.handlePasteEvent(event, {
       force: true,
-      position: getDefaultImportPosition(),
+      position: getClipboardPlacementContext(),
     });
 
     if (handled) {
