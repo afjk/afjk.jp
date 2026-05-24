@@ -8260,6 +8260,15 @@ function getDefaultImportPosition() {
   );
 }
 
+function getCenterRayPlacementContext() {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const clientX = rect.left + rect.width / 2;
+  const clientY = rect.top + rect.height / 2;
+
+  return dragDropManager.getPlacementFromClientPoint?.(clientX, clientY)
+    || getDefaultImportPosition();
+}
+
 const clipboardImportManager = new ClipboardImportManager({
   container: document,
   getDefaultPosition: getDefaultImportPosition,
@@ -8337,7 +8346,7 @@ dom.mobileImageInput?.addEventListener('change', (event) => {
   const file = input?.files?.[0];
 
   if (file) {
-    dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
+    dragDropManager.handleFile(file, getCenterRayPlacementContext()).catch((error) => {
       console.warn('[mobile-image-input] failed to add image:', error);
       showToast(error?.message || '画像の追加に失敗しました');
     });
@@ -8352,7 +8361,7 @@ dom.mobileGlbInput?.addEventListener('change', (event) => {
   const file = input?.files?.[0];
 
   if (file) {
-    dragDropManager.handleFile(file, getDefaultImportPosition()).catch((error) => {
+    dragDropManager.handleFile(file, getCenterRayPlacementContext()).catch((error) => {
       console.warn('[mobile-glb-input] failed to add GLB:', error);
       showToast(error?.message || '3Dモデルの追加に失敗しました');
     });
