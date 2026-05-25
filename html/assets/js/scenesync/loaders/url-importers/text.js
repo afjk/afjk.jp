@@ -60,7 +60,7 @@ export async function importTextUrl(url, ctx) {
         color: '#ffffff',
         backgroundColor: 'rgba(0,0,0,0.65)',
         align: 'left',
-        layout: { ...DEFAULT_TEXT_LAYOUT },
+        layout: { ...DEFAULT_TEXT_LAYOUT, autoFit: true },
         scroll: { ...DEFAULT_TEXT_SCROLL },
       },
       metadata: {
