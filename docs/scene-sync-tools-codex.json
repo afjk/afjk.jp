@@ -94,7 +94,7 @@
         },
         "params": {
           "type": "object",
-          "description": "For focusObject send params.objectId. For uploadGlbFromUrl, addImageFromUrl, addVideoFromUrl, addTextFromUrl, and setSkyboxFromImageUrl send params.url. After URL-based imports or skybox changes, read the scene snapshot if verification matters.",
+          "description": "For focusObject send params.objectId. For uploadGlbFromUrl, addImageFromUrl, addVideoFromUrl, addTextFromUrl, and setSkyboxFromImageUrl send params.url. For screenshot, send mode (image/url), maxWidth (pixels), quality (0.1-1). After URL-based imports or skybox changes, read the scene snapshot if verification matters.",
           "additionalProperties": true
         }
       },

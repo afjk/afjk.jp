@@ -213,6 +213,12 @@ Implemented actions:
 - `setSkyboxFromImageUrl`
 - `setAnimationClip`
 
+## Screenshots
+
+When taking screenshots through GPT Actions, use screenshot with `mode: "url"` and inspect the returned temporary URL if available.
+
+Scene objects may include `bounds.world.min`, `bounds.world.max`, `bounds.world.center`, and `bounds.world.size`. Use `bounds.world.size` as the real world-space size after scale is applied when aligning objects, fitting panels to walls, or placing objects on the floor.
+
 ## Animation clips
 
 For animated GLB objects, use `setAnimationClip` to switch clips by name or index.

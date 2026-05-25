@@ -4635,6 +4635,11 @@ async function respondToSceneRequest(from) {
       scale: obj.scale.toArray(),
     };
 
+    const bounds = computeWorldBoundsForExternalUse(obj);
+    if (bounds) {
+      entry.bounds = bounds;
+    }
+
     // 保存済み meshPath を再利用（再エクスポート不要）
     if (obj.userData.meshPath) {
       entry.meshPath = obj.userData.meshPath;
@@ -5200,7 +5205,69 @@ function focusCameraOnObject(objectId) {
   };
 }
 
-function captureScreenshotBlob() {
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('failed to read blob'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function splitDataUrl(dataUrl) {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl);
+  if (!match) {
+    return {
+      mimeType: 'application/octet-stream',
+      base64: dataUrl,
+    };
+  }
+
+  return {
+    mimeType: match[1],
+    base64: match[2],
+  };
+}
+
+function computeWorldBoundsForExternalUse(obj) {
+  if (!obj) return null;
+
+  try {
+    obj.updateWorldMatrix(true, true);
+
+    const box = new THREE.Box3().setFromObject(obj);
+
+    if (box.isEmpty()) {
+      return null;
+    }
+
+    const min = box.min.toArray();
+    const max = box.max.toArray();
+    const center = box.getCenter(new THREE.Vector3()).toArray();
+    const size = box.getSize(new THREE.Vector3()).toArray();
+
+    return {
+      world: {
+        min,
+        max,
+        center,
+        size,
+      },
+    };
+  } catch (error) {
+    console.warn('[ai] failed to compute object bounds', {
+      objectId: obj.userData?.objectId || null,
+      error,
+    });
+    return null;
+  }
+}
+
+function captureScreenshotBlob(options = {}) {
+  const {
+    mimeType = 'image/jpeg',
+    quality = 0.92,
+  } = options;
   return new Promise((resolve, reject) => {
     const canvas = renderer.domElement;
     if (!canvas) {
@@ -5234,15 +5301,15 @@ function captureScreenshotBlob() {
     };
 
     if (typeof canvas.toBlob === 'function') {
-      canvas.toBlob(finish, 'image/jpeg', 0.92);
+      canvas.toBlob(finish, mimeType, quality);
       return;
     }
 
     try {
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const dataUrl = canvas.toDataURL(mimeType, quality);
       const base64 = dataUrl.split(',')[1] || '';
       const bytes = Uint8Array.from(atob(base64), ch => ch.charCodeAt(0));
-      finish(new Blob([bytes], { type: 'image/jpeg' }));
+      finish(new Blob([bytes], { type: mimeType }));
     } catch (err) {
       reject(err);
     }
@@ -5264,6 +5331,70 @@ async function uploadBlobToStore(blob, contentType = 'application/octet-stream',
   return {
     path,
     url: `${BLOB_BASE}/${path}`,
+  };
+}
+
+async function captureScreenshotForAi(options = {}) {
+  const {
+    mode = 'url',
+    maxWidth = 768,
+    quality = 0.7,
+  } = options || {};
+
+  const blob = await captureScreenshotBlob({
+    mimeType: 'image/jpeg',
+    quality,
+  });
+
+  if (mode !== 'image') {
+    const uploaded = await uploadBlobToStore(blob, 'image/jpeg', '.jpg');
+    return {
+      ok: true,
+      mode: 'url',
+      mimeType: 'image/jpeg',
+      ...uploaded,
+    };
+  }
+
+  let finalBlob = blob;
+  let width = renderer.domElement.width;
+  let height = renderer.domElement.height;
+
+  if (Number.isFinite(maxWidth) && maxWidth > 0 && width > maxWidth) {
+    const scale = maxWidth / width;
+    const targetWidth = Math.round(width * scale);
+    const targetHeight = Math.round(height * scale);
+
+    const imageBitmap = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(imageBitmap, 0, 0, targetWidth, targetHeight);
+    imageBitmap.close?.();
+
+    finalBlob = await new Promise((resolve, reject) => {
+      canvas.toBlob((nextBlob) => {
+        if (nextBlob) resolve(nextBlob);
+        else reject(new Error('failed to encode resized screenshot'));
+      }, 'image/jpeg', quality);
+    });
+
+    width = targetWidth;
+    height = targetHeight;
+  }
+
+  const dataUrl = await blobToDataUrl(finalBlob);
+  const { base64, mimeType } = splitDataUrl(dataUrl);
+
+  return {
+    ok: true,
+    mode: 'image',
+    mimeType,
+    width,
+    height,
+    base64,
   };
 }
 
@@ -5524,6 +5655,11 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
     meshPath: obj.userData?.meshPath || obj.userData?.asset?.meshPath || null,
   };
 
+  const bounds = computeWorldBoundsForExternalUse(obj);
+  if (bounds) {
+    result.bounds = bounds;
+  }
+
   const animation = serializeObjectAnimationState(obj);
   if (animation) {
     result.animation = animation;
@@ -5731,9 +5867,15 @@ async function handleAiCommand(from, payload) {
         };
         break;
       case 'screenshot': {
-        const blob = await captureScreenshotBlob();
-        const uploaded = await uploadBlobToStore(blob, 'image/jpeg', '.jpg');
-        result = { ok: true, ...uploaded };
+        const params = payload.params || {};
+        const mode = params.mode === 'image' ? 'image' : 'url';
+
+        result = await captureScreenshotForAi({
+          mode,
+          maxWidth: Number.isFinite(params.maxWidth) ? params.maxWidth : 768,
+          quality: Number.isFinite(params.quality) ? params.quality : (mode === 'image' ? 0.7 : 0.92),
+        });
+
         break;
       }
       case 'uploadGlbFromUrl':
