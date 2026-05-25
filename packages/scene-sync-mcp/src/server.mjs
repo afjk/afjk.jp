@@ -841,11 +841,11 @@ server.registerTool(
     description: 'Request a screenshot from the browser. Defaults to returning MCP image content for visual verification. Use mode=url for a temporary URL instead.',
     inputSchema: z.object({
       mode: z.enum(['image', 'url']).optional().describe('Return mode. image returns MCP image content. url uploads to temporary Scene Sync blob and returns URL metadata. Defaults to image.'),
-      maxWidth: z.number().int().min(128).max(2048).optional().describe('Maximum screenshot width in pixels for image mode. Browser may downscale before returning. Default 1024.'),
-      quality: z.number().min(0.1).max(1).optional().describe('JPEG quality. Default 0.75 for image mode.')
+      maxWidth: z.number().int().min(128).max(2048).optional().describe('Maximum screenshot width in pixels for image mode. Browser may downscale before returning. Default 768. Can specify up to 2048 for higher quality.'),
+      quality: z.number().min(0.1).max(1).optional().describe('JPEG quality. Default 0.7 for image mode.')
     })
   },
-  async ({ mode = 'image', maxWidth = 1024, quality } = {}) => {
+  async ({ mode = 'image', maxWidth = 768, quality } = {}) => {
     try {
       const session = getSession()
 
@@ -856,7 +856,7 @@ server.registerTool(
         {
           mode,
           maxWidth,
-          quality: quality ?? (mode === 'image' ? 0.75 : 0.92)
+          quality: quality ?? (mode === 'image' ? 0.7 : 0.92)
         },
         { timeout: 15000 }
       )

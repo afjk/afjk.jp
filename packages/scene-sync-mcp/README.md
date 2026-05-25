@@ -494,9 +494,19 @@ Focus the browser camera on an object (requires objectId).
 
 Take a screenshot from the linked browser.
 
-By default, this returns MCP image content so Claude/Codex can visually inspect the scene.
+By default, this returns MCP image content so Claude/Codex can visually inspect the scene. Default size is optimized for WebSocket safety (768px, quality 0.7).
 
 Input:
+
+```json
+{
+  "mode": "image",
+  "maxWidth": 768,
+  "quality": 0.7
+}
+```
+
+For higher resolution, you can specify up to 2048px:
 
 ```json
 {
@@ -514,7 +524,7 @@ Use URL mode for compatibility/debugging:
 }
 ```
 
-Fields: `mode` (optional, "image" or "url", defaults to "image"), `maxWidth` (optional, pixels, defaults to 1024), `quality` (optional, JPEG quality 0.1-1, defaults to 0.75 for image mode).
+Fields: `mode` (optional, "image" or "url", defaults to "image"), `maxWidth` (optional, pixels, defaults to 768, max 2048), `quality` (optional, JPEG quality 0.1-1, defaults to 0.7 for image mode).
 
 ### scene_sync_revoke
 Revoke the current link. The user must redeem a new code to continue.

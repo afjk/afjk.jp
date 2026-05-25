@@ -534,7 +534,7 @@ components:
         count: 10
     ScreenshotParams:
       type: object
-      description: Optional parameters for screenshot. For MCP clients, mode="image" returns image content by default. For GPT Actions, use mode="url".
+      description: Optional parameters for screenshot. For MCP clients, mode="image" returns image content by default. For GPT Actions, use mode="url". Default 768px width optimized for WebSocket safety.
       properties:
         mode:
           type: string
@@ -544,14 +544,14 @@ components:
           type: integer
           minimum: 128
           maximum: 2048
-          description: Maximum image width for image mode. Default 1024.
+          description: Maximum image width for image mode. Default 768. Can specify up to 2048 for higher quality.
         quality:
           type: number
           minimum: 0.1
           maximum: 1
-          description: JPEG quality. Default 0.75 for image mode.
+          description: JPEG quality. Default 0.7 for image mode.
       additionalProperties: false
-      example: { "mode": "image", "maxWidth": 1024, "quality": 0.75 }
+      example: { "mode": "image", "maxWidth": 768, "quality": 0.7 }
     UploadGlbFromUrlParams:
       type: object
       required: [url]

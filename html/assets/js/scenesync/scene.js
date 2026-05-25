@@ -5337,8 +5337,8 @@ async function uploadBlobToStore(blob, contentType = 'application/octet-stream',
 async function captureScreenshotForAi(options = {}) {
   const {
     mode = 'url',
-    maxWidth = 1024,
-    quality = 0.75,
+    maxWidth = 768,
+    quality = 0.7,
   } = options || {};
 
   const blob = await captureScreenshotBlob({
@@ -5872,8 +5872,8 @@ async function handleAiCommand(from, payload) {
 
         result = await captureScreenshotForAi({
           mode,
-          maxWidth: Number.isFinite(params.maxWidth) ? params.maxWidth : 1024,
-          quality: Number.isFinite(params.quality) ? params.quality : (mode === 'image' ? 0.75 : 0.92),
+          maxWidth: Number.isFinite(params.maxWidth) ? params.maxWidth : 768,
+          quality: Number.isFinite(params.quality) ? params.quality : (mode === 'image' ? 0.7 : 0.92),
         });
 
         break;
