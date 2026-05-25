@@ -1,3 +1,16 @@
+const DEFAULT_TEXT_LAYOUT = {
+  version: 1,
+  width: 2.4,
+  height: 1.6,
+  padding: 0.12,
+  lineHeight: 1.35,
+  mode: 'scroll',
+};
+
+const DEFAULT_TEXT_SCROLL = {
+  y: 0,
+};
+
 function getTextUrlFormat(url) {
   try {
     const u = new URL(url);
@@ -46,7 +59,9 @@ export async function importTextUrl(url, ctx) {
         fontStyle: 'normal',
         color: '#ffffff',
         backgroundColor: 'rgba(0,0,0,0.65)',
-        align: 'center',
+        align: 'left',
+        layout: { ...DEFAULT_TEXT_LAYOUT },
+        scroll: { ...DEFAULT_TEXT_SCROLL },
       },
       metadata: {
         ...existingMetadata,

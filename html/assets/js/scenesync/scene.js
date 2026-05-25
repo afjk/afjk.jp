@@ -20,6 +20,7 @@ import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { resolveDroppedUrl } from './loaders/url-resolver.js';
+import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL } from './components/text-panel-renderer.js';
 import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
@@ -2824,17 +2825,74 @@ let singleTapTimer = null;
 
 renderer.domElement.addEventListener('touchstart', (e) => {
   touchMoved = false;
-}, { passive: true });
+  textPanelScrollActive = false;
+  textPanelTouchCandidate = null;
+
+  const touch = e.touches[0];
+  if (!touch) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((touch.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((touch.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(pointer, camera);
+  const targets = Array.from(managedObjects.values())
+    .filter((obj) => obj.userData?.role === 'text-panel' && !isSkySphereThreeObject(obj));
+  const hits = raycaster.intersectObjects(targets, true);
+
+  if (hits.length > 0) {
+    const hitObject = findTextPanelRoot(hits[0].object);
+    if (hitObject && canScrollTextPanel(hitObject)) {
+      textPanelTouchCandidate = {
+        panel: hitObject,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        lastY: touch.clientY,
+      };
+    }
+  }
+}, { passive: false });
 
 renderer.domElement.addEventListener('touchmove', (e) => {
   touchMoved = true;
-}, { passive: true });
+
+  if (!textPanelTouchCandidate || textPanelScrollActive) {
+    if (textPanelScrollActive && textPanelTouchCandidate && e.touches.length > 0) {
+      const touch = e.touches[0];
+      const deltaY = touch.clientY - textPanelTouchCandidate.lastY;
+      textPanelTouchCandidate.lastY = touch.clientY;
+      updateTextPanelScroll(textPanelTouchCandidate.panel.userData.objectId, -deltaY);
+      e.preventDefault();
+    }
+    return;
+  }
+
+  if (e.touches.length > 0) {
+    const touch = e.touches[0];
+    const dx = touch.clientX - textPanelTouchCandidate.startX;
+    const dy = touch.clientY - textPanelTouchCandidate.startY;
+
+    const isVerticalDrag =
+      Math.abs(dy) > SCROLL_DRAG_THRESHOLD_PX &&
+      Math.abs(dy) > Math.abs(dx);
+
+    if (isVerticalDrag) {
+      textPanelScrollActive = true;
+      textPanelTouchCandidate.lastY = touch.clientY;
+      updateTextPanelScroll(textPanelTouchCandidate.panel.userData.objectId, -dy);
+      e.preventDefault();
+    }
+  }
+}, { passive: false });
 
 function handleDoubleTap(clientX, clientY) {
   selectObjectAt(clientX, clientY);
 }
 
 renderer.domElement.addEventListener('touchend', (e) => {
+  textPanelTouchCandidate = null;
+  textPanelScrollActive = false;
+
   if (e.touches.length > 0) return;
   const touch = e.changedTouches[0];
   if (!touch) return;
@@ -2875,6 +2933,82 @@ renderer.domElement.addEventListener('touchend', (e) => {
     }, DOUBLE_TAP_DELAY + 50);
   }
 }, { passive: false });
+
+// ── Text Panel Scroll (wheel) ──────────────────────────────
+
+function updateTextPanelScroll(objectId, deltaY) {
+  const object = managedObjects.get(objectId);
+  if (!object) return;
+
+  const asset = object.userData?.asset;
+  const metrics = object.userData?.textPanelMetrics;
+  const resolvedText = object.userData?.resolvedText;
+
+  if (!asset || !metrics) return;
+
+  const currentScrollY = textPanelScrollState.get(objectId) ?? asset.scroll?.y ?? 0;
+  const nextScrollY = clamp(currentScrollY + deltaY, 0, metrics.maxScrollY);
+
+  if (nextScrollY === currentScrollY) return;
+
+  textPanelScrollState.set(objectId, nextScrollY);
+
+  // Rerender text panel with cached text + new scroll position
+  const renderAsset = {
+    ...asset,
+    text: resolvedText || asset.text || '',
+    scroll: { y: nextScrollY },
+  };
+
+  const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
+  const canvas = result.canvas;
+
+  const mesh = object.children.find((child) => child.isMesh);
+  if (!mesh) return;
+
+  const oldTexture = mesh.material.map;
+  const newTexture = new THREE.CanvasTexture(canvas);
+  newTexture.colorSpace = THREE.SRGBColorSpace;
+  newTexture.magFilter = THREE.LinearFilter;
+  newTexture.minFilter = THREE.LinearFilter;
+
+  mesh.material.map = newTexture;
+  mesh.material.needsUpdate = true;
+
+  object.userData.textPanelMetrics = result.metrics;
+  oldTexture?.dispose();
+}
+
+function handleTextPanelWheel(event) {
+  // Only scroll text panels, not camera, if overflow
+  if (isDragging) return; // Transform drag priority
+  if (event.ctrlKey || event.metaKey) return; // Allow pinch-zoom
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(pointer, camera);
+  const targets = Array.from(managedObjects.values())
+    .filter((obj) => obj.userData?.role === 'text-panel' && !isSkySphereThreeObject(obj));
+  const hits = raycaster.intersectObjects(targets, true);
+
+  if (hits.length === 0) return;
+
+  const hitObject = findTextPanelRoot(hits[0].object);
+  if (!hitObject) return;
+  if (!canScrollTextPanel(hitObject)) return;
+
+  // Text panel is overflowing → prevent default & scroll
+  event.preventDefault();
+  event.stopPropagation();
+
+  const deltaY = event.deltaY > 0 ? 40 : -40;
+  const objectId = hitObject.userData.objectId;
+  updateTextPanelScroll(objectId, deltaY);
+}
+
+renderer.domElement.addEventListener('wheel', handleTextPanelWheel, { passive: false });
 
 // ── 削除ロジック（共通） ──────────────────────────────────
 
@@ -6316,65 +6450,70 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
   });
 }
 
+// ── Text Panel v2 Scroll State ────────────────────────────────────
+// Local scroll state (not synced to other clients)
+const textPanelScrollState = new Map();
+let textPanelTouchCandidate = null;
+let textPanelScrollActive = false;
+const SCROLL_DRAG_THRESHOLD_PX = 8;
+
+function findTextPanelRoot(object) {
+  let current = object;
+  while (current) {
+    if (current.userData?.role === 'text-panel') return current;
+    current = current.parent;
+  }
+  return null;
+}
+
+function canScrollTextPanel(textPanel) {
+  const metrics = textPanel?.userData?.textPanelMetrics;
+  return metrics && metrics.maxScrollY > 0;
+}
+
 function loadTextObject(objectId, info, asset, existing) {
-  const textPromise = (asset.source === 'url' && asset.url)
-    ? fetch(asset.url, { mode: 'cors' }).then((r) => {
+  const normalizedAsset = normalizeTextAsset(asset, info);
+
+  const textPromise = (normalizedAsset.source === 'url' && normalizedAsset.url)
+    ? fetch(normalizedAsset.url, { mode: 'cors' }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.text();
       })
-    : Promise.resolve(asset.text || '');
+    : Promise.resolve(normalizedAsset.text || '');
 
-  textPromise.then((text) => {
-    const fontFamily = FONT_PRESETS[asset.fontFamily] || FONT_PRESETS['system-sans'];
-    const fontSize = typeof asset.fontSize === 'number' ? asset.fontSize : 32;
-    const fontWeight = asset.fontWeight || 'normal';
-    const fontStyle = asset.fontStyle || 'normal';
-    const color = asset.color || '#ffffff';
-    const bgColor = asset.backgroundColor || 'rgba(0,0,0,0.65)';
-    const align = asset.align || 'center';
+  textPromise.then((resolvedText) => {
+    const renderAsset = {
+      ...normalizedAsset,
+      text: resolvedText,
+      scroll: {
+        ...normalizedAsset.scroll,
+        y: textPanelScrollState.get(objectId) ?? normalizedAsset.scroll?.y ?? 0,
+      },
+    };
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
-    ctx.fillStyle = color;
-    ctx.textAlign = align === 'left' ? 'left' : align === 'right' ? 'right' : 'center';
-    ctx.textBaseline = 'middle';
-
-    const lines = text.split('\n');
-    const lineHeight = fontSize * 1.4;
-    const totalHeight = lines.length * lineHeight;
-    const startY = (canvas.height - totalHeight) / 2 + lineHeight / 2;
-    const x = align === 'left' ? 20 : align === 'right' ? canvas.width - 20 : canvas.width / 2;
-
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], x, startY + i * lineHeight, canvas.width - 40);
-    }
+    const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
+    const canvas = result.canvas;
+    const metrics = result.metrics;
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearFilter;
 
-    const aspect = canvas.width / canvas.height;
-    const maxEdge = 2;
-    const width = aspect >= 1 ? maxEdge : Math.max(maxEdge * aspect, 0.1);
-    const height = aspect >= 1 ? Math.max(maxEdge / aspect, 0.1) : maxEdge;
+    const layout = normalizedAsset.layout || DEFAULT_TEXT_LAYOUT;
+    const panelWidth = layout.width;
+    const panelHeight = layout.height;
 
-    const geometry = new THREE.PlaneGeometry(width, height);
+    const geometry = new THREE.PlaneGeometry(panelWidth, panelHeight);
     const material = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
-      depthWrite: true,
       side: THREE.DoubleSide,
       toneMapped: false,
     });
 
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.y = height / 2;
+    mesh.position.y = panelHeight / 2;
 
     const group = new THREE.Group();
     group.add(mesh);
@@ -6382,7 +6521,11 @@ function loadTextObject(objectId, info, asset, existing) {
     group.userData.objectId = objectId;
     group.userData.name = info.name;
     group.userData.assetType = 'text';
-    if (info.asset) group.userData.asset = structuredClone(info.asset);
+    group.userData.role = 'text-panel';
+    group.userData.asset = structuredClone(normalizedAsset);
+    group.userData.textPanelMetrics = metrics;
+    group.userData.resolvedText = resolvedText;
+    group.userData.dropRaycastTarget = true;
 
     group.userData.disposable = () => {
       texture.dispose();
@@ -6395,7 +6538,6 @@ function loadTextObject(objectId, info, asset, existing) {
       group.quaternion.copy(existing.quaternion);
       group.scale.copy(existing.scale);
       if (transformCtrl.object === existing) transformCtrl.detach();
-      scene.remove(existing);
     }
 
     if (removedObjectIds.has(objectId)) {
@@ -6591,19 +6733,30 @@ async function replaceObjectContent(objectId, input, options = {}) {
     metaFit = existingMeta.fit || 'contain';
   } else if (input.kind === 'text') {
     const existingAsset = existing.userData?.asset || {};
+
+    const nextFormat =
+      input.format ||
+      (input.source === 'url' &&
+      typeof input.url === 'string' &&
+      /\.(md|markdown)(?:$|[?#])/i.test(input.url)
+        ? 'markdown'
+        : existingAsset.format || 'plain');
+
     newAsset = {
       type: 'text',
-      source: input.source || 'inline',
-      ...(input.url ? { url: input.url } : {}),
-      ...(input.text !== undefined ? { text: input.text } : {}),
-      format: input.format || 'plain',
+      source: input.source || existingAsset.source || 'inline',
+      ...(input.url ? { url: input.url } : existingAsset.url ? { url: existingAsset.url } : {}),
+      ...(input.text !== undefined ? { text: input.text } : existingAsset.text ? { text: existingAsset.text } : {}),
+      format: nextFormat,
       fontFamily: input.fontFamily || existingAsset.fontFamily || 'system-sans',
       fontSize: input.fontSize || existingAsset.fontSize || 32,
       fontWeight: input.fontWeight || existingAsset.fontWeight || 'normal',
       fontStyle: input.fontStyle || existingAsset.fontStyle || 'normal',
       color: input.color || existingAsset.color || '#ffffff',
       backgroundColor: input.backgroundColor || existingAsset.backgroundColor || 'rgba(0,0,0,0.65)',
-      align: input.align || existingAsset.align || 'center',
+      align: input.align || existingAsset.align || 'left',
+      layout: existingAsset.layout || { ...DEFAULT_TEXT_LAYOUT },
+      scroll: existingAsset.scroll || { ...DEFAULT_TEXT_SCROLL },
     };
     metaRole = existingMeta.role || 'text-panel';
     metaAccepts = existingMeta.accepts || ['text'];
@@ -7975,7 +8128,9 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     fontStyle: 'normal',
     color: '#ffffff',
     backgroundColor: 'rgba(0,0,0,0.65)',
-    align: 'center',
+    align: 'left',
+    layout: { ...DEFAULT_TEXT_LAYOUT },
+    scroll: { ...DEFAULT_TEXT_SCROLL },
   };
 
   // Check for replace target
