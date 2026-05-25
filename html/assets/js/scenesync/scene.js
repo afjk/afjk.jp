@@ -1013,13 +1013,20 @@ function sendSelectedDelta() {
 
   if (!isFinite(pos[0]) || !isFinite(pos[1]) || !isFinite(pos[2])) return;
 
-  broadcast({
+  const payload = {
     kind: 'scene-delta',
     objectId: obj.userData.objectId,
     position: pos,
     rotation: rot,
     scale: scl,
-  });
+  };
+
+  // Text Panel scale bake では asset.layout が本体なので、asset を含める
+  if (obj.userData?.asset?.type === 'text') {
+    payload.asset = structuredClone(obj.userData.asset);
+  }
+
+  broadcast(payload);
   notifySceneStateChanged('selected-transform-sent');
 }
 
@@ -6362,17 +6369,33 @@ function rerenderTextPanelObject(object, asset) {
   const mesh = object.children.find((child) => child.isMesh);
   if (!mesh) return;
 
+  const layout = {
+    ...DEFAULT_TEXT_LAYOUT,
+    ...(asset.layout || {}),
+  };
+
+  const panelWidth = layout.width;
+  const panelHeight = layout.height;
+
   const oldTexture = mesh.material.map;
+  const oldGeometry = mesh.geometry;
+
   const newTexture = new THREE.CanvasTexture(canvas);
   newTexture.colorSpace = THREE.SRGBColorSpace;
   newTexture.magFilter = THREE.LinearFilter;
   newTexture.minFilter = THREE.LinearFilter;
 
+  const newGeometry = new THREE.PlaneGeometry(panelWidth, panelHeight);
+
+  mesh.geometry = newGeometry;
   mesh.material.map = newTexture;
   mesh.material.needsUpdate = true;
+  mesh.position.y = panelHeight / 2;
 
   object.userData.textPanelMetrics = result.metrics;
+
   oldTexture?.dispose();
+  oldGeometry?.dispose();
 }
 
 function bakeTextPanelScaleToLayout(object) {
