@@ -17,7 +17,7 @@ import {
   normalizeName,
   makeObjectId
 } from './validators.mjs'
-import { jsonResult, errorResult, successResult } from './tool-results.mjs'
+import { jsonResult, errorResult, successResult, imageResult } from './tool-results.mjs'
 
 const client = new SceneSyncClient()
 const store = new SessionStore()
@@ -130,6 +130,7 @@ function summarizeScene(scene) {
       position: obj.position,
       rotation: obj.rotation,
       scale: obj.scale,
+      bounds: obj.bounds,
       asset: obj.asset
     })),
     truncated: true
@@ -837,24 +838,65 @@ server.registerTool(
   'scene_sync_screenshot',
   {
     title: 'Take screenshot',
-    description: 'Request a screenshot from the browser. May take a few seconds.',
-    inputSchema: z.object({})
+    description: 'Request a screenshot from the browser. Defaults to returning MCP image content for visual verification. Use mode=url for a temporary URL instead.',
+    inputSchema: z.object({
+      mode: z.enum(['image', 'url']).optional().describe('Return mode. image returns MCP image content. url uploads to temporary Scene Sync blob and returns URL metadata. Defaults to image.'),
+      maxWidth: z.number().int().min(128).max(2048).optional().describe('Maximum screenshot width in pixels for image mode. Browser may downscale before returning. Default 1024.'),
+      quality: z.number().min(0.1).max(1).optional().describe('JPEG quality. Default 0.75 for image mode.')
+    })
   },
-  async () => {
+  async ({ mode = 'image', maxWidth = 1024, quality } = {}) => {
     try {
       const session = getSession()
 
-      const response = await client.aiCommand(session.roomId, session.sessionId, 'screenshot', {}, {
-        timeout: 10000
-      })
+      const response = await client.aiCommand(
+        session.roomId,
+        session.sessionId,
+        'screenshot',
+        {
+          mode,
+          maxWidth,
+          quality: quality ?? (mode === 'image' ? 0.75 : 0.92)
+        },
+        { timeout: 15000 }
+      )
 
       assertAiCommandOk(response)
+
+      const result = response?.result || response
+
+      if (mode === 'image') {
+        const base64 = result?.base64 || result?.data || null
+        const mimeType = result?.mimeType || 'image/jpeg'
+
+        if (!base64 || typeof base64 !== 'string') {
+          return errorResult(new Error('screenshot did not return base64 image data'))
+        }
+
+        return imageResult({
+          data: base64,
+          mimeType,
+          metadata: {
+            ok: true,
+            action: 'screenshot',
+            mode: 'image',
+            mimeType,
+            width: result.width ?? null,
+            height: result.height ?? null,
+            room: response.room || session.roomId,
+            userPresent: response.userPresent !== false,
+            targetPeerId: response.targetPeerId || null
+          }
+        })
+      }
 
       const sanitized = sanitizeScreenshotResult(response)
 
       return jsonResult({
         ...sanitized,
-        ok: true
+        ok: true,
+        action: 'screenshot',
+        mode: 'url'
       })
     } catch (e) {
       if (e instanceof ValidationError) {

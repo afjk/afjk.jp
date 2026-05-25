@@ -269,6 +269,26 @@ components:
       maxItems: 4
       items:
         type: number
+    WorldBounds:
+      type: object
+      additionalProperties: false
+      required: [min, max, center, size]
+      properties:
+        min:
+          $ref: '#/components/schemas/Vector3'
+        max:
+          $ref: '#/components/schemas/Vector3'
+        center:
+          $ref: '#/components/schemas/Vector3'
+        size:
+          $ref: '#/components/schemas/Vector3'
+    Bounds:
+      type: object
+      additionalProperties: false
+      required: [world]
+      properties:
+        world:
+          $ref: '#/components/schemas/WorldBounds'
     SceneAddPayload:
       type: object
       additionalProperties: true
@@ -361,6 +381,9 @@ components:
       type: object
       additionalProperties: true
       required: [kind, action]
+      description: |
+        AI command action. For screenshot, mode="url" is recommended for GPT Actions and external clients.
+        Scene objects may include bounds.world.min/max/center/size for positioning calculations.
       properties:
         kind:
           type: string
@@ -384,6 +407,9 @@ components:
         params:
           type: object
           additionalProperties: true
+          description: |
+            Action-specific parameters. For screenshot: mode ("image" or "url"), maxWidth (pixels), quality (0.1-1).
+            For upload/add actions: url, objectId (optional), name (optional), position (optional), rotation (optional), scale (optional).
         targetPeerId:
           type: string
         onBehalfOf:
@@ -458,6 +484,8 @@ components:
           $ref: '#/components/schemas/Quaternion'
         scale:
           $ref: '#/components/schemas/Vector3'
+        bounds:
+          $ref: '#/components/schemas/Bounds'
         asset:
           $ref: '#/components/schemas/Asset'
         meshPath:

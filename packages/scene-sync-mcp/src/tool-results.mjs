@@ -117,3 +117,19 @@ export function successResult(data) {
     ...data
   })
 }
+
+export function imageResult({ data, mimeType = 'image/jpeg', metadata = {} }) {
+  return {
+    content: [
+      {
+        type: 'image',
+        data,
+        mimeType
+      },
+      {
+        type: 'text',
+        text: JSON.stringify(metadata, null, 2)
+      }
+    ]
+  }
+}

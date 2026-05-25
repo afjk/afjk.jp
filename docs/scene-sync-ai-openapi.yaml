@@ -534,10 +534,24 @@ components:
         count: 10
     ScreenshotParams:
       type: object
-      description: No parameters.
-      properties: {}
+      description: Optional parameters for screenshot. For MCP clients, mode="image" returns image content by default. For GPT Actions, use mode="url".
+      properties:
+        mode:
+          type: string
+          enum: [image, url]
+          description: Return mode. "image" returns base64 image content (MCP). "url" uploads to temporary blob and returns URL.
+        maxWidth:
+          type: integer
+          minimum: 128
+          maximum: 2048
+          description: Maximum image width for image mode. Default 1024.
+        quality:
+          type: number
+          minimum: 0.1
+          maximum: 1
+          description: JPEG quality. Default 0.75 for image mode.
       additionalProperties: false
-      example: {}
+      example: { "mode": "image", "maxWidth": 1024, "quality": 0.75 }
     UploadGlbFromUrlParams:
       type: object
       required: [url]

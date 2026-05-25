@@ -175,6 +175,23 @@ Input: `{}` (default) or `{ "selectedOnly": true }` to return only currently sel
 
 When `selectedOnly: true`, the browser is queried for the current selection instead of fetching the full scene snapshot.
 
+Returned objects may include world-space bounds:
+
+```json
+{
+  "bounds": {
+    "world": {
+      "min": [0, 0, 0],
+      "max": [1, 1, 1],
+      "center": [0.5, 0.5, 0.5],
+      "size": [1, 1, 1]
+    }
+  }
+}
+```
+
+`bounds.world.size` is the actual size after scale is applied.
+
 ### scene_sync_add_box
 Add a box to the scene. High-level tool; use directly for requests like "add a red cube".
 
@@ -448,6 +465,8 @@ This is a generic current-selection API for external tools. Selection is browser
 
 Input: `{}`
 
+Returned objects may include world-space bounds (same structure as `scene_sync_get_scene`).
+
 Use cases:
 
 - align selected objects
@@ -472,7 +491,30 @@ Note: Undo/Redo operates on the browser-side Scene Sync history. Some operations
 Focus the browser camera on an object (requires objectId).
 
 ### scene_sync_screenshot
-Request a screenshot from the browser (may take a few seconds).
+
+Take a screenshot from the linked browser.
+
+By default, this returns MCP image content so Claude/Codex can visually inspect the scene.
+
+Input:
+
+```json
+{
+  "mode": "image",
+  "maxWidth": 1024,
+  "quality": 0.75
+}
+```
+
+Use URL mode for compatibility/debugging:
+
+```json
+{
+  "mode": "url"
+}
+```
+
+Fields: `mode` (optional, "image" or "url", defaults to "image"), `maxWidth` (optional, pixels, defaults to 1024), `quality` (optional, JPEG quality 0.1-1, defaults to 0.75 for image mode).
 
 ### scene_sync_revoke
 Revoke the current link. The user must redeem a new code to continue.

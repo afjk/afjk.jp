@@ -204,6 +204,24 @@ Implemented actions:
 - `getSelection`
 - `setAnimationClip`
 
+## Screenshots
+
+For MCP clients (Claude, Codex), `screenshot` can return image content directly. For GPT Actions, prefer `mode: "url"` to receive a temporary URL.
+
+```json
+{
+  "sessionId": "v1....",
+  "action": "screenshot",
+  "params": {
+    "mode": "image",
+    "maxWidth": 1024,
+    "quality": 0.75
+  }
+}
+```
+
+Scene objects may include `bounds.world.min`, `bounds.world.max`, `bounds.world.center`, and `bounds.world.size`. Use `bounds.world.size` as the real world-space size after scale is applied when aligning objects, fitting panels to walls, or placing objects on the floor.
+
 ## Animation clips
 
 For animated GLB objects, use `setAnimationClip` to switch clips by name or index.
