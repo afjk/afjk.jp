@@ -411,8 +411,7 @@ export function renderTextPanelCanvas(asset, options = {}) {
   }
 
   const viewportHeight = canvasHeight - 2 * paddingPx;
-  const maxScrollY = Math.max(0, contentHeight - viewportHeight);
-  const scrollY = clamp(asset.scroll?.y || 0, 0, maxScrollY);
+  const scrollY = 0;
 
   // Draw background
   ctx.fillStyle = asset.backgroundColor;
@@ -445,28 +444,11 @@ export function renderTextPanelCanvas(asset, options = {}) {
 
   ctx.restore();
 
-  // Draw scrollbar if needed
-  if (maxScrollY > 0) {
-    const scrollbarWidth = 4;
-    const scrollbarHeight = (viewportHeight / contentHeight) * viewportHeight;
-    const scrollbarY = (scrollY / maxScrollY) * (viewportHeight - scrollbarHeight);
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.fillRect(
-      canvasWidth - scrollbarWidth - 4,
-      paddingPx + scrollbarY,
-      scrollbarWidth,
-      scrollbarHeight,
-    );
-  }
-
   return {
     canvas,
     metrics: {
       contentHeight,
       viewportHeight,
-      maxScrollY,
-      scrollY,
       lineCount: layoutLines.length,
       overflow: contentHeight > viewportHeight,
     },
