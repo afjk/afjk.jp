@@ -105,7 +105,16 @@ export function parseClipboardDataTransfer(dataTransfer) {
     }
   }
 
-  // 優先順位4: text/html から URL 抽出
+  // 優先順位4: text/plain がURL
+  const plainText = dataTransfer.getData('text/plain');
+  if (plainText) {
+    const trimmed = plainText.trim();
+    if (isLikelyHttpUrl(trimmed)) {
+      return { kind: 'url', url: trimmed };
+    }
+  }
+
+  // 優先順位5: text/html から URL 抽出
   const html = dataTransfer.getData('text/html');
   if (html) {
     const url = extractHtmlUrls(html);
@@ -114,15 +123,8 @@ export function parseClipboardDataTransfer(dataTransfer) {
     }
   }
 
-  // 優先順位5: text/plain がURL
-  const plainText = dataTransfer.getData('text/plain');
+  // 優先順位6: 通常テキスト
   if (plainText) {
-    const trimmed = plainText.trim();
-    if (isLikelyHttpUrl(trimmed)) {
-      return { kind: 'url', url: trimmed };
-    }
-
-    // 優先順位6: 通常テキスト
     return createPlainTextClipboardPayload(plainText);
   }
 
@@ -152,7 +154,7 @@ export async function parseNavigatorClipboardItems(items) {
     }
   }
 
-  // テキスト抽出 (text/plain, text/uri-list, text/html)
+  // テキスト抽出 (text/uri-list, text/plain, text/html)
   for (const item of items) {
     if (item.types.includes('text/uri-list')) {
       try {
@@ -169,20 +171,9 @@ export async function parseNavigatorClipboardItems(items) {
         console.warn('[clipboard] uri-list extraction failed:', err);
       }
     }
+  }
 
-    if (item.types.includes('text/html')) {
-      try {
-        const blob = await item.getType('text/html');
-        const html = await blob.text();
-        const url = extractHtmlUrls(html);
-        if (url) {
-          return { kind: 'url', url };
-        }
-      } catch (err) {
-        console.warn('[clipboard] html extraction failed:', err);
-      }
-    }
-
+  for (const item of items) {
     if (item.types.includes('text/plain')) {
       try {
         const blob = await item.getType('text/plain');
@@ -195,6 +186,21 @@ export async function parseNavigatorClipboardItems(items) {
         return createPlainTextClipboardPayload(text);
       } catch (err) {
         console.warn('[clipboard] text extraction failed:', err);
+      }
+    }
+  }
+
+  for (const item of items) {
+    if (item.types.includes('text/html')) {
+      try {
+        const blob = await item.getType('text/html');
+        const html = await blob.text();
+        const url = extractHtmlUrls(html);
+        if (url) {
+          return { kind: 'url', url };
+        }
+      } catch (err) {
+        console.warn('[clipboard] html extraction failed:', err);
       }
     }
   }
