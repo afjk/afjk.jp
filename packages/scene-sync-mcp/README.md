@@ -5,6 +5,7 @@ An MCP server for controlling [afjk.jp](https://afjk.jp) Scene Sync from Claude 
 Scene Sync is a real-time 3D scene synchronization system. This MCP server lets AI models:
 - Redeem pairing codes to link to a user's Scene Sync room
 - Add and manipulate 3D objects (boxes, spheres, primitives, and image/video/text/GLB assets from URL)
+- Place objects precisely using world bounds, alignment, and size fitting helpers
 - Replace existing media/text panels with new content (with Undo/Redo support)
 - Inspect camera pose
 - Access browser operation history (undo/redo)
@@ -229,6 +230,51 @@ Rotate an object using a quaternion [x, y, z, w].
 
 ### scene_sync_scale_object
 Scale an object using [x, y, z] scale factors.
+
+### scene_sync_set_transform
+Set object position, rotation, and/or scale in one scene-delta update.
+
+Input:
+```json
+{
+  "objectId": "my-box-1",
+  "position": [0, 0.5, 0],
+  "rotation": [0, 0, 0, 1],
+  "scale": [1, 2, 1]
+}
+```
+
+At least one of `position`, `rotation`, or `scale` is required.
+
+### scene_sync_align_bounds
+Move a source object by aligning one or more `bounds.world` anchors to another object or to explicit world coordinates.
+
+Input:
+```json
+{
+  "sourceObjectId": "fox",
+  "axes": {
+    "y": {
+      "source": "min",
+      "value": 0
+    }
+  }
+}
+```
+
+### scene_sync_fit_bounds_size
+Scale an object so its current `bounds.world.size` matches a target real-world size.
+
+Input:
+```json
+{
+  "objectId": "fox",
+  "size": {
+    "y": 1
+  },
+  "preserveAspect": true
+}
+```
 
 ### scene_sync_set_color
 Change the color of a primitive object.
@@ -474,6 +520,60 @@ Use cases:
 - randomize selected rotation or scale
 - apply a Loomlet graph to selected objects
 - run scoped edits from AI or CLI tools
+
+### Bounds-based placement tools
+
+Some tools use `bounds.world` from the current browser scene. These bounds are world-axis aligned bounding boxes after scale and rotation are applied. This means rotated objects are measured as world-axis AABBs, not local oriented bounds.
+
+Use these tools for production-like placement tasks:
+
+- `scene_sync_set_transform`: update position, rotation, and scale together
+- `scene_sync_align_bounds`: align object bounds to another object or to a world coordinate
+- `scene_sync_fit_bounds_size`: scale an object to a target world-space size
+
+Place an object on the floor at world Y=0:
+
+```json
+{
+  "tool": "scene_sync_align_bounds",
+  "arguments": {
+    "sourceObjectId": "fox",
+    "axes": {
+      "y": { "source": "min", "value": 0 }
+    }
+  }
+}
+```
+
+Center an image panel on a wall and place it slightly in front:
+
+```json
+{
+  "tool": "scene_sync_align_bounds",
+  "arguments": {
+    "sourceObjectId": "image-panel",
+    "targetObjectId": "wall",
+    "axes": {
+      "x": { "source": "center", "target": "center" },
+      "y": { "source": "center", "target": "center" },
+      "z": { "source": "min", "target": "max", "offset": 0.01 }
+    }
+  }
+}
+```
+
+Make a GLB model 1 meter tall:
+
+```json
+{
+  "tool": "scene_sync_fit_bounds_size",
+  "arguments": {
+    "objectId": "fox",
+    "size": { "y": 1 },
+    "preserveAspect": true
+  }
+}
+```
 
 ### scene_sync_undo
 Undo the last operation recorded in the Scene Sync history.

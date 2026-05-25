@@ -8,6 +8,7 @@ import {
   ValidationError,
   assertLinked,
   assertObjectId,
+  assertVec3,
   normalizeVec3,
   normalizeQuat,
   normalizeScale,
@@ -15,7 +16,10 @@ import {
   normalizePrimitive,
   primitiveToName,
   normalizeName,
-  makeObjectId
+  makeObjectId,
+  assertBoundsWorld,
+  computeAlignedPosition,
+  computeFitScale
 } from './validators.mjs'
 import { jsonResult, errorResult, successResult, imageResult } from './tool-results.mjs'
 
@@ -135,6 +139,36 @@ function summarizeScene(scene) {
     })),
     truncated: true
   }
+}
+
+function listSceneObjects(scene) {
+  return normalizeObjects(scene?.objects)
+}
+
+function findSceneObject(scene, objectId) {
+  return listSceneObjects(scene).find((obj) => obj.objectId === objectId) || null
+}
+
+function getWorldBounds(object) {
+  const bounds = object?.bounds?.world
+  if (!bounds) {
+    throw new ValidationError(`Object ${object?.objectId || '(unknown)'} has no bounds.world`)
+  }
+  assertBoundsWorld(bounds, `Object ${object?.objectId || '(unknown)'}.bounds.world`)
+  return bounds
+}
+
+function getObjectPosition(object) {
+  const position = object?.position
+  if (position === undefined) {
+    throw new ValidationError(`Object ${object?.objectId || '(unknown)'} has no position`)
+  }
+  assertVec3(position, `Object ${object?.objectId || '(unknown)'}.position`)
+  return position
+}
+
+function getObjectScale(object) {
+  return normalizeScale(object?.scale, [1, 1, 1])
 }
 
 // Helper to add primitive objects
@@ -743,6 +777,209 @@ server.registerTool(
       return successResult({
         objectId,
         scale: finalScale
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+const alignAxisRuleSchema = z.object({
+  source: z.enum(['min', 'center', 'max']).describe('Source bounds anchor'),
+  target: z.enum(['min', 'center', 'max']).optional().describe('Target bounds anchor'),
+  value: z.number().optional().describe('Explicit world-space value to align to'),
+  offset: z.number().optional().describe('Optional offset in meters after alignment')
+})
+
+// scene_sync_set_transform
+server.registerTool(
+  'scene_sync_set_transform',
+  {
+    title: 'Set object transform',
+    description: 'Set object position, rotation, and/or scale in one scene-delta update. Use this when multiple transform fields should be updated together.',
+    inputSchema: z.object({
+      objectId: z.string().describe('Target object ID'),
+      position: z.array(z.number()).length(3).optional().describe('[x, y, z] position in meters'),
+      rotation: z.array(z.number()).length(4).optional().describe('[x, y, z, w] quaternion'),
+      scale: z.array(z.number()).length(3).optional().describe('[x, y, z] scale')
+    }).refine((value) => (
+      value.position !== undefined ||
+      value.rotation !== undefined ||
+      value.scale !== undefined
+    ), {
+      message: 'At least one of position, rotation, or scale is required'
+    })
+  },
+  async ({ objectId, position, rotation, scale }) => {
+    try {
+      const session = getSession()
+      assertObjectId(objectId)
+
+      const payload = {
+        kind: 'scene-delta',
+        objectId
+      }
+
+      if (position !== undefined) {
+        payload.position = normalizeVec3(position)
+      }
+      if (rotation !== undefined) {
+        payload.rotation = normalizeQuat(rotation)
+      }
+      if (scale !== undefined) {
+        payload.scale = normalizeScale(scale)
+      }
+
+      await client.broadcast(session.roomId, session.sessionId, payload)
+
+      return successResult({
+        objectId,
+        ...(payload.position !== undefined ? { position: payload.position } : {}),
+        ...(payload.rotation !== undefined ? { rotation: payload.rotation } : {}),
+        ...(payload.scale !== undefined ? { scale: payload.scale } : {})
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_align_bounds
+server.registerTool(
+  'scene_sync_align_bounds',
+  {
+    title: 'Align object bounds',
+    description: 'Move a source object by aligning one or more world-bounds anchors to a target object or world coordinate. Useful for floor contact, wall fitting, and center alignment.',
+    inputSchema: z.object({
+      sourceObjectId: z.string().describe('Object to move'),
+      targetObjectId: z.string().optional().describe('Object to align against. If omitted, use explicit axis values.'),
+      axes: z.object({
+        x: alignAxisRuleSchema.optional(),
+        y: alignAxisRuleSchema.optional(),
+        z: alignAxisRuleSchema.optional()
+      }).describe('Per-axis alignment rules. Each axis uses either targetObjectId+target or explicit value.')
+    })
+  },
+  async ({ sourceObjectId, targetObjectId, axes }) => {
+    try {
+      const session = getSession()
+      assertObjectId(sourceObjectId)
+      if (targetObjectId !== undefined) {
+        assertObjectId(targetObjectId)
+      }
+
+      const scene = await client.getScene(session.roomId, session.sessionId)
+      const sourceObject = findSceneObject(scene, sourceObjectId)
+      if (!sourceObject) {
+        throw new ValidationError(`Source object not found: ${sourceObjectId}`)
+      }
+
+      const targetObject = targetObjectId ? findSceneObject(scene, targetObjectId) : null
+      if (targetObjectId && !targetObject) {
+        throw new ValidationError(`Target object not found: ${targetObjectId}`)
+      }
+
+      const sourcePosition = getObjectPosition(sourceObject)
+      const sourceBounds = getWorldBounds(sourceObject)
+      const targetBounds = targetObject ? getWorldBounds(targetObject) : null
+
+      const nextPosition = computeAlignedPosition({
+        sourcePosition,
+        sourceBounds,
+        targetBounds,
+        axes
+      })
+
+      await client.broadcast(session.roomId, session.sessionId, {
+        kind: 'scene-delta',
+        objectId: sourceObjectId,
+        position: nextPosition
+      })
+
+      return successResult({
+        objectId: sourceObjectId,
+        position: nextPosition,
+        aligned: axes,
+        sourceBounds,
+        targetObjectId: targetObjectId || null,
+        targetBounds
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_fit_bounds_size
+server.registerTool(
+  'scene_sync_fit_bounds_size',
+  {
+    title: 'Fit object bounds size',
+    description: 'Scale an object so its world bounds size matches a target size on one or more axes. Useful for making panels or GLB models a real-world size.',
+    inputSchema: z.object({
+      objectId: z.string().describe('Target object ID'),
+      size: z.object({
+        x: z.number().positive().optional(),
+        y: z.number().positive().optional(),
+        z: z.number().positive().optional()
+      }).refine((value) => (
+        value.x !== undefined ||
+        value.y !== undefined ||
+        value.z !== undefined
+      ), {
+        message: 'At least one target size axis is required'
+      }).describe('Target world bounds size in meters for each axis. Omitted axes keep proportional scale unless preserveAspect is false.'),
+      preserveAspect: z.boolean().optional().describe('If true, use a uniform scale factor based on the first specified axis. Defaults to true.')
+    })
+  },
+  async ({ objectId, size, preserveAspect = true }) => {
+    try {
+      const session = getSession()
+      assertObjectId(objectId)
+
+      const scene = await client.getScene(session.roomId, session.sessionId)
+      const object = findSceneObject(scene, objectId)
+      if (!object) {
+        throw new ValidationError(`Object not found: ${objectId}`)
+      }
+
+      const bounds = getWorldBounds(object)
+      const currentScale = getObjectScale(object)
+      const currentBoundsSize = normalizeVec3(bounds.size, [
+        bounds.max[0] - bounds.min[0],
+        bounds.max[1] - bounds.min[1],
+        bounds.max[2] - bounds.min[2]
+      ])
+
+      const nextScale = computeFitScale({
+        currentScale,
+        currentBoundsSize,
+        targetSize: size,
+        preserveAspect
+      })
+
+      await client.broadcast(session.roomId, session.sessionId, {
+        kind: 'scene-delta',
+        objectId,
+        scale: nextScale
+      })
+
+      return successResult({
+        objectId,
+        scale: nextScale,
+        previousScale: currentScale,
+        previousBoundsSize: currentBoundsSize,
+        targetSize: size,
+        preserveAspect
       })
     } catch (e) {
       if (e instanceof ValidationError) {
