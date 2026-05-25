@@ -961,6 +961,11 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
   } else {
     clearInterval(dragIntervalId);
     dragIntervalId = null;
+
+    // Text Panel scale bake (sendSelectedDelta と history 記録より前)
+    const wasBaked = transformCtrl.object &&
+      bakeTextPanelScaleToLayout(transformCtrl.object);
+
     sendSelectedDelta();
 
     // ドラッグ終了時に履歴に追加
@@ -1008,13 +1013,20 @@ function sendSelectedDelta() {
 
   if (!isFinite(pos[0]) || !isFinite(pos[1]) || !isFinite(pos[2])) return;
 
-  broadcast({
+  const payload = {
     kind: 'scene-delta',
     objectId: obj.userData.objectId,
     position: pos,
     rotation: rot,
     scale: scl,
-  });
+  };
+
+  // Text Panel scale bake では asset.layout が本体なので、asset を含める
+  if (obj.userData?.asset?.type === 'text') {
+    payload.asset = structuredClone(obj.userData.asset);
+  }
+
+  broadcast(payload);
   notifySceneStateChanged('selected-transform-sent');
 }
 
@@ -6339,6 +6351,89 @@ function findTextPanelRoot(object) {
     current = current.parent;
   }
   return null;
+}
+
+function rerenderTextPanelObject(object, asset) {
+  if (!object) return;
+
+  const resolvedText = object.userData?.resolvedText || asset.text || '';
+
+  const renderAsset = {
+    ...asset,
+    text: resolvedText,
+  };
+
+  const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
+  const canvas = result.canvas;
+
+  const mesh = object.children.find((child) => child.isMesh);
+  if (!mesh) return;
+
+  const layout = {
+    ...DEFAULT_TEXT_LAYOUT,
+    ...(asset.layout || {}),
+  };
+
+  const panelWidth = layout.width;
+  const panelHeight = layout.height;
+
+  const oldTexture = mesh.material.map;
+  const oldGeometry = mesh.geometry;
+
+  const newTexture = new THREE.CanvasTexture(canvas);
+  newTexture.colorSpace = THREE.SRGBColorSpace;
+  newTexture.magFilter = THREE.LinearFilter;
+  newTexture.minFilter = THREE.LinearFilter;
+
+  const newGeometry = new THREE.PlaneGeometry(panelWidth, panelHeight);
+
+  mesh.geometry = newGeometry;
+  mesh.material.map = newTexture;
+  mesh.material.needsUpdate = true;
+  mesh.position.y = panelHeight / 2;
+
+  object.userData.textPanelMetrics = result.metrics;
+
+  oldTexture?.dispose();
+  oldGeometry?.dispose();
+}
+
+function bakeTextPanelScaleToLayout(object) {
+  if (!object) return false;
+  if (object.userData?.role !== 'text-panel') return false;
+
+  const asset = object.userData?.asset;
+  if (!asset || asset.type !== 'text') return false;
+
+  const sx = object.scale.x || 1;
+  const sy = object.scale.y || 1;
+
+  if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) {
+    return false;
+  }
+
+  const layout = {
+    ...DEFAULT_TEXT_LAYOUT,
+    ...(asset.layout || {}),
+  };
+
+  const nextLayout = {
+    ...layout,
+    width: Math.max(0.4, layout.width * Math.abs(sx)),
+    height: Math.max(0.3, layout.height * Math.abs(sy)),
+  };
+
+  const nextAsset = {
+    ...asset,
+    layout: nextLayout,
+  };
+
+  object.userData.asset = nextAsset;
+  object.scale.set(1, 1, 1);
+
+  rerenderTextPanelObject(object, nextAsset);
+
+  return true;
 }
 
 function loadTextObject(objectId, info, asset, existing) {
