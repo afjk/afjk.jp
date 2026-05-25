@@ -8777,6 +8777,21 @@ const EDITABLE_SCENE_OBJECT_FIELDS = new Set([
   'asset',
 ]);
 
+const EDITABLE_TEXT_ASSET_FIELDS = new Set([
+  'fontSize',
+  'fontFamily',
+  'fontWeight',
+  'fontStyle',
+  'color',
+  'backgroundColor',
+  'align',
+]);
+
+const EDITABLE_TEXT_LAYOUT_FIELDS = new Set([
+  'width',
+  'height',
+]);
+
 function cloneInspectorValue(value) {
   if (value === undefined) return undefined;
   if (value === null || typeof value !== 'object') return value;
@@ -8811,6 +8826,55 @@ function validateColorValue(value, path, errors) {
     errors.push(`${path} must be a string or number color value.`);
   }
   return valid;
+}
+
+function validateFontSize(value, path, errors) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    errors.push(`${path} must be a finite number.`);
+    return false;
+  }
+  if (value < 8 || value > 256) {
+    errors.push(`${path} must be between 8 and 256.`);
+    return false;
+  }
+  return true;
+}
+
+function validateTextLayoutValue(value, path, errors) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    errors.push(`${path} must be a finite number.`);
+    return false;
+  }
+  if (path.includes('width') && (value < 0.4 || value > 100)) {
+    errors.push(`${path} must be between 0.4 and 100.`);
+    return false;
+  }
+  if (path.includes('height') && (value < 0.3 || value > 100)) {
+    errors.push(`${path} must be between 0.3 and 100.`);
+    return false;
+  }
+  return true;
+}
+
+function validateTextAssetField(key, value, objectId, errors) {
+  if (key === 'fontSize') {
+    return validateFontSize(value, `objects.${objectId}.asset.fontSize`, errors);
+  }
+  if (key === 'color' || key === 'backgroundColor') {
+    return validateColorValue(value, `objects.${objectId}.asset.${key}`, errors);
+  }
+  if (key === 'fontFamily' || key === 'fontWeight' || key === 'fontStyle' || key === 'align') {
+    if (typeof value !== 'string') {
+      errors.push(`objects.${objectId}.asset.${key} must be a string.`);
+      return false;
+    }
+    if (key === 'align' && !['left', 'center', 'right'].includes(value)) {
+      errors.push(`objects.${objectId}.asset.align must be 'left', 'center', or 'right'.`);
+      return false;
+    }
+    return true;
+  }
+  return true;
 }
 
 function addIgnoredSceneInspectorEntry(entries, path, reason) {
@@ -8950,40 +9014,126 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       const baseAsset = baseObject.asset;
       const editedAsset = editedObject.asset;
       const baseAssetIsPrimitive = baseAsset?.type === 'primitive';
-      const assetKeys = new Set([
-        ...Object.keys(baseAsset || {}),
-        ...Object.keys(editedAsset || {}),
-      ]);
-      const changedAssetKeys = Array.from(assetKeys)
-        .filter((key) => !valuesEqual(baseAsset?.[key], editedAsset?.[key]));
+      const baseAssetIsText = baseAsset?.type === 'text';
+      const editedAssetIsText = editedAsset?.type === 'text';
 
-      const unsupportedAssetKeys = changedAssetKeys.filter((key) => key !== 'color');
-      if (unsupportedAssetKeys.length > 0) {
-        for (const key of unsupportedAssetKeys) {
-          addIgnoredSceneInspectorEntry(
-            ignoredEntries,
-            `objects.${objectId}.asset.${key}`,
-            'only asset.color is editable in this prototype'
-          );
+      if (baseAssetIsText && editedAssetIsText) {
+        const assetPatch = cloneInspectorValue(baseAsset);
+        const changedAssetFields = [];
+
+        const editableTextAssetKeys = new Set([
+          ...EDITABLE_TEXT_ASSET_FIELDS,
+          'layout',
+        ]);
+
+        const readOnlyTextAssetKeys = new Set([
+          'type',
+          'source',
+          'text',
+          'url',
+          'format',
+        ]);
+
+        // Handle text asset display properties
+        for (const key of EDITABLE_TEXT_ASSET_FIELDS) {
+          if (!valuesEqual(baseAsset?.[key], editedAsset?.[key])) {
+            const isValid = validateTextAssetField(key, editedAsset?.[key], objectId, errors);
+            if (isValid) {
+              assetPatch[key] = cloneInspectorValue(editedAsset[key]);
+              changedAssetFields.push(`asset.${key}`);
+            }
+          }
         }
-      }
 
-      if (changedAssetKeys.includes('color')) {
-        if (!editedAsset || typeof editedAsset !== 'object' || Array.isArray(editedAsset)) {
-          addIgnoredSceneInspectorEntry(
-            ignoredEntries,
-            `objects.${objectId}.asset.color`,
-            'color edits require an asset object'
-          );
-        } else if (!baseAssetIsPrimitive) {
-          addIgnoredSceneInspectorEntry(
-            ignoredEntries,
-            `objects.${objectId}.asset.color`,
-            'color edits are limited to primitive objects'
-          );
-        } else if (validateColorValue(editedAsset?.color, `objects.${objectId}.asset.color`, errors)) {
-          objectDelta.asset = { color: editedAsset.color };
-          changedFields.push('asset.color');
+        // Handle layout object
+        if (!valuesEqual(baseAsset?.layout, editedAsset?.layout)) {
+          const layoutPatch = {
+            ...(baseAsset?.layout || {}),
+          };
+          let layoutChanged = false;
+
+          for (const key of EDITABLE_TEXT_LAYOUT_FIELDS) {
+            if (!valuesEqual(baseAsset?.layout?.[key], editedAsset?.layout?.[key])) {
+              const isValid = validateTextLayoutValue(
+                editedAsset?.layout?.[key],
+                `objects.${objectId}.asset.layout.${key}`,
+                errors
+              );
+              if (isValid) {
+                layoutPatch[key] = editedAsset.layout[key];
+                changedAssetFields.push(`asset.layout.${key}`);
+                layoutChanged = true;
+              }
+            }
+          }
+
+          if (layoutChanged) {
+            assetPatch.layout = layoutPatch;
+          }
+        }
+
+        // Collect ignored fields for text asset
+        const assetKeys = new Set([
+          ...Object.keys(baseAsset || {}),
+          ...Object.keys(editedAsset || {}),
+        ]);
+        for (const key of assetKeys) {
+          if (readOnlyTextAssetKeys.has(key) && !valuesEqual(baseAsset?.[key], editedAsset?.[key])) {
+            addIgnoredSceneInspectorEntry(
+              ignoredEntries,
+              `objects.${objectId}.asset.${key}`,
+              'text asset content/source fields are read-only; use replacement to change content'
+            );
+          } else if (!editableTextAssetKeys.has(key) && !readOnlyTextAssetKeys.has(key) && !valuesEqual(baseAsset?.[key], editedAsset?.[key])) {
+            addIgnoredSceneInspectorEntry(
+              ignoredEntries,
+              `objects.${objectId}.asset.${key}`,
+              'asset field is not editable for this asset type'
+            );
+          }
+        }
+
+        if (changedAssetFields.length > 0) {
+          objectDelta.asset = assetPatch;
+          changedFields.push(...changedAssetFields);
+        }
+      } else {
+        // Primitive and other asset type handling
+        const assetKeys = new Set([
+          ...Object.keys(baseAsset || {}),
+          ...Object.keys(editedAsset || {}),
+        ]);
+        const changedAssetKeys = Array.from(assetKeys)
+          .filter((key) => !valuesEqual(baseAsset?.[key], editedAsset?.[key]));
+
+        const unsupportedAssetKeys = changedAssetKeys.filter((key) => key !== 'color');
+        if (unsupportedAssetKeys.length > 0) {
+          for (const key of unsupportedAssetKeys) {
+            addIgnoredSceneInspectorEntry(
+              ignoredEntries,
+              `objects.${objectId}.asset.${key}`,
+              'asset field is not editable for this asset type'
+            );
+          }
+        }
+
+        if (changedAssetKeys.includes('color')) {
+          if (!editedAsset || typeof editedAsset !== 'object' || Array.isArray(editedAsset)) {
+            addIgnoredSceneInspectorEntry(
+              ignoredEntries,
+              `objects.${objectId}.asset.color`,
+              'color edits require an asset object'
+            );
+          } else if (!baseAssetIsPrimitive) {
+            addIgnoredSceneInspectorEntry(
+              ignoredEntries,
+              `objects.${objectId}.asset.color`,
+              'color edits are limited to primitive objects'
+            );
+          } else if (validateColorValue(editedAsset?.color, `objects.${objectId}.asset.color`, errors)) {
+            objectDelta.asset = { color: editedAsset.color };
+            changedFields.push('asset.color');
+          }
         }
       }
     }
