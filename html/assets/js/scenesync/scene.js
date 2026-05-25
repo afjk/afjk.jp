@@ -9018,8 +9018,21 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       const editedAssetIsText = editedAsset?.type === 'text';
 
       if (baseAssetIsText && editedAssetIsText) {
-        const assetPatch = { type: 'text' };
+        const assetPatch = cloneInspectorValue(baseAsset);
         const changedAssetFields = [];
+
+        const editableTextAssetKeys = new Set([
+          ...EDITABLE_TEXT_ASSET_FIELDS,
+          'layout',
+        ]);
+
+        const readOnlyTextAssetKeys = new Set([
+          'type',
+          'source',
+          'text',
+          'url',
+          'format',
+        ]);
 
         // Handle text asset display properties
         for (const key of EDITABLE_TEXT_ASSET_FIELDS) {
@@ -9064,17 +9077,14 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
           ...Object.keys(baseAsset || {}),
           ...Object.keys(editedAsset || {}),
         ]);
-        const editableKeys = new Set([
-          'type',
-          ...EDITABLE_TEXT_ASSET_FIELDS,
-          'layout',
-          'source',
-          'text',
-          'url',
-          'format', // these are read-only
-        ]);
         for (const key of assetKeys) {
-          if (!editableKeys.has(key) && !valuesEqual(baseAsset?.[key], editedAsset?.[key])) {
+          if (readOnlyTextAssetKeys.has(key) && !valuesEqual(baseAsset?.[key], editedAsset?.[key])) {
+            addIgnoredSceneInspectorEntry(
+              ignoredEntries,
+              `objects.${objectId}.asset.${key}`,
+              'text asset content/source fields are read-only; use replacement to change content'
+            );
+          } else if (!editableTextAssetKeys.has(key) && !readOnlyTextAssetKeys.has(key) && !valuesEqual(baseAsset?.[key], editedAsset?.[key])) {
             addIgnoredSceneInspectorEntry(
               ignoredEntries,
               `objects.${objectId}.asset.${key}`,
