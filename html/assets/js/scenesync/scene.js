@@ -2825,8 +2825,6 @@ let singleTapTimer = null;
 
 renderer.domElement.addEventListener('touchstart', (e) => {
   touchMoved = false;
-  textPanelScrollActive = false;
-  textPanelTouchCandidate = null;
 
   const touch = e.touches[0];
   if (!touch) return;
@@ -2835,54 +2833,12 @@ renderer.domElement.addEventListener('touchstart', (e) => {
   pointer.x = ((touch.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((touch.clientY - rect.top) / rect.height) * 2 + 1;
 
-  raycaster.setFromCamera(pointer, camera);
-  const targets = Array.from(managedObjects.values())
-    .filter((obj) => obj.userData?.role === 'text-panel' && !isSkySphereThreeObject(obj));
-  const hits = raycaster.intersectObjects(targets, true);
-
-  if (hits.length > 0) {
-    const hitObject = findTextPanelRoot(hits[0].object);
-    if (hitObject && canScrollTextPanel(hitObject)) {
-      textPanelTouchCandidate = {
-        panel: hitObject,
-        startX: touch.clientX,
-        startY: touch.clientY,
-        lastY: touch.clientY,
-      };
-    }
-  }
+  lastTapX = touch.clientX;
+  lastTapY = touch.clientY;
 }, { passive: false });
 
 renderer.domElement.addEventListener('touchmove', (e) => {
   touchMoved = true;
-
-  if (!textPanelTouchCandidate || textPanelScrollActive) {
-    if (textPanelScrollActive && textPanelTouchCandidate && e.touches.length > 0) {
-      const touch = e.touches[0];
-      const deltaY = touch.clientY - textPanelTouchCandidate.lastY;
-      textPanelTouchCandidate.lastY = touch.clientY;
-      updateTextPanelScroll(textPanelTouchCandidate.panel.userData.objectId, -deltaY);
-      e.preventDefault();
-    }
-    return;
-  }
-
-  if (e.touches.length > 0) {
-    const touch = e.touches[0];
-    const dx = touch.clientX - textPanelTouchCandidate.startX;
-    const dy = touch.clientY - textPanelTouchCandidate.startY;
-
-    const isVerticalDrag =
-      Math.abs(dy) > SCROLL_DRAG_THRESHOLD_PX &&
-      Math.abs(dy) > Math.abs(dx);
-
-    if (isVerticalDrag) {
-      textPanelScrollActive = true;
-      textPanelTouchCandidate.lastY = touch.clientY;
-      updateTextPanelScroll(textPanelTouchCandidate.panel.userData.objectId, -dy);
-      e.preventDefault();
-    }
-  }
 }, { passive: false });
 
 function handleDoubleTap(clientX, clientY) {
@@ -2890,9 +2846,6 @@ function handleDoubleTap(clientX, clientY) {
 }
 
 renderer.domElement.addEventListener('touchend', (e) => {
-  textPanelTouchCandidate = null;
-  textPanelScrollActive = false;
-
   if (e.touches.length > 0) return;
   const touch = e.changedTouches[0];
   if (!touch) return;
@@ -2936,79 +2889,6 @@ renderer.domElement.addEventListener('touchend', (e) => {
 
 // ── Text Panel Scroll (wheel) ──────────────────────────────
 
-function updateTextPanelScroll(objectId, deltaY) {
-  const object = managedObjects.get(objectId);
-  if (!object) return;
-
-  const asset = object.userData?.asset;
-  const metrics = object.userData?.textPanelMetrics;
-  const resolvedText = object.userData?.resolvedText;
-
-  if (!asset || !metrics) return;
-
-  const currentScrollY = textPanelScrollState.get(objectId) ?? asset.scroll?.y ?? 0;
-  const nextScrollY = clamp(currentScrollY + deltaY, 0, metrics.maxScrollY);
-
-  if (nextScrollY === currentScrollY) return;
-
-  textPanelScrollState.set(objectId, nextScrollY);
-
-  // Rerender text panel with cached text + new scroll position
-  const renderAsset = {
-    ...asset,
-    text: resolvedText || asset.text || '',
-    scroll: { y: nextScrollY },
-  };
-
-  const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
-  const canvas = result.canvas;
-
-  const mesh = object.children.find((child) => child.isMesh);
-  if (!mesh) return;
-
-  const oldTexture = mesh.material.map;
-  const newTexture = new THREE.CanvasTexture(canvas);
-  newTexture.colorSpace = THREE.SRGBColorSpace;
-  newTexture.magFilter = THREE.LinearFilter;
-  newTexture.minFilter = THREE.LinearFilter;
-
-  mesh.material.map = newTexture;
-  mesh.material.needsUpdate = true;
-
-  object.userData.textPanelMetrics = result.metrics;
-  oldTexture?.dispose();
-}
-
-function handleTextPanelWheel(event) {
-  // Only scroll text panels, not camera, if overflow
-  if (isDragging) return; // Transform drag priority
-  if (event.ctrlKey || event.metaKey) return; // Allow pinch-zoom
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-  raycaster.setFromCamera(pointer, camera);
-  const targets = Array.from(managedObjects.values())
-    .filter((obj) => obj.userData?.role === 'text-panel' && !isSkySphereThreeObject(obj));
-  const hits = raycaster.intersectObjects(targets, true);
-
-  if (hits.length === 0) return;
-
-  const hitObject = findTextPanelRoot(hits[0].object);
-  if (!hitObject) return;
-  if (!canScrollTextPanel(hitObject)) return;
-
-  // Text panel is overflowing → prevent default & scroll
-  event.preventDefault();
-  event.stopPropagation();
-
-  const deltaY = event.deltaY > 0 ? 40 : -40;
-  const objectId = hitObject.userData.objectId;
-  updateTextPanelScroll(objectId, deltaY);
-}
-
-renderer.domElement.addEventListener('wheel', handleTextPanelWheel, { passive: false });
 
 // ── 削除ロジック（共通） ──────────────────────────────────
 
@@ -6450,12 +6330,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
   });
 }
 
-// ── Text Panel v2 Scroll State ────────────────────────────────────
-// Local scroll state (not synced to other clients)
-const textPanelScrollState = new Map();
-let textPanelTouchCandidate = null;
-let textPanelScrollActive = false;
-const SCROLL_DRAG_THRESHOLD_PX = 8;
+// ── Text Panel v2 Helpers ────────────────────────────────────
 
 function findTextPanelRoot(object) {
   let current = object;
@@ -6464,11 +6339,6 @@ function findTextPanelRoot(object) {
     current = current.parent;
   }
   return null;
-}
-
-function canScrollTextPanel(textPanel) {
-  const metrics = textPanel?.userData?.textPanelMetrics;
-  return metrics && metrics.maxScrollY > 0;
 }
 
 function loadTextObject(objectId, info, asset, existing) {
@@ -6485,10 +6355,6 @@ function loadTextObject(objectId, info, asset, existing) {
     const renderAsset = {
       ...normalizedAsset,
       text: resolvedText,
-      scroll: {
-        ...normalizedAsset.scroll,
-        y: textPanelScrollState.get(objectId) ?? normalizedAsset.scroll?.y ?? 0,
-      },
     };
 
     const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
