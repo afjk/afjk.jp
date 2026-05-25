@@ -990,6 +990,11 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
       }
       dragStartState = null;
     }
+
+    // Text Panel scale bake
+    if (transformCtrl.object && transformCtrl.object.userData?.role === 'text-panel') {
+      bakeTextPanelScaleToLayout(transformCtrl.object.userData.objectId, transformCtrl.object);
+    }
   }
 });
 
@@ -6339,6 +6344,85 @@ function findTextPanelRoot(object) {
     current = current.parent;
   }
   return null;
+}
+
+function broadcastObjectUpdate(objectId, patch) {
+  const payload = {
+    kind: 'scene-delta',
+    objectId,
+    ...patch,
+  };
+  broadcast(payload);
+}
+
+function rerenderTextPanel(objectId, asset) {
+  const object = managedObjects.get(objectId);
+  if (!object) return;
+
+  const resolvedText = object.userData?.resolvedText || asset.text || '';
+
+  const renderAsset = {
+    ...asset,
+    text: resolvedText,
+  };
+
+  const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
+  const canvas = result.canvas;
+
+  const mesh = object.children.find((child) => child.isMesh);
+  if (!mesh) return;
+
+  const oldTexture = mesh.material.map;
+  const newTexture = new THREE.CanvasTexture(canvas);
+  newTexture.colorSpace = THREE.SRGBColorSpace;
+  newTexture.magFilter = THREE.LinearFilter;
+  newTexture.minFilter = THREE.LinearFilter;
+
+  mesh.material.map = newTexture;
+  mesh.material.needsUpdate = true;
+
+  object.userData.textPanelMetrics = result.metrics;
+  oldTexture?.dispose();
+}
+
+function bakeTextPanelScaleToLayout(objectId, object) {
+  const asset = object?.userData?.asset;
+  if (!asset || asset.type !== 'text') return false;
+
+  const sx = object.scale.x || 1;
+  const sy = object.scale.y || 1;
+
+  if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) {
+    return false;
+  }
+
+  const layout = {
+    ...DEFAULT_TEXT_LAYOUT,
+    ...(asset.layout || {}),
+  };
+
+  const nextLayout = {
+    ...layout,
+    width: Math.max(0.4, layout.width * Math.abs(sx)),
+    height: Math.max(0.3, layout.height * Math.abs(sy)),
+  };
+
+  const nextAsset = {
+    ...asset,
+    layout: nextLayout,
+  };
+
+  object.scale.set(1, 1, 1);
+  object.userData.asset = nextAsset;
+
+  rerenderTextPanel(objectId, nextAsset);
+
+  broadcastObjectUpdate(objectId, {
+    asset: nextAsset,
+    scale: [1, 1, 1],
+  });
+
+  return true;
 }
 
 function loadTextObject(objectId, info, asset, existing) {
