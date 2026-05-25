@@ -961,6 +961,11 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
   } else {
     clearInterval(dragIntervalId);
     dragIntervalId = null;
+
+    // Text Panel scale bake (sendSelectedDelta と history 記録より前)
+    const wasBaked = transformCtrl.object &&
+      bakeTextPanelScaleToLayout(transformCtrl.object);
+
     sendSelectedDelta();
 
     // ドラッグ終了時に履歴に追加
@@ -989,11 +994,6 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
         }
       }
       dragStartState = null;
-    }
-
-    // Text Panel scale bake
-    if (transformCtrl.object && transformCtrl.object.userData?.role === 'text-panel') {
-      bakeTextPanelScaleToLayout(transformCtrl.object.userData.objectId, transformCtrl.object);
     }
   }
 });
@@ -6346,17 +6346,7 @@ function findTextPanelRoot(object) {
   return null;
 }
 
-function broadcastObjectUpdate(objectId, patch) {
-  const payload = {
-    kind: 'scene-delta',
-    objectId,
-    ...patch,
-  };
-  broadcast(payload);
-}
-
-function rerenderTextPanel(objectId, asset) {
-  const object = managedObjects.get(objectId);
+function rerenderTextPanelObject(object, asset) {
   if (!object) return;
 
   const resolvedText = object.userData?.resolvedText || asset.text || '';
@@ -6385,8 +6375,11 @@ function rerenderTextPanel(objectId, asset) {
   oldTexture?.dispose();
 }
 
-function bakeTextPanelScaleToLayout(objectId, object) {
-  const asset = object?.userData?.asset;
+function bakeTextPanelScaleToLayout(object) {
+  if (!object) return false;
+  if (object.userData?.role !== 'text-panel') return false;
+
+  const asset = object.userData?.asset;
   if (!asset || asset.type !== 'text') return false;
 
   const sx = object.scale.x || 1;
@@ -6412,15 +6405,10 @@ function bakeTextPanelScaleToLayout(objectId, object) {
     layout: nextLayout,
   };
 
-  object.scale.set(1, 1, 1);
   object.userData.asset = nextAsset;
+  object.scale.set(1, 1, 1);
 
-  rerenderTextPanel(objectId, nextAsset);
-
-  broadcastObjectUpdate(objectId, {
-    asset: nextAsset,
-    scale: [1, 1, 1],
-  });
+  rerenderTextPanelObject(object, nextAsset);
 
   return true;
 }
