@@ -8352,13 +8352,7 @@ async function pasteFromClipboardAtDefaultPosition() {
     return result;
   }
 
-  if (isMobileUi()) {
-    openPasteSheet();
-    showToast('枠内を長押しして貼り付けてください');
-    return null;
-  }
-
-  showToast('クリップボードを読み取れません。通常の貼り付け操作を使ってください');
+  showToast('クリップボードを読み取れません');
   return null;
 }
 

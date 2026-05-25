@@ -1,3 +1,15 @@
+function getTextUrlFormat(url) {
+  try {
+    const u = new URL(url);
+    const ext = (u.pathname.split('.').pop() || '').toLowerCase();
+    return ext === 'md' || ext === 'markdown' ? 'markdown' : 'plain';
+  } catch {
+    return /\.(md|markdown)(?:$|[?#])/i.test(String(url))
+      ? 'markdown'
+      : 'plain';
+  }
+}
+
 /**
  * URL からテキストアセットを scene-add として追加。
  * テキスト内容はフェッチせず URL 参照のまま保持する。
@@ -27,7 +39,7 @@ export async function importTextUrl(url, ctx) {
         type: 'text',
         source: 'url',
         url,
-        format: /\.(md|markdown)$/i.test(filename) ? 'markdown' : 'plain',
+        format: getTextUrlFormat(url),
         fontFamily: 'system-sans',
         fontSize: 32,
         fontWeight: 'normal',
