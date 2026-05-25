@@ -20,7 +20,7 @@ import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { resolveDroppedUrl } from './loaders/url-resolver.js';
-import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL } from './components/text-panel-renderer.js';
+import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL, estimateTextPanelLayout } from './components/text-panel-renderer.js';
 import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
@@ -6447,9 +6447,25 @@ function loadTextObject(objectId, info, asset, existing) {
     : Promise.resolve(normalizedAsset.text || '');
 
   textPromise.then((resolvedText) => {
+    const shouldAutoFitLayout =
+      normalizedAsset.source === 'url' &&
+      normalizedAsset.layout?.autoFit === true;
+
+    let layout = normalizedAsset.layout;
+    if (shouldAutoFitLayout) {
+      layout = {
+        ...estimateTextPanelLayout(resolvedText, {
+          format: normalizedAsset.format,
+          fontSize: normalizedAsset.fontSize,
+        }),
+        autoFit: false,
+      };
+    }
+
     const renderAsset = {
       ...normalizedAsset,
       text: resolvedText,
+      layout,
     };
 
     const result = renderTextPanelCanvas(renderAsset, { pixelsPerUnit: 512 });
@@ -6461,7 +6477,6 @@ function loadTextObject(objectId, info, asset, existing) {
     texture.magFilter = THREE.LinearFilter;
     texture.minFilter = THREE.LinearFilter;
 
-    const layout = normalizedAsset.layout || DEFAULT_TEXT_LAYOUT;
     const panelWidth = layout.width;
     const panelHeight = layout.height;
 
@@ -6483,7 +6498,7 @@ function loadTextObject(objectId, info, asset, existing) {
     group.userData.name = info.name;
     group.userData.assetType = 'text';
     group.userData.role = 'text-panel';
-    group.userData.asset = structuredClone(normalizedAsset);
+    group.userData.asset = structuredClone(renderAsset);
     group.userData.textPanelMetrics = metrics;
     group.userData.resolvedText = resolvedText;
     group.userData.dropRaycastTarget = true;
@@ -6716,7 +6731,11 @@ async function replaceObjectContent(objectId, input, options = {}) {
       color: input.color || existingAsset.color || '#ffffff',
       backgroundColor: input.backgroundColor || existingAsset.backgroundColor || 'rgba(0,0,0,0.65)',
       align: input.align || existingAsset.align || 'left',
-      layout: existingAsset.layout || { ...DEFAULT_TEXT_LAYOUT },
+      layout: (() => {
+        const baseLayout = existingAsset.layout || { ...DEFAULT_TEXT_LAYOUT };
+        const { autoFit, ...cleanLayout } = baseLayout;
+        return { ...cleanLayout, autoFit: false };
+      })(),
       scroll: existingAsset.scroll || { ...DEFAULT_TEXT_SCROLL },
     };
     metaRole = existingMeta.role || 'text-panel';
@@ -8078,11 +8097,12 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     : readQuaternionArray(context.rotation, [0, 0, 0, 1]);
   const scale = readVector3Array(context.scale, [1, 1, 1]);
 
+  const format = /\.(md|markdown)$/i.test(filename) ? 'markdown' : 'plain';
   const newAsset = {
     type: 'text',
     source: 'inline',
     text,
-    format: /\.(md|markdown)$/i.test(filename) ? 'markdown' : 'plain',
+    format,
     fontFamily: 'system-sans',
     fontSize: 32,
     fontWeight: 'normal',
@@ -8090,7 +8110,10 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     color: '#ffffff',
     backgroundColor: 'rgba(0,0,0,0.65)',
     align: 'left',
-    layout: { ...DEFAULT_TEXT_LAYOUT },
+    layout: estimateTextPanelLayout(text, {
+      format,
+      fontSize: 32,
+    }),
     scroll: { ...DEFAULT_TEXT_SCROLL },
   };
 

@@ -16,6 +16,64 @@ export const DEFAULT_TEXT_SCROLL = {
   y: 0,
 };
 
+export const AUTO_TEXT_LAYOUT_MIN_WIDTH = 0.6;
+export const AUTO_TEXT_LAYOUT_MIN_HEIGHT = 0.35;
+export const AUTO_TEXT_LAYOUT_MAX_WIDTH = DEFAULT_TEXT_LAYOUT.width;
+export const AUTO_TEXT_LAYOUT_MAX_HEIGHT = DEFAULT_TEXT_LAYOUT.height;
+
+export function estimateTextPanelLayout(text, options = {}) {
+  const fontSize = Number.isFinite(options.fontSize) ? options.fontSize : 32;
+  const format = options.format || 'plain';
+
+  const minWidth = AUTO_TEXT_LAYOUT_MIN_WIDTH;
+  const minHeight = AUTO_TEXT_LAYOUT_MIN_HEIGHT;
+  const maxWidth = AUTO_TEXT_LAYOUT_MAX_WIDTH;
+  const maxHeight = AUTO_TEXT_LAYOUT_MAX_HEIGHT;
+  const padding = DEFAULT_TEXT_LAYOUT.padding;
+  const lineHeight = DEFAULT_TEXT_LAYOUT.lineHeight;
+
+  const content = String(text || '').trim();
+  if (!content) {
+    return { ...DEFAULT_TEXT_LAYOUT, width: minWidth, height: minHeight };
+  }
+
+  const lines = content.split(/\r?\n/);
+  const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
+
+  const maxLineLength = Math.max(
+    1,
+    ...nonEmptyLines.map((line) => {
+      let normalized = line.trim();
+
+      if (format === 'markdown') {
+        normalized = normalized
+          .replace(/^#{1,6}\s+/, '')
+          .replace(/^[-*+]\s+/, '')
+          .replace(/^\d+\.\s+/, '')
+          .replace(/^>\s+/, '');
+      }
+
+      return Array.from(normalized).length;
+    })
+  );
+
+  const lineCount = Math.max(1, nonEmptyLines.length || lines.length);
+
+  const charWidthWorld = (fontSize / 512) * 0.62;
+
+  const estimatedTextWidth = maxLineLength * charWidthWorld;
+  const estimatedWidth = estimatedTextWidth + padding * 2;
+
+  const lineHeightWorld = (fontSize / 512) * lineHeight;
+  const estimatedHeight = lineCount * lineHeightWorld + padding * 2;
+
+  return {
+    ...DEFAULT_TEXT_LAYOUT,
+    width: Math.max(minWidth, Math.min(maxWidth, estimatedWidth)),
+    height: Math.max(minHeight, Math.min(maxHeight, estimatedHeight)),
+  };
+}
+
 export function normalizeTextAsset(asset, info = {}) {
   const source = asset && typeof asset === 'object' ? asset : {};
 
