@@ -20,7 +20,7 @@ import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { resolveDroppedUrl } from './loaders/url-resolver.js';
-import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL } from './components/text-panel-renderer.js';
+import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL, estimateTextPanelLayout } from './components/text-panel-renderer.js';
 import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
@@ -6461,7 +6461,13 @@ function loadTextObject(objectId, info, asset, existing) {
     texture.magFilter = THREE.LinearFilter;
     texture.minFilter = THREE.LinearFilter;
 
-    const layout = normalizedAsset.layout || DEFAULT_TEXT_LAYOUT;
+    let layout = normalizedAsset.layout;
+    if (normalizedAsset.source === 'url') {
+      layout = estimateTextPanelLayout(resolvedText, {
+        format: normalizedAsset.format,
+        fontSize: normalizedAsset.fontSize,
+      });
+    }
     const panelWidth = layout.width;
     const panelHeight = layout.height;
 
@@ -8078,11 +8084,12 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     : readQuaternionArray(context.rotation, [0, 0, 0, 1]);
   const scale = readVector3Array(context.scale, [1, 1, 1]);
 
+  const format = /\.(md|markdown)$/i.test(filename) ? 'markdown' : 'plain';
   const newAsset = {
     type: 'text',
     source: 'inline',
     text,
-    format: /\.(md|markdown)$/i.test(filename) ? 'markdown' : 'plain',
+    format,
     fontFamily: 'system-sans',
     fontSize: 32,
     fontWeight: 'normal',
@@ -8090,7 +8097,10 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     color: '#ffffff',
     backgroundColor: 'rgba(0,0,0,0.65)',
     align: 'left',
-    layout: { ...DEFAULT_TEXT_LAYOUT },
+    layout: estimateTextPanelLayout(text, {
+      format,
+      fontSize: 32,
+    }),
     scroll: { ...DEFAULT_TEXT_SCROLL },
   };
 
