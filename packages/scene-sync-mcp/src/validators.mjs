@@ -117,3 +117,138 @@ export function primitiveToName(primitive) {
   }
   return names[primitive] || 'AI Object'
 }
+
+export function assertBoundsWorld(value, name = 'bounds.world') {
+  if (!value || typeof value !== 'object') {
+    throw new ValidationError(`${name} must be an object.`)
+  }
+
+  assertVec3(value.min, `${name}.min`)
+  assertVec3(value.center, `${name}.center`)
+  assertVec3(value.max, `${name}.max`)
+
+  if (value.size !== undefined) {
+    assertVec3(value.size, `${name}.size`)
+  }
+}
+
+export function getAxisIndex(axis) {
+  if (axis === 'x') return 0
+  if (axis === 'y') return 1
+  if (axis === 'z') return 2
+  throw new ValidationError(`Invalid axis: ${axis}`)
+}
+
+export function getBoundsAnchor(bounds, axis, anchor) {
+  assertBoundsWorld(bounds)
+  const index = getAxisIndex(axis)
+
+  if (anchor === 'min') return bounds.min[index]
+  if (anchor === 'center') return bounds.center[index]
+  if (anchor === 'max') return bounds.max[index]
+
+  throw new ValidationError(`Invalid anchor: ${anchor}`)
+}
+
+function assertPositiveFiniteNumber(value, name) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new ValidationError(`${name} must be a positive number.`)
+  }
+}
+
+function assertNonZeroBoundsSize(value, name) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) < 1e-9) {
+    throw new ValidationError(`${name} must be non-zero.`)
+  }
+}
+
+export function computeAlignedPosition({ sourcePosition, sourceBounds, targetBounds = null, axes }) {
+  assertVec3(sourcePosition, 'sourcePosition')
+  assertBoundsWorld(sourceBounds, 'sourceBounds')
+
+  if (!axes || typeof axes !== 'object') {
+    throw new ValidationError('axes must be an object.')
+  }
+
+  const nextPosition = [...sourcePosition]
+  let applied = 0
+
+  for (const axis of ['x', 'y', 'z']) {
+    const rule = axes[axis]
+    if (!rule) continue
+
+    applied += 1
+
+    const sourceAnchor = getBoundsAnchor(sourceBounds, axis, rule.source)
+    let targetValue = null
+
+    if (typeof rule.value === 'number') {
+      if (!Number.isFinite(rule.value)) {
+        throw new ValidationError(`axes.${axis}.value must be a finite number.`)
+      }
+      targetValue = rule.value
+    } else {
+      if (!targetBounds) {
+        throw new ValidationError(`axes.${axis}.value or targetBounds is required.`)
+      }
+      if (!rule.target) {
+        throw new ValidationError(`axes.${axis}.target is required when aligning to target bounds.`)
+      }
+      targetValue = getBoundsAnchor(targetBounds, axis, rule.target)
+    }
+
+    const offset = rule.offset === undefined ? 0 : rule.offset
+    if (typeof offset !== 'number' || !Number.isFinite(offset)) {
+      throw new ValidationError(`axes.${axis}.offset must be a finite number.`)
+    }
+
+    const delta = targetValue + offset - sourceAnchor
+    nextPosition[getAxisIndex(axis)] += delta
+  }
+
+  if (applied === 0) {
+    throw new ValidationError('At least one axis rule is required.')
+  }
+
+  return nextPosition
+}
+
+export function computeFitScale({ currentScale, currentBoundsSize, targetSize, preserveAspect = true }) {
+  assertVec3(currentScale, 'currentScale')
+  assertVec3(currentBoundsSize, 'currentBoundsSize')
+
+  if (!targetSize || typeof targetSize !== 'object') {
+    throw new ValidationError('targetSize must be an object.')
+  }
+
+  const specifiedAxes = ['x', 'y', 'z'].filter((axis) => targetSize[axis] !== undefined)
+
+  if (specifiedAxes.length === 0) {
+    throw new ValidationError('At least one target size axis is required.')
+  }
+
+  for (const axis of specifiedAxes) {
+    assertPositiveFiniteNumber(targetSize[axis], `targetSize.${axis}`)
+  }
+
+  if (preserveAspect) {
+    const axis = specifiedAxes[0]
+    const index = getAxisIndex(axis)
+    const currentSize = currentBoundsSize[index]
+    assertNonZeroBoundsSize(currentSize, `currentBoundsSize.${axis}`)
+
+    const factor = targetSize[axis] / currentSize
+    return currentScale.map((value) => value * factor)
+  }
+
+  const nextScale = [...currentScale]
+
+  for (const axis of specifiedAxes) {
+    const index = getAxisIndex(axis)
+    const currentSize = currentBoundsSize[index]
+    assertNonZeroBoundsSize(currentSize, `currentBoundsSize.${axis}`)
+    nextScale[index] = currentScale[index] * (targetSize[axis] / currentSize)
+  }
+
+  return nextScale
+}

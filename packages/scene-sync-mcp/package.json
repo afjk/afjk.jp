@@ -35,6 +35,7 @@
   "scripts": {
     "start": "node src/cli.mjs serve",
     "dev": "node src/cli.mjs serve",
+    "test": "node --test src/*.test.mjs",
     "doctor": "node src/cli.mjs doctor",
     "setup:codex": "node src/cli.mjs setup codex",
     "setup:codex:staging": "node src/cli.mjs setup codex --staging",
