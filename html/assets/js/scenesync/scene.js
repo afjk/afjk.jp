@@ -2854,9 +2854,10 @@ renderer.domElement.addEventListener('touchstart', (e) => {
 }, { passive: false });
 
 renderer.domElement.addEventListener('touchmove', (e) => {
+  touchMoved = true;
+
   if (!textPanelTouchCandidate || textPanelScrollActive) {
-    // Already in scroll mode or no candidate
-    if (textPanelScrollActive && e.touches.length > 0) {
+    if (textPanelScrollActive && textPanelTouchCandidate && e.touches.length > 0) {
       const touch = e.touches[0];
       const deltaY = touch.clientY - textPanelTouchCandidate.lastY;
       textPanelTouchCandidate.lastY = touch.clientY;
@@ -2865,8 +2866,6 @@ renderer.domElement.addEventListener('touchmove', (e) => {
     }
     return;
   }
-
-  touchMoved = true;
 
   if (e.touches.length > 0) {
     const touch = e.touches[0];
