@@ -526,6 +526,37 @@ Use URL mode for compatibility/debugging:
 
 Fields: `mode` (optional, "image" or "url", defaults to "image"), `maxWidth` (optional, pixels, defaults to 768, max 2048), `quality` (optional, JPEG quality 0.1-1, defaults to 0.7 for image mode).
 
+#### Verifying image mode
+
+`mode: "image"` is the default for MCP clients, and `scene_sync_screenshot` has two return layers:
+
+- Browser / AI command layer: when `mode: "image"` is used, the browser returns JSON containing base64 image data.
+- MCP tool layer: the MCP server converts that base64 data into MCP image content so Claude, Codex, and other MCP clients can inspect the screenshot visually.
+
+When testing MCP behavior, call the registered MCP tool directly. Do not only call `scene-sync-client.mjs` or `aiCommand('screenshot')` directly, because that only verifies the lower-level JSON/base64 transport.
+
+A successful MCP tool result should contain image content followed by metadata text:
+
+```text
+content[0].type: image
+content[0].mimeType: image/jpeg
+content[1].type: text
+```
+
+Example metadata:
+
+```json
+{
+  "ok": true,
+  "action": "screenshot",
+  "mode": "image",
+  "mimeType": "image/jpeg",
+  "width": 1024,
+  "height": 598,
+  "userPresent": true
+}
+```
+
 ### scene_sync_revoke
 Revoke the current link. The user must redeem a new code to continue.
 
