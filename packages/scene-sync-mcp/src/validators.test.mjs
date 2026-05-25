@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { computeAlignedPosition, computeFitScale, ValidationError } from './validators.mjs'
+import { assertQuat, assertVec3, computeAlignedPosition, computeFitScale, ValidationError } from './validators.mjs'
 
 test('computeAlignedPosition aligns source minY to world Y=0', () => {
   const nextPosition = computeAlignedPosition({
@@ -84,4 +84,14 @@ test('computeFitScale rejects zero-sized current bounds on a fitted axis', () =>
       preserveAspect: true
     })
   }, ValidationError)
+})
+
+test('assertVec3 rejects NaN and Infinity', () => {
+  assert.throws(() => assertVec3([NaN, 0, 0], 'position'), ValidationError)
+  assert.throws(() => assertVec3([0, Infinity, 0], 'position'), ValidationError)
+})
+
+test('assertQuat rejects NaN and Infinity', () => {
+  assert.throws(() => assertQuat([0, 0, 0, NaN], 'rotation'), ValidationError)
+  assert.throws(() => assertQuat([0, 0, Infinity, 1], 'rotation'), ValidationError)
 })

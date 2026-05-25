@@ -28,14 +28,14 @@ export function assertCode(code) {
 }
 
 export function assertVec3(value, name = 'vector') {
-  if (!Array.isArray(value) || value.length !== 3 || !value.every(v => typeof v === 'number')) {
-    throw new ValidationError(`${name} must be [number, number, number].`)
+  if (!Array.isArray(value) || value.length !== 3 || !value.every(v => typeof v === 'number' && Number.isFinite(v))) {
+    throw new ValidationError(`${name} must be [finite number, finite number, finite number].`)
   }
 }
 
 export function assertQuat(value, name = 'quaternion') {
-  if (!Array.isArray(value) || value.length !== 4 || !value.every(v => typeof v === 'number')) {
-    throw new ValidationError(`${name} must be [number, number, number, number].`)
+  if (!Array.isArray(value) || value.length !== 4 || !value.every(v => typeof v === 'number' && Number.isFinite(v))) {
+    throw new ValidationError(`${name} must be [finite number, finite number, finite number, finite number].`)
   }
 }
 
