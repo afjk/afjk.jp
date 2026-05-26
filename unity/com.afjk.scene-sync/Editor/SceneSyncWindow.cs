@@ -1113,6 +1113,8 @@ namespace Afjk.SceneSync.Editor
             if (!objectIdMatch.Success) return;
             var objectId = objectIdMatch.Groups[1].Value;
 
+            var name = SceneSyncWireJson.ExtractString(raw, "name");
+            var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
             float[] position = ExtractArray(raw, "\"position\":");
             float[] rotation = ExtractArray(raw, "\"rotation\":");
             float[] scale = ExtractArray(raw, "\"scale\":");
@@ -1122,9 +1124,16 @@ namespace Afjk.SceneSync.Editor
             var go = FindManagedObject(objectId);
             if (go == null) return;
 
+            if (!string.IsNullOrWhiteSpace(name))
+                go.name = name;
+
+            if (visible.HasValue)
+                go.SetActive(visible.Value);
+
             if (!string.IsNullOrWhiteSpace(assetJson) || !string.IsNullOrWhiteSpace(metadataJson))
             {
                 SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
+                SceneSyncPanelFactory.ApplyAssetVisualDelta(go, assetJson);
 
                 if (!string.IsNullOrWhiteSpace(assetJson))
                 {
@@ -1684,6 +1693,7 @@ namespace Afjk.SceneSync.Editor
             var nameMatch = System.Text.RegularExpressions.Regex.Match(
                 raw, "\"name\":\"([^\"]+)\"");
             var name = nameMatch.Success ? nameMatch.Groups[1].Value : objectId;
+            var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
 
             float[] position = ExtractArray(raw, "\"position\":");
             float[] rotation = ExtractArray(raw, "\"rotation\":");
@@ -1738,12 +1748,13 @@ namespace Afjk.SceneSync.Editor
             // メッシュがある場合は glB をダウンロードしてインポート
             if (hasMeshAsset)
             {
-                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis, assetJson, metadataJson);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis, assetJson, metadataJson, visible);
             }
             else
             {
                 var go = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                 ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
+                if (visible.HasValue) go.SetActive(visible.Value);
                 go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                 ApplyTransform(go, position, rotation, scale);
                 _managedObjects[objectId] = go;
@@ -2081,6 +2092,7 @@ namespace Afjk.SceneSync.Editor
                     ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
                     ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
                     ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+                    ",\"visible\":" + (go.activeSelf ? "true" : "false") +
                     meshPathJson + assetIdJson + assetJson + metadataJson + "}");
             }
 
@@ -2110,7 +2122,7 @@ namespace Afjk.SceneSync.Editor
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null,
-            string assetJson = null, string metadataJson = null)
+            string assetJson = null, string metadataJson = null, bool? visible = null)
         {
             try
             {
@@ -2135,6 +2147,7 @@ namespace Afjk.SceneSync.Editor
                     Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
                     var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                     ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+                    if (visible.HasValue) fallback.SetActive(visible.Value);
                     fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
@@ -2165,6 +2178,7 @@ namespace Afjk.SceneSync.Editor
                     var go = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
                     SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                    if (visible.HasValue) go.SetActive(visible.Value);
                     go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
@@ -2196,6 +2210,7 @@ namespace Afjk.SceneSync.Editor
                     Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
                     var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                     ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+                    if (visible.HasValue) fallback.SetActive(visible.Value);
                     fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     ApplyTransform(fallback, position, rotation, scale);
                     _managedObjects[objectId] = fallback;
