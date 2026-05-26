@@ -1,11 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createSceneDocumentFromSceneSyncState } from '../../../html/assets/js/scenesync-export/export/export-scene-document.js';
 import { collectExportAssets } from '../../../html/assets/js/scenesync-export/export/collect-export-assets.js';
 import { generateManifest } from '../../../html/assets/js/scenesync-export/export/export-manifest.js';
 import { generateReadme, generateReadmeHtml } from '../../../html/assets/js/scenesync-export/export/export-readme.js';
 import { generateExportIndexHtml, VIEWER_SOURCES } from '../../../html/assets/js/scenesync-export/export/build-export-package.js';
 import { isValidSceneDocument } from '../../../html/assets/js/scenesync-export/viewer/scene-document.js';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 // Simulate the core export package logic (without JSZip / DOM)
 
@@ -81,24 +86,30 @@ test('export package construction', async (t) => {
     }
   });
 
-  await t.test('VIEWER_SOURCES dest paths include viewer/loom/loom.js and viewer/loom/loom-scenesync.js', () => {
+  await t.test('VIEWER_SOURCES dest paths include the vendored Loomlet runtime bundle', () => {
     const destPaths = VIEWER_SOURCES.map(s => s.dest);
-    assert.ok(destPaths.includes('viewer/loom/loom.js'),
-      `VIEWER_SOURCES should contain viewer/loom/loom.js (got: ${destPaths.join(', ')})`);
-    assert.ok(destPaths.includes('viewer/loom/loom-scenesync.js'),
-      `VIEWER_SOURCES should contain viewer/loom/loom-scenesync.js (got: ${destPaths.join(', ')})`);
+    assert.ok(destPaths.includes('viewer/loomlet/loomlet-scenesync-runtime.browser.js'),
+      `VIEWER_SOURCES should contain viewer/loomlet/loomlet-scenesync-runtime.browser.js (got: ${destPaths.join(', ')})`);
   });
 
-  await t.test('VIEWER_SOURCES loom entries maintain relative import compatibility', () => {
-    // loom-scenesync.js imports "./loom.js" — both must be under viewer/loom/ for this to work
-    const loomEntry = VIEWER_SOURCES.find(s => s.dest === 'viewer/loom/loom.js');
-    const loomSyncEntry = VIEWER_SOURCES.find(s => s.dest === 'viewer/loom/loom-scenesync.js');
-    assert.ok(loomEntry, 'viewer/loom/loom.js entry must exist in VIEWER_SOURCES');
-    assert.ok(loomSyncEntry, 'viewer/loom/loom-scenesync.js entry must exist in VIEWER_SOURCES');
-    // Both must reside in the same directory so './loom.js' import resolves correctly
-    const loomDir = loomEntry.dest.split('/').slice(0, -1).join('/');
-    const loomSyncDir = loomSyncEntry.dest.split('/').slice(0, -1).join('/');
-    assert.equal(loomDir, loomSyncDir, 'loom.js and loom-scenesync.js must be in the same directory');
+  await t.test('vendored Loomlet runtime source exists and is self-contained', () => {
+    const runtimeSource = VIEWER_SOURCES.find(
+      s => s.dest === 'viewer/loomlet/loomlet-scenesync-runtime.browser.js'
+    );
+    assert.ok(runtimeSource, 'vendored runtime source must be listed');
+
+    const sourcePath = path.join(repoRoot, 'html', runtimeSource.src.replace(/^\//, ''));
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    assert.match(source, /Loomlet Scene Sync browser runtime bundle/);
+    assert.doesNotMatch(source, /from\s+['"]|import\s+/);
+    assert.doesNotMatch(source, /parseDSL|compileToGraph|compileLoomSource|loom-dsl/);
+    assert.doesNotMatch(source, /afjk\.jp|presence-server|presence server|cdn\.jsdelivr|unpkg/);
+  });
+
+  await t.test('VIEWER_SOURCES no longer exports the transitional viewer/loom layout', () => {
+    const destPaths = VIEWER_SOURCES.map(s => s.dest);
+    assert.equal(destPaths.some(path => path.startsWith('viewer/loom/')), false,
+      `VIEWER_SOURCES should not contain old viewer/loom files (got: ${destPaths.join(', ')})`);
   });
 
   await t.test('scene.json includes behaviors when behaviorState provided', async () => {
@@ -130,6 +141,11 @@ test('export package construction', async (t) => {
     assert.ok(isValidSceneDocument(doc), 'document with behaviors should be valid');
     assert.ok(doc.behaviors, 'behaviors should be present in scene.json');
     assert.ok(doc.behaviors.objects['box-1'], 'object behavior should be present');
+    assert.deepEqual(doc.loomletRuntime, {
+      version: '0.1.2',
+      graphVersion: 'scene-sync-graph-json-v1',
+      adapter: 'scenesync',
+    });
   });
 
   await t.test('scene.json is still valid without behaviors (v1 compatibility)', async () => {

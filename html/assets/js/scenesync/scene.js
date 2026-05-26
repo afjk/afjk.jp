@@ -37,7 +37,7 @@ import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
 import { createHistoryManager, HistoryManager } from './history/history-manager.js';
 import { createUserManager } from './user/user-manager.js';
 import { createLinkManager } from './link/link-manager.js';
-import { createSceneSyncLoomIntegration } from './loom/loom-integration.js';
+import { createSceneSyncLoomIntegration } from './loomlet-runtime-integration.js';
 import { computeAssetId } from './assets/asset-id.js';
 import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
