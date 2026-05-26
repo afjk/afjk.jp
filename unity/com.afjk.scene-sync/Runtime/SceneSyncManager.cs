@@ -1143,6 +1143,8 @@ namespace Afjk.SceneSync
             if (!objectIdMatch.Success) return;
             var objectId = objectIdMatch.Groups[1].Value;
 
+            var name = SceneSyncWireJson.ExtractString(raw, "name");
+            var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
             float[] position = ExtractArray(raw, "\"position\":");
             float[] rotation = ExtractArray(raw, "\"rotation\":");
             float[] scale = ExtractArray(raw, "\"scale\":");
@@ -1152,9 +1154,16 @@ namespace Afjk.SceneSync
             var go = FindManagedObject(objectId);
             if (go == null) return;
 
+            if (!string.IsNullOrWhiteSpace(name))
+                go.name = name;
+
+            if (visible.HasValue)
+                go.SetActive(visible.Value);
+
             if (!string.IsNullOrWhiteSpace(assetJson) || !string.IsNullOrWhiteSpace(metadataJson))
             {
                 SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
+                SceneSyncPanelFactory.ApplyAssetVisualDelta(go, assetJson);
 
                 if (!string.IsNullOrWhiteSpace(assetJson))
                 {
@@ -1259,6 +1268,7 @@ namespace Afjk.SceneSync
             var nameMatch = System.Text.RegularExpressions.Regex.Match(
                 raw, "\"name\":\"([^\"]+)\"");
             var name = nameMatch.Success ? nameMatch.Groups[1].Value : objectId;
+            var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
 
             float[] position = ExtractArray(raw, "\"position\":");
             float[] rotation = ExtractArray(raw, "\"rotation\":");
@@ -1337,6 +1347,7 @@ namespace Afjk.SceneSync
                 placeholder.hideFlags = HideFlags.NotEditable;
                 ConfigureRemoteTemporaryIdentity(placeholder, objectId, meshPath, assetId);
                 SceneSyncPanelFactory.ConfigureWireMetadata(placeholder, assetJson, metadataJson);
+                if (visible.HasValue) placeholder.SetActive(visible.Value);
                 placeholder.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                 _managedObjects[objectId] = placeholder;
@@ -1344,7 +1355,7 @@ namespace Afjk.SceneSync
                 _instanceToObjectId[placeholder.GetInstanceID()] = objectId;
 
                 // 非同期でダウンロード・インポート開始
-                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis, assetJson, metadataJson);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis, assetJson, metadataJson, visible);
             }
             else
             {
@@ -1352,6 +1363,7 @@ namespace Afjk.SceneSync
 
                 var go = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                 ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
+                if (visible.HasValue) go.SetActive(visible.Value);
                 go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                 _managedObjects[objectId] = go;
@@ -1645,6 +1657,7 @@ namespace Afjk.SceneSync
                     pos,
                     rot,
                     scl,
+                    go.activeSelf,
                     path,
                     assetId,
                     rawAssetJson,
@@ -1704,6 +1717,7 @@ namespace Afjk.SceneSync
                     pos,
                     rot,
                     scl,
+                    go.activeSelf,
                     path,
                     assetId,
                     rawAssetJson,
@@ -1876,13 +1890,15 @@ namespace Afjk.SceneSync
             float[] scale,
             string assetId = null,
             string assetJson = null,
-            string metadataJson = null)
+            string metadataJson = null,
+            bool? visible = null)
         {
             var placeholder = _managedObjects[objectId];
             var placeholderInstanceId = placeholder.GetInstanceID();
 
             var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
             ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+            if (visible.HasValue) fallback.SetActive(visible.Value);
             fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
             var fallbackMaterial = GetFallbackImportMaterial();
@@ -1903,7 +1919,7 @@ namespace Afjk.SceneSync
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null,
-            string assetJson = null, string metadataJson = null)
+            string assetJson = null, string metadataJson = null, bool? visible = null)
         {
             _knownObjectIds.Add(objectId);
 
@@ -1969,7 +1985,7 @@ namespace Afjk.SceneSync
                         _ = HandleMissingGlb(objectId, meshPath, null, assetId);
                     }
 
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -2031,6 +2047,7 @@ namespace Afjk.SceneSync
                     var go = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
                     SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                    if (visible.HasValue) go.SetActive(visible.Value);
                     go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
@@ -2087,7 +2104,7 @@ namespace Afjk.SceneSync
                         + ", loadingError=" + gltf.LoadingError
                         + ", sceneCount=" + gltf.SceneCount
                         + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
 
@@ -2126,7 +2143,7 @@ namespace Afjk.SceneSync
 
                 if (_managedObjects.ContainsKey(objectId))
                 {
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }

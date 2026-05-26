@@ -62,6 +62,34 @@ namespace Afjk.SceneSync
             return UnescapeJsonString(match.Groups[1].Value);
         }
 
+        public static bool? ExtractBoolean(string json, string fieldName)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(fieldName)) return null;
+            var match = Regex.Match(
+                json,
+                "\"" + Regex.Escape(fieldName) + "\"\\s*:\\s*(true|false)");
+            if (!match.Success) return null;
+            return match.Groups[1].Value == "true";
+        }
+
+        public static float? ExtractFloat(string json, string fieldName)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(fieldName)) return null;
+            var match = Regex.Match(
+                json,
+                "\"" + Regex.Escape(fieldName) + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)");
+            if (!match.Success) return null;
+            if (float.TryParse(
+                match.Groups[1].Value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var value))
+            {
+                return value;
+            }
+            return null;
+        }
+
         public static string ExtractRawObject(string json, string fieldName)
         {
             if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(fieldName)) return null;
@@ -161,6 +189,7 @@ namespace Afjk.SceneSync
             Vector3 position,
             Quaternion rotation,
             Vector3 scale,
+            bool visible,
             string meshPath,
             string assetId,
             string assetJson,
@@ -182,6 +211,7 @@ namespace Afjk.SceneSync
                 .Append(FormatFloat(scale.x)).Append(",")
                 .Append(FormatFloat(scale.y)).Append(",")
                 .Append(FormatFloat(scale.z)).Append("]");
+            builder.Append(",\"visible\":").Append(visible ? "true" : "false");
             if (!string.IsNullOrEmpty(meshPath))
                 builder.Append(",\"meshPath\":\"").Append(JsonEscape(meshPath)).Append("\"");
             if (!string.IsNullOrEmpty(assetId))
@@ -365,7 +395,9 @@ namespace Afjk.SceneSync
             else if (assetType == "video")
                 ApplyVideoTexture(go, SceneSyncWireJson.GetAssetUrl(assetJson));
             else if (assetType == "text")
-                ApplyText(go, GetTextForAsset(assetJson));
+                ApplyTextPanelStyle(go, assetJson, updateText: true);
+            else if (SceneSyncWireJson.GetAssetColor(assetJson) != null)
+                ApplyColorToRenderers(go, SceneSyncWireJson.GetAssetColor(assetJson));
         }
 
         private static SceneSyncWireMetadata EnsureWireMetadata(GameObject go)
@@ -385,7 +417,7 @@ namespace Afjk.SceneSync
             else if (primitive == "capsule") type = PrimitiveType.Capsule;
 
             var go = GameObject.CreatePrimitive(type);
-            ApplyColor(go, SceneSyncWireJson.GetAssetColor(assetJson));
+            ApplyColorToRenderers(go, SceneSyncWireJson.GetAssetColor(assetJson));
             return go;
         }
 
@@ -432,6 +464,45 @@ namespace Afjk.SceneSync
             var textMesh = root.GetComponentInChildren<TextMesh>();
             if (textMesh == null) textMesh = AddTextMesh(root, text);
             else textMesh.text = LimitText(text);
+        }
+
+        private static void ApplyTextPanelStyle(GameObject root, string assetJson, bool updateText)
+        {
+            if (root == null) return;
+
+            var textMesh = root.GetComponentInChildren<TextMesh>();
+            if (textMesh == null) textMesh = AddTextMesh(root, GetTextForAsset(assetJson));
+            else if (updateText) textMesh.text = LimitText(GetTextForAsset(assetJson));
+
+            var textColor = SceneSyncWireJson.ExtractString(assetJson, "color");
+            if (!string.IsNullOrWhiteSpace(textColor) && TryParseCssColor(textColor, out var parsedTextColor))
+                textMesh.color = parsedTextColor;
+
+            var fontSize = SceneSyncWireJson.ExtractFloat(assetJson, "fontSize");
+            if (fontSize.HasValue)
+                textMesh.fontSize = Mathf.Max(1, Mathf.RoundToInt(fontSize.Value));
+
+            var backgroundColor = SceneSyncWireJson.ExtractString(assetJson, "backgroundColor");
+            if (!string.IsNullOrWhiteSpace(backgroundColor))
+            {
+                var renderer = FindTextBackgroundRenderer(root);
+                if (renderer != null) ApplyColor(renderer.gameObject, backgroundColor);
+            }
+        }
+
+        public static void ApplyAssetVisualDelta(GameObject go, string assetJson)
+        {
+            if (go == null || string.IsNullOrWhiteSpace(assetJson)) return;
+
+            if (SceneSyncWireJson.GetAssetType(assetJson) == "text")
+            {
+                ApplyTextPanelStyle(go, assetJson, updateText: false);
+                return;
+            }
+
+            var color = SceneSyncWireJson.GetAssetColor(assetJson);
+            if (!string.IsNullOrWhiteSpace(color))
+                ApplyColorToRenderers(go, color);
         }
 
         private static string GetTextForAsset(string assetJson)
@@ -522,12 +593,86 @@ namespace Afjk.SceneSync
         private static void ApplyColor(GameObject go, string htmlColor)
         {
             if (go == null || string.IsNullOrEmpty(htmlColor)) return;
-            if (!ColorUtility.TryParseHtmlString(htmlColor, out var color)) return;
+            if (!TryParseCssColor(htmlColor, out var color)) return;
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null) return;
             var material = new Material(Shader.Find("Standard"));
+            ConfigureMaterialAlpha(material, color);
             material.color = color;
             renderer.sharedMaterial = material;
+        }
+
+        private static void ApplyColorToRenderers(GameObject root, string htmlColor)
+        {
+            if (root == null || string.IsNullOrEmpty(htmlColor)) return;
+            if (!TryParseCssColor(htmlColor, out var color)) return;
+
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(includeInactive: true))
+            {
+                var material = renderer.sharedMaterial != null
+                    ? new Material(renderer.sharedMaterial)
+                    : new Material(Shader.Find("Standard"));
+                ConfigureMaterialAlpha(material, color);
+                material.color = color;
+                renderer.sharedMaterial = material;
+            }
+        }
+
+        private static Renderer FindTextBackgroundRenderer(GameObject root)
+        {
+            if (root == null) return null;
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(includeInactive: true))
+            {
+                if (renderer.GetComponent<TextMesh>() == null) return renderer;
+            }
+            return null;
+        }
+
+        private static bool TryParseCssColor(string value, out Color color)
+        {
+            color = Color.white;
+            if (string.IsNullOrWhiteSpace(value)) return false;
+
+            var trimmed = value.Trim();
+            if (ColorUtility.TryParseHtmlString(trimmed, out color)) return true;
+
+            var match = Regex.Match(
+                trimmed,
+                "^rgba?\\s*\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)(?:\\s*,\\s*([\\d.]+))?\\s*\\)$",
+                RegexOptions.IgnoreCase);
+            if (!match.Success) return false;
+
+            color = new Color(
+                ParseCssColorComponent(match.Groups[1].Value),
+                ParseCssColorComponent(match.Groups[2].Value),
+                ParseCssColorComponent(match.Groups[3].Value),
+                match.Groups[4].Success ? Mathf.Clamp01(ParseFloatInvariant(match.Groups[4].Value)) : 1f);
+            return true;
+        }
+
+        private static float ParseCssColorComponent(string value)
+        {
+            return Mathf.Clamp01(ParseFloatInvariant(value) / 255f);
+        }
+
+        private static float ParseFloatInvariant(string value)
+        {
+            if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result))
+                return result;
+            return 0f;
+        }
+
+        private static void ConfigureMaterialAlpha(Material material, Color color)
+        {
+            if (material == null || color.a >= 0.999f) return;
+            material.SetFloat("_Mode", 3f);
+            material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            material.SetInt("_ZWrite", 0);
+            material.DisableKeyword("_ALPHATEST_ON");
+            material.EnableKeyword("_ALPHABLEND_ON");
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
         }
     }
 }
