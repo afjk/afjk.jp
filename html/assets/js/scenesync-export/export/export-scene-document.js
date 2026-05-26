@@ -1,4 +1,5 @@
 import { SCENE_DOCUMENT_FORMAT, SCENE_DOCUMENT_VERSION } from '../viewer/scene-document.js';
+import { LOOMLET_RUNTIME_METADATA } from '../../scenesync/loomlet-runtime-integration.js';
 
 const SKIP_ROLES = new Set([
   'multi-transform-pivot',
@@ -165,6 +166,7 @@ export function createSceneDocumentFromSceneSyncState({
     format: SCENE_DOCUMENT_FORMAT,
     version: SCENE_DOCUMENT_VERSION,
     units: 'meters',
+    loomletRuntime: { ...LOOMLET_RUNTIME_METADATA },
     objects,
     skybox: buildSkyboxEntry(envId),
     bgm: buildBgmEntry(bgmState),

@@ -4,10 +4,165 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { isValidSceneDocument } from './scene-document.js';
 import { createStaticAssetResolver } from './static-asset-resolver.js';
-import { Loom } from './loom/loom.js';
-import { LoomSceneSync } from './loom/loom-scenesync.js';
+import { createSceneSyncRuntime } from './loomlet/loomlet-scenesync-runtime.browser.js';
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function setVector3(target, values) {
+  if (!target) return;
+  if (typeof target.set === 'function') {
+    target.set(values[0], values[1], values[2]);
+  } else {
+    target.x = values[0];
+    target.y = values[1];
+    target.z = values[2];
+  }
+}
+
+function setQuaternion(target, values) {
+  if (!target) return;
+  if (typeof target.set === 'function') {
+    target.set(values[0], values[1], values[2], values[3]);
+  } else {
+    target.x = values[0];
+    target.y = values[1];
+    target.z = values[2];
+    target.w = values[3];
+  }
+}
+
+function clonePosition(position) {
+  if (!position) return null;
+  if (typeof position.clone === 'function') return position.clone();
+  return {
+    x: Number(position.x || 0),
+    y: Number(position.y || 0),
+    z: Number(position.z || 0),
+  };
+}
+
+const OBJECT_TARGET_NODE_TYPES = new Set([
+  'sceneSetPosition',
+  'sceneOffsetPosition',
+  'sceneSetRotation',
+  'sceneSetScale',
+  'sceneSetColor',
+  'sceneSetVisible',
+  'scene.setPosition',
+  'scene.offsetPosition',
+  'scene.setRotation',
+  'scene.setScale',
+  'scene.setColor',
+  'scene.setVisible',
+]);
+
+function graphForRuntime(graph, scopeObjectId) {
+  const cloned = cloneJson(graph);
+  if (!scopeObjectId) return cloned;
+
+  return {
+    ...cloned,
+    nodes: cloned.nodes.map((node) => {
+      if (!OBJECT_TARGET_NODE_TYPES.has(node.type)) return node;
+      const params = { ...(node.params || {}) };
+      if (!params.target && !params.objectId) {
+        params.target = scopeObjectId;
+      }
+      return { ...node, params };
+    }),
+  };
+}
+
+function createExportBehaviorRuntime(behaviorState, objectMap) {
+  const runtimes = [];
+  const behaviorBases = new Map();
+
+  function applySceneEffect(effect, scopeKey) {
+    const objectId = effect?.objectId;
+    if (!objectId) return;
+
+    const object = objectMap.get(objectId);
+    if (!object) return;
+
+    if (effect.type === 'scene.setPosition' && Array.isArray(effect.position)) {
+      setVector3(object.position, effect.position);
+    } else if (effect.type === 'scene.offsetPosition' && Array.isArray(effect.offset)) {
+      const baseKey = `${scopeKey}:${objectId}`;
+      if (!behaviorBases.has(baseKey)) {
+        const position = clonePosition(object.position);
+        if (position) behaviorBases.set(baseKey, { target: objectId, position });
+      }
+      const base = behaviorBases.get(baseKey)?.position;
+      if (base) {
+        setVector3(object.position, [
+          base.x + effect.offset[0],
+          base.y + effect.offset[1],
+          base.z + effect.offset[2],
+        ]);
+      }
+    } else if (effect.type === 'scene.setRotation' && Array.isArray(effect.rotation)) {
+      setQuaternion(object.quaternion || object.rotation, effect.rotation);
+    } else if (effect.type === 'scene.setScale' && Array.isArray(effect.scale)) {
+      setVector3(object.scale, effect.scale);
+    } else if (effect.type === 'scene.setVisible') {
+      object.visible = Boolean(effect.visible);
+    } else if (effect.type === 'scene.setColor' && Array.isArray(effect.color)) {
+      const material = Array.isArray(object.material) ? object.material[0] : object.material;
+      material?.color?.setRGB?.(effect.color[0], effect.color[1], effect.color[2]);
+    }
+  }
+
+  if (behaviorState?.bases && typeof behaviorState.bases === 'object') {
+    for (const [key, base] of Object.entries(behaviorState.bases)) {
+      if (!base?.position || !base.target) continue;
+      const object = objectMap.get(base.target);
+      if (object?.position) {
+        setVector3(object.position, [base.position.x, base.position.y, base.position.z]);
+      }
+      behaviorBases.set(key, {
+        target: base.target,
+        position: { ...base.position },
+      });
+    }
+  }
+
+  function addRuntime(scopeKey, scope, graph) {
+    const scopeObjectId = scope.type === 'object' ? scope.id : null;
+    runtimes.push({
+      scope,
+      runtime: createSceneSyncRuntime(graphForRuntime(graph, scopeObjectId), {
+        resolveTarget: (objectId) => objectMap.get(objectId) || null,
+        applySceneEffect: (effect) => applySceneEffect(effect, scopeKey),
+      }),
+    });
+  }
+
+  if (behaviorState?.scene) {
+    addRuntime('scene', { type: 'scene' }, behaviorState.scene);
+  }
+  if (behaviorState?.objects && typeof behaviorState.objects === 'object') {
+    for (const [objectId, graph] of Object.entries(behaviorState.objects)) {
+      if (graph) addRuntime(`object:${objectId}`, { type: 'object', id: objectId }, graph);
+    }
+  }
+
+  return {
+    tick(now = performance.now()) {
+      const time = now / 1000;
+      for (const entry of runtimes) {
+        entry.runtime.evaluateAt({ time, scope: entry.scope, events: [] }, now);
+      }
+    },
+    dispose() {
+      runtimes.length = 0;
+      behaviorBases.clear();
+    },
+  };
+}
 
 function buildPrimitive(assetDef) {
   const color = assetDef.color || '#888888';
@@ -328,17 +483,7 @@ export async function createViewerCore({
   // Loomlet behavior graph runtime
   let loomAdapter = null;
   if (sceneDoc.behaviors) {
-    loomAdapter = new LoomSceneSync({
-      LoomClass: Loom,
-      send: () => {},
-      getServerTime: () => performance.now() / 1000,
-      getObjectRuntimeTime: (_objectId, now) => now / 1000,
-      resolveTarget: (targetId) => objectMap.get(targetId) || null,
-      isObjectBeingEdited: () => false,
-    });
-
-    loomAdapter.importState(sceneDoc.behaviors);
-    loomAdapter.start();
+    loomAdapter = createExportBehaviorRuntime(sceneDoc.behaviors, objectMap);
   }
 
   const api = {
@@ -347,7 +492,7 @@ export async function createViewerCore({
       for (const m of mixers) m.update(delta);
 
       if (loomAdapter) {
-        loomAdapter.tickObjectGraphs(performance.now());
+        loomAdapter.tick(performance.now());
       }
     },
 

@@ -418,6 +418,11 @@ test('createSceneDocumentFromSceneSyncState with behaviorState', async (t) => {
 
     assert.ok(doc.behaviors, 'behaviors should be present');
     assert.ok(doc.behaviors.objects['box-1'], 'object graph should be in behaviors');
+    assert.deepEqual(doc.loomletRuntime, {
+      version: '0.1.2',
+      graphVersion: 'scene-sync-graph-json-v1',
+      adapter: 'scenesync',
+    });
     assert.equal(doc.version, SCENE_DOCUMENT_VERSION);
   });
 

@@ -10,9 +10,11 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/static-asset-resolver.js', dest: 'viewer/static-asset-resolver.js' },
   { src: '/assets/js/scenesync-export/viewer/scene-document.js', dest: 'viewer/scene-document.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
-  // Loomlet behavior graph runtime (relative imports preserved inside viewer/loom/)
-  { src: '/assets/js/scenesync/loom/loom.js', dest: 'viewer/loom/loom.js' },
-  { src: '/assets/js/scenesync/loom/loom-scenesync.js', dest: 'viewer/loom/loom-scenesync.js' },
+  // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
+  {
+    src: '/assets/vendor/loomlet/0.1.2/loomlet-scenesync-runtime.browser.js',
+    dest: 'viewer/loomlet/loomlet-scenesync-runtime.browser.js',
+  },
 ];
 
 const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
