@@ -305,6 +305,7 @@ namespace Afjk.SceneSync
 
     public static class SceneSyncPanelFactory
     {
+        private const int MaxTextLength = 512;
         private static readonly HttpClient Http = new HttpClient();
 
         public static GameObject CreateObjectForAsset(string name, string assetJson, string metadataJson)
@@ -327,7 +328,7 @@ namespace Afjk.SceneSync
                     ApplyVideoTexture(go, SceneSyncWireJson.GetAssetUrl(assetJson));
                     break;
                 case "text":
-                    go = CreateTextPanel(name, SceneSyncWireJson.ExtractString(assetJson, "text") ?? SceneSyncWireJson.GetAssetUrl(assetJson) ?? "Text");
+                    go = CreateTextPanel(name, GetTextForAsset(assetJson));
                     break;
                 default:
                     go = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -340,10 +341,31 @@ namespace Afjk.SceneSync
             return go;
         }
 
-        public static void ConfigureWireMetadata(GameObject go, string assetJson, string metadataJson)
+        public static void ConfigureWireMetadata(
+            GameObject go,
+            string assetJson,
+            string metadataJson,
+            bool preserveMissing = false)
         {
             if (go == null) return;
-            EnsureWireMetadata(go).Configure(assetJson, metadataJson);
+
+            var wire = EnsureWireMetadata(go);
+            var hasAsset = !string.IsNullOrWhiteSpace(assetJson);
+            var hasMetadata = !string.IsNullOrWhiteSpace(metadataJson);
+            var nextAssetJson = hasAsset || !preserveMissing ? assetJson : wire.AssetJson;
+            var nextMetadataJson = hasMetadata || !preserveMissing ? metadataJson : wire.MetadataJson;
+
+            wire.Configure(nextAssetJson, nextMetadataJson);
+
+            if (!hasAsset) return;
+
+            var assetType = SceneSyncWireJson.GetAssetType(assetJson);
+            if (assetType == "image")
+                _ = ApplyImageTexture(go, SceneSyncWireJson.GetAssetUrl(assetJson));
+            else if (assetType == "video")
+                ApplyVideoTexture(go, SceneSyncWireJson.GetAssetUrl(assetJson));
+            else if (assetType == "text")
+                ApplyText(go, GetTextForAsset(assetJson));
         }
 
         private static SceneSyncWireMetadata EnsureWireMetadata(GameObject go)
@@ -383,20 +405,46 @@ namespace Afjk.SceneSync
         {
             var go = CreatePanel(name, "TextPanelBackground");
             ApplyColor(go.transform.GetChild(0).gameObject, "#202020");
+            AddTextMesh(go, text);
+            return go;
+        }
 
+        private static TextMesh AddTextMesh(GameObject root, string text)
+        {
             var textObject = new GameObject("Text");
-            textObject.transform.SetParent(go.transform, worldPositionStays: false);
+            textObject.transform.SetParent(root.transform, worldPositionStays: false);
             textObject.transform.localPosition = new Vector3(-0.45f, 0.2f, -0.01f);
             textObject.transform.localRotation = Quaternion.identity;
             textObject.transform.localScale = Vector3.one * 0.08f;
 
             var textMesh = textObject.AddComponent<TextMesh>();
-            textMesh.text = text.Length > 512 ? text.Substring(0, 512) : text;
+            textMesh.text = LimitText(text);
             textMesh.anchor = TextAnchor.UpperLeft;
             textMesh.alignment = TextAlignment.Left;
             textMesh.fontSize = 32;
             textMesh.color = Color.white;
-            return go;
+            return textMesh;
+        }
+
+        private static void ApplyText(GameObject root, string text)
+        {
+            if (root == null) return;
+            var textMesh = root.GetComponentInChildren<TextMesh>();
+            if (textMesh == null) textMesh = AddTextMesh(root, text);
+            else textMesh.text = LimitText(text);
+        }
+
+        private static string GetTextForAsset(string assetJson)
+        {
+            return SceneSyncWireJson.ExtractString(assetJson, "text")
+                ?? SceneSyncWireJson.GetAssetUrl(assetJson)
+                ?? "Text";
+        }
+
+        private static string LimitText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            return text.Length > MaxTextLength ? text.Substring(0, MaxTextLength) : text;
         }
 
         private static async Task ApplyImageTexture(GameObject root, string url)
@@ -435,13 +483,25 @@ namespace Afjk.SceneSync
             var renderer = root.GetComponentInChildren<Renderer>();
             if (renderer == null) return;
 
-            var texture = new RenderTexture(1024, 576, 0);
-            texture.name = "SceneSyncVideo";
-            var material = new Material(Shader.Find("Unlit/Texture") ?? Shader.Find("Standard"));
-            material.mainTexture = texture;
-            renderer.sharedMaterial = material;
+            var texture = renderer.sharedMaterial != null
+                ? renderer.sharedMaterial.mainTexture as RenderTexture
+                : null;
+            if (texture == null)
+            {
+                texture = new RenderTexture(1024, 576, 0);
+                texture.name = "SceneSyncVideo";
+            }
 
-            var player = root.AddComponent<VideoPlayer>();
+            if (renderer.sharedMaterial == null || renderer.sharedMaterial.mainTexture != texture)
+            {
+                var material = new Material(Shader.Find("Unlit/Texture") ?? Shader.Find("Standard"));
+                material.mainTexture = texture;
+                renderer.sharedMaterial = material;
+            }
+
+            var player = root.GetComponent<VideoPlayer>();
+            if (player == null) player = root.AddComponent<VideoPlayer>();
+            else player.Stop();
             player.source = VideoSource.Url;
             player.url = url;
             player.isLooping = true;
@@ -449,8 +509,14 @@ namespace Afjk.SceneSync
             player.renderMode = VideoRenderMode.RenderTexture;
             player.targetTexture = texture;
             player.audioOutputMode = VideoAudioOutputMode.None;
+            player.prepareCompleted -= PlayPreparedVideo;
+            player.prepareCompleted += PlayPreparedVideo;
             player.Prepare();
-            player.prepareCompleted += p => p.Play();
+        }
+
+        private static void PlayPreparedVideo(VideoPlayer player)
+        {
+            if (player != null) player.Play();
         }
 
         private static void ApplyColor(GameObject go, string htmlColor)
