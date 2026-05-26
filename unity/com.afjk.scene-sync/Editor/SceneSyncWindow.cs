@@ -1116,9 +1116,36 @@ namespace Afjk.SceneSync.Editor
             float[] position = ExtractArray(raw, "\"position\":");
             float[] rotation = ExtractArray(raw, "\"rotation\":");
             float[] scale = ExtractArray(raw, "\"scale\":");
+            var assetJson = SceneSyncWireJson.ExtractRawObject(raw, "asset");
+            var metadataJson = SceneSyncWireJson.ExtractRawObject(raw, "metadata");
 
             var go = FindManagedObject(objectId);
             if (go == null) return;
+
+            if (!string.IsNullOrWhiteSpace(assetJson) || !string.IsNullOrWhiteSpace(metadataJson))
+            {
+                SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
+
+                if (!string.IsNullOrWhiteSpace(assetJson))
+                {
+                    var meshPath = SceneSyncWireJson.ExtractString(assetJson, "meshPath");
+                    var assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
+                    var identity = go.GetComponent<SceneSyncIdentity>();
+
+                    if (!string.IsNullOrWhiteSpace(meshPath))
+                    {
+                        _meshPaths[objectId] = meshPath;
+                        if (identity != null) identity.MeshPath = meshPath;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(assetId) && identity != null)
+                        identity.AssetId = assetId;
+
+                    if (identity != null) EditorUtility.SetDirty(identity);
+                }
+
+                EditorUtility.SetDirty(go);
+            }
 
             // 現在選択されているオブジェクトなら無視（Last-Writer-Wins）
             if (SceneSyncManager.ResolveSceneSyncRoot(Selection.activeGameObject) == go) return;
