@@ -9,6 +9,7 @@
   },
   "keywords": ["scene", "sync", "collaboration", "websocket"],
   "dependencies": {
+    "com.afjk.loomlet-runtime": "0.3.0",
     "com.unity.cloud.gltfast": "6.0.0"
   }
 }
