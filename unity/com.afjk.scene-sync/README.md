@@ -20,7 +20,7 @@ afjk.jp/pipe の presence-server と blob store を利用して通信する。
     }
   ],
   "dependencies": {
-    "com.afjk.scene-sync": "0.1.0"
+    "com.afjk.scene-sync": "0.3.0"
   }
 }
 ```
@@ -40,7 +40,7 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync
 特定バージョンを指定する場合:
 
 ```
-https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
+https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.3.0
 ```
 
 `Packages/manifest.json` に直接記述する場合:
