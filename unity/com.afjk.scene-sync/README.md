@@ -6,51 +6,6 @@ afjk.jp/pipe の presence-server と blob store を利用して通信する。
 
 ## インストール
 
-`Packages/manifest.json` に以下を追加:
-
-```json
-{
-  "scopedRegistries": [
-    {
-      "name": "afjk",
-      "url": "https://upm.afjk.jp",
-      "scopes": ["com.afjk"]
-    }
-  ],
-  "dependencies": {
-    "com.afjk.scene-sync": "0.1.0"
-  }
-}
-```
-
-### Git URL
-
-Unity Editor の **Window > Package Manager > + > Add package from git URL** に以下を入力:
-
-```
-https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync
-```
-
-特定バージョンを指定する場合:
-
-```
-https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
-```
-
-`Packages/manifest.json` に直接記述する場合:
-
-```json
-{
-  "dependencies": {
-    "com.afjk.scene-sync": "https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync"
-  }
-}
-```
-
-依存パッケージ（`com.unity.cloud.gltfast@6.0.0`）は自動インストールされない場合があるため、別途追加してください。
-
-## インストール
-
 ### UPM スコープドレジストリ（推奨）
 
 `Packages/manifest.json` に以下を追加:
@@ -59,7 +14,7 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
 {
   "scopedRegistries": [
     {
-      "name": "afjk",
+      "name": "afjk UPM Registry",
       "url": "https://upm.afjk.jp",
       "scopes": ["com.afjk"]
     }
@@ -69,6 +24,10 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
   }
 }
 ```
+
+Scene Sync は `com.afjk.loomlet-runtime@0.3.0` に依存しています。`upm.afjk.jp` の scoped registry が設定されていれば、Scene Sync のインストール時に Loomlet Runtime も自動で解決されます。
+
+`com.afjk.loomlet-runtime@0.3.0` が `upm.afjk.jp` に publish 済みである必要があります。Scene Sync 側の依存 version は package release ごとに固定します。
 
 ### Git URL
 
@@ -94,7 +53,7 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.1.0
 }
 ```
 
-依存パッケージ（`com.unity.cloud.gltfast@6.0.0`）は自動インストールされない場合があるため、別途追加してください。
+Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` と `com.unity.cloud.gltfast@6.0.0` は package dependency として解決されます。解決されない場合は、`upm.afjk.jp` scoped registry と Unity package registry の設定を確認してください。
 
 ---
 
