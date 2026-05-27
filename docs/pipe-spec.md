@@ -479,7 +479,7 @@ sequenceDiagram
 ```mermaid
 graph LR
     GH["GitHub\nActions"]
-    GH -->|Release publish| SSH
+    GH -->|Manual deploy dispatch| SSH
 
     subgraph VPS
         SSH["git pull\ndocker compose up"]
@@ -488,8 +488,21 @@ graph LR
     end
 ```
 
-- `main` ブランチへのマージ → `staging.afjk.jp` へ自動デプロイ
-- GitHub Release 作成 → `afjk.jp`（本番）へデプロイ
+- `main` ブランチへのマージ → `staging.afjk.jp` へ自動デプロイ（`deploy-staging.yml`）
+- GitHub Release 公開（`release: published`）→ Unity package を UPM publish（`publish-upm.yml`）
+- `afjk.jp`（本番）への deploy は `deploy.yml` の手動実行（`workflow_dispatch`）のみ
+
+### release / deploy / package version の関係
+
+- GitHub Release の tag は `vX.Y.Z` を使う。
+- `publish-upm.yml` は release tag の `v` を除いた `X.Y.Z` を package version として publish する。
+- 本番 deploy は release event では起動しないため、必要時に Actions から明示的に実行する。
+
+### package-only release 手順
+
+1. GitHub で `vX.Y.Z` の Release を公開する。
+2. `publish-upm.yml` が起動して UPM publish されることを確認する。
+3. 本番 deploy が不要な場合は `Deploy Production` workflow を実行しない。
 
 ---
 

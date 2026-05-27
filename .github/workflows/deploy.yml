@@ -1,8 +1,7 @@
-name: Deploy on Release
+name: Deploy Production
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   deploy:
