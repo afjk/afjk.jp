@@ -2568,6 +2568,8 @@ let lastPointerEventForPastePreview = null;
 
 let currentHoveredObjectId = null;
 const loomletHostEvents = new Map(); // objectId -> Set<eventName>
+const tmpViewerPosition = new THREE.Vector3();
+const tmpViewerForward = new THREE.Vector3();
 
 function enqueueLoomletHostEvent(objectId, eventName) {
   if (!objectId || !eventName) return;
@@ -2594,14 +2596,14 @@ function getObjectHoverStateForLoomlet(objectId) {
 
 function getViewerPositionForLoomlet() {
   if (!camera) return null;
-  return [camera.position.x, camera.position.y, camera.position.z];
+  camera.getWorldPosition(tmpViewerPosition);
+  return [tmpViewerPosition.x, tmpViewerPosition.y, tmpViewerPosition.z];
 }
 
 function getViewerForwardForLoomlet() {
   if (!camera) return null;
-  const forward = new THREE.Vector3(0, 0, -1);
-  forward.applyQuaternion(camera.quaternion);
-  return [forward.x, forward.y, forward.z];
+  camera.getWorldDirection(tmpViewerForward);
+  return [tmpViewerForward.x, tmpViewerForward.y, tmpViewerForward.z];
 }
 
 function getSelectedObjects() {

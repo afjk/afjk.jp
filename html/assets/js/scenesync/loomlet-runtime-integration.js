@@ -254,6 +254,7 @@ function createRuntimeManager({
       if (eventNames && eventNames.size > 0) {
         events = Array.from(eventNames).map((channel) => ({
           channel,
+          target: entry.scopeObjectId,
           timestamp: time,
         }));
       }
