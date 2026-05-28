@@ -402,7 +402,7 @@ namespace Afjk.SceneSync
                     _meshPathCache[path] = glb;
 
                 var assetIdJson = assetId != null ? ",\"assetId\":\"" + SceneSyncWireJson.JsonEscape(assetId) + "\"" : "";
-                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" +
+                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\",\"name\":\"" + SceneSyncWireJson.JsonEscape(go.name) + "\",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" +
                     ",\"origin\":\"unity\"" +
                     ",\"unityHierarchyPath\":\"" + SceneSyncWireJson.JsonEscape(SceneSyncWireJson.GetUnityHierarchyPath(go)) + "\"" +
                     assetIdJson +
@@ -1611,7 +1611,7 @@ namespace Afjk.SceneSync
             _meshPaths[objectId] = meshPath;
 
             var go = FindManagedObject(objectId);
-            var name = go != null ? go.name : objectId;
+            var name = SceneSyncWireJson.ExtractString(raw, "name") ?? (go != null ? go.name : objectId);
 
             if (go == null && origin == "unity")
             {

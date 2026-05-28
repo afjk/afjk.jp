@@ -1965,7 +1965,7 @@ namespace Afjk.SceneSync.Editor
             _meshPaths[objectId] = meshPath;
 
             var go = FindManagedObject(objectId);
-            var name = go != null ? go.name : objectId;
+            var name = SceneSyncWireJson.ExtractString(raw, "name") ?? (go != null ? go.name : objectId);
 
             if (go == null && origin == "unity")
             {
