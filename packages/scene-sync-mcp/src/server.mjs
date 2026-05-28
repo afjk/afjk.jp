@@ -19,6 +19,7 @@ import {
   makeObjectId,
   assertBoundsWorld,
   computeAlignedPosition,
+  computeBoundsAlignmentErrors,
   computeFitScale
 } from './validators.mjs'
 import { jsonResult, errorResult, successResult, imageResult } from './tool-results.mjs'
@@ -29,6 +30,22 @@ const server = new McpServer({
   name: 'scene-sync-mcp',
   version: '0.1.0'
 })
+
+const CAPABILITIES = {
+  screenshotImage: true,
+  screenshotUrl: true,
+  boundsWorld: true,
+  selection: true,
+  selectObject: true,
+  cameraPose: true,
+  focusObject: true,
+  focusAndScreenshot: true,
+  boundsPlacement: true,
+  boundsAlignmentVerification: true,
+  objectInfo: true,
+  mediaReplacement: true,
+  textReplacement: true
+}
 
 // Helper to get current session or throw error
 function getSession() {
@@ -149,6 +166,25 @@ function findSceneObject(scene, objectId) {
   return listSceneObjects(scene).find((obj) => obj.objectId === objectId) || null
 }
 
+function summarizeObject(object) {
+  if (!object) return null
+
+  return {
+    objectId: object.objectId,
+    name: object.name,
+    position: object.position,
+    rotation: object.rotation,
+    scale: object.scale,
+    visible: object.visible,
+    bounds: object.bounds,
+    asset: object.asset,
+    metadata: object.metadata,
+    meshPath: object.meshPath,
+    animation: object.animation,
+    animationClips: object.animationClips
+  }
+}
+
 function getWorldBounds(object) {
   const bounds = object?.bounds?.world
   if (!bounds) {
@@ -169,6 +205,68 @@ function getObjectPosition(object) {
 
 function getObjectScale(object) {
   return normalizeScale(object?.scale, [1, 1, 1])
+}
+
+async function requestScreenshot({ mode = 'image', maxWidth = 768, quality } = {}) {
+  const session = getSession()
+
+  const response = await client.aiCommand(
+    session.roomId,
+    session.sessionId,
+    'screenshot',
+    {
+      mode,
+      maxWidth,
+      quality: quality ?? (mode === 'image' ? 0.7 : 0.92)
+    },
+    { timeout: 15000 }
+  )
+
+  assertAiCommandOk(response)
+
+  return {
+    session,
+    response,
+    result: response?.result || response
+  }
+}
+
+function screenshotToolResult({ mode, session, response, result, metadata = {} }) {
+  if (mode === 'image') {
+    const base64 = result?.base64 || result?.data || null
+    const mimeType = result?.mimeType || 'image/jpeg'
+
+    if (!base64 || typeof base64 !== 'string') {
+      return errorResult(new Error('screenshot did not return base64 image data'))
+    }
+
+    return imageResult({
+      data: base64,
+      mimeType,
+      metadata: {
+        ok: true,
+        action: 'screenshot',
+        mode: 'image',
+        mimeType,
+        width: result.width ?? null,
+        height: result.height ?? null,
+        room: response.room || session.roomId,
+        userPresent: response.userPresent !== false,
+        targetPeerId: response.targetPeerId || null,
+        ...metadata
+      }
+    })
+  }
+
+  const sanitized = sanitizeScreenshotResult(response)
+
+  return jsonResult({
+    ...sanitized,
+    ok: true,
+    action: 'screenshot',
+    mode: 'url',
+    ...metadata
+  })
 }
 
 // Helper to add primitive objects
@@ -226,7 +324,9 @@ const urlTransformInputSchema = z.object({
   name: z.string().optional().describe('Display name. If omitted, browser may infer from URL filename.'),
   position: z.array(z.number()).length(3).optional().describe('[x, y, z] position in meters'),
   rotation: z.array(z.number()).length(4).optional().describe('[x, y, z, w] quaternion'),
-  scale: z.array(z.number()).length(3).optional().describe('[x, y, z] scale')
+  scale: z.array(z.number()).length(3).optional().describe('[x, y, z] scale'),
+  targetSize: z.number().positive().optional().describe('Optional target world-bounds size in meters after import.'),
+  targetAxis: z.enum(['x', 'y', 'z', 'max']).optional().describe('Bounds axis used with targetSize. Defaults to max.')
 })
 
 function makeUrlAssetToolHandler(action, options = {}) {
@@ -236,8 +336,9 @@ function makeUrlAssetToolHandler(action, options = {}) {
     timeout = 60000
   } = options
 
-  return async ({ url, objectId, name, position, rotation, scale }) => {
+  return async ({ url, objectId, name, position, rotation, scale, targetSize, targetAxis = 'max' }) => {
     try {
+      const session = getSession()
       const finalObjectId = objectId || makeObjectId(objectIdPrefix)
       assertObjectId(finalObjectId)
 
@@ -254,12 +355,52 @@ function makeUrlAssetToolHandler(action, options = {}) {
       }
 
       const response = await runAiCommand(action, params, { timeout })
+      let fitted = null
+
+      if (targetSize !== undefined) {
+        const scene = await client.getScene(session.roomId, session.sessionId)
+        const object = findSceneObject(scene, finalObjectId)
+        if (!object) {
+          throw new ValidationError(`Imported object not found for targetSize fit: ${finalObjectId}`)
+        }
+
+        const bounds = getWorldBounds(object)
+        const currentBoundsSize = normalizeVec3(bounds.size, [
+          bounds.max[0] - bounds.min[0],
+          bounds.max[1] - bounds.min[1],
+          bounds.max[2] - bounds.min[2]
+        ])
+        const axis = targetAxis === 'max'
+          ? ['x', 'y', 'z'][currentBoundsSize.indexOf(Math.max(...currentBoundsSize))]
+          : targetAxis
+        const nextScale = computeFitScale({
+          currentScale: getObjectScale(object),
+          currentBoundsSize,
+          targetSize: { [axis]: targetSize },
+          preserveAspect: true
+        })
+
+        await client.broadcast(session.roomId, session.sessionId, {
+          kind: 'scene-delta',
+          objectId: finalObjectId,
+          scale: nextScale
+        })
+
+        fitted = {
+          axis,
+          targetAxis,
+          targetSize,
+          scale: nextScale,
+          previousBoundsSize: currentBoundsSize
+        }
+      }
 
       return jsonResult({
         ...response,
         ok: true,
         objectId: finalObjectId,
-        action
+        action,
+        ...(fitted ? { fitted } : {})
       })
     } catch (e) {
       if (e instanceof ValidationError) {
@@ -322,6 +463,10 @@ server.registerTool(
       if (!session.sessionId || !session.roomId) {
         return jsonResult({
           linked: false,
+          capabilities: CAPABILITIES,
+          server: {
+            baseUrl: client.baseUrl
+          },
           message: 'Not linked. Ask the user to press AIにリンク in Scene Sync and provide the 6-digit code.'
         })
       }
@@ -329,6 +474,11 @@ server.registerTool(
       if (session.expiresAt && session.expiresAt <= Date.now()) {
         return jsonResult({
           linked: false,
+          roomId: session.roomId,
+          capabilities: CAPABILITIES,
+          server: {
+            baseUrl: client.baseUrl
+          },
           message: 'Link expired. Ask the user to redeem a new code.'
         })
       }
@@ -338,7 +488,11 @@ server.registerTool(
         linked: true,
         roomId: session.roomId,
         expiresAt: session.expiresAt,
-        expiresInSec
+        expiresInSec,
+        capabilities: CAPABILITIES,
+        server: {
+          baseUrl: client.baseUrl
+        }
       })
     } catch (e) {
       return errorResult(e)
@@ -416,6 +570,89 @@ server.registerTool(
         action: 'getSelection'
       })
     } catch (e) {
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_get_object
+server.registerTool(
+  'scene_sync_get_object',
+  {
+    title: 'Get Scene Sync object details',
+    description: 'Get one object from the current Scene Sync scene, including transform, bounds, asset, metadata, and animation information when available.',
+    inputSchema: z.object({
+      objectId: z.string().describe('Target object ID')
+    }),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async ({ objectId }) => {
+    try {
+      const session = getSession()
+      assertObjectId(objectId)
+
+      const scene = await client.getScene(session.roomId, session.sessionId)
+      const object = findSceneObject(scene, objectId)
+      if (!object) {
+        throw new ValidationError(`Object not found: ${objectId}`)
+      }
+
+      return jsonResult({
+        ok: true,
+        roomId: scene?.roomId || session.roomId,
+        userPresent: scene?.userPresent !== false,
+        object: summarizeObject(object)
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_select_object
+server.registerTool(
+  'scene_sync_select_object',
+  {
+    title: 'Select Scene Sync object',
+    description: 'Select an object in the linked browser so the user can see which target the AI is working on.',
+    inputSchema: z.object({
+      objectId: z.string().describe('Target object ID')
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async ({ objectId }) => {
+    try {
+      assertObjectId(objectId)
+
+      const response = await runAiCommand(
+        'selectObject',
+        { objectId },
+        { timeout: 10000 }
+      )
+
+      return jsonResult({
+        ...response,
+        ok: true,
+        objectId,
+        action: 'selectObject'
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
       return errorResult(e)
     }
   }
@@ -794,6 +1031,10 @@ const alignAxisRuleSchema = z.object({
   offset: z.number().optional().describe('Optional offset in meters after alignment')
 })
 
+const verifyAxisRuleSchema = alignAxisRuleSchema.extend({
+  tolerance: z.number().min(0).optional().describe('Allowed absolute error in meters. Defaults to 0.01.')
+})
+
 // scene_sync_set_transform
 server.registerTool(
   'scene_sync_set_transform',
@@ -909,6 +1150,249 @@ server.registerTool(
         sourceBounds,
         targetObjectId: targetObjectId || null,
         targetBounds
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_verify_bounds_alignment
+server.registerTool(
+  'scene_sync_verify_bounds_alignment',
+  {
+    title: 'Verify bounds alignment',
+    description: 'Measure whether source object world-bounds anchors are aligned to target object bounds or explicit world coordinates within tolerance.',
+    inputSchema: z.object({
+      sourceObjectId: z.string().describe('Object to check'),
+      targetObjectId: z.string().optional().describe('Object to check against. If omitted, use explicit axis values.'),
+      axes: z.object({
+        x: verifyAxisRuleSchema.optional(),
+        y: verifyAxisRuleSchema.optional(),
+        z: verifyAxisRuleSchema.optional()
+      }).describe('Per-axis verification rules. Each axis uses either targetObjectId+target or explicit value.')
+    }),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async ({ sourceObjectId, targetObjectId, axes }) => {
+    try {
+      const session = getSession()
+      assertObjectId(sourceObjectId)
+      if (targetObjectId !== undefined) {
+        assertObjectId(targetObjectId)
+      }
+
+      const scene = await client.getScene(session.roomId, session.sessionId)
+      const sourceObject = findSceneObject(scene, sourceObjectId)
+      if (!sourceObject) {
+        throw new ValidationError(`Source object not found: ${sourceObjectId}`)
+      }
+
+      const targetObject = targetObjectId ? findSceneObject(scene, targetObjectId) : null
+      if (targetObjectId && !targetObject) {
+        throw new ValidationError(`Target object not found: ${targetObjectId}`)
+      }
+
+      const sourceBounds = getWorldBounds(sourceObject)
+      const targetBounds = targetObject ? getWorldBounds(targetObject) : null
+      const verification = computeBoundsAlignmentErrors({
+        sourceBounds,
+        targetBounds,
+        axes
+      })
+
+      return successResult({
+        passed: verification.ok,
+        errors: verification.errors,
+        axisPassed: verification.passed,
+        sourceObjectId,
+        targetObjectId: targetObjectId || null,
+        axes,
+        sourceBounds,
+        targetBounds
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+async function alignBoundsTool({ sourceObjectId, targetObjectId, axes }) {
+  const session = getSession()
+  assertObjectId(sourceObjectId)
+  if (targetObjectId !== undefined) {
+    assertObjectId(targetObjectId)
+  }
+
+  const scene = await client.getScene(session.roomId, session.sessionId)
+  const sourceObject = findSceneObject(scene, sourceObjectId)
+  if (!sourceObject) {
+    throw new ValidationError(`Source object not found: ${sourceObjectId}`)
+  }
+
+  const targetObject = targetObjectId ? findSceneObject(scene, targetObjectId) : null
+  if (targetObjectId && !targetObject) {
+    throw new ValidationError(`Target object not found: ${targetObjectId}`)
+  }
+
+  const sourcePosition = getObjectPosition(sourceObject)
+  const sourceBounds = getWorldBounds(sourceObject)
+  const targetBounds = targetObject ? getWorldBounds(targetObject) : null
+
+  const nextPosition = computeAlignedPosition({
+    sourcePosition,
+    sourceBounds,
+    targetBounds,
+    axes
+  })
+
+  await client.broadcast(session.roomId, session.sessionId, {
+    kind: 'scene-delta',
+    objectId: sourceObjectId,
+    position: nextPosition
+  })
+
+  return {
+    objectId: sourceObjectId,
+    position: nextPosition,
+    aligned: axes,
+    sourceBounds,
+    targetObjectId: targetObjectId || null,
+    targetBounds
+  }
+}
+
+// scene_sync_place_on_floor
+server.registerTool(
+  'scene_sync_place_on_floor',
+  {
+    title: 'Place object on floor',
+    description: 'Move an object so its world bounds bottom rests on a floor Y value. Defaults to Y=0.',
+    inputSchema: z.object({
+      objectId: z.string().describe('Object to move'),
+      y: z.number().optional().describe('Floor world Y value. Defaults to 0.'),
+      offset: z.number().optional().describe('Additional Y offset in meters. Defaults to 0.')
+    })
+  },
+  async ({ objectId, y = 0, offset = 0 }) => {
+    try {
+      const result = await alignBoundsTool({
+        sourceObjectId: objectId,
+        axes: {
+          y: {
+            source: 'min',
+            value: y,
+            offset
+          }
+        }
+      })
+
+      return successResult({
+        ...result,
+        action: 'placeOnFloor',
+        floorY: y,
+        offset
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_center_on_object
+server.registerTool(
+  'scene_sync_center_on_object',
+  {
+    title: 'Center object on another object',
+    description: 'Move a source object so selected world-bounds center axes match a target object center.',
+    inputSchema: z.object({
+      sourceObjectId: z.string().describe('Object to move'),
+      targetObjectId: z.string().describe('Object to center on'),
+      axes: z.array(z.enum(['x', 'y', 'z'])).optional().describe('Axes to center. Defaults to x, y, and z.')
+    })
+  },
+  async ({ sourceObjectId, targetObjectId, axes = ['x', 'y', 'z'] }) => {
+    try {
+      const axisRules = {}
+      for (const axis of axes) {
+        axisRules[axis] = {
+          source: 'center',
+          target: 'center'
+        }
+      }
+
+      const result = await alignBoundsTool({
+        sourceObjectId,
+        targetObjectId,
+        axes: axisRules
+      })
+
+      return successResult({
+        ...result,
+        action: 'centerOnObject'
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
+// scene_sync_place_in_front_of
+server.registerTool(
+  'scene_sync_place_in_front_of',
+  {
+    title: 'Place object in front of target bounds',
+    description: 'Move a source object in front of a target object using world Z bounds, optionally centering X and Y.',
+    inputSchema: z.object({
+      sourceObjectId: z.string().describe('Object to move'),
+      targetObjectId: z.string().describe('Object to place in front of'),
+      offset: z.number().optional().describe('Gap in meters between target max Z and source min Z. Defaults to 0.1.'),
+      centerX: z.boolean().optional().describe('Center X on the target. Defaults to true.'),
+      centerY: z.boolean().optional().describe('Center Y on the target. Defaults to true.')
+    })
+  },
+  async ({ sourceObjectId, targetObjectId, offset = 0.1, centerX = true, centerY = true }) => {
+    try {
+      const axes = {
+        z: {
+          source: 'min',
+          target: 'max',
+          offset
+        }
+      }
+
+      if (centerX) axes.x = { source: 'center', target: 'center' }
+      if (centerY) axes.y = { source: 'center', target: 'center' }
+
+      const result = await alignBoundsTool({
+        sourceObjectId,
+        targetObjectId,
+        axes
+      })
+
+      return successResult({
+        ...result,
+        action: 'placeInFrontOf',
+        offset,
+        centerX,
+        centerY
       })
     } catch (e) {
       if (e instanceof ValidationError) {
@@ -1070,6 +1554,47 @@ server.registerTool(
   }
 )
 
+// scene_sync_focus_and_screenshot
+server.registerTool(
+  'scene_sync_focus_and_screenshot',
+  {
+    title: 'Focus object and take screenshot',
+    description: 'Select/focus an object in the linked browser, then return a screenshot for visual verification.',
+    inputSchema: z.object({
+      objectId: z.string().describe('Target object ID'),
+      mode: z.enum(['image', 'url']).optional().describe('Return mode. image returns MCP image content. url returns URL metadata. Defaults to image.'),
+      maxWidth: z.number().int().min(128).max(2048).optional().describe('Maximum screenshot width in pixels. Defaults to 768.'),
+      quality: z.number().min(0.1).max(1).optional().describe('JPEG quality. Default 0.7 for image mode.')
+    })
+  },
+  async ({ objectId, mode = 'image', maxWidth = 768, quality } = {}) => {
+    try {
+      assertObjectId(objectId)
+
+      const focusResponse = await runAiCommand(
+        'focusObject',
+        { objectId },
+        { timeout: 10000 }
+      )
+
+      return screenshotToolResult({
+        mode,
+        ...await requestScreenshot({ mode, maxWidth, quality }),
+        metadata: {
+          action: 'focusAndScreenshot',
+          objectId,
+          focused: focusResponse?.ok !== false
+        }
+      })
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        return errorResult(e)
+      }
+      return errorResult(e)
+    }
+  }
+)
+
 // scene_sync_screenshot
 server.registerTool(
   'scene_sync_screenshot',
@@ -1084,56 +1609,9 @@ server.registerTool(
   },
   async ({ mode = 'image', maxWidth = 768, quality } = {}) => {
     try {
-      const session = getSession()
-
-      const response = await client.aiCommand(
-        session.roomId,
-        session.sessionId,
-        'screenshot',
-        {
-          mode,
-          maxWidth,
-          quality: quality ?? (mode === 'image' ? 0.7 : 0.92)
-        },
-        { timeout: 15000 }
-      )
-
-      assertAiCommandOk(response)
-
-      const result = response?.result || response
-
-      if (mode === 'image') {
-        const base64 = result?.base64 || result?.data || null
-        const mimeType = result?.mimeType || 'image/jpeg'
-
-        if (!base64 || typeof base64 !== 'string') {
-          return errorResult(new Error('screenshot did not return base64 image data'))
-        }
-
-        return imageResult({
-          data: base64,
-          mimeType,
-          metadata: {
-            ok: true,
-            action: 'screenshot',
-            mode: 'image',
-            mimeType,
-            width: result.width ?? null,
-            height: result.height ?? null,
-            room: response.room || session.roomId,
-            userPresent: response.userPresent !== false,
-            targetPeerId: response.targetPeerId || null
-          }
-        })
-      }
-
-      const sanitized = sanitizeScreenshotResult(response)
-
-      return jsonResult({
-        ...sanitized,
-        ok: true,
-        action: 'screenshot',
-        mode: 'url'
+      return screenshotToolResult({
+        mode,
+        ...await requestScreenshot({ mode, maxWidth, quality })
       })
     } catch (e) {
       if (e instanceof ValidationError) {

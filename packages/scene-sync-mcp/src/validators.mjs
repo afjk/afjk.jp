@@ -252,3 +252,64 @@ export function computeFitScale({ currentScale, currentBoundsSize, targetSize, p
 
   return nextScale
 }
+
+export function computeBoundsAlignmentErrors({ sourceBounds, targetBounds = null, axes }) {
+  assertBoundsWorld(sourceBounds, 'sourceBounds')
+
+  if (!axes || typeof axes !== 'object') {
+    throw new ValidationError('axes must be an object.')
+  }
+
+  const errors = {}
+  const passed = {}
+  let checked = 0
+
+  for (const axis of ['x', 'y', 'z']) {
+    const rule = axes[axis]
+    if (!rule) continue
+
+    checked += 1
+
+    const sourceValue = getBoundsAnchor(sourceBounds, axis, rule.source)
+    let targetValue = null
+
+    if (typeof rule.value === 'number') {
+      if (!Number.isFinite(rule.value)) {
+        throw new ValidationError(`axes.${axis}.value must be a finite number.`)
+      }
+      targetValue = rule.value
+    } else {
+      if (!targetBounds) {
+        throw new ValidationError(`axes.${axis}.value or targetBounds is required.`)
+      }
+      if (!rule.target) {
+        throw new ValidationError(`axes.${axis}.target is required when verifying target bounds.`)
+      }
+      targetValue = getBoundsAnchor(targetBounds, axis, rule.target)
+    }
+
+    const offset = rule.offset === undefined ? 0 : rule.offset
+    if (typeof offset !== 'number' || !Number.isFinite(offset)) {
+      throw new ValidationError(`axes.${axis}.offset must be a finite number.`)
+    }
+
+    const tolerance = rule.tolerance === undefined ? 0.01 : rule.tolerance
+    if (typeof tolerance !== 'number' || !Number.isFinite(tolerance) || tolerance < 0) {
+      throw new ValidationError(`axes.${axis}.tolerance must be a finite non-negative number.`)
+    }
+
+    const error = sourceValue - (targetValue + offset)
+    errors[axis] = error
+    passed[axis] = Math.abs(error) <= tolerance
+  }
+
+  if (checked === 0) {
+    throw new ValidationError('At least one axis rule is required.')
+  }
+
+  return {
+    ok: Object.values(passed).every(Boolean),
+    errors,
+    passed
+  }
+}

@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assertQuat, assertVec3, computeAlignedPosition, computeFitScale, ValidationError } from './validators.mjs'
+import {
+  assertQuat,
+  assertVec3,
+  computeAlignedPosition,
+  computeBoundsAlignmentErrors,
+  computeFitScale,
+  ValidationError
+} from './validators.mjs'
 
 test('computeAlignedPosition aligns source minY to world Y=0', () => {
   const nextPosition = computeAlignedPosition({
@@ -84,6 +91,39 @@ test('computeFitScale rejects zero-sized current bounds on a fitted axis', () =>
       preserveAspect: true
     })
   }, ValidationError)
+})
+
+test('computeBoundsAlignmentErrors reports per-axis signed errors and pass state', () => {
+  const result = computeBoundsAlignmentErrors({
+    sourceBounds: {
+      min: [0, 0, 0],
+      center: [1, 1, 1],
+      max: [2, 2, 2]
+    },
+    targetBounds: {
+      min: [10, 10, 10],
+      center: [11, 11, 11],
+      max: [12, 12, 12]
+    },
+    axes: {
+      x: {
+        source: 'center',
+        target: 'center',
+        tolerance: 0.01
+      },
+      y: {
+        source: 'max',
+        value: 2.005,
+        tolerance: 0.01
+      }
+    }
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.errors.x, -10)
+  assert.equal(result.passed.x, false)
+  assert.ok(Math.abs(result.errors.y + 0.005) < 1e-9)
+  assert.equal(result.passed.y, true)
 })
 
 test('assertVec3 rejects NaN and Infinity', () => {
