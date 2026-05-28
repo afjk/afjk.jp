@@ -88,10 +88,18 @@ namespace Afjk.SceneSync
             _startedAt = Time.realtimeSinceStartup;
             _lastTime = _startedAt;
 
-            var graph = LoomletGraph.FromJson(graphJson);
-            if (!sceneScope)
-                InjectObjectScopeTarget(graph, targetObjectId);
-            _evaluator = new LoomletEvaluator(graph, CreateSceneSyncRegistry());
+            try
+            {
+                var graph = LoomletGraph.FromJson(graphJson);
+                if (!sceneScope)
+                    InjectObjectScopeTarget(graph, targetObjectId);
+                _evaluator = new LoomletEvaluator(graph, CreateSceneSyncRegistry());
+            }
+            catch (Exception error)
+            {
+                Debug.LogWarning("[SceneSync] Failed to bind Loomlet graph: " + error.Message);
+                ClearGraph(restoreBases: false);
+            }
         }
 
         public void ClearGraph(bool restoreBases)
@@ -113,7 +121,7 @@ namespace Afjk.SceneSync
 
             try
             {
-                _context.WithSceneClock(elapsed, delta, false, "server", 1.0);
+                _context.WithSceneClock(elapsed, delta, false, "local", 1.0);
                 _evaluator.Evaluate(_context);
             }
             catch (Exception error)
