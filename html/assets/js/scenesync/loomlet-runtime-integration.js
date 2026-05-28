@@ -100,6 +100,8 @@ function createRuntimeManager({
   getViewerPosition,
   getViewerForward,
   getObjectHoverState,
+  getObjectGazeState,
+  getGazeHit,
   getLoomletHostEvents,
   clearLoomletHostEvents,
 }) {
@@ -126,6 +128,29 @@ function createRuntimeManager({
       if (viewerFwd) {
         inputs['viewer.forward'] = viewerFwd;
       }
+    }
+
+    // Viewer gaze inputs (local-only, not broadcast)
+    if (getViewerPosition) {
+      const gazeOrigin = getViewerPosition();
+      if (gazeOrigin) {
+        inputs['viewer.gaze.origin'] = gazeOrigin;
+      }
+    }
+    if (getViewerForward) {
+      const gazeDirection = getViewerForward();
+      if (gazeDirection) {
+        inputs['viewer.gaze.direction'] = gazeDirection;
+      }
+    }
+    const gazeHit = getGazeHit?.();
+    if (gazeHit) {
+      if (gazeHit.position) {
+        inputs['viewer.gaze.hitPosition'] = gazeHit.position;
+      }
+      inputs['viewer.gaze.hitDistance'] = gazeHit.distance;
+      inputs['viewer.gaze.hitObjectId'] = gazeHit.objectId;
+      inputs['viewer.gaze.source'] = gazeHit.source || 'camera';
     }
 
     // Object-scoped inputs
@@ -162,6 +187,11 @@ function createRuntimeManager({
     inputs['isSelected'] = hoverState?.isSelected || false;
     inputs['isHovered'] = hoverState?.isHovered || false;
     inputs['isBeingEdited'] = isObjectBeingEdited?.(objectId) || false;
+
+    // Gaze state inputs (local-only, not broadcast)
+    const gazeState = getObjectGazeState?.(objectId);
+    inputs['isGazed'] = gazeState?.isGazed || false;
+    inputs['gazeDwellTime'] = gazeState?.gazeDwellTime || 0;
 
     return inputs;
   }
@@ -378,6 +408,8 @@ export function createSceneSyncLoomIntegration({
   getViewerPosition,
   getViewerForward,
   getObjectHoverState,
+  getObjectGazeState,
+  getGazeHit,
   getLoomletHostEvents,
   clearLoomletHostEvents,
 }) {
@@ -389,6 +421,8 @@ export function createSceneSyncLoomIntegration({
     getViewerPosition,
     getViewerForward,
     getObjectHoverState,
+    getObjectGazeState,
+    getGazeHit,
     getLoomletHostEvents,
     clearLoomletHostEvents,
   });
