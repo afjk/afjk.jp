@@ -190,8 +190,16 @@ function createRuntimeManager({
 
     // Gaze state inputs (local-only, not broadcast)
     const gazeState = getObjectGazeState?.(objectId);
-    inputs['isGazed'] = gazeState?.isGazed || false;
-    inputs['gazeDwellTime'] = gazeState?.gazeDwellTime || 0;
+    const isGazed = gazeState?.isGazed || false;
+    const gazeDwellTime = gazeState?.gazeDwellTime || 0;
+    const gazeDistance = gazeState?.gazeDistance || 0;
+
+    inputs['isGazed'] = isGazed;
+    inputs['gazeDwellTime'] = gazeDwellTime;
+
+    inputs['target.isGazed'] = isGazed;
+    inputs['target.gazeDwellTime'] = gazeDwellTime;
+    inputs['target.gazeDistance'] = gazeDistance;
 
     return inputs;
   }

@@ -2608,14 +2608,17 @@ function getObjectGazeStateForLoomlet(objectId) {
 
   const isGazed = currentGazedObjectId === objectId;
   let gazeDwellTime = 0;
+  let gazeDistance = 0;
 
   if (isGazed && gazeEnterTime !== null) {
     gazeDwellTime = (performance.now() - gazeEnterTime) / 1000;
+    gazeDistance = currentGazeHit?.distance || 0;
   }
 
   return {
     isGazed,
     gazeDwellTime,
+    gazeDistance,
   };
 }
 
