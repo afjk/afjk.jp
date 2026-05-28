@@ -2571,6 +2571,15 @@ const loomletHostEvents = new Map(); // objectId -> Set<eventName>
 const tmpViewerPosition = new THREE.Vector3();
 const tmpViewerForward = new THREE.Vector3();
 
+// Gaze tracking state (local-only, not broadcast)
+let currentGazedObjectId = null;
+let gazeEnterTime = null;
+let lastGazeDwellEventAt = null;
+const gazeDwellThresholdSeconds = 1.0;
+const tmpGazeOrigin = new THREE.Vector3();
+const tmpGazeDirection = new THREE.Vector3();
+let currentGazeHit = null;
+
 function enqueueLoomletHostEvent(objectId, eventName) {
   if (!objectId || !eventName) return;
   if (!loomletHostEvents.has(objectId)) {
@@ -2594,6 +2603,38 @@ function getObjectHoverStateForLoomlet(objectId) {
   };
 }
 
+function getObjectGazeStateForLoomlet(objectId) {
+  if (!objectId) return null;
+
+  const isGazed = currentGazedObjectId === objectId;
+  let gazeDwellTime = 0;
+  let gazeDistance = 0;
+
+  if (isGazed && gazeEnterTime !== null) {
+    gazeDwellTime = (performance.now() - gazeEnterTime) / 1000;
+    gazeDistance = currentGazeHit?.distance || 0;
+  }
+
+  return {
+    isGazed,
+    gazeDwellTime,
+    gazeDistance,
+  };
+}
+
+function getGazeHitForLoomlet() {
+  if (!currentGazeHit) return null;
+
+  return {
+    objectId: currentGazedObjectId,
+    position: currentGazeHit.point
+      ? [currentGazeHit.point.x, currentGazeHit.point.y, currentGazeHit.point.z]
+      : null,
+    distance: currentGazeHit.distance || 0,
+    source: 'camera',
+  };
+}
+
 function getViewerPositionForLoomlet() {
   if (!camera) return null;
   camera.getWorldPosition(tmpViewerPosition);
@@ -2604,6 +2645,62 @@ function getViewerForwardForLoomlet() {
   if (!camera) return null;
   camera.getWorldDirection(tmpViewerForward);
   return [tmpViewerForward.x, tmpViewerForward.y, tmpViewerForward.z];
+}
+
+function updateGazeStateFromCamera() {
+  if (!camera) return;
+
+  // Compute gaze ray from camera forward (local-only, not broadcast)
+  camera.getWorldPosition(tmpGazeOrigin);
+  camera.getWorldDirection(tmpGazeDirection);
+  raycaster.ray.origin.copy(tmpGazeOrigin);
+  raycaster.ray.direction.copy(tmpGazeDirection);
+
+  const targets = Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj));
+  const hits = raycaster.intersectObjects(targets, true);
+
+  let newGazedObjectId = null;
+  let gazeHit = null;
+  if (hits.length > 0) {
+    let obj = hits[0].object;
+    while (obj.parent && !obj.userData.objectId) obj = obj.parent;
+    if (!obj.userData._isLockOverlay && obj.userData.objectId) {
+      newGazedObjectId = obj.userData.objectId;
+      gazeHit = hits[0];
+    }
+  }
+
+  // Handle gaze state changes
+  if (newGazedObjectId !== currentGazedObjectId) {
+    if (currentGazedObjectId) {
+      enqueueLoomletHostEvent(currentGazedObjectId, 'object.gaze.leave');
+    }
+    if (newGazedObjectId) {
+      const now = performance.now();
+      gazeEnterTime = now;
+      lastGazeDwellEventAt = now;
+      enqueueLoomletHostEvent(newGazedObjectId, 'object.gaze.enter');
+    } else {
+      gazeEnterTime = null;
+      lastGazeDwellEventAt = null;
+    }
+    currentGazedObjectId = newGazedObjectId;
+  }
+
+  currentGazeHit = gazeHit;
+}
+
+function updateGazeDwellState(now) {
+  if (!currentGazedObjectId || gazeEnterTime === null) return;
+
+  const gazeDwellMs = now - lastGazeDwellEventAt;
+  const gazeDwellSec = gazeDwellMs / 1000;
+
+  if (gazeDwellSec >= gazeDwellThresholdSeconds) {
+    enqueueLoomletHostEvent(currentGazedObjectId, 'object.gaze.dwell');
+    lastGazeDwellEventAt = now;
+  }
 }
 
 function getSelectedObjects() {
@@ -2896,6 +2993,14 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
 renderer.domElement.addEventListener('pointercancel', () => {
   pointerSelectionStart = null;
+});
+
+renderer.domElement.addEventListener('pointerleave', () => {
+  // Clear hover state when pointer leaves the canvas
+  if (currentHoveredObjectId) {
+    enqueueLoomletHostEvent(currentHoveredObjectId, 'object.hover.leave');
+    currentHoveredObjectId = null;
+  }
 });
 
 renderer.domElement.addEventListener('click', (event) => {
@@ -4015,6 +4120,8 @@ renderer.setAnimationLoop((time, frame) => {
 
   const now = performance.now();
   updateObjectGlbAnimations(now);
+  updateGazeStateFromCamera();
+  updateGazeDwellState(now);
   loomIntegration?.tickObjectGraphs?.(now);
 
   if (xrState.active) {
@@ -4269,6 +4376,8 @@ const loomIntegration = createSceneSyncLoomIntegration({
   getViewerPosition: getViewerPositionForLoomlet,
   getViewerForward: getViewerForwardForLoomlet,
   getObjectHoverState: getObjectHoverStateForLoomlet,
+  getObjectGazeState: getObjectGazeStateForLoomlet,
+  getGazeHit: getGazeHitForLoomlet,
   getLoomletHostEvents: getLoomletHostEventsForObject,
   clearLoomletHostEvents: clearLoomletHostEventsForObject,
 });
