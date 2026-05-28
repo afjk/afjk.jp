@@ -218,12 +218,12 @@ namespace Afjk.SceneSync
             return await GlbExporter.ExportGameObjectAsGlb(go, SceneSyncGlbExportBackend.GltfFast);
         }
 
-        public static async Task UploadGlb(byte[] glb, string blobBaseUrl, string path)
+        public static async Task<bool> UploadGlb(byte[] glb, string blobBaseUrl, string path)
         {
             if (glb == null || glb.Length == 0)
             {
                 Debug.LogWarning("[SceneSync] Upload skipped: glb is null or empty, path=" + path);
-                return;
+                return false;
             }
 
             try
@@ -238,17 +238,20 @@ namespace Afjk.SceneSync
                     Debug.LogWarning(
                         "[SceneSync] Upload failed: status=" + (int)response.StatusCode + " " + response.StatusCode
                         + ", url=" + url);
+                    return false;
                 }
                 else
                 {
                     Debug.Log(
                         "[SceneSync] Upload success: status=" + (int)response.StatusCode + " " + response.StatusCode
                         + ", url=" + url);
+                    return true;
                 }
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] Upload failed: path=" + path + ", blobBaseUrl=" + blobBaseUrl + "\n" + ex);
+                return false;
             }
         }
 

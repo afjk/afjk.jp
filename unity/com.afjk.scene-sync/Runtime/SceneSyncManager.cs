@@ -388,15 +388,21 @@ namespace Afjk.SceneSync
                 // blob store に POST（全クライアント共有）
                 var path = PresenceClientRuntime.GenerateRandomPath();
                 var assetId = PresenceClientRuntime.ComputeAssetId(glb);
+                var uploaded = await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
+                if (!uploaded)
+                {
+                    Debug.LogWarning("[SceneSync] Skipping scene-mesh broadcast because GLB upload failed: objectId=" + objectId);
+                    continue;
+                }
+
                 _meshPaths[objectId] = path;
                 if (assetId != null)
                     _assetIdCache[assetId] = glb;
                 if (path != null)
                     _meshPathCache[path] = glb;
-                await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
 
-                var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
-                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + objectId + "\",\"meshPath\":\"" + path + "\"" + assetIdJson +
+                var assetIdJson = assetId != null ? ",\"assetId\":\"" + SceneSyncWireJson.JsonEscape(assetId) + "\"" : "";
+                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" + assetIdJson +
                     ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") + "}";
                 await _client.Broadcast(payload);
             }
@@ -731,11 +737,17 @@ namespace Afjk.SceneSync
             byte[] glb = null;
             string path = null;
             string assetId = null;
-            if (go.GetComponentInChildren<MeshFilter>() != null
-                || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
+            var hasMeshVisual = go.GetComponentInChildren<MeshFilter>() != null
+                || go.GetComponentInChildren<SkinnedMeshRenderer>() != null;
+            if (hasMeshVisual)
             {
                 glb = await PresenceClientRuntime.ExportGameObjectAsGlb(go);
-                if (glb != null)
+                if (glb == null)
+                {
+                    Debug.LogWarning("[SceneSync] Skipping scene-add because GLB export failed: objectId=" + sendObjectId);
+                    return;
+                }
+                else
                 {
                     path = PresenceClientRuntime.GenerateRandomPath();
                     assetId = PresenceClientRuntime.ComputeAssetId(glb);
@@ -746,25 +758,33 @@ namespace Afjk.SceneSync
             if (glb != null && path != null)
             {
                 var objectIdStr = go.GetInstanceID().ToString();
-                _meshPaths[objectIdStr] = path;
-                if (assetId != null)
-                    _assetIdCache[assetId] = glb;
-                if (path != null)
-                    _meshPathCache[path] = glb;
-                await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
+                var uploaded = await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
+                if (!uploaded)
+                {
+                    Debug.LogWarning("[SceneSync] Skipping scene-add because GLB upload failed: objectId=" + objectIdStr);
+                    return;
+                }
+                else
+                {
+                    _meshPaths[objectIdStr] = path;
+                    if (assetId != null)
+                        _assetIdCache[assetId] = glb;
+                    if (path != null)
+                        _meshPathCache[path] = glb;
+                }
             }
 
             if (_isShuttingDown || !_connected) return;
 
-            var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
-            var assetIdJson = assetId != null ? ",\"assetId\":\"" + assetId + "\"" : "";
+            var meshPathJson = path != null ? ",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" : "";
+            var assetIdJson = assetId != null ? ",\"assetId\":\"" + SceneSyncWireJson.JsonEscape(assetId) + "\"" : "";
             var assetJson = path != null
                 ? ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity")
                 : "";
-            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + go.GetInstanceID() + "\",\"name\":\"" + go.name + "\"" +
-                ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
-                ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
+            var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(go.GetInstanceID().ToString()) + "\",\"name\":\"" + SceneSyncWireJson.JsonEscape(go.name) + "\"" +
+                ",\"position\":[" + SceneSyncWireJson.FormatFloat(pos.x) + "," + SceneSyncWireJson.FormatFloat(pos.y) + "," + SceneSyncWireJson.FormatFloat(-pos.z) + "]" +
+                ",\"rotation\":[" + SceneSyncWireJson.FormatFloat(rot.x) + "," + SceneSyncWireJson.FormatFloat(rot.y) + "," + SceneSyncWireJson.FormatFloat(-rot.z) + "," + SceneSyncWireJson.FormatFloat(-rot.w) + "]" +
+                ",\"scale\":[" + SceneSyncWireJson.FormatFloat(scl.x) + "," + SceneSyncWireJson.FormatFloat(scl.y) + "," + SceneSyncWireJson.FormatFloat(scl.z) + "]" +
                 meshPathJson + assetIdJson + assetJson + "}";
             await _client.Broadcast(payload);
 
@@ -1265,9 +1285,7 @@ namespace Afjk.SceneSync
 
             Debug.Log("[SceneSync] scene-add received: objectId=" + objectId + " → not yet managed");
 
-            var nameMatch = System.Text.RegularExpressions.Regex.Match(
-                raw, "\"name\":\"([^\"]+)\"");
-            var name = nameMatch.Success ? nameMatch.Groups[1].Value : objectId;
+            var name = SceneSyncWireJson.ExtractString(raw, "name") ?? objectId;
             var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
 
             float[] position = ExtractArray(raw, "\"position\":");
@@ -1304,10 +1322,7 @@ namespace Afjk.SceneSync
             if (string.IsNullOrEmpty(assetId) && !string.IsNullOrEmpty(assetJson))
                 assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
 
-            // Extract visualBasis from asset JSON
-            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
-                raw, "\"visualBasis\":\"([^\"]+)\"");
-            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+            var visualBasis = SceneSyncWireJson.ExtractString(assetJson, "visualBasis");
 
             // meshPath を保存
             if (!string.IsNullOrEmpty(meshPath))
@@ -1469,10 +1484,7 @@ namespace Afjk.SceneSync
             if (string.IsNullOrEmpty(assetId) && !string.IsNullOrEmpty(assetJson))
                 assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
 
-            // Extract visualBasis from asset JSON
-            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
-                raw, "\"visualBasis\":\"([^\"]+)\"");
-            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+            var visualBasis = SceneSyncWireJson.ExtractString(assetJson, "visualBasis");
 
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
@@ -1579,7 +1591,6 @@ namespace Afjk.SceneSync
             var objectsJson = new System.Text.StringBuilder();
             objectsJson.Append("{");
             bool first = true;
-            var pendingUploads = new List<(byte[] glb, string path, string assetId)>();
             int sceneStateObjectCount = 0;
 
             foreach (var go in rootObjects)
@@ -1628,13 +1639,28 @@ namespace Afjk.SceneSync
                     || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
                 {
                     var glb = await PresenceClientRuntime.ExportGameObjectAsGlb(go);
-                    if (glb != null)
+                    if (glb == null)
+                    {
+                        Debug.LogWarning(
+                            "[SceneSync] scene-state skipped because GLB export failed: objectId=" +
+                            objectId + ", name=" + go.name);
+                        continue;
+                    }
+                    else
                     {
                         path = PresenceClientRuntime.GenerateRandomPath();
                         assetId = PresenceClientRuntime.ComputeAssetId(glb);
-                        pendingUploads.Add((glb, path, assetId));
+                        var uploaded = await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
+                        if (!uploaded)
+                        {
+                            Debug.LogWarning(
+                                "[SceneSync] scene-state skipped because GLB upload failed: objectId=" +
+                                objectId + ", name=" + go.name);
+                            continue;
+                        }
                         _meshPaths[objectId] = path;
-                        _assetIdCache[assetId] = glb;
+                        if (assetId != null)
+                            _assetIdCache[assetId] = glb;
                         _meshPathCache[path] = glb;
                     }
                 }
@@ -1728,10 +1754,6 @@ namespace Afjk.SceneSync
             objectsJson.Append("}");
 
             Debug.Log($"[SceneSync] Building scene-state. count={sceneStateObjectCount}");
-
-            // アップロードを先に完了させる
-            foreach (var (glb, path, assetId) in pendingUploads)
-                await PresenceClientRuntime.UploadGlb(glb, GetBlobUrl(), path);
 
             // handoff で 1対1 返信（broadcast ではない）
             var envJson = !string.IsNullOrWhiteSpace(_envId)
