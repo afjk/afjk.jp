@@ -93,6 +93,14 @@ layout_mode = 2
 autowrap_mode = 2
 text = "Click Create SceneSyncRoot, place 3D objects under it, then click Publish Children."
 
+[node name="ManagedObjectsHeader" type="Label" parent="."]
+layout_mode = 2
+text = "Managed Objects"
+
+[node name="ManagedObjectsContainer" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+
 [node name="CreateRootButton" type="Button" parent="."]
 unique_name_in_owner = true
 layout_mode = 2

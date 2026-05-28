@@ -13,6 +13,7 @@ var _manager: SceneSyncManager
 @onready var _sync_meshes_button: Button = %SyncMeshesButton
 @onready var _target_root_value: Label = %TargetRootValue
 @onready var _publish_rules_label: Label = %PublishRulesLabel
+@onready var _managed_objects_container: VBoxContainer = %ManagedObjectsContainer
 @onready var _create_root_button: Button = %CreateRootButton
 @onready var _use_selected_root_button: Button = %UseSelectedRootButton
 @onready var _publish_selected_button: Button = %PublishSelectedButton
@@ -155,20 +156,60 @@ func _refresh_status() -> void:
 func _refresh_target_root() -> void:
     if _manager == null:
         _target_root_value.text = "No sync root selected"
+        _refresh_managed_objects(null)
         return
     var root_status := _manager.get_publish_root_status()
     if bool(root_status.get("ok", false)):
         var root = root_status.get("root")
         _target_root_value.text = _format_root_label(root)
         _publish_rules_label.text = "Managed objects: direct Node3D children of Target Root that contain a MeshInstance3D."
+        _refresh_managed_objects(root)
     else:
         _target_root_value.text = "No sync root selected"
         _publish_rules_label.text = "Click Create SceneSyncRoot, place 3D objects under it, then click Publish Children."
+        _refresh_managed_objects(null)
 
 
 func _refresh_publish_status(message: String) -> void:
     _refresh_target_root()
     _publish_status_label.text = message
+
+
+func _refresh_managed_objects(root) -> void:
+    for child in _managed_objects_container.get_children():
+        child.queue_free()
+
+    if not (root is Node):
+        _add_managed_object_line("No Publish Root yet.")
+        return
+
+    var children: Array = root.get_children()
+    if children.is_empty():
+        _add_managed_object_line("No objects under Publish Root.")
+        _add_managed_object_line("Move a 3D object here, then Publish Children.")
+        return
+
+    var ready_count := 0
+    var skipped_count := 0
+    for child in children:
+        var status := _manager.get_publish_candidate_status(child)
+        if bool(status.get("publishable", false)):
+            ready_count += 1
+            _add_managed_object_line("READY  %s" % child.name)
+        else:
+            skipped_count += 1
+            _add_managed_object_line("SKIP   %s - %s" % [
+                child.name,
+                String(status.get("reason", "not publishable")),
+            ])
+    _add_managed_object_line("Total: %d ready, %d skipped" % [ready_count, skipped_count])
+
+
+func _add_managed_object_line(text: String) -> void:
+    var label := Label.new()
+    label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    label.text = text
+    _managed_objects_container.add_child(label)
 
 
 func _get_edited_scene_root() -> Node:
