@@ -27,7 +27,11 @@ var _origins: Dictionary = {}
 var _unity_hierarchy_paths: Dictionary = {}
 var _mesh_data_by_asset_id: Dictionary = {}
 var _mesh_data_by_path: Dictionary = {}
+var _pending_recoveries: Dictionary = {}
+var _responder_cooldowns: Dictionary = {}
+var _active_outgoing_transfer_id: String = ""
 var _loom_graphs: Dictionary = {}
+var _loom_runner: Node = null
 var _env_id: String = ""
 var _locks: Dictionary = {}
 var _last_snapshots: Dictionary = {}
@@ -40,6 +44,10 @@ var _hierarchy_timer: float = 0.0
 var _connected: bool = false
 
 const SEND_INTERVAL: float = 0.05
+const RECOVERY_TIMEOUT_SECONDS: float = 30.0
+const PEER_RETRY_INTERVAL_SECONDS: float = 4.0
+const RECOVERY_RESPONDER_COOLDOWN_SECONDS: float = 30.0
+const MAX_GLB_SIZE: int = 50 * 1024 * 1024
 const OBJECT_ID_META := "scene_sync_object_id"
 const ASSET_META := "scene_sync_asset"
 const METADATA_META := "scene_sync_metadata"
@@ -47,6 +55,7 @@ const ASSET_ID_META := "scene_sync_asset_id"
 const ORIGIN_META := "scene_sync_origin"
 const UNITY_HIERARCHY_PATH_META := "scene_sync_unity_hierarchy_path"
 const RECEIVE_ROOT_NAME := "SceneSyncRoot"
+const LOOM_RUNNER_SCRIPT_PATH := "res://addons/scene_sync/SceneSyncLoomletRunner.cs"
 
 
 func _ready() -> void:
@@ -54,6 +63,7 @@ func _ready() -> void:
     _blob_client = SceneSyncBlobClient.new()
     _blob_client.name = "SceneSyncBlobClient"
     add_child(_blob_client)
+    _ensure_loom_runner()
 
     _client.connected.connect(_on_connected)
     _client.disconnected.connect(_on_disconnected)
@@ -161,9 +171,13 @@ func _on_disconnected() -> void:
     _scene_received = false
     _first_peers_received = false
     _locks.clear()
+    _clear_all_loom_graphs()
     _loom_graphs.clear()
     _mesh_data_by_asset_id.clear()
     _mesh_data_by_path.clear()
+    _pending_recoveries.clear()
+    _responder_cooldowns.clear()
+    _active_outgoing_transfer_id = ""
     _env_id = ""
     _currently_locked_id = ""
     disconnected.emit()
@@ -221,6 +235,10 @@ func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void
             _handle_scene_graph_set(payload)
         "scene-graph-clear":
             _handle_scene_graph_clear(payload)
+        "scene-asset-request":
+            _handle_scene_asset_request(payload, from_id)
+        "file":
+            _handle_file_handoff(payload, from_id)
         "scene-request":
             _handle_scene_request(from_id)
         "scene-state":
@@ -276,9 +294,12 @@ func _handle_scene_graph_set(payload: Dictionary) -> void:
             objects = {}
         objects[object_id] = (graph as Dictionary).duplicate(true)
         _loom_graphs["objects"] = objects
+        _bind_loom_graph_for_object(object_id)
         return
 
-    _loom_graphs["scene"] = (graph as Dictionary).duplicate(true)
+    var scene_graph := graph as Dictionary
+    _loom_graphs["scene"] = scene_graph.duplicate(true)
+    _set_loom_scene_graph(scene_graph)
 
 
 func _handle_scene_graph_clear(payload: Dictionary) -> void:
@@ -291,9 +312,11 @@ func _handle_scene_graph_clear(payload: Dictionary) -> void:
                 _loom_graphs.erase("objects")
             else:
                 _loom_graphs["objects"] = objects
+        _clear_loom_object_graph(object_id)
         return
 
     _loom_graphs.erase("scene")
+    _clear_loom_scene_graph()
 
 
 func _handle_scene_env(payload: Dictionary) -> void:
@@ -338,6 +361,7 @@ func _handle_scene_state(payload: Dictionary) -> void:
     var loom_graphs = payload.get("loomGraphs", {})
     if loom_graphs is Dictionary:
         _loom_graphs = (loom_graphs as Dictionary).duplicate(true)
+        _apply_loom_graph_state()
 
     var objects = payload.get("objects", {})
     if not (objects is Dictionary):
@@ -347,6 +371,7 @@ func _handle_scene_state(payload: Dictionary) -> void:
         var info = objects[object_id]
         if info is Dictionary:
             _handle_scene_add((info as Dictionary).merged({"objectId": object_id}, true))
+    _apply_loom_graph_state()
 
 
 func _handle_scene_add(payload: Dictionary) -> void:
@@ -415,6 +440,7 @@ func _handle_scene_remove(payload: Dictionary) -> void:
             node.queue_free()
     _managed_objects.erase(object_id)
     _known_ids.erase(object_id)
+    _unbind_loom_object(object_id)
     _mesh_paths.erase(object_id)
     _asset_ids.erase(object_id)
     _metadata.erase(object_id)
@@ -520,6 +546,7 @@ func _detect_hierarchy_changes() -> void:
                 continue
         _client.broadcast(SceneSyncProtocol.make_scene_remove(String(object_id)))
         _managed_objects.erase(object_id)
+        _unbind_loom_object(String(object_id))
         _mesh_paths.erase(object_id)
         _asset_ids.erase(object_id)
         _metadata.erase(object_id)
@@ -547,6 +574,11 @@ func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
     if mesh_path == "" and asset.is_empty() and _node_has_mesh(node):
         var glb := SceneSyncGltfHelper.export_glb(node)
         if not glb.is_empty():
+            if asset_id == "":
+                asset_id = SceneSyncBlobClient.compute_asset_id(glb)
+            if asset_id != "":
+                _asset_ids[object_id] = asset_id
+                node.set_meta(ASSET_ID_META, asset_id)
             mesh_path = SceneSyncBlobClient.generate_random_path()
             var upload_err := await _blob_client.upload_glb(glb, mesh_path)
             if upload_err == OK:
@@ -591,6 +623,12 @@ func _sync_mesh_for_node(node: Node3D) -> void:
         return
 
     var mesh_path := SceneSyncBlobClient.generate_random_path()
+    var asset_id := _get_asset_id(node, object_id)
+    if asset_id == "":
+        asset_id = SceneSyncBlobClient.compute_asset_id(glb)
+    if asset_id != "":
+        _asset_ids[object_id] = asset_id
+        node.set_meta(ASSET_ID_META, asset_id)
     var upload_err := await _blob_client.upload_glb(glb, mesh_path)
     if upload_err != OK:
         return
@@ -605,7 +643,6 @@ func _sync_mesh_for_node(node: Node3D) -> void:
         }
     elif String(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
         asset["meshPath"] = mesh_path
-    var asset_id := _get_asset_id(node, object_id)
     if asset_id != "" and not asset.has("assetId"):
         asset["assetId"] = asset_id
     _cache_mesh_data(mesh_path, asset_id, glb)
@@ -627,10 +664,46 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
         data = await _blob_client.download_glb(mesh_path)
         if not data.is_empty():
             _cache_mesh_data(mesh_path, asset_id, data)
-    var old_node_value = _managed_objects.get(object_id)
-    var old_node: Node3D = null
-    if old_node_value != null and is_instance_valid(old_node_value):
-        old_node = old_node_value as Node3D
+    if data.is_empty():
+        _handle_missing_glb(object_id, mesh_path, null, asset_id)
+    _replace_object_with_mesh_data(object_id, payload, data)
+
+
+func _load_mesh_bytes_for_object(object_id: String, data: PackedByteArray, asset_id: String = "") -> void:
+    var node := _get_managed_node(object_id)
+    if node == null:
+        push_warning("[SceneSync] Cannot load recovered GLB; object not found: %s" % object_id)
+        return
+
+    var snapshot := _snapshot_for_node(node)
+    var asset := _get_asset(node, object_id)
+    var mesh_path := String(_mesh_paths.get(object_id, ""))
+    if mesh_path != "":
+        asset["meshPath"] = mesh_path
+    if asset_id != "":
+        asset["assetId"] = asset_id
+
+    var payload := {
+        "objectId": object_id,
+        "name": node.name,
+        "position": SceneSyncProtocol.pos_to_wire(snapshot.get("position", Vector3.ZERO)),
+        "rotation": SceneSyncProtocol.rot_to_wire(snapshot.get("rotation", Quaternion.IDENTITY)),
+        "scale": SceneSyncProtocol.scale_to_wire(snapshot.get("scale", Vector3.ONE)),
+        "asset": asset,
+        "metadata": _get_metadata(node, object_id),
+        "origin": _get_origin(node, object_id),
+        "unityHierarchyPath": _get_unity_hierarchy_path(node, object_id),
+    }
+    if mesh_path != "":
+        payload["meshPath"] = mesh_path
+    if asset_id != "":
+        payload["assetId"] = asset_id
+
+    _replace_object_with_mesh_data(object_id, payload, data)
+
+
+func _replace_object_with_mesh_data(object_id: String, payload: Dictionary, data: PackedByteArray) -> void:
+    var old_node := _get_managed_node(object_id)
     var replacement: Node3D = null
 
     if not data.is_empty():
@@ -661,6 +734,7 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
 
     _managed_objects[object_id] = replacement
     _known_ids[object_id] = true
+    _bind_loom_object_target(object_id, replacement)
     object_added.emit(object_id, replacement)
 
 
@@ -676,12 +750,14 @@ func _register_managed_object(object_id: String, node: Node3D) -> void:
     node.set_meta(OBJECT_ID_META, object_id)
     _managed_objects[object_id] = node
     _known_ids[object_id] = true
+    _bind_loom_object_target(object_id, node)
 
 
 func _bind_existing_managed_object(object_id: String, node: Node3D) -> void:
     node.set_meta(OBJECT_ID_META, object_id)
     _managed_objects[object_id] = node
     _known_ids[object_id] = true
+    _bind_loom_object_target(object_id, node)
 
 
 func _create_primitive(primitive_type: String, color: String = "#888888") -> MeshInstance3D:
@@ -808,6 +884,271 @@ func _get_cached_mesh_data(mesh_path: String, asset_id: String) -> PackedByteArr
     return PackedByteArray()
 
 
+func _handle_scene_asset_request(payload: Dictionary, requester_peer_id: String) -> void:
+    if requester_peer_id == "":
+        return
+    var request_id := String(payload.get("requestId", ""))
+    var object_id := String(payload.get("objectId", ""))
+    if request_id == "" or object_id == "":
+        return
+    if _get_managed_node(object_id) == null:
+        return
+
+    var asset_id := _nullable_string(payload.get("assetId", ""))
+    var mesh_path := _nullable_string(payload.get("meshPath", ""))
+    var cache_key := asset_id if asset_id != "" else mesh_path
+    if cache_key == "":
+        return
+
+    var cooldown_key := "%s-%s" % [cache_key, requester_peer_id]
+    var now := Time.get_ticks_msec() / 1000.0
+    if _responder_cooldowns.has(cooldown_key):
+        var last_time := float(_responder_cooldowns[cooldown_key])
+        if now - last_time < RECOVERY_RESPONDER_COOLDOWN_SECONDS:
+            return
+
+    if _active_outgoing_transfer_id != "":
+        return
+
+    var data := _get_cached_mesh_data(mesh_path, asset_id)
+    if data.is_empty() or data.size() > MAX_GLB_SIZE:
+        return
+
+    _responder_cooldowns[cooldown_key] = now
+    _active_outgoing_transfer_id = request_id
+    var filename := "%s.glb" % (asset_id if asset_id != "" else object_id)
+    await _send_glb_to_peer(requester_peer_id, filename, data)
+    if _active_outgoing_transfer_id == request_id:
+        _active_outgoing_transfer_id = ""
+
+
+func _handle_missing_glb(object_id: String, mesh_path: String, expected_size: Variant, asset_id: String) -> void:
+    var request_id := _generate_recovery_request_id()
+    var recovery := {
+        "requestId": request_id,
+        "objectId": object_id,
+        "assetId": asset_id,
+        "meshPath": mesh_path,
+        "expectedSize": expected_size,
+        "requestedAt": Time.get_ticks_msec() / 1000.0,
+        "requestedPeerIds": {},
+    }
+    _pending_recoveries[request_id] = recovery
+
+    var peers := _get_other_peers()
+    if peers.is_empty():
+        _remove_recovery_after_timeout(request_id)
+        return
+
+    _retry_recovery_peers(request_id, peers)
+    _remove_recovery_after_timeout(request_id)
+
+
+func _retry_recovery_peers(request_id: String, peers: Array) -> void:
+    for peer in peers:
+        if not _pending_recoveries.has(request_id):
+            return
+        if not (peer is Dictionary):
+            continue
+        var peer_id := String((peer as Dictionary).get("id", ""))
+        if peer_id == "" or peer_id == _client.id:
+            continue
+
+        var recovery: Dictionary = _pending_recoveries[request_id]
+        var requested_peer_ids: Dictionary = recovery.get("requestedPeerIds", {})
+        requested_peer_ids[peer_id] = true
+        recovery["requestedPeerIds"] = requested_peer_ids
+        _pending_recoveries[request_id] = recovery
+
+        _client.send_handoff(peer_id, SceneSyncProtocol.make_scene_asset_request(
+            request_id,
+            String(recovery.get("objectId", "")),
+            String(recovery.get("assetId", "")),
+            String(recovery.get("meshPath", "")),
+            recovery.get("expectedSize", null)
+        ))
+
+        if get_tree() == null:
+            return
+        await get_tree().create_timer(PEER_RETRY_INTERVAL_SECONDS).timeout
+
+    if _pending_recoveries.has(request_id):
+        _pending_recoveries.erase(request_id)
+
+
+func _remove_recovery_after_timeout(request_id: String) -> void:
+    if get_tree() == null:
+        return
+    await get_tree().create_timer(RECOVERY_TIMEOUT_SECONDS).timeout
+    _pending_recoveries.erase(request_id)
+
+
+func _handle_file_handoff(payload: Dictionary, from_peer_id: String) -> void:
+    var path := String(payload.get("path", ""))
+    var filename := String(payload.get("filename", ""))
+    var size := int(payload.get("size", 0))
+    var mime := String(payload.get("mime", ""))
+    if not _can_accept_file_handoff(from_peer_id, filename, size, mime):
+        return
+
+    var url := "%s/%s" % [_get_piping_server_base().trim_suffix("/"), path.uri_encode()]
+    var data := await _download_bytes_from_url(url)
+    _handle_received_file(from_peer_id, filename, data, mime)
+
+
+func _can_accept_file_handoff(from_peer_id: String, filename: String, size: int, mime: String) -> bool:
+    if from_peer_id == "" or filename == "" or size <= 0 or mime == "":
+        return false
+    if size > MAX_GLB_SIZE:
+        return false
+    if mime != "model/gltf-binary" and not filename.to_lower().ends_with(".glb"):
+        return false
+
+    for recovery_value in _pending_recoveries.values():
+        if not (recovery_value is Dictionary):
+            continue
+        var recovery: Dictionary = recovery_value
+        var requested_peer_ids: Dictionary = recovery.get("requestedPeerIds", {})
+        if not requested_peer_ids.has(from_peer_id):
+            continue
+        var expected = recovery.get("expectedSize", null)
+        if expected != null and int(expected) != size:
+            continue
+        return true
+    return false
+
+
+func _handle_received_file(from_peer_id: String, filename: String, data: PackedByteArray, mime: String) -> void:
+    if data.is_empty() or data.size() > MAX_GLB_SIZE:
+        return
+    if mime != "model/gltf-binary" and not filename.to_lower().ends_with(".glb"):
+        return
+
+    var matched_request_id := ""
+    var matched_recovery := {}
+    for request_id in _pending_recoveries.keys():
+        var recovery_value = _pending_recoveries[request_id]
+        if not (recovery_value is Dictionary):
+            continue
+        var recovery: Dictionary = recovery_value
+        var requested_peer_ids: Dictionary = recovery.get("requestedPeerIds", {})
+        if not requested_peer_ids.has(from_peer_id):
+            continue
+        var expected = recovery.get("expectedSize", null)
+        if expected != null and int(expected) != data.size():
+            continue
+        matched_request_id = String(request_id)
+        matched_recovery = recovery
+        break
+
+    if matched_request_id == "":
+        return
+
+    var expected_asset_id := String(matched_recovery.get("assetId", ""))
+    var computed_asset_id := ""
+    if expected_asset_id != "":
+        computed_asset_id = SceneSyncBlobClient.compute_asset_id(data)
+        if computed_asset_id == "" or computed_asset_id != expected_asset_id:
+            return
+
+    _pending_recoveries.erase(matched_request_id)
+    var mesh_path := String(matched_recovery.get("meshPath", ""))
+    _cache_mesh_data(mesh_path, computed_asset_id if computed_asset_id != "" else expected_asset_id, data)
+    _load_mesh_bytes_for_object(
+        String(matched_recovery.get("objectId", "")),
+        data,
+        computed_asset_id if computed_asset_id != "" else expected_asset_id
+    )
+
+
+func _send_glb_to_peer(target_peer_id: String, filename: String, data: PackedByteArray) -> void:
+    if target_peer_id == "" or data.is_empty():
+        return
+    var path := SceneSyncBlobClient.generate_random_path()
+    var display_url := "%s/#%s" % [_get_piping_display_url().trim_suffix("/"), path]
+    _client.send_handoff(target_peer_id, SceneSyncProtocol.make_file_handoff(
+        path,
+        filename,
+        data.size(),
+        "model/gltf-binary",
+        display_url
+    ))
+
+    var upload_url := "%s/%s" % [_get_piping_server_base().trim_suffix("/"), path.uri_encode()]
+    await _upload_bytes_to_url(upload_url, data, "model/gltf-binary")
+
+
+func _upload_bytes_to_url(url: String, data: PackedByteArray, mime: String) -> Error:
+    var request := HTTPRequest.new()
+    add_child(request)
+    var headers := PackedStringArray(["Content-Type: %s" % mime])
+    var err := request.request_raw(url, headers, HTTPClient.METHOD_POST, data)
+    if err != OK:
+        request.queue_free()
+        return err
+    var result: Array = await request.request_completed
+    request.queue_free()
+    var response_code := int(result[1])
+    return OK if response_code >= 200 and response_code < 300 else ERR_CANT_CONNECT
+
+
+func _download_bytes_from_url(url: String) -> PackedByteArray:
+    var request := HTTPRequest.new()
+    add_child(request)
+    var err := request.request(url)
+    if err != OK:
+        request.queue_free()
+        return PackedByteArray()
+    var result: Array = await request.request_completed
+    request.queue_free()
+    var response_code := int(result[1])
+    if response_code < 200 or response_code >= 300:
+        return PackedByteArray()
+    return result[3]
+
+
+func _get_other_peers() -> Array:
+    var result: Array = []
+    if _client == null:
+        return result
+    for peer in _client.peers:
+        if peer is Dictionary and String((peer as Dictionary).get("id", "")) != _client.id:
+            result.append(peer)
+    return result
+
+
+func _get_piping_server_base() -> String:
+    var raw := presence_url.replace("wss://", "").replace("ws://", "")
+    var host := raw.split("/", false, 1)[0]
+    if host == "" or host.begins_with("localhost") or host.begins_with("127.0.0.1"):
+        return "http://localhost:8080"
+    return "https://pipe.afjk.jp"
+
+
+func _get_piping_display_url() -> String:
+    var scheme := "https://"
+    var raw := presence_url
+    if raw.begins_with("ws://"):
+        scheme = "http://"
+    raw = raw.replace("wss://", "").replace("ws://", "")
+    var host := raw.split("/", false, 1)[0]
+    if host == "" or host.begins_with("localhost") or host.begins_with("127.0.0.1"):
+        return "http://localhost"
+    return "%s%s/pipe" % [scheme, host]
+
+
+func _generate_recovery_request_id() -> String:
+    var rng := RandomNumberGenerator.new()
+    rng.randomize()
+    return "%d-%06d" % [Time.get_ticks_usec(), rng.randi_range(0, 999999)]
+
+
+func _nullable_string(value: Variant) -> String:
+    if value == null:
+        return ""
+    return String(value)
+
+
 func _wrap_imported_mesh_for_visual_basis(imported: Node3D, visual_basis: String) -> Node3D:
     if imported == null:
         return null
@@ -897,6 +1238,103 @@ func _store_metadata_loom_graph(object_id: String, metadata: Dictionary) -> void
         objects = {}
     objects[object_id] = (graph as Dictionary).duplicate(true)
     _loom_graphs["objects"] = objects
+    _bind_loom_graph_for_object(object_id)
+
+
+func _ensure_loom_runner() -> Node:
+    if _loom_runner != null and is_instance_valid(_loom_runner):
+        return _loom_runner
+
+    if ClassDB.class_exists("SceneSyncLoomletRunner"):
+        _loom_runner = ClassDB.instantiate("SceneSyncLoomletRunner") as Node
+    else:
+        var runner_script = load(LOOM_RUNNER_SCRIPT_PATH)
+        if runner_script == null:
+            push_warning("[SceneSync] Loomlet runner script is unavailable: %s" % LOOM_RUNNER_SCRIPT_PATH)
+            return null
+        _loom_runner = runner_script.new()
+
+    if _loom_runner == null:
+        push_warning("[SceneSync] Failed to instantiate Loomlet runner.")
+        return null
+
+    _loom_runner.name = "SceneSyncLoomletRunner"
+    add_child(_loom_runner)
+    return _loom_runner
+
+
+func _call_loom_runner(method_name: String, args: Array = []) -> void:
+    var runner := _ensure_loom_runner()
+    if runner == null:
+        return
+    if runner.has_method(method_name):
+        runner.callv(method_name, args)
+        return
+    var snake_name := method_name.to_snake_case()
+    if runner.has_method(snake_name):
+        runner.callv(snake_name, args)
+
+
+func _set_loom_scene_graph(graph: Dictionary) -> void:
+    if graph.is_empty():
+        return
+    _call_loom_runner("SetSceneGraph", [JSON.stringify(graph)])
+
+
+func _clear_loom_scene_graph() -> void:
+    _call_loom_runner("ClearSceneGraph")
+
+
+func _bind_loom_object_target(object_id: String, node: Node3D) -> void:
+    if object_id == "" or node == null:
+        return
+    _call_loom_runner("BindObject", [object_id, node])
+    _bind_loom_graph_for_object(object_id)
+
+
+func _bind_loom_graph_for_object(object_id: String) -> void:
+    if object_id == "":
+        return
+    var node := _get_managed_node(object_id)
+    if node == null:
+        return
+    var objects = _loom_graphs.get("objects", {})
+    if not (objects is Dictionary):
+        return
+    var object_graphs := objects as Dictionary
+    if not object_graphs.has(object_id):
+        return
+    var graph = object_graphs[object_id]
+    if graph is Dictionary:
+        _call_loom_runner("SetObjectGraph", [object_id, node, JSON.stringify(graph)])
+
+
+func _clear_loom_object_graph(object_id: String) -> void:
+    _call_loom_runner("ClearObjectGraph", [object_id])
+
+
+func _unbind_loom_object(object_id: String) -> void:
+    _call_loom_runner("UnbindObject", [object_id])
+
+
+func _clear_all_loom_graphs() -> void:
+    _clear_loom_scene_graph()
+    var objects = _loom_graphs.get("objects", {})
+    if objects is Dictionary:
+        for object_id in (objects as Dictionary).keys():
+            _clear_loom_object_graph(String(object_id))
+
+
+func _apply_loom_graph_state() -> void:
+    var scene_graph = _loom_graphs.get("scene", {})
+    if scene_graph is Dictionary:
+        var typed_scene_graph := scene_graph as Dictionary
+        _set_loom_scene_graph(typed_scene_graph)
+
+    var objects = _loom_graphs.get("objects", {})
+    if objects is Dictionary:
+        for object_id in (objects as Dictionary).keys():
+            _bind_loom_graph_for_object(String(object_id))
 
 
 func _merge_asset_metadata(node: Node3D, _object_id: String, asset: Dictionary) -> void:
@@ -973,6 +1411,23 @@ func _get_asset_id(node: Node3D, object_id: String) -> String:
     return String(_asset_ids.get(object_id, ""))
 
 
+func _get_asset(node: Node3D, object_id: String) -> Dictionary:
+    if node != null and node.has_meta(ASSET_META):
+        var value = node.get_meta(ASSET_META)
+        if value is Dictionary:
+            return (value as Dictionary).duplicate(true)
+    return _asset_from_known_object(object_id)
+
+
+func _asset_from_known_object(object_id: String) -> Dictionary:
+    var node := _get_managed_node(object_id)
+    if node != null and node.has_meta(ASSET_META):
+        var value = node.get_meta(ASSET_META)
+        if value is Dictionary:
+            return (value as Dictionary).duplicate(true)
+    return {}
+
+
 func _get_metadata(node: Node3D, object_id: String) -> Dictionary:
     if node != null and node.has_meta(METADATA_META):
         var value = node.get_meta(METADATA_META)
@@ -994,6 +1449,13 @@ func _get_unity_hierarchy_path(node: Node3D, object_id: String) -> String:
     if node != null and node.has_meta(UNITY_HIERARCHY_PATH_META):
         return String(node.get_meta(UNITY_HIERARCHY_PATH_META))
     return String(_unity_hierarchy_paths.get(object_id, ""))
+
+
+func _get_managed_node(object_id: String) -> Node3D:
+    var node_value = _managed_objects.get(object_id)
+    if node_value != null and is_instance_valid(node_value):
+        return node_value as Node3D
+    return null
 
 
 func _resolve_existing_sync_target_for_payload(object_id: String, payload: Dictionary) -> Node3D:
