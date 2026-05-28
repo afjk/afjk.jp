@@ -4122,7 +4122,13 @@ renderer.setAnimationLoop((time, frame) => {
   updateObjectGlbAnimations(now);
   updateGazeStateFromCamera();
   updateGazeDwellState(now);
-  loomIntegration?.tickObjectGraphs?.(now);
+  const sceneClockStateForTick = getSceneClockStateForLoomlet(now);
+  loomIntegration?.tickObjectGraphs?.(sceneClockStateForTick);
+
+  // Update Scene Clock debug UI
+  if (!sceneClockPanelEl?.hidden) {
+    updateSceneClockUI();
+  }
 
   if (xrState.active) {
     updateXrGrab();
@@ -4345,6 +4351,119 @@ const sceneInspectorState = {
   },
 };
 
+// ── Scene Clock 状態 ────────────────────────────────
+// Host 所有のグローバル時刻制御システム
+// local-only: broadcast しない、room history に記録しない
+// 用途: Loomlet behavior の可制御なアニメーション
+// time.t = object graph の実評価時刻（選択中は 0）
+// time.sceneT = 将来: Scene Clock のグローバル時刻（MVP では公開しない）
+const sceneClockState = {
+  mode: 'server-follow',        // 'server-follow' | 'local'
+  paused: false,
+  localTime: 0,                 // local mode でのみ使用
+  pausedAt: null,               // 一時停止時の冷凍時刻
+  seekOffset: 0,
+  lastUpdateNow: performance.now(),
+  rate: 1,                       // 再生速度倍率
+};
+
+function getSceneClockTime(now = performance.now()) {
+  if (sceneClockState.paused) {
+    return sceneClockState.pausedAt ?? 0;
+  }
+
+  if (sceneClockState.mode === 'local') {
+    const elapsed = (now - sceneClockState.lastUpdateNow) / 1000;
+    return Math.max(0, sceneClockState.localTime + elapsed * sceneClockState.rate);
+  }
+
+  // server-follow mode: server time を使用
+  return Date.now() / 1000;
+}
+
+function getSceneClockDelta(now = performance.now()) {
+  if (sceneClockState.paused) {
+    return 0;
+  }
+
+  if (sceneClockState.mode === 'local') {
+    const elapsed = (now - sceneClockState.lastUpdateNow) / 1000;
+    return Math.max(0, elapsed * sceneClockState.rate);
+  }
+
+  return 0;
+}
+
+function getSceneClockStateForLoomlet(now = performance.now()) {
+  const t = getSceneClockTime(now);
+  const delta = getSceneClockDelta(now);
+
+  return {
+    t,
+    delta,
+    isPaused: sceneClockState.paused,
+    mode: sceneClockState.mode,
+    rate: sceneClockState.rate,
+    serverNow: Date.now() / 1000,
+  };
+}
+
+function setSceneClockMode(mode, now = performance.now()) {
+  if (mode === sceneClockState.mode) return;
+
+  if (mode === 'local') {
+    // server-follow → local: 現在時刻を localTime として記録
+    const currentTime = getSceneClockTime(now);
+    sceneClockState.localTime = currentTime;
+    sceneClockState.lastUpdateNow = now;
+    sceneClockState.paused = false;
+    sceneClockState.pausedAt = null;
+  } else if (mode === 'server-follow') {
+    // local → server-follow: ローカル状態をクリア
+    sceneClockState.localTime = 0;
+    sceneClockState.paused = false;
+    sceneClockState.pausedAt = null;
+  }
+
+  sceneClockState.mode = mode;
+}
+
+function pauseSceneClock(now = performance.now()) {
+  if (sceneClockState.paused) return;
+
+  sceneClockState.paused = true;
+  sceneClockState.pausedAt = getSceneClockTime(now);
+}
+
+function resumeSceneClock(now = performance.now()) {
+  if (!sceneClockState.paused) return;
+
+  sceneClockState.paused = false;
+  sceneClockState.pausedAt = null;
+  sceneClockState.lastUpdateNow = now;
+}
+
+function seekSceneClock(t, now = performance.now()) {
+  t = Math.max(0, t);
+
+  if (sceneClockState.mode !== 'local') {
+    setSceneClockMode('local', now);
+  }
+
+  sceneClockState.localTime = t;
+  sceneClockState.lastUpdateNow = now;
+  sceneClockState.paused = false;
+  sceneClockState.pausedAt = null;
+}
+
+function resetSceneClock(now = performance.now()) {
+  seekSceneClock(0, now);
+}
+
+function followServerClock(now = performance.now()) {
+  setSceneClockMode('server-follow', now);
+}
+
 // ── Loom 統合初期化 ──────────────────────────────────
 const loomIntegration = createSceneSyncLoomIntegration({
   getObjectById: (objectId) => managedObjects.get(objectId) || null,
@@ -4380,7 +4499,88 @@ const loomIntegration = createSceneSyncLoomIntegration({
   getGazeHit: getGazeHitForLoomlet,
   getLoomletHostEvents: getLoomletHostEventsForObject,
   clearLoomletHostEvents: clearLoomletHostEventsForObject,
+  getSceneClockStateForLoomlet,
 });
+
+// ── Scene Clock Debug UI 制御 ────────────────────────────
+const sceneClockPanelEl = document.getElementById('scene-clock-panel');
+const sceneClockCloseBtn = document.getElementById('scene-clock-close');
+const sceneClockTimeValueEl = document.getElementById('scene-clock-time-value');
+const sceneClockModeEl = document.getElementById('scene-clock-mode');
+const sceneClockStatusEl = document.getElementById('scene-clock-status');
+const sceneClockResetBtn = document.getElementById('scene-clock-reset');
+const sceneClockTogglePauseBtn = document.getElementById('scene-clock-toggle-pause');
+const sceneClockFollowBtn = document.getElementById('scene-clock-follow');
+const sceneClockSeekInput = document.getElementById('scene-clock-seek-input');
+const sceneClockRateInput = document.getElementById('scene-clock-rate-input');
+
+sceneClockCloseBtn?.addEventListener('click', () => {
+  sceneClockPanelEl?.setAttribute('hidden', '');
+});
+
+sceneClockResetBtn?.addEventListener('click', () => {
+  resetSceneClock();
+  updateSceneClockUI();
+});
+
+sceneClockTogglePauseBtn?.addEventListener('click', () => {
+  if (sceneClockState.paused) {
+    resumeSceneClock();
+  } else {
+    pauseSceneClock();
+  }
+  updateSceneClockUI();
+});
+
+sceneClockFollowBtn?.addEventListener('click', () => {
+  setSceneClockMode('server-follow');
+  updateSceneClockUI();
+});
+
+sceneClockSeekInput?.addEventListener('change', (e) => {
+  const t = parseFloat(e.target.value) || 0;
+  seekSceneClock(t);
+  updateSceneClockUI();
+});
+
+sceneClockRateInput?.addEventListener('change', (e) => {
+  sceneClockState.rate = parseFloat(e.target.value) || 1;
+  if (sceneClockState.rate < 0) sceneClockState.rate = 0;
+  sceneClockRateInput.value = sceneClockState.rate;
+  updateSceneClockUI();
+});
+
+function updateSceneClockUI() {
+  const clockState = getSceneClockStateForLoomlet?.();
+  if (!clockState) return;
+
+  if (sceneClockTimeValueEl) {
+    sceneClockTimeValueEl.textContent = clockState.t.toFixed(2);
+  }
+
+  if (sceneClockModeEl) {
+    sceneClockModeEl.textContent = sceneClockState.mode;
+    sceneClockModeEl.classList.toggle('local', sceneClockState.mode === 'local');
+  }
+
+  if (sceneClockStatusEl) {
+    sceneClockStatusEl.textContent = sceneClockState.paused ? 'paused' : 'running';
+    sceneClockStatusEl.classList.toggle('paused', sceneClockState.paused);
+  }
+
+  if (sceneClockSeekInput) {
+    sceneClockSeekInput.value = clockState.t.toFixed(2);
+  }
+
+  if (sceneClockRateInput) {
+    sceneClockRateInput.value = sceneClockState.rate;
+  }
+}
+
+// Debug UI トグル（開発用: dev-tool で開く / dev shortcut）
+// フェーズ4では常に非表示（最初からパネル開くキーボードショートカットなどを追加可）
+// 手動で右クリック→Inspector→Elements で hidden 属性を削除するか、
+// F12 devtools で document.getElementById('scene-clock-panel').removeAttribute('hidden')
 
 // ── ニックネーム編集 ───────────────────────────────────
 
