@@ -986,8 +986,8 @@ function buildTurnServers() {
   const urls = raw.split(',').map(u => u.trim()).filter(Boolean);
   if (!urls.length) {
     const devTurn = process.env.DEV_TURN_URL || 'turn:localhost:3478?transport=udp';
-    const enableDev = process.env.ENABLE_DEV_TURN !== 'false';
-    if (enableDev && process.env.NODE_ENV !== 'production') {
+    const enableDev = process.env.ENABLE_DEV_TURN === 'true';
+    if (enableDev) {
       urls.push(devTurn);
     }
   }
