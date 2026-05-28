@@ -216,6 +216,26 @@ dom.clearBgmButton?.addEventListener('click', () => {
   notifySceneStateChanged('bgm-cleared');
 });
 
+// Input routing mode toggle
+function updateInputRoutingModeUI() {
+  const modeBtn = document.getElementById('mode');
+  if (!modeBtn) return;
+
+  const isInteract = inputRoutingMode === 'interact';
+  modeBtn.textContent = `Mode: ${isInteract ? 'Interact' : 'Edit'}`;
+  if (isInteract) {
+    modeBtn.classList.add('interact');
+  } else {
+    modeBtn.classList.remove('interact');
+  }
+}
+
+document.getElementById('mode')?.addEventListener('click', () => {
+  const nextMode = inputRoutingMode === 'edit' ? 'interact' : 'edit';
+  setInputRoutingMode(nextMode);
+  showToast(`Mode: ${nextMode.toUpperCase()}`);
+});
+
 setupXrButtons({
   renderer,
   dom,
@@ -2577,6 +2597,10 @@ const loomletHostEvents = new Map(); // objectId -> Set<eventName>
 const tmpViewerPosition = new THREE.Vector3();
 const tmpViewerForward = new THREE.Vector3();
 
+// Input routing mode (local-only host UI state)
+let inputRoutingMode = 'edit';
+const INPUT_ROUTING_MODES = new Set(['edit', 'interact']);
+
 // Gaze tracking state (local-only, not broadcast)
 let currentGazedObjectId = null;
 let gazeEnterTime = null;
@@ -2585,6 +2609,16 @@ const gazeDwellThresholdSeconds = 1.0;
 const tmpGazeOrigin = new THREE.Vector3();
 const tmpGazeDirection = new THREE.Vector3();
 let currentGazeHit = null;
+
+function getInputRoutingMode() {
+  return inputRoutingMode;
+}
+
+function setInputRoutingMode(mode) {
+  if (!INPUT_ROUTING_MODES.has(mode)) return;
+  inputRoutingMode = mode;
+  updateInputRoutingModeUI();
+}
 
 function enqueueLoomletHostEvent(objectId, eventName) {
   if (!objectId || !eventName) return;
@@ -2677,21 +2711,31 @@ function updateGazeStateFromCamera() {
     }
   }
 
-  // Handle gaze state changes
-  if (newGazedObjectId !== currentGazedObjectId) {
-    if (currentGazedObjectId) {
-      enqueueLoomletHostEvent(currentGazedObjectId, 'object.gaze.leave');
+  // Gaze events are Interact mode only
+  if (inputRoutingMode === 'interact') {
+    // Handle gaze state changes
+    if (newGazedObjectId !== currentGazedObjectId) {
+      if (currentGazedObjectId) {
+        enqueueLoomletHostEvent(currentGazedObjectId, 'object.gaze.leave');
+      }
+      if (newGazedObjectId) {
+        const now = performance.now();
+        gazeEnterTime = now;
+        lastGazeDwellEventAt = now;
+        enqueueLoomletHostEvent(newGazedObjectId, 'object.gaze.enter');
+      } else {
+        gazeEnterTime = null;
+        lastGazeDwellEventAt = null;
+      }
+      currentGazedObjectId = newGazedObjectId;
     }
-    if (newGazedObjectId) {
-      const now = performance.now();
-      gazeEnterTime = now;
-      lastGazeDwellEventAt = now;
-      enqueueLoomletHostEvent(newGazedObjectId, 'object.gaze.enter');
-    } else {
+  } else {
+    // Clear gaze state in Edit mode
+    if (currentGazedObjectId) {
+      currentGazedObjectId = null;
       gazeEnterTime = null;
       lastGazeDwellEventAt = null;
     }
-    currentGazedObjectId = newGazedObjectId;
   }
 
   currentGazeHit = gazeHit;
@@ -2911,15 +2955,23 @@ function updateHoverStateFromPointer(clientX, clientY) {
     }
   }
 
-  // Handle hover state changes
-  if (newHoveredObjectId !== currentHoveredObjectId) {
+  // Hover events are Interact mode only
+  if (inputRoutingMode === 'interact') {
+    // Handle hover state changes
+    if (newHoveredObjectId !== currentHoveredObjectId) {
+      if (currentHoveredObjectId) {
+        enqueueLoomletHostEvent(currentHoveredObjectId, 'object.hover.leave');
+      }
+      if (newHoveredObjectId) {
+        enqueueLoomletHostEvent(newHoveredObjectId, 'object.hover.enter');
+      }
+      currentHoveredObjectId = newHoveredObjectId;
+    }
+  } else {
+    // Clear hover state in Edit mode
     if (currentHoveredObjectId) {
-      enqueueLoomletHostEvent(currentHoveredObjectId, 'object.hover.leave');
+      currentHoveredObjectId = null;
     }
-    if (newHoveredObjectId) {
-      enqueueLoomletHostEvent(newHoveredObjectId, 'object.hover.enter');
-    }
-    currentHoveredObjectId = newHoveredObjectId;
   }
 }
 
@@ -2945,9 +2997,14 @@ function selectObjectAt(clientX, clientY, event = null) {
         showToast(`${who} が編集中です`);
         return;
       }
-      // Enqueue activate event for Loomlet behaviors
-      enqueueLoomletHostEvent(obj.userData.objectId, 'object.activate');
-      handleObjectSelection(obj, event);
+      // Input routing: Edit mode vs Interact mode
+      if (inputRoutingMode === 'edit') {
+        // Edit mode: click selects object for editing
+        handleObjectSelection(obj, event);
+      } else {
+        // Interact mode: click fires object.activate event
+        enqueueLoomletHostEvent(obj.userData.objectId, 'object.activate');
+      }
     }
   } else {
     clearSelection({ reason: 'selection-cleared-raycast' });
@@ -4519,6 +4576,7 @@ const loomIntegration = createSceneSyncLoomIntegration({
   getLoomletHostEvents: getLoomletHostEventsForObject,
   clearLoomletHostEvents: clearLoomletHostEventsForObject,
   getSceneClockStateForLoomlet,
+  getInputRoutingMode,
 });
 
 // ── Scene Clock Debug UI 制御 ────────────────────────────
@@ -11106,6 +11164,7 @@ if (sceneSyncOperatorLink) {
 // 初期状態を反映（DOM 参照と関数定義が揃った後で呼ぶ）
 updateLinkButtonState();
 updateMobileDevVisibility();
+updateInputRoutingModeUI();
 if (mobileEnvSelect && dom.envSelect) {
   mobileEnvSelect.value = dom.envSelect.value;
 }

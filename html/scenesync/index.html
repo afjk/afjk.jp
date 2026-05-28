@@ -156,10 +156,24 @@
       padding: 6px 14px;
       border-radius: 6px;
       font: 13px/1.4 monospace;
-      color: #aaa;
-      background: rgba(0,0,0,0.45);
+      color: #fff;
+      background: rgba(0,0,0,0.55);
+      border: none;
+      cursor: pointer;
       z-index: 10;
       user-select: none;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    #mode:hover {
+      background: rgba(0,0,0,0.75);
+    }
+    #mode.interact {
+      background: rgba(68,136,255,0.55);
+      color: #fff;
+    }
+    #mode.interact:hover {
+      background: rgba(68,136,255,0.8);
     }
     #add-btn {
       position: fixed;
@@ -1446,7 +1460,7 @@
       </div>
     </div>
   </div>
-  <div id="mode">W: 移動 &nbsp; E: 回転 &nbsp; R: スケール</div>
+  <button id="mode" type="button" title="入力ルーティングモードを切り替え">Mode: Edit</button>
   <div id="toast"></div>
   <div id="history-toolbar">
     <button id="btn-undo" class="tb-btn" title="取り消す (Ctrl+Z)">↶</button>
