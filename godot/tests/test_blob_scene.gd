@@ -28,7 +28,16 @@ func _process(delta: float) -> void:
 
 func _run_tests() -> void:
     var test_path = SceneSyncBlobClient.generate_random_path()
-    var test_data = "hello scenesync".to_utf8_buffer()
+    var mesh_instance := MeshInstance3D.new()
+    mesh_instance.mesh = BoxMesh.new()
+    add_child(mesh_instance)
+    var test_data = SceneSyncGltfHelper.export_glb(mesh_instance)
+    mesh_instance.queue_free()
+    if test_data.is_empty():
+        _failed += 1
+        print("  FAIL: export_glb produced empty test data")
+        _finish_all()
+        return
 
     print("[Test] Uploading to %s/%s" % [_blob_client.blob_base_url, test_path])
     var upload_err = await _blob_client.upload_glb(test_data, test_path)
