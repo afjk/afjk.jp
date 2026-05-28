@@ -282,7 +282,7 @@ func _run_manager_tests() -> void:
         "ops": [{"kind": "scene-env", "envId": "ops-env"}],
         "actions": [{"kind": "scene-env", "envId": "actions-env"}],
     }, {})
-    _assert_eq(manager._env_id, "actions-env", "manager scene-batch applies ops and actions")
+    _assert_eq(manager._env_id, "ops-env", "manager scene-batch prefers ops over actions")
 
     manager._handle_scene_state({
         "kind": "scene-state",

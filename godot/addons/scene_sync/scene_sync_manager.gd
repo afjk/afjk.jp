@@ -268,21 +268,18 @@ func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void
 
 
 func _handle_scene_batch(payload: Dictionary, from_info: Dictionary) -> void:
-    var arrays: Array = []
-    var ops = payload.get("ops", [])
-    if ops is Array:
-        arrays.append(ops)
-    var actions = payload.get("actions", [])
-    if actions is Array:
-        arrays.append(actions)
+    var ops = payload.get("ops", null)
+    if not (ops is Array):
+        ops = payload.get("actions", [])
+    if not (ops is Array):
+        return
 
-    for entries in arrays:
-        for op in entries:
-            if op is Dictionary:
-                var child := (op as Dictionary).duplicate(true)
-                if payload.has("onBehalfOf") and not child.has("onBehalfOf"):
-                    child["onBehalfOf"] = payload["onBehalfOf"]
-                _dispatch_scene_payload(child, from_info)
+    for op in ops:
+        if op is Dictionary:
+            var child := (op as Dictionary).duplicate(true)
+            if payload.has("onBehalfOf") and not child.has("onBehalfOf"):
+                child["onBehalfOf"] = payload["onBehalfOf"]
+            _dispatch_scene_payload(child, from_info)
 
 
 func _handle_scene_graph_set(payload: Dictionary) -> void:

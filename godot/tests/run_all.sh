@@ -7,6 +7,7 @@ REPO_ROOT="$(dirname "$PROJECT_DIR")"
 TMP_DIR="${TMPDIR:-/tmp}/scenesync-godot-tests"
 TEST_PORT="${SCENESYNC_TEST_PORT:-18787}"
 mkdir -p "$TMP_DIR/blobs"
+mkdir -p "$TMP_DIR/logs"
 
 if [ -n "${GODOT_BIN:-}" ]; then
   GODOT="$GODOT_BIN"
@@ -26,7 +27,7 @@ fi
 
 echo "--- Generating import cache ---"
 cd "$PROJECT_DIR"
-"$GODOT" --headless --editor --import --quit >/dev/null 2>&1 || true
+"$GODOT" --headless --log-file "$TMP_DIR/logs/import.log" --editor --import --quit >/dev/null 2>&1 || true
 echo ""
 
 echo "--- Starting presence-server ---"
@@ -60,15 +61,15 @@ run_test() {
 }
 
 run_test "Unit Tests" \
-  "$GODOT" --headless -s tests/run_tests.gd
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/unit.log" -s tests/run_tests.gd
 
 run_test "WebSocket Connection Test" \
   env SCENESYNC_PRESENCE_URL="ws://localhost:$TEST_PORT" \
-  "$GODOT" --headless tests/test_connection.tscn
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/connection.log" tests/test_connection.tscn
 
 run_test "Blob Store Test" \
   env SCENESYNC_BLOB_URL="http://localhost:$TEST_PORT/blob" \
-  "$GODOT" --headless tests/test_blob.tscn
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/blob.log" tests/test_blob.tscn
 
 kill "$PRESENCE_PID" 2>/dev/null || true
 

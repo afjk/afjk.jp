@@ -40,7 +40,7 @@ The addon follows the current Unity SceneSync wire shape for scene objects:
 - caches uploaded/downloaded GLB bytes by `assetId` and `meshPath` during the current session
 - recovers expired blob-store GLB assets through Unity-compatible `scene-asset-request` and `file` handoff messages
 - rebinds incoming scene objects to an existing unique Godot sync target when possible
-- accepts `scene-batch` messages with `ops` and `actions`
+- accepts `scene-batch` messages with `ops`, falling back to `actions` only when `ops` is absent
 - accepts `scene-delete` as a removal alias
 - preserves `scene-env.envId` in subsequent scene-state replies
 - preserves `scene-state.loomGraphs` and `scene-graph-set` / `scene-graph-clear` updates when relaying scene state
