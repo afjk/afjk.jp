@@ -3,7 +3,8 @@
   "rootNamespace": "Afjk.SceneSync",
   "references": [
     "glTFast",
-    "glTFast.Export"
+    "glTFast.Export",
+    "Loomlet.Runtime"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],

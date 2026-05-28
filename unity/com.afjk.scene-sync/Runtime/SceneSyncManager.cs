@@ -338,6 +338,11 @@ namespace Afjk.SceneSync
             return ResolveSceneSyncRoot(go);
         }
 
+        public GameObject FindSceneSyncObject(string objectId)
+        {
+            return FindManagedObject(objectId);
+        }
+
         public bool ValidateManagedObjects()
         {
             EnsureManagedObjectsList();
@@ -808,7 +813,7 @@ namespace Afjk.SceneSync
 
         private void OnHandoff(string raw)
         {
-            if (!raw.Contains("\"kind\"")) return;
+            if (!raw.Contains("\"kind\"") && !raw.Contains("\"type\":\"scene-graph-")) return;
 
             // from.id を抽出（handoff メッセージに含まれる）
             string fromId = null;
@@ -824,7 +829,15 @@ namespace Afjk.SceneSync
         {
             if (string.IsNullOrEmpty(raw)) return;
 
-            if (raw.Contains("\"kind\":\"scene-request\""))
+            if (raw.Contains("\"type\":\"scene-graph-set\""))
+            {
+                HandleSceneGraphSet(raw);
+            }
+            else if (raw.Contains("\"type\":\"scene-graph-clear\""))
+            {
+                HandleSceneGraphClear(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-request\""))
             {
                 if (fromId != null)
                     _ = HandleSceneRequest(fromId);
@@ -1151,6 +1164,95 @@ namespace Afjk.SceneSync
                 Debug.Log("[SceneSync] Restore scene-state object as scene-add: " + fakeJson);
                 HandleSceneAdd(fakeJson);
             }
+
+            RestoreLoomGraphsFromSceneState(raw);
+        }
+
+        private void HandleSceneGraphSet(string raw)
+        {
+            var graphJson = SceneSyncWireJson.ExtractRawObject(raw, "graph");
+            if (string.IsNullOrWhiteSpace(graphJson)) return;
+
+            if (TryExtractGraphObjectScope(raw, out var objectId))
+            {
+                var go = FindManagedObject(objectId);
+                if (go == null)
+                {
+                    Debug.LogWarning("[SceneSync] scene-graph-set target not found: objectId=" + objectId);
+                    return;
+                }
+
+                SceneSyncLoomletBehaviour.SetObjectGraph(go, this, objectId, graphJson);
+                Debug.Log("[SceneSync] Bound Loomlet object graph: objectId=" + objectId);
+                return;
+            }
+
+            SceneSyncLoomletBehaviour.SetSceneGraph(this, graphJson);
+            Debug.Log("[SceneSync] Bound Loomlet scene graph");
+        }
+
+        private void HandleSceneGraphClear(string raw)
+        {
+            if (TryExtractGraphObjectScope(raw, out var objectId))
+            {
+                var go = FindManagedObject(objectId);
+                SceneSyncLoomletBehaviour.ClearObjectGraph(go);
+                Debug.Log("[SceneSync] Cleared Loomlet object graph: objectId=" + objectId);
+                return;
+            }
+
+            SceneSyncLoomletBehaviour.ClearSceneGraph(this);
+            Debug.Log("[SceneSync] Cleared Loomlet scene graph");
+        }
+
+        private bool TryExtractGraphObjectScope(string raw, out string objectId)
+        {
+            var scopeJson = SceneSyncWireJson.ExtractRawObject(raw, "scope");
+            objectId = SceneSyncWireJson.ExtractString(scopeJson, "object");
+            if (!string.IsNullOrWhiteSpace(objectId)) return true;
+
+            var scope = SceneSyncWireJson.ExtractString(raw, "scope");
+            if (scope == "object")
+            {
+                objectId = SceneSyncWireJson.ExtractString(raw, "objectId");
+                return !string.IsNullOrWhiteSpace(objectId);
+            }
+
+            objectId = null;
+            return !string.IsNullOrWhiteSpace(objectId);
+        }
+
+        private void RestoreLoomGraphsFromSceneState(string raw)
+        {
+            var loomGraphsJson = SceneSyncWireJson.ExtractRawObject(raw, "loomGraphs");
+            if (string.IsNullOrWhiteSpace(loomGraphsJson)) return;
+
+            var sceneGraphJson = SceneSyncWireJson.ExtractRawObject(loomGraphsJson, "scene");
+            if (!string.IsNullOrWhiteSpace(sceneGraphJson))
+                SceneSyncLoomletBehaviour.SetSceneGraph(this, sceneGraphJson);
+
+            foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(loomGraphsJson, "objects"))
+            {
+                var go = FindManagedObject(entry.Key);
+                if (go == null)
+                {
+                    Debug.LogWarning("[SceneSync] scene-state Loomlet graph target not found: objectId=" + entry.Key);
+                    continue;
+                }
+                SceneSyncLoomletBehaviour.SetObjectGraph(go, this, entry.Key, entry.Value);
+            }
+        }
+
+        private void ApplyMetadataBehaviorGraph(GameObject go, string objectId, string metadataJson)
+        {
+            if (go == null || string.IsNullOrWhiteSpace(objectId) || string.IsNullOrWhiteSpace(metadataJson)) return;
+
+            var graphJson = SceneSyncWireJson.ExtractRawObject(metadataJson, "loomGraph");
+            if (string.IsNullOrWhiteSpace(graphJson))
+                graphJson = SceneSyncWireJson.ExtractRawObject(metadataJson, "behaviorGraph");
+            if (string.IsNullOrWhiteSpace(graphJson)) return;
+
+            SceneSyncLoomletBehaviour.SetObjectGraph(go, this, objectId, graphJson);
         }
 
         private void HandleSceneEnv(string raw)
@@ -1189,6 +1291,7 @@ namespace Afjk.SceneSync
             {
                 SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
                 SceneSyncPanelFactory.ApplyAssetVisualDelta(go, assetJson);
+                ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
 
                 if (!string.IsNullOrWhiteSpace(assetJson))
                 {
@@ -1326,6 +1429,7 @@ namespace Afjk.SceneSync
             if (!string.IsNullOrEmpty(meshPath))
                 _meshPaths[objectId] = meshPath;
             SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
+            ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
             if (visible.HasValue) go.SetActive(visible.Value);
             ApplyTransform(go, position, rotation, scale);
 
@@ -1481,6 +1585,7 @@ namespace Afjk.SceneSync
                 placeholder.hideFlags = HideFlags.NotEditable;
                 ConfigureRemoteTemporaryIdentity(placeholder, objectId, meshPath, assetId);
                 SceneSyncPanelFactory.ConfigureWireMetadata(placeholder, assetJson, metadataJson);
+                ApplyMetadataBehaviorGraph(placeholder, objectId, metadataJson);
                 if (visible.HasValue) placeholder.SetActive(visible.Value);
                 placeholder.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
@@ -1497,6 +1602,7 @@ namespace Afjk.SceneSync
 
                 var go = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                 ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
+                ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
                 if (visible.HasValue) go.SetActive(visible.Value);
                 go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
@@ -1647,6 +1753,7 @@ namespace Afjk.SceneSync
                     identity.AssetId = assetId;
                 }
                 SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
 
                 _managedObjects[objectId] = go;
                 _knownObjectIds.Add(objectId);
@@ -1898,8 +2005,42 @@ namespace Afjk.SceneSync
             var envJson = !string.IsNullOrWhiteSpace(_envId)
                 ? ",\"envId\":\"" + SceneSyncWireJson.JsonEscape(_envId) + "\""
                 : "";
-            var payload = "{\"kind\":\"scene-state\"" + envJson + ",\"objects\":" + objectsJson + "}";
+            var loomGraphsJson = BuildLoomGraphsStateJson();
+            var payload = "{\"kind\":\"scene-state\"" + envJson + ",\"objects\":" + objectsJson
+                + (!string.IsNullOrWhiteSpace(loomGraphsJson) ? ",\"loomGraphs\":" + loomGraphsJson : "")
+                + "}";
             await _client.SendHandoff(fromId, payload);
+        }
+
+        private string BuildLoomGraphsStateJson()
+        {
+            var sceneGraph = GetComponent<SceneSyncLoomletBehaviour>();
+            var hasSceneGraph = sceneGraph != null
+                && sceneGraph.SceneScope
+                && !string.IsNullOrWhiteSpace(sceneGraph.GraphJson);
+
+            var objects = new System.Text.StringBuilder();
+            objects.Append("{");
+            var hasObjectGraphs = false;
+            foreach (var kvp in _managedObjects)
+            {
+                var go = kvp.Value;
+                if (go == null) continue;
+                var runner = go.GetComponent<SceneSyncLoomletBehaviour>();
+                if (runner == null || runner.SceneScope || string.IsNullOrWhiteSpace(runner.GraphJson)) continue;
+                if (hasObjectGraphs) objects.Append(",");
+                hasObjectGraphs = true;
+                objects.Append("\"").Append(SceneSyncWireJson.JsonEscape(kvp.Key)).Append("\":").Append(runner.GraphJson);
+            }
+            objects.Append("}");
+
+            if (!hasSceneGraph && !hasObjectGraphs) return null;
+
+            var builder = new System.Text.StringBuilder();
+            builder.Append("{\"scene\":");
+            builder.Append(hasSceneGraph ? sceneGraph.GraphJson : "null");
+            builder.Append(",\"objects\":").Append(objects).Append("}");
+            return builder.ToString();
         }
 
         private void ApplyTransform(GameObject go, float[] position, float[] rotation, float[] scale)
@@ -2059,6 +2200,7 @@ namespace Afjk.SceneSync
 
             var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
             ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+            ApplyMetadataBehaviorGraph(fallback, objectId, metadataJson);
             if (visible.HasValue) fallback.SetActive(visible.Value);
             fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
@@ -2208,6 +2350,7 @@ namespace Afjk.SceneSync
                     var go = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
                     SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                    ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
                     if (visible.HasValue) go.SetActive(visible.Value);
                     go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
@@ -2758,6 +2901,7 @@ namespace Afjk.SceneSync
             _lastSnapshots.Remove(objectId);
             _meshPaths.Remove(objectId);
             _locks.Remove(objectId);
+            SceneSyncLoomletBehaviour.ClearObjectGraph(go);
 
             if (go != null)
             {

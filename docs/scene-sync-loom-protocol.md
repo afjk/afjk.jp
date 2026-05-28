@@ -168,6 +168,18 @@ Scene Sync 側の方針:
 
 ---
 
+## Unity runtime binding
+
+Unity package は `com.afjk.loomlet-runtime` を使って compile 済み Graph JSON を評価する。
+
+- `scene-graph-set` / `scene-graph-clear` を受信し、object scope graph は対象 GameObject の `SceneSyncLoomletBehaviour` に bind する。
+- `scene-state.loomGraphs.scene` と `scene-state.loomGraphs.objects[objectId]` を late join 時に復元する。
+- object metadata の `loomGraph` または `behaviorGraph` に Graph JSON が含まれる場合も object graph として bind する。
+- Unity package は Loomlet DSL parser / compiler を持たない。
+- Scene clock は host が read-only input として渡し、graph から pause / seek / reset などの host control は行わない。
+
+---
+
 ## Related docs
 
 - [Scene Sync Spec Index](./scene-sync-spec.md)
