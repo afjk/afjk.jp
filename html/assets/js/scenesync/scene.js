@@ -2614,9 +2614,27 @@ function getInputRoutingMode() {
   return inputRoutingMode;
 }
 
+function clearInteractionRoutingState() {
+  // Clear all hover/gaze interaction state when switching to Edit mode
+  if (currentHoveredObjectId) {
+    currentHoveredObjectId = null;
+  }
+  if (currentGazedObjectId) {
+    currentGazedObjectId = null;
+    gazeEnterTime = null;
+    lastGazeDwellEventAt = null;
+  }
+  currentGazeHit = null;
+}
+
 function setInputRoutingMode(mode) {
   if (!INPUT_ROUTING_MODES.has(mode)) return;
+  if (inputRoutingMode === mode) return;
   inputRoutingMode = mode;
+  // Clear interaction state when switching to Edit mode
+  if (mode === 'edit') {
+    clearInteractionRoutingState();
+  }
   updateInputRoutingModeUI();
 }
 
@@ -3007,7 +3025,11 @@ function selectObjectAt(clientX, clientY, event = null) {
       }
     }
   } else {
-    clearSelection({ reason: 'selection-cleared-raycast' });
+    // Empty click: only clear selection in Edit mode
+    // Interact mode does not change selection on background click
+    if (inputRoutingMode === 'edit') {
+      clearSelection({ reason: 'selection-cleared-raycast' });
+    }
   }
 }
 
