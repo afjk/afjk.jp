@@ -4397,7 +4397,9 @@ function getSceneClockDelta(now = performance.now()) {
 
   if (sceneClockState.mode === 'local') {
     const elapsed = (now - sceneClockState.lastUpdateNow) / 1000;
-    return Math.max(0, elapsed * sceneClockState.rate);
+    const delta = Math.max(0, elapsed * sceneClockState.rate);
+    sceneClockState.lastUpdateNow = now;  // Update for next frame
+    return delta;
   }
 
   // server-follow mode: delta from last server time
@@ -4451,9 +4453,13 @@ function pauseSceneClock(now = performance.now()) {
 function resumeSceneClock(now = performance.now()) {
   if (!sceneClockState.paused) return;
 
+  const pausedAt = sceneClockState.pausedAt ?? getSceneClockTime(now);
+
+  sceneClockState.mode = 'local';
+  sceneClockState.localTime = pausedAt;
+  sceneClockState.lastUpdateNow = now;
   sceneClockState.paused = false;
   sceneClockState.pausedAt = null;
-  sceneClockState.lastUpdateNow = now;
 }
 
 function seekSceneClock(t, now = performance.now()) {
