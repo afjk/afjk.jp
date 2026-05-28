@@ -175,6 +175,14 @@ func _run_protocol_tests() -> void:
     _assert_eq(graph_clear["kind"], "scene-graph-clear", "make_scene_graph_clear kind")
     _assert_eq(graph_clear["scope"], "object", "make_scene_graph_clear object scope")
 
+    var asset_request = SceneSyncProtocol.make_scene_asset_request("req-1", "obj-4", "asset-1", "mesh-path", 1234)
+    _assert_eq(asset_request["kind"], "scene-asset-request", "make_scene_asset_request kind")
+    _assert_eq(asset_request["assetId"], "asset-1", "make_scene_asset_request assetId")
+
+    var file_handoff = SceneSyncProtocol.make_file_handoff("pipe-path", "asset-1.glb", 1234, "model/gltf-binary", "https://example.test/#pipe-path")
+    _assert_eq(file_handoff["kind"], "file", "make_file_handoff kind")
+    _assert_eq(file_handoff["mime"], "model/gltf-binary", "make_file_handoff mime")
+
     var payload = {
         "position": [1.0, 2.0, 3.0],
         "rotation": [0.0, 0.0, 0.0, 1.0],
@@ -204,6 +212,11 @@ func _run_blob_client_tests() -> void:
     var path2 = SceneSyncBlobClient.generate_random_path()
     _assert_true(path1.length() == 8, "random_path length 8")
     _assert_true(path1 != path2, "random_path unique")
+    _assert_eq(
+        SceneSyncBlobClient.compute_asset_id(PackedByteArray([1, 2, 3, 4])),
+        "sha256-9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a",
+        "compute_asset_id sha256"
+    )
 
 
 func _run_gltf_helper_tests() -> void:
@@ -269,7 +282,7 @@ func _run_manager_tests() -> void:
         "ops": [{"kind": "scene-env", "envId": "ops-env"}],
         "actions": [{"kind": "scene-env", "envId": "actions-env"}],
     }, {})
-    _assert_eq(manager._env_id, "ops-env", "manager scene-batch prefers ops over actions")
+    _assert_eq(manager._env_id, "actions-env", "manager scene-batch applies ops and actions")
 
     manager._handle_scene_state({
         "kind": "scene-state",
@@ -284,6 +297,24 @@ func _run_manager_tests() -> void:
     manager._cache_mesh_data("mesh-path", "asset-1", bytes)
     _assert_eq(manager._get_cached_mesh_data("", "asset-1"), bytes, "manager cache lookup by assetId")
     _assert_eq(manager._get_cached_mesh_data("mesh-path", ""), bytes, "manager cache lookup by meshPath")
+    _assert_eq(manager._get_piping_server_base(), "https://pipe.afjk.jp", "manager piping base default")
+
+    manager._pending_recoveries["req-1"] = {
+        "requestId": "req-1",
+        "objectId": "obj-1",
+        "assetId": "asset-1",
+        "meshPath": "mesh-path",
+        "expectedSize": 4,
+        "requestedPeerIds": {"peer-1": true},
+    }
+    _assert_true(
+        manager._can_accept_file_handoff("peer-1", "asset-1.glb", 4, "model/gltf-binary"),
+        "manager accepts matching recovery file handoff"
+    )
+    _assert_true(
+        not manager._can_accept_file_handoff("peer-2", "asset-1.glb", 4, "model/gltf-binary"),
+        "manager rejects unrequested recovery file handoff"
+    )
 
     var imported := Node3D.new()
     var wrapped = manager._wrap_imported_mesh_for_visual_basis(imported, "unity")

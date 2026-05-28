@@ -177,6 +177,35 @@ static func make_scene_graph_clear(object_id: String = "") -> Dictionary:
     return msg
 
 
+static func make_scene_asset_request(
+    request_id: String,
+    object_id: String,
+    asset_id: String = "",
+    mesh_path: String = "",
+    expected_size: Variant = null
+) -> Dictionary:
+    var msg := {
+        "kind": "scene-asset-request",
+        "requestId": request_id,
+        "objectId": object_id,
+        "assetId": asset_id if asset_id != "" else null,
+        "meshPath": mesh_path if mesh_path != "" else null,
+        "expectedSize": expected_size,
+    }
+    return msg
+
+
+static func make_file_handoff(path: String, filename: String, size: int, mime: String, url: String) -> Dictionary:
+    return {
+        "kind": "file",
+        "path": path,
+        "filename": filename,
+        "size": size,
+        "mime": mime,
+        "url": url,
+    }
+
+
 static func extract_transform(payload: Dictionary) -> Dictionary:
     var result := {}
     if payload.has("position") and payload["position"] is Array:

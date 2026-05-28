@@ -47,6 +47,18 @@ func download_glb(path: String) -> PackedByteArray:
     return result[3]
 
 
+static func compute_asset_id(data: PackedByteArray) -> String:
+    if data.is_empty():
+        return ""
+
+    var hashing := HashingContext.new()
+    var err := hashing.start(HashingContext.HASH_SHA256)
+    if err != OK:
+        return ""
+    hashing.update(data)
+    return "sha256-" + _bytes_to_hex(hashing.finish())
+
+
 static func generate_random_path() -> String:
     const CHARS := "abcdefghijklmnopqrstuvwxyz0123456789"
     var rng := RandomNumberGenerator.new()
@@ -54,4 +66,14 @@ static func generate_random_path() -> String:
     var result := ""
     for i in range(8):
         result += CHARS[rng.randi_range(0, CHARS.length() - 1)]
+    return result
+
+
+static func _bytes_to_hex(data: PackedByteArray) -> String:
+    const HEX := "0123456789abcdef"
+    var result := ""
+    for byte_value in data:
+        var value := int(byte_value)
+        result += HEX.substr((value >> 4) & 0x0f, 1)
+        result += HEX.substr(value & 0x0f, 1)
     return result
