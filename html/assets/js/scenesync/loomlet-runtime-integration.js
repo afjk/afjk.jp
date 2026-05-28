@@ -105,6 +105,7 @@ function createRuntimeManager({
   getLoomletHostEvents,
   clearLoomletHostEvents,
   getSceneClockStateForLoomlet,
+  getInputRoutingMode,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
@@ -114,7 +115,7 @@ function createRuntimeManager({
     return `${key}:${target}`;
   }
 
-  function buildHostInputsForObject(objectId, objectTime, clockState) {
+  function buildHostInputsForObject(objectId, objectTime, clockState, options = {}) {
     const inputs = {};
 
     // Viewer inputs
@@ -188,6 +189,15 @@ function createRuntimeManager({
     inputs['isSelected'] = hoverState?.isSelected || false;
     inputs['isHovered'] = hoverState?.isHovered || false;
     inputs['isBeingEdited'] = isObjectBeingEdited?.(objectId) || false;
+
+    // Input routing mode inputs (local-only, read-only)
+    // Loomlet behavior can read the current mode but cannot change it
+    const mode = options?.getInputRoutingMode?.();
+    if (mode) {
+      inputs['input.mode'] = mode;
+      inputs['input.isEditMode'] = mode === 'edit';
+      inputs['input.isInteractMode'] = mode === 'interact';
+    }
 
     // Gaze state inputs (local-only, not broadcast)
     const gazeState = getObjectGazeState?.(objectId);
@@ -301,7 +311,7 @@ function createRuntimeManager({
       : (clockState?.t ?? getServerTime());
 
     // Build host inputs for object-scoped evaluations
-    const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId, time, clockState) : {};
+    const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId, time, clockState, { getInputRoutingMode }) : {};
 
     // Gather host events for object-scoped evaluations
     let events = [];
@@ -441,6 +451,7 @@ export function createSceneSyncLoomIntegration({
   getLoomletHostEvents,
   clearLoomletHostEvents,
   getSceneClockStateForLoomlet,
+  getInputRoutingMode,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
@@ -455,6 +466,7 @@ export function createSceneSyncLoomIntegration({
     getLoomletHostEvents,
     clearLoomletHostEvents,
     getSceneClockStateForLoomlet,
+    getInputRoutingMode,
   });
 
   function isSceneGraphMessage(payload) {
