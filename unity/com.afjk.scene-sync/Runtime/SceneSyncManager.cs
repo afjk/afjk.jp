@@ -402,7 +402,10 @@ namespace Afjk.SceneSync
                     _meshPathCache[path] = glb;
 
                 var assetIdJson = assetId != null ? ",\"assetId\":\"" + SceneSyncWireJson.JsonEscape(assetId) + "\"" : "";
-                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" + assetIdJson +
+                var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\",\"name\":\"" + SceneSyncWireJson.JsonEscape(go.name) + "\",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" +
+                    ",\"origin\":\"unity\"" +
+                    ",\"unityHierarchyPath\":\"" + SceneSyncWireJson.JsonEscape(SceneSyncWireJson.GetUnityHierarchyPath(go)) + "\"" +
+                    assetIdJson +
                     ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") + "}";
                 await _client.Broadcast(payload);
             }
@@ -782,6 +785,8 @@ namespace Afjk.SceneSync
                 ? ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity")
                 : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(go.GetInstanceID().ToString()) + "\",\"name\":\"" + SceneSyncWireJson.JsonEscape(go.name) + "\"" +
+                ",\"origin\":\"unity\"" +
+                ",\"unityHierarchyPath\":\"" + SceneSyncWireJson.JsonEscape(SceneSyncWireJson.GetUnityHierarchyPath(go)) + "\"" +
                 ",\"position\":[" + SceneSyncWireJson.FormatFloat(pos.x) + "," + SceneSyncWireJson.FormatFloat(pos.y) + "," + SceneSyncWireJson.FormatFloat(-pos.z) + "]" +
                 ",\"rotation\":[" + SceneSyncWireJson.FormatFloat(rot.x) + "," + SceneSyncWireJson.FormatFloat(rot.y) + "," + SceneSyncWireJson.FormatFloat(-rot.z) + "," + SceneSyncWireJson.FormatFloat(-rot.w) + "]" +
                 ",\"scale\":[" + SceneSyncWireJson.FormatFloat(scl.x) + "," + SceneSyncWireJson.FormatFloat(scl.y) + "," + SceneSyncWireJson.FormatFloat(scl.z) + "]" +
@@ -1243,6 +1248,94 @@ namespace Afjk.SceneSync
             return null;
         }
 
+        private GameObject ResolveUnityOriginObject(string objectId, string name, string unityHierarchyPath)
+        {
+            var candidates = GetAllSyncTargets();
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate == null || IsTemporaryObject(candidate)) continue;
+                var identity = candidate.GetComponent<SceneSyncIdentity>();
+                if (identity == null) continue;
+                if (identity.Origin != SceneSyncOrigin.Unity) continue;
+                if (identity.Temporary) continue;
+                if (identity.ObjectId == objectId) return candidate;
+            }
+
+            if (int.TryParse(objectId, out var instanceId))
+            {
+                foreach (var candidate in candidates)
+                {
+                    if (candidate != null && candidate.GetInstanceID() == instanceId && !IsTemporaryObject(candidate))
+                        return candidate;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(unityHierarchyPath))
+            {
+                GameObject match = null;
+                foreach (var candidate in candidates)
+                {
+                    if (candidate == null || IsTemporaryObject(candidate)) continue;
+                    if (SceneSyncWireJson.GetUnityHierarchyPath(candidate) != unityHierarchyPath) continue;
+                    if (match != null) return null;
+                    match = candidate;
+                }
+                if (match != null) return match;
+            }
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                GameObject match = null;
+                foreach (var candidate in candidates)
+                {
+                    if (candidate == null || IsTemporaryObject(candidate)) continue;
+                    if (candidate.name != name) continue;
+                    if (match != null) return null;
+                    match = candidate;
+                }
+                return match;
+            }
+
+            return null;
+        }
+
+        private void BindUnityOriginObject(
+            GameObject go,
+            string objectId,
+            string meshPath,
+            string assetId,
+            string assetJson,
+            string metadataJson,
+            bool? visible,
+            float[] position,
+            float[] rotation,
+            float[] scale)
+        {
+            if (go == null) return;
+
+            var identity = EnsureSceneSyncIdentity(go);
+            identity.ObjectId = objectId;
+            identity.Origin = SceneSyncOrigin.Unity;
+            identity.Temporary = false;
+            identity.State = SceneSyncState.Synced;
+            identity.MeshPath = meshPath;
+            identity.AssetId = assetId;
+            identity.LockOwner = null;
+
+            if (!string.IsNullOrEmpty(meshPath))
+                _meshPaths[objectId] = meshPath;
+            SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
+            if (visible.HasValue) go.SetActive(visible.Value);
+            ApplyTransform(go, position, rotation, scale);
+
+            _managedObjects[objectId] = go;
+            _knownObjectIds.Add(objectId);
+            _instanceToObjectId[go.GetInstanceID()] = objectId;
+            _remoteRemovedUnityObjectIds.Remove(objectId);
+            OnObjectAdded?.Invoke(objectId, go);
+        }
+
         private float[] ExtractArray(string json, string key)
         {
             var pattern = System.Text.RegularExpressions.Regex.Escape(key) + @"\s*\[\s*([^\]]+)\s*\]";
@@ -1286,6 +1379,8 @@ namespace Afjk.SceneSync
             Debug.Log("[SceneSync] scene-add received: objectId=" + objectId + " → not yet managed");
 
             var name = SceneSyncWireJson.ExtractString(raw, "name") ?? objectId;
+            var origin = SceneSyncWireJson.ExtractString(raw, "origin");
+            var unityHierarchyPath = SceneSyncWireJson.ExtractString(raw, "unityHierarchyPath");
             var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
 
             float[] position = ExtractArray(raw, "\"position\":");
@@ -1328,6 +1423,30 @@ namespace Afjk.SceneSync
             if (!string.IsNullOrEmpty(meshPath))
             {
                 _meshPaths[objectId] = meshPath;
+            }
+
+            if (origin == "unity")
+            {
+                var unityObject = ResolveUnityOriginObject(objectId, name, unityHierarchyPath);
+                if (unityObject != null)
+                {
+                    BindUnityOriginObject(
+                        unityObject,
+                        objectId,
+                        meshPath,
+                        assetId,
+                        assetJson,
+                        metadataJson,
+                        visible,
+                        position,
+                        rotation,
+                        scale);
+                    Debug.Log("[SceneSync] scene-add resolved origin=unity to existing GameObject: objectId=" + objectId + ", name=" + unityObject.name);
+                    return;
+                }
+
+                Debug.LogWarning("[SceneSync] origin=unity object not found in Hierarchy; ignoring remote creation: objectId=" + objectId + ", name=" + name + ", hierarchyPath=" + unityHierarchyPath);
+                return;
             }
 
             // Unity 由来の objectId は整数（InstanceID）。
@@ -1485,12 +1604,28 @@ namespace Afjk.SceneSync
                 assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
 
             var visualBasis = SceneSyncWireJson.ExtractString(assetJson, "visualBasis");
+            var origin = SceneSyncWireJson.ExtractString(raw, "origin");
+            var unityHierarchyPath = SceneSyncWireJson.ExtractString(raw, "unityHierarchyPath");
 
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
 
             var go = FindManagedObject(objectId);
-            var name = go != null ? go.name : objectId;
+            var name = SceneSyncWireJson.ExtractString(raw, "name") ?? (go != null ? go.name : objectId);
+
+            if (go == null && origin == "unity")
+            {
+                go = ResolveUnityOriginObject(objectId, name, unityHierarchyPath);
+                if (go != null)
+                {
+                    BindUnityOriginObject(go, objectId, meshPath, assetId, assetJson, metadataJson, null, null, null, null);
+                    Debug.Log("[SceneSync] scene-mesh resolved origin=unity to existing GameObject: objectId=" + objectId + ", name=" + go.name);
+                    return;
+                }
+
+                Debug.LogWarning("[SceneSync] origin=unity scene-mesh target not found in Hierarchy; ignoring remote creation: objectId=" + objectId + ", hierarchyPath=" + unityHierarchyPath);
+                return;
+            }
 
             Debug.Log(
                 "[SceneSync] scene-mesh received: objectId=" + objectId
@@ -1687,7 +1822,9 @@ namespace Afjk.SceneSync
                     path,
                     assetId,
                     rawAssetJson,
-                    rawMetadataJson));
+                    rawMetadataJson,
+                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? "unity" : null,
+                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? SceneSyncWireJson.GetUnityHierarchyPath(go) : null));
                 sceneStateObjectCount++;
             }
 
@@ -1747,7 +1884,9 @@ namespace Afjk.SceneSync
                     path,
                     assetId,
                     rawAssetJson,
-                    rawMetadataJson));
+                    rawMetadataJson,
+                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? "unity" : null,
+                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? SceneSyncWireJson.GetUnityHierarchyPath(go) : null));
                 sceneStateObjectCount++;
             }
 
