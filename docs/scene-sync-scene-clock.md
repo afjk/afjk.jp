@@ -105,6 +105,8 @@ inputs['time.t']         // object graph evaluation time
                          // selected object: always 0
                          // normal object: Scene Clock time
 inputs['time.delta']     // frame delta for object evaluation
+inputs['time.sceneT']    // Scene Clock global time (same as time.t for normal objects)
+inputs['time.sceneDelta'] // Scene Clock global delta
 inputs['time.isPaused']  // whether Scene Clock is paused
 inputs['time.mode']      // 'server-follow' | 'local'
 inputs['time.rate']      // playback rate multiplier (1.0 = normal)
@@ -112,6 +114,11 @@ inputs['time.serverNow'] // always current synchronized server time
 ```
 
 Inputs are read-only. Behavior graphs cannot modify time controls.
+
+### Note on Delta
+
+- **local mode**: delta = frame-to-frame time delta with rate applied
+- **server-follow mode**: delta = server time delta since last frame
 
 ## Example Loomlet Behavior
 

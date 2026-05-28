@@ -208,6 +208,8 @@ function createRuntimeManager({
     if (clockState) {
       inputs['time.t'] = objectTime ?? 0;
       inputs['time.delta'] = clockState.delta ?? 0;
+      inputs['time.sceneT'] = clockState.t;
+      inputs['time.sceneDelta'] = clockState.delta ?? 0;
       inputs['time.isPaused'] = clockState.isPaused;
       inputs['time.mode'] = clockState.mode;
       inputs['time.rate'] = clockState.rate;
@@ -292,10 +294,10 @@ function createRuntimeManager({
 
   function evaluateRuntime(key, entry, clockState, now = performance.now()) {
     // object graph の実評価時刻を決定
-    // - selected/edited object: t=0 (from getObjectRuntimeTime)
-    // - normal object: Scene Clock global time (from clockState)
+    // - selected/edited object: t=0
+    // - normal object: Scene Clock global time
     const time = entry.scopeObjectId && getObjectRuntimeTime
-      ? getObjectRuntimeTime(entry.scopeObjectId, now)
+      ? getObjectRuntimeTime(entry.scopeObjectId, now, clockState)
       : (clockState?.t ?? getServerTime());
 
     // Build host inputs for object-scoped evaluations

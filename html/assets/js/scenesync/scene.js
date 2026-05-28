@@ -1486,15 +1486,21 @@ function isRuntimeFrozenForSelection(objectId) {
   return selectedObjectIds.has(objectId);
 }
 
-function getObjectRuntimeTime(objectId, now = performance.now()) {
+function getObjectRuntimeTime(objectId, now = performance.now(), clockState = null) {
   const obj = managedObjects.get(objectId);
   if (!obj) return 0;
 
   const runtime = ensureObjectRuntime(obj);
   if (!runtime?.enabled) return 0;
 
+  // selected/edited object: freeze to t=0
   if (isRuntimeFrozenForSelection(objectId)) {
     return runtime.selectedTime ?? 0;
+  }
+
+  // normal object: use Scene Clock time if available, else object runtime time
+  if (clockState) {
+    return clockState.t;
   }
 
   const speed = Number.isFinite(runtime.speed) ? runtime.speed : 1;
@@ -4355,8 +4361,10 @@ const sceneInspectorState = {
 // Host 所有のグローバル時刻制御システム
 // local-only: broadcast しない、room history に記録しない
 // 用途: Loomlet behavior の可制御なアニメーション
-// time.t = object graph の実評価時刻（選択中は 0）
-// time.sceneT = 将来: Scene Clock のグローバル時刻（MVP では公開しない）
+// time.t = object graph の実評価時刻（選択中は 0、通常は Scene Clock time）
+// time.sceneT = Scene Clock のグローバル時刻（通常は time.t と同じ）
+// time.delta = object evaluation delta
+// time.sceneDelta = Scene Clock global delta
 const sceneClockState = {
   mode: 'server-follow',        // 'server-follow' | 'local'
   paused: false,
@@ -4364,6 +4372,7 @@ const sceneClockState = {
   pausedAt: null,               // 一時停止時の冷凍時刻
   seekOffset: 0,
   lastUpdateNow: performance.now(),
+  lastServerNow: Date.now() / 1000,  // server-follow mode の delta 計算用
   rate: 1,                       // 再生速度倍率
 };
 
@@ -4391,7 +4400,11 @@ function getSceneClockDelta(now = performance.now()) {
     return Math.max(0, elapsed * sceneClockState.rate);
   }
 
-  return 0;
+  // server-follow mode: delta from last server time
+  const currentServerNow = Date.now() / 1000;
+  const delta = currentServerNow - sceneClockState.lastServerNow;
+  sceneClockState.lastServerNow = currentServerNow;
+  return Math.max(0, delta);
 }
 
 function getSceneClockStateForLoomlet(now = performance.now()) {
@@ -4544,8 +4557,21 @@ sceneClockSeekInput?.addEventListener('change', (e) => {
 });
 
 sceneClockRateInput?.addEventListener('change', (e) => {
-  sceneClockState.rate = parseFloat(e.target.value) || 1;
-  if (sceneClockState.rate < 0) sceneClockState.rate = 0;
+  const now = performance.now();
+  const nextRate = parseFloat(e.target.value) || 1;
+  if (nextRate < 0) {
+    sceneClockRateInput.value = 0;
+    return;
+  }
+
+  // rate 変更時に time jump を避ける
+  // 現在時刻を localTime に焼いてから rate を変更
+  if (sceneClockState.mode === 'local') {
+    sceneClockState.localTime = getSceneClockTime(now);
+    sceneClockState.lastUpdateNow = now;
+  }
+
+  sceneClockState.rate = nextRate;
   sceneClockRateInput.value = sceneClockState.rate;
   updateSceneClockUI();
 });
