@@ -21,6 +21,14 @@ var _blob_client: SceneSyncBlobClient
 var _managed_objects: Dictionary = {}
 var _known_ids: Dictionary = {}
 var _mesh_paths: Dictionary = {}
+var _asset_ids: Dictionary = {}
+var _metadata: Dictionary = {}
+var _origins: Dictionary = {}
+var _unity_hierarchy_paths: Dictionary = {}
+var _mesh_data_by_asset_id: Dictionary = {}
+var _mesh_data_by_path: Dictionary = {}
+var _loom_graphs: Dictionary = {}
+var _env_id: String = ""
 var _locks: Dictionary = {}
 var _last_snapshots: Dictionary = {}
 var _selected_object: Node3D = null
@@ -33,6 +41,11 @@ var _connected: bool = false
 
 const SEND_INTERVAL: float = 0.05
 const OBJECT_ID_META := "scene_sync_object_id"
+const ASSET_META := "scene_sync_asset"
+const METADATA_META := "scene_sync_metadata"
+const ASSET_ID_META := "scene_sync_asset_id"
+const ORIGIN_META := "scene_sync_origin"
+const UNITY_HIERARCHY_PATH_META := "scene_sync_unity_hierarchy_path"
 const RECEIVE_ROOT_NAME := "SceneSyncRoot"
 
 
@@ -148,6 +161,10 @@ func _on_disconnected() -> void:
     _scene_received = false
     _first_peers_received = false
     _locks.clear()
+    _loom_graphs.clear()
+    _mesh_data_by_asset_id.clear()
+    _mesh_data_by_path.clear()
+    _env_id = ""
     _currently_locked_id = ""
     disconnected.emit()
 
@@ -190,14 +207,26 @@ func _on_handoff_received(data: Dictionary) -> void:
         return
 
     var from_info: Dictionary = data.get("from", {})
+    _dispatch_scene_payload(payload, from_info)
+
+
+func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void:
     var from_id := String(from_info.get("id", ""))
     var kind := String(payload.get("kind", ""))
+    if kind == "":
+        kind = String(payload.get("type", ""))
 
     match kind:
+        "scene-graph-set":
+            _handle_scene_graph_set(payload)
+        "scene-graph-clear":
+            _handle_scene_graph_clear(payload)
         "scene-request":
             _handle_scene_request(from_id)
         "scene-state":
             _handle_scene_state(payload)
+        "scene-env":
+            _handle_scene_env(payload)
         "scene-delta":
             if from_id != _client.id:
                 _handle_scene_delta(payload)
@@ -205,6 +234,8 @@ func _on_handoff_received(data: Dictionary) -> void:
             if from_id != _client.id:
                 _handle_scene_add(payload)
         "scene-remove":
+            _handle_scene_remove(payload)
+        "scene-delete":
             _handle_scene_remove(payload)
         "scene-mesh":
             if from_id != _client.id:
@@ -214,6 +245,61 @@ func _on_handoff_received(data: Dictionary) -> void:
                 _handle_scene_lock(payload, from_info)
         "scene-unlock":
             _handle_scene_unlock(payload)
+        "scene-batch":
+            _handle_scene_batch(payload, from_info)
+
+
+func _handle_scene_batch(payload: Dictionary, from_info: Dictionary) -> void:
+    var ops = payload.get("ops", null)
+    if not (ops is Array):
+        ops = payload.get("actions", [])
+    if not (ops is Array):
+        return
+
+    for op in ops:
+        if op is Dictionary:
+            var child := (op as Dictionary).duplicate(true)
+            if payload.has("onBehalfOf") and not child.has("onBehalfOf"):
+                child["onBehalfOf"] = payload["onBehalfOf"]
+            _dispatch_scene_payload(child, from_info)
+
+
+func _handle_scene_graph_set(payload: Dictionary) -> void:
+    var graph = payload.get("graph", {})
+    if not (graph is Dictionary):
+        return
+
+    var object_id := _graph_object_scope(payload)
+    if object_id != "":
+        var objects = _loom_graphs.get("objects", {})
+        if not (objects is Dictionary):
+            objects = {}
+        objects[object_id] = (graph as Dictionary).duplicate(true)
+        _loom_graphs["objects"] = objects
+        return
+
+    _loom_graphs["scene"] = (graph as Dictionary).duplicate(true)
+
+
+func _handle_scene_graph_clear(payload: Dictionary) -> void:
+    var object_id := _graph_object_scope(payload)
+    if object_id != "":
+        var objects = _loom_graphs.get("objects", {})
+        if objects is Dictionary:
+            objects.erase(object_id)
+            if objects.is_empty():
+                _loom_graphs.erase("objects")
+            else:
+                _loom_graphs["objects"] = objects
+        return
+
+    _loom_graphs.erase("scene")
+
+
+func _handle_scene_env(payload: Dictionary) -> void:
+    var env_id := String(payload.get("envId", ""))
+    if env_id != "":
+        _env_id = env_id
 
 
 func _handle_scene_delta(payload: Dictionary) -> void:
@@ -224,6 +310,7 @@ func _handle_scene_delta(payload: Dictionary) -> void:
     var node := node_value as Node3D
     if node == null:
         return
+    _apply_payload_metadata(node, object_id, payload, true)
     if _selected_object != null and is_instance_valid(_selected_object):
         if _get_object_id(_selected_object) == object_id:
             return
@@ -242,11 +329,16 @@ func _handle_scene_request(from_id: String) -> void:
         var object_id := _get_or_assign_object_id(node)
         var entry := await _build_object_payload(node, object_id)
         objects[object_id] = entry
-    _client.send_handoff(from_id, SceneSyncProtocol.make_scene_state(objects))
+    _client.send_handoff(from_id, SceneSyncProtocol.make_scene_state(objects, _loom_graphs, _env_id))
 
 
 func _handle_scene_state(payload: Dictionary) -> void:
     _scene_received = true
+    _handle_scene_env(payload)
+    var loom_graphs = payload.get("loomGraphs", {})
+    if loom_graphs is Dictionary:
+        _loom_graphs = (loom_graphs as Dictionary).duplicate(true)
+
     var objects = payload.get("objects", {})
     if not (objects is Dictionary):
         return
@@ -262,21 +354,34 @@ func _handle_scene_add(payload: Dictionary) -> void:
     if object_id == "":
         return
     if _managed_objects.has(object_id) and is_instance_valid(_managed_objects[object_id]):
-        _apply_transform_to_node(_managed_objects[object_id], SceneSyncProtocol.extract_transform(payload))
+        var existing := _managed_objects[object_id] as Node3D
+        if existing != null:
+            _apply_payload_metadata(existing, object_id, payload, true)
+            _apply_transform_to_node(existing, SceneSyncProtocol.extract_transform(payload))
         return
 
-    var asset = payload.get("asset", {})
-    var mesh_path := String(payload.get("meshPath", ""))
-    var node: Node3D = null
+    var asset := _asset_from_payload(payload)
+    var metadata := _metadata_from_payload(payload)
+    var mesh_path := _mesh_path_from_payload(payload)
+    var node := _resolve_existing_sync_target_for_payload(object_id, payload)
+    if node != null:
+        _bind_existing_managed_object(object_id, node)
+        _apply_payload_metadata(node, object_id, payload, true)
+        _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
+        if mesh_path != "":
+            _mesh_paths[object_id] = mesh_path
+        object_added.emit(object_id, node)
+        return
 
-    if asset is Dictionary and String(asset.get("type", "")) == "primitive":
+    if String(asset.get("type", "")) == "primitive":
         node = _create_primitive(String(asset.get("primitive", "box")), String(asset.get("color", "#888888")))
-    elif asset is Dictionary and String(asset.get("type", "")) == "mesh":
+    elif String(asset.get("type", "")) == "mesh":
         mesh_path = String(asset.get("meshPath", mesh_path))
 
     if node == null and mesh_path != "":
         node = _create_loading_placeholder(String(payload.get("name", object_id)))
         _register_managed_object(object_id, node)
+        _apply_payload_metadata(node, object_id, payload, true)
         _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
         _mesh_paths[object_id] = mesh_path
         _load_mesh_for_object(object_id, payload, mesh_path)
@@ -286,10 +391,13 @@ func _handle_scene_add(payload: Dictionary) -> void:
         node = _create_primitive("box")
 
     _register_managed_object(object_id, node)
+    _apply_payload_metadata(node, object_id, payload, true)
     _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
 
-    if asset is Dictionary and not asset.is_empty():
-        node.set_meta("scene_sync_asset", asset.duplicate(true))
+    if not asset.is_empty():
+        node.set_meta(ASSET_META, asset.duplicate(true))
+    if not metadata.is_empty():
+        node.set_meta(METADATA_META, metadata.duplicate(true))
     if mesh_path != "":
         _mesh_paths[object_id] = mesh_path
     object_added.emit(object_id, node)
@@ -308,6 +416,10 @@ func _handle_scene_remove(payload: Dictionary) -> void:
     _managed_objects.erase(object_id)
     _known_ids.erase(object_id)
     _mesh_paths.erase(object_id)
+    _asset_ids.erase(object_id)
+    _metadata.erase(object_id)
+    _origins.erase(object_id)
+    _unity_hierarchy_paths.erase(object_id)
     _locks.erase(object_id)
     _last_snapshots.erase(object_id)
     object_removed.emit(object_id)
@@ -315,7 +427,7 @@ func _handle_scene_remove(payload: Dictionary) -> void:
 
 func _handle_scene_mesh(payload: Dictionary) -> void:
     var object_id := String(payload.get("objectId", ""))
-    var mesh_path := String(payload.get("meshPath", ""))
+    var mesh_path := _mesh_path_from_payload(payload)
     if object_id == "" or mesh_path == "":
         return
 
@@ -327,8 +439,14 @@ func _handle_scene_mesh(payload: Dictionary) -> void:
         if node != null:
             transform_data = _snapshot_for_node(node)
     else:
-        node = _create_loading_placeholder(object_id)
-        _register_managed_object(object_id, node)
+        node = _resolve_existing_sync_target_for_payload(object_id, payload)
+        if node != null:
+            _bind_existing_managed_object(object_id, node)
+            transform_data = _snapshot_for_node(node)
+        else:
+            node = _create_loading_placeholder(object_id)
+            _register_managed_object(object_id, node)
+    _apply_payload_metadata(node, object_id, payload, true)
     _mesh_paths[object_id] = mesh_path
     _load_mesh_for_object(object_id, {
         "objectId": object_id,
@@ -336,6 +454,11 @@ func _handle_scene_mesh(payload: Dictionary) -> void:
         "position": SceneSyncProtocol.pos_to_wire(transform_data.get("position", Vector3.ZERO)),
         "rotation": SceneSyncProtocol.rot_to_wire(transform_data.get("rotation", Quaternion.IDENTITY)),
         "scale": SceneSyncProtocol.scale_to_wire(transform_data.get("scale", Vector3.ONE)),
+        "asset": _asset_from_payload(payload),
+        "metadata": _metadata_from_payload(payload),
+        "assetId": String(payload.get("assetId", "")),
+        "origin": String(payload.get("origin", "")),
+        "unityHierarchyPath": String(payload.get("unityHierarchyPath", "")),
     }, mesh_path)
 
 
@@ -398,6 +521,10 @@ func _detect_hierarchy_changes() -> void:
         _client.broadcast(SceneSyncProtocol.make_scene_remove(String(object_id)))
         _managed_objects.erase(object_id)
         _mesh_paths.erase(object_id)
+        _asset_ids.erase(object_id)
+        _metadata.erase(object_id)
+        _origins.erase(object_id)
+        _unity_hierarchy_paths.erase(object_id)
         _locks.erase(object_id)
         _last_snapshots.erase(object_id)
         _known_ids.erase(object_id)
@@ -412,6 +539,10 @@ func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
     var snapshot := _snapshot_for_node(node)
     var asset := _detect_asset(node)
     var mesh_path := String(_mesh_paths.get(object_id, ""))
+    var asset_id := _get_asset_id(node, object_id)
+    var metadata := _get_metadata(node, object_id)
+    var origin := _get_origin(node, object_id)
+    var unity_hierarchy_path := _get_unity_hierarchy_path(node, object_id)
 
     if mesh_path == "" and asset.is_empty() and _node_has_mesh(node):
         var glb := SceneSyncGltfHelper.export_glb(node)
@@ -420,8 +551,21 @@ func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
             var upload_err := await _blob_client.upload_glb(glb, mesh_path)
             if upload_err == OK:
                 _mesh_paths[object_id] = mesh_path
+                _cache_mesh_data(mesh_path, asset_id, glb)
             else:
                 mesh_path = ""
+
+    if mesh_path != "":
+        if asset.is_empty():
+            asset = {
+                "type": "mesh",
+                "source": "carrier",
+                "meshPath": mesh_path,
+            }
+        elif String(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
+            asset["meshPath"] = mesh_path
+        if asset_id != "" and not asset.has("assetId"):
+            asset["assetId"] = asset_id
 
     var payload := SceneSyncProtocol.make_scene_add(
         object_id,
@@ -430,7 +574,12 @@ func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
         snapshot["rotation"],
         snapshot["scale"],
         mesh_path,
-        asset
+        asset,
+        asset_id,
+        metadata,
+        origin,
+        unity_hierarchy_path,
+        node.visible
     )
     return payload
 
@@ -447,11 +596,37 @@ func _sync_mesh_for_node(node: Node3D) -> void:
         return
 
     _mesh_paths[object_id] = mesh_path
-    _client.broadcast(SceneSyncProtocol.make_scene_mesh(object_id, mesh_path))
+    var asset := _detect_asset(node)
+    if asset.is_empty():
+        asset = {
+            "type": "mesh",
+            "source": "carrier",
+            "meshPath": mesh_path,
+        }
+    elif String(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
+        asset["meshPath"] = mesh_path
+    var asset_id := _get_asset_id(node, object_id)
+    if asset_id != "" and not asset.has("assetId"):
+        asset["assetId"] = asset_id
+    _cache_mesh_data(mesh_path, asset_id, glb)
+    _client.broadcast(SceneSyncProtocol.make_scene_mesh(
+        object_id,
+        mesh_path,
+        asset_id,
+        asset,
+        _get_metadata(node, object_id),
+        _get_origin(node, object_id),
+        _get_unity_hierarchy_path(node, object_id)
+    ))
 
 
 func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: String) -> void:
-    var data := await _blob_client.download_glb(mesh_path)
+    var asset_id := _asset_id_from_payload(payload)
+    var data := _get_cached_mesh_data(mesh_path, asset_id)
+    if data.is_empty():
+        data = await _blob_client.download_glb(mesh_path)
+        if not data.is_empty():
+            _cache_mesh_data(mesh_path, asset_id, data)
     var old_node_value = _managed_objects.get(object_id)
     var old_node: Node3D = null
     if old_node_value != null and is_instance_valid(old_node_value):
@@ -459,7 +634,10 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
     var replacement: Node3D = null
 
     if not data.is_empty():
-        replacement = SceneSyncGltfHelper.import_glb(data)
+        replacement = _wrap_imported_mesh_for_visual_basis(
+            SceneSyncGltfHelper.import_glb(data),
+            _visual_basis_from_payload(payload)
+        )
     if replacement == null:
         replacement = _create_primitive("box", "#ff4444")
 
@@ -473,6 +651,7 @@ func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: St
 
     replacement.name = String(payload.get("name", object_id))
     replacement.set_meta(OBJECT_ID_META, object_id)
+    _apply_payload_metadata(replacement, object_id, payload, true)
     _apply_transform_to_node(replacement, SceneSyncProtocol.extract_transform(payload))
 
     if old_node != null and is_instance_valid(old_node):
@@ -494,6 +673,12 @@ func _register_managed_object(object_id: String, node: Node3D) -> void:
     if Engine.is_editor_hint():
         _assign_editor_owner_recursive(node)
     node.name = String(node.name if node.name != "" else object_id)
+    node.set_meta(OBJECT_ID_META, object_id)
+    _managed_objects[object_id] = node
+    _known_ids[object_id] = true
+
+
+func _bind_existing_managed_object(object_id: String, node: Node3D) -> void:
     node.set_meta(OBJECT_ID_META, object_id)
     _managed_objects[object_id] = node
     _known_ids[object_id] = true
@@ -536,8 +721,8 @@ func _create_loading_placeholder(display_name: String) -> Node3D:
 
 
 func _detect_asset(node: Node3D) -> Dictionary:
-    if node.has_meta("scene_sync_asset"):
-        var existing = node.get_meta("scene_sync_asset")
+    if node.has_meta(ASSET_META):
+        var existing = node.get_meta(ASSET_META)
         if existing is Dictionary:
             return existing.duplicate(true)
 
@@ -554,6 +739,283 @@ func _detect_asset(node: Node3D) -> Dictionary:
                 "color": color,
             }
     return {}
+
+
+func _asset_from_payload(payload: Dictionary) -> Dictionary:
+    var asset = payload.get("asset", {})
+    if asset is Dictionary:
+        var result := (asset as Dictionary).duplicate(true)
+        var mesh_path := String(payload.get("meshPath", ""))
+        if mesh_path != "" and not result.has("meshPath"):
+            result["meshPath"] = mesh_path
+        var asset_id := String(payload.get("assetId", ""))
+        if asset_id != "" and not result.has("assetId"):
+            result["assetId"] = asset_id
+        return result
+    return {}
+
+
+func _metadata_from_payload(payload: Dictionary) -> Dictionary:
+    var metadata = payload.get("metadata", {})
+    if metadata is Dictionary:
+        return (metadata as Dictionary).duplicate(true)
+    return {}
+
+
+func _mesh_path_from_payload(payload: Dictionary) -> String:
+    var mesh_path := String(payload.get("meshPath", ""))
+    if mesh_path != "":
+        return mesh_path
+    var asset := _asset_from_payload(payload)
+    if asset.is_empty():
+        return ""
+    return String(asset.get("meshPath", ""))
+
+
+func _asset_id_from_payload(payload: Dictionary) -> String:
+    var asset_id := String(payload.get("assetId", ""))
+    if asset_id != "":
+        return asset_id
+    var asset := _asset_from_payload(payload)
+    if asset.is_empty():
+        return ""
+    return String(asset.get("assetId", ""))
+
+
+func _visual_basis_from_payload(payload: Dictionary) -> String:
+    var asset := _asset_from_payload(payload)
+    if asset.is_empty():
+        return ""
+    return String(asset.get("visualBasis", ""))
+
+
+func _cache_mesh_data(mesh_path: String, asset_id: String, data: PackedByteArray) -> void:
+    if data.is_empty():
+        return
+    if mesh_path != "":
+        _mesh_data_by_path[mesh_path] = data
+    if asset_id != "":
+        _mesh_data_by_asset_id[asset_id] = data
+
+
+func _get_cached_mesh_data(mesh_path: String, asset_id: String) -> PackedByteArray:
+    if asset_id != "" and _mesh_data_by_asset_id.has(asset_id):
+        var by_asset: PackedByteArray = _mesh_data_by_asset_id[asset_id]
+        return by_asset
+    if mesh_path != "" and _mesh_data_by_path.has(mesh_path):
+        var by_path: PackedByteArray = _mesh_data_by_path[mesh_path]
+        return by_path
+    return PackedByteArray()
+
+
+func _wrap_imported_mesh_for_visual_basis(imported: Node3D, visual_basis: String) -> Node3D:
+    if imported == null:
+        return null
+    if visual_basis != "unity":
+        return imported
+
+    var wrapper := Node3D.new()
+    imported.name = "ImportedGlbRoot"
+    imported.rotation = Vector3(0.0, PI, 0.0)
+    wrapper.add_child(imported)
+    return wrapper
+
+
+func _apply_payload_metadata(node: Node3D, object_id: String, payload: Dictionary, preserve_missing: bool = true) -> void:
+    if node == null:
+        return
+
+    var name := String(payload.get("name", ""))
+    if name != "":
+        node.name = name
+
+    if payload.has("visible"):
+        node.visible = bool(payload["visible"])
+
+    var mesh_path := _mesh_path_from_payload(payload)
+    if mesh_path != "":
+        _mesh_paths[object_id] = mesh_path
+
+    var asset_id := String(payload.get("assetId", ""))
+    var asset := _asset_from_payload(payload)
+    if asset_id == "" and not asset.is_empty():
+        asset_id = String(asset.get("assetId", ""))
+    if asset_id != "":
+        _asset_ids[object_id] = asset_id
+        node.set_meta(ASSET_ID_META, asset_id)
+    elif not preserve_missing:
+        _asset_ids.erase(object_id)
+        if node.has_meta(ASSET_ID_META):
+            node.remove_meta(ASSET_ID_META)
+
+    if not asset.is_empty():
+        _apply_asset_visual_delta(node, asset)
+        _merge_asset_metadata(node, object_id, asset)
+    elif not preserve_missing:
+        if node.has_meta(ASSET_META):
+            node.remove_meta(ASSET_META)
+
+    var metadata := _metadata_from_payload(payload)
+    if not metadata.is_empty():
+        _metadata[object_id] = metadata.duplicate(true)
+        node.set_meta(METADATA_META, metadata.duplicate(true))
+        _store_metadata_loom_graph(object_id, metadata)
+    elif not preserve_missing:
+        _metadata.erase(object_id)
+        if node.has_meta(METADATA_META):
+            node.remove_meta(METADATA_META)
+
+    var origin := String(payload.get("origin", ""))
+    if origin != "":
+        _origins[object_id] = origin
+        node.set_meta(ORIGIN_META, origin)
+
+    var hierarchy_path := String(payload.get("unityHierarchyPath", ""))
+    if hierarchy_path != "":
+        _unity_hierarchy_paths[object_id] = hierarchy_path
+        node.set_meta(UNITY_HIERARCHY_PATH_META, hierarchy_path)
+
+
+func _graph_object_scope(payload: Dictionary) -> String:
+    var scope = payload.get("scope", "")
+    if scope is Dictionary:
+        return String((scope as Dictionary).get("object", ""))
+    if String(scope) == "object":
+        return String(payload.get("objectId", ""))
+    return ""
+
+
+func _store_metadata_loom_graph(object_id: String, metadata: Dictionary) -> void:
+    var graph = metadata.get("loomGraph", {})
+    if not (graph is Dictionary):
+        graph = metadata.get("behaviorGraph", {})
+    if not (graph is Dictionary):
+        return
+
+    var objects = _loom_graphs.get("objects", {})
+    if not (objects is Dictionary):
+        objects = {}
+    objects[object_id] = (graph as Dictionary).duplicate(true)
+    _loom_graphs["objects"] = objects
+
+
+func _merge_asset_metadata(node: Node3D, _object_id: String, asset: Dictionary) -> void:
+    var merged := {}
+    if node.has_meta(ASSET_META):
+        var existing = node.get_meta(ASSET_META)
+        if existing is Dictionary:
+            merged = (existing as Dictionary).duplicate(true)
+    for key in asset.keys():
+        merged[key] = asset[key]
+    node.set_meta(ASSET_META, merged.duplicate(true))
+
+
+func _apply_asset_visual_delta(node: Node3D, asset: Dictionary) -> void:
+    if String(asset.get("type", "")) != "primitive":
+        return
+
+    var primitive := String(asset.get("primitive", ""))
+    var color := String(asset.get("color", ""))
+    var mesh_instance := _find_mesh_instance(node)
+    if mesh_instance == null:
+        return
+    if primitive != "":
+        var next_mesh := _mesh_for_primitive(primitive)
+        if next_mesh != null:
+            mesh_instance.mesh = next_mesh
+    if color != "":
+        _apply_color(mesh_instance, color)
+
+
+func _find_mesh_instance(node: Node) -> MeshInstance3D:
+    if node is MeshInstance3D:
+        return node as MeshInstance3D
+    for child in node.get_children():
+        var found := _find_mesh_instance(child)
+        if found != null:
+            return found
+    return null
+
+
+func _mesh_for_primitive(primitive_type: String) -> Mesh:
+    match primitive_type:
+        "box":
+            return BoxMesh.new()
+        "sphere":
+            return SphereMesh.new()
+        "cylinder":
+            return CylinderMesh.new()
+        "cone":
+            var cone := CylinderMesh.new()
+            cone.top_radius = 0.0
+            return cone
+        "plane":
+            return PlaneMesh.new()
+        "torus":
+            return TorusMesh.new()
+        _:
+            return null
+
+
+func _apply_color(mesh_instance: MeshInstance3D, color: String) -> void:
+    var mat: StandardMaterial3D
+    if mesh_instance.material_override is StandardMaterial3D:
+        mat = (mesh_instance.material_override as StandardMaterial3D).duplicate() as StandardMaterial3D
+    else:
+        mat = StandardMaterial3D.new()
+    mat.albedo_color = Color.from_string(color, Color(0.53, 0.53, 0.53))
+    mesh_instance.material_override = mat
+
+
+func _get_asset_id(node: Node3D, object_id: String) -> String:
+    if node != null and node.has_meta(ASSET_ID_META):
+        return String(node.get_meta(ASSET_ID_META))
+    return String(_asset_ids.get(object_id, ""))
+
+
+func _get_metadata(node: Node3D, object_id: String) -> Dictionary:
+    if node != null and node.has_meta(METADATA_META):
+        var value = node.get_meta(METADATA_META)
+        if value is Dictionary:
+            return (value as Dictionary).duplicate(true)
+    var stored = _metadata.get(object_id, {})
+    if stored is Dictionary:
+        return (stored as Dictionary).duplicate(true)
+    return {}
+
+
+func _get_origin(node: Node3D, object_id: String) -> String:
+    if node != null and node.has_meta(ORIGIN_META):
+        return String(node.get_meta(ORIGIN_META))
+    return String(_origins.get(object_id, ""))
+
+
+func _get_unity_hierarchy_path(node: Node3D, object_id: String) -> String:
+    if node != null and node.has_meta(UNITY_HIERARCHY_PATH_META):
+        return String(node.get_meta(UNITY_HIERARCHY_PATH_META))
+    return String(_unity_hierarchy_paths.get(object_id, ""))
+
+
+func _resolve_existing_sync_target_for_payload(object_id: String, payload: Dictionary) -> Node3D:
+    var hierarchy_path := String(payload.get("unityHierarchyPath", ""))
+    var node_name := String(payload.get("name", ""))
+    var name_matches: Array[Node3D] = []
+
+    for node in _get_all_sync_targets():
+        if not (node is Node3D) or not is_instance_valid(node):
+            continue
+        var node_object_id := _get_object_id(node)
+        if object_id != "" and node_object_id == object_id:
+            return node
+        if hierarchy_path != "" and node.has_meta(UNITY_HIERARCHY_PATH_META):
+            if String(node.get_meta(UNITY_HIERARCHY_PATH_META)) == hierarchy_path:
+                return node
+        if node_name != "" and node.name == node_name:
+            name_matches.append(node)
+
+    if name_matches.size() == 1:
+        return name_matches[0]
+    return null
 
 
 func _primitive_type_for_mesh(mesh: Mesh) -> String:
