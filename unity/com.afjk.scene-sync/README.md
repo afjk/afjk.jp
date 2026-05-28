@@ -29,6 +29,8 @@ Scene Sync は `com.afjk.loomlet-runtime@0.3.0` に依存しています。`upm.
 
 `com.afjk.loomlet-runtime@0.3.0` が `upm.afjk.jp` に publish 済みである必要があります。Scene Sync 側の依存 version は package release ごとに固定します。
 
+Unity 受信側は `scene-graph-set` / `scene-graph-clear` と `scene-state.loomGraphs` を受け取り、対象 GameObject に `SceneSyncLoomletBehaviour` を bind します。Object scope の graph は同じ object への再送で置き換わり、clear または replace 時に `sceneOffsetPosition` の base position を復元します。Unity 側は Loomlet DSL を parse せず、compile 済み Graph JSON だけを評価します。
+
 ### Git URL
 
 Unity Editor の **Window > Package Manager > + > Add package from git URL** に以下を入力:
