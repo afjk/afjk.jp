@@ -354,6 +354,47 @@ func _run_manager_tests() -> void:
     _assert_true(manager._mesh_paths.has("obj-mesh-rebind"), "manager scene-mesh rebind stores meshPath")
     _assert_true(manager._managed_objects["obj-mesh-rebind"] != mesh_existing, "manager scene-mesh rebind loads replacement mesh")
 
+    var publish_root := Node3D.new()
+    root.add_child(publish_root)
+    manager.sync_root = publish_root
+
+    var publish_target := Node3D.new()
+    publish_target.name = "PublishTarget"
+    publish_root.add_child(publish_target)
+    var publish_mesh := MeshInstance3D.new()
+    publish_mesh.mesh = BoxMesh.new()
+    publish_target.add_child(publish_mesh)
+
+    var publish_status := manager.get_publish_candidate_status(publish_target)
+    _assert_true(bool(publish_status.get("publishable", false)), "manager publish candidate with descendant mesh")
+
+    var empty_target := Node3D.new()
+    empty_target.name = "EmptyPublishTarget"
+    publish_root.add_child(empty_target)
+    var empty_status := manager.get_publish_candidate_status(empty_target)
+    _assert_eq(empty_status.get("reason", ""), "no mesh found in this node or children", "manager publish candidate skips meshless Node3D")
+
+    var plain_node := Node.new()
+    plain_node.name = "PlainNode"
+    var plain_status := manager.get_publish_candidate_status(plain_node)
+    _assert_eq(plain_status.get("reason", ""), "selected node is not Node3D", "manager publish candidate skips non Node3D")
+    plain_node.free()
+
+    var reusable_scene := Node3D.new()
+    root.add_child(reusable_scene)
+    var reusable_root := Node3D.new()
+    reusable_root.name = "SceneSyncRoot"
+    reusable_scene.add_child(reusable_root)
+    var create_result := manager.create_scene_sync_root(reusable_scene)
+    _assert_eq(create_result.get("root", null), reusable_root, "manager create SceneSyncRoot reuses existing root")
+
+    manager.sync_root = publish_root
+    var children_status := manager.get_publish_children_status()
+    _assert_eq(children_status.get("published", 0), 1, "manager publish children counts publishable nodes")
+    _assert_eq(children_status.get("skipped", 0), 1, "manager publish children counts skipped nodes")
+
+    reusable_scene.free()
+    publish_root.free()
     wrapped.free()
     manager.free()
     sync_root.free()

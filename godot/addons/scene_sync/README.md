@@ -14,7 +14,17 @@ Enable the plugin, open the dock on the right side, then set:
 - `Room`: shared room code
 - `Name`: display name
 
-Use `Connect` to join the room and `Sync Meshes` to export local meshes as `.glb` and publish them through the blob store.
+Use `Connect` to join the room. The `Publish` section exposes the current publish target root and explicit publish actions for selected nodes.
+
+Recommended first-time flow:
+
+1. Click `Create SceneSyncRoot`.
+2. Place 3D objects under `SceneSyncRoot`.
+3. Click `Publish Children`.
+
+Godot publishes `Node3D` nodes as Scene Sync objects. A publish target must contain a `MeshInstance3D` on itself or in its descendants. Set `sync_root` to make the publish boundary explicit; `Publish Children` scans the direct children of that root. If a node cannot be published, the dock shows the skipped reason, such as `selected node is not Node3D` or `no mesh found in this node or children`.
+
+Use `Republish Meshes` to export the current sync targets as `.glb` and publish updated mesh data through the blob store.
 
 ## Runtime
 

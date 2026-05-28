@@ -160,6 +160,172 @@ func sync_all_meshes() -> void:
         _sync_mesh_for_node(node)
 
 
+func get_publish_root_status() -> Dictionary:
+    if sync_root != null and is_instance_valid(sync_root):
+        var root_path := String(sync_root.get_path()) if sync_root.is_inside_tree() else sync_root.name
+        return {
+            "ok": true,
+            "root": sync_root,
+            "path": root_path,
+            "message": root_path,
+        }
+    return {
+        "ok": false,
+        "root": null,
+        "path": "",
+        "message": "No sync root selected",
+        "reason": "No sync root selected",
+    }
+
+
+func create_scene_sync_root(host_root: Node = null) -> Dictionary:
+    if host_root == null:
+        host_root = _get_host_scene_root()
+    if host_root == null:
+        return _publish_result(0, [{
+            "name": RECEIVE_ROOT_NAME,
+            "reason": "no edited scene root",
+        }])
+
+    var existing := host_root.get_node_or_null(RECEIVE_ROOT_NAME)
+    if existing != null:
+        if existing is Node3D:
+            sync_root = existing
+            _assign_owner_for_publish_root(existing, host_root)
+            return {
+                "ok": true,
+                "root": existing,
+                "created": false,
+                "message": "Using existing SceneSyncRoot",
+            }
+        return _publish_result(0, [{
+            "name": RECEIVE_ROOT_NAME,
+            "reason": "existing SceneSyncRoot is not Node3D",
+        }])
+
+    var next_root := Node3D.new()
+    next_root.name = RECEIVE_ROOT_NAME
+    host_root.add_child(next_root)
+    _assign_owner_for_publish_root(next_root, host_root)
+    sync_root = next_root
+    return {
+        "ok": true,
+        "root": next_root,
+        "created": true,
+        "message": "Created SceneSyncRoot",
+    }
+
+
+func use_publish_root(node: Node) -> Dictionary:
+    if node == null:
+        return _publish_result(0, [{"name": "", "reason": "No node selected"}])
+    if not (node is Node3D):
+        return _publish_result(0, [{"name": node.name, "reason": "selected node is not Node3D"}])
+    sync_root = node
+    return {
+        "ok": true,
+        "root": node,
+        "message": "Using %s as publish root" % node.name,
+    }
+
+
+func get_publish_candidate_status(node: Node) -> Dictionary:
+    if node == null:
+        return _publish_candidate(false, "", "No node selected")
+    if not (node is Node3D):
+        return _publish_candidate(false, node.name, "selected node is not Node3D")
+    var root_status := get_publish_root_status()
+    if not bool(root_status.get("ok", false)):
+        return _publish_candidate(false, node.name, "No sync root selected")
+    var root = root_status.get("root")
+    if root != null and node.get_parent() != root:
+        return _publish_candidate(false, node.name, "selected node is not a direct child of sync root")
+    if not _node_has_mesh(node as Node3D):
+        return _publish_candidate(false, node.name, "no mesh found in this node or children")
+    return _publish_candidate(true, node.name, "")
+
+
+func get_publish_children_status() -> Dictionary:
+    var root_status := get_publish_root_status()
+    if not bool(root_status.get("ok", false)):
+        return _publish_result(0, [{
+            "name": RECEIVE_ROOT_NAME,
+            "reason": "No sync root selected",
+        }])
+
+    var publishable := 0
+    var skipped: Array = []
+    var root := root_status.get("root") as Node3D
+    for child in root.get_children():
+        var candidate := get_publish_candidate_status(child)
+        if bool(candidate.get("publishable", false)):
+            publishable += 1
+        else:
+            skipped.append(candidate)
+
+    if root.get_child_count() == 0:
+        skipped.append({
+            "name": root.name,
+            "reason": "sync root has no children",
+        })
+    return _publish_result(publishable, skipped)
+
+
+func publish_node(node: Node) -> Dictionary:
+    var candidate := get_publish_candidate_status(node)
+    if not bool(candidate.get("publishable", false)):
+        return _publish_result(0, [candidate])
+    if not _connected:
+        return _publish_result(0, [{
+            "name": String(candidate.get("name", "")),
+            "reason": "not connected",
+        }])
+
+    var node_3d := node as Node3D
+    var object_id := _get_or_assign_object_id(node_3d)
+    await _send_scene_add(node_3d, object_id)
+    _managed_objects[object_id] = node_3d
+    _known_ids[object_id] = true
+    return _publish_result(1, [])
+
+
+func publish_children_of_root() -> Dictionary:
+    var root_status := get_publish_root_status()
+    if not bool(root_status.get("ok", false)):
+        return _publish_result(0, [{
+            "name": RECEIVE_ROOT_NAME,
+            "reason": "No sync root selected",
+        }])
+
+    var published := 0
+    var skipped: Array = []
+    var root := root_status.get("root") as Node3D
+    for child in root.get_children():
+        var candidate := get_publish_candidate_status(child)
+        if not bool(candidate.get("publishable", false)):
+            skipped.append(candidate)
+            continue
+        if not _connected:
+            skipped.append({
+                "name": child.name,
+                "reason": "not connected",
+            })
+            continue
+        var child_3d := child as Node3D
+        var object_id := _get_or_assign_object_id(child_3d)
+        await _send_scene_add(child_3d, object_id)
+        _managed_objects[object_id] = child_3d
+        _known_ids[object_id] = true
+        published += 1
+
+    if root.get_child_count() == 0:
+        skipped.append({
+            "name": root.name,
+            "reason": "sync root has no children",
+        })
+    return _publish_result(published, skipped)
+
+
 func _on_connected(new_id: String, new_room: String) -> void:
     _connected = true
     room = new_room
@@ -1586,6 +1752,34 @@ func _node_has_mesh(node: Node3D) -> bool:
         if child is Node3D and _node_has_mesh(child):
             return true
     return false
+
+
+func _publish_candidate(publishable: bool, node_name: String, reason: String) -> Dictionary:
+    return {
+        "publishable": publishable,
+        "name": node_name,
+        "reason": reason,
+    }
+
+
+func _publish_result(published: int, skipped: Array) -> Dictionary:
+    return {
+        "published": published,
+        "skipped": skipped.size(),
+        "reasons": skipped,
+        "ok": published > 0 and skipped.is_empty(),
+    }
+
+
+func _assign_owner_for_publish_root(node: Node, host_root: Node) -> void:
+    if node == null:
+        return
+    if Engine.is_editor_hint():
+        var edited_root := get_tree().edited_scene_root if get_tree() != null else null
+        node.owner = edited_root
+        return
+    if host_root != null:
+        node.owner = host_root.owner
 
 
 func _get_object_id(node: Node) -> String:
