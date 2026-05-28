@@ -87,6 +87,12 @@ size_flags_horizontal = 3
 autowrap_mode = 2
 text = "No sync root selected"
 
+[node name="PublishRulesLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 2
+text = "Click Create SceneSyncRoot, place 3D objects under it, then click Publish Children."
+
 [node name="CreateRootButton" type="Button" parent="."]
 unique_name_in_owner = true
 layout_mode = 2
@@ -115,7 +121,7 @@ text = "Republish Meshes"
 [node name="PublishHelpLabel" type="Label" parent="."]
 layout_mode = 2
 autowrap_mode = 2
-text = "Publish Node3D children of the target root. A publish target must contain a MeshInstance3D in itself or its children."
+text = "Publish Selected publishes one direct child of Target Root. Publish Children publishes all direct children with meshes."
 
 [node name="PublishStatusLabel" type="Label" parent="."]
 unique_name_in_owner = true

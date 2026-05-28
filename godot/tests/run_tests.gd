@@ -372,7 +372,7 @@ func _run_manager_tests() -> void:
     empty_target.name = "EmptyPublishTarget"
     publish_root.add_child(empty_target)
     var empty_status := manager.get_publish_candidate_status(empty_target)
-    _assert_eq(empty_status.get("reason", ""), "no mesh found in this node or children", "manager publish candidate skips meshless Node3D")
+    _assert_eq(empty_status.get("reason", ""), "no mesh found in this node or children. Add a MeshInstance3D under this node.", "manager publish candidate skips meshless Node3D")
 
     var plain_node := Node.new()
     plain_node.name = "PlainNode"

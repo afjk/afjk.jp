@@ -12,6 +12,7 @@ var _manager: SceneSyncManager
 @onready var _peers_container: VBoxContainer = %PeersContainer
 @onready var _sync_meshes_button: Button = %SyncMeshesButton
 @onready var _target_root_value: Label = %TargetRootValue
+@onready var _publish_rules_label: Label = %PublishRulesLabel
 @onready var _create_root_button: Button = %CreateRootButton
 @onready var _use_selected_root_button: Button = %UseSelectedRootButton
 @onready var _publish_selected_button: Button = %PublishSelectedButton
@@ -31,7 +32,7 @@ func _ready() -> void:
     _room_edit.text = _manager.room
     _nickname_edit.text = _manager.nickname
     _refresh_status()
-    _refresh_publish_status("Select a Node3D under the target root, then publish it.")
+    _refresh_publish_status("Create or choose a Target Root to start publishing.")
 
 
 func set_editor_interface(editor_interface: EditorInterface) -> void:
@@ -86,7 +87,7 @@ func _on_create_root_pressed() -> void:
             if selection != null:
                 selection.clear()
                 selection.add_node(root)
-        _refresh_publish_status(String(result.get("message", "SceneSyncRoot ready.")))
+        _refresh_publish_status("%s.\nMove 3D objects under this root, then click Publish Children." % String(result.get("message", "SceneSyncRoot ready")))
     else:
         _refresh_publish_status(_format_publish_result(result))
 
@@ -95,7 +96,7 @@ func _on_use_selected_root_pressed() -> void:
     _ensure_manager()
     var result := _manager.use_publish_root(_get_selected_node())
     if bool(result.get("ok", false)):
-        _refresh_publish_status(String(result.get("message", "Publish root updated.")))
+        _refresh_publish_status("%s.\nDirect Node3D children with meshes are now managed." % String(result.get("message", "Publish root updated")))
     else:
         _refresh_publish_status(_format_publish_result(result))
 
@@ -156,7 +157,13 @@ func _refresh_target_root() -> void:
         _target_root_value.text = "No sync root selected"
         return
     var root_status := _manager.get_publish_root_status()
-    _target_root_value.text = String(root_status.get("message", "No sync root selected"))
+    if bool(root_status.get("ok", false)):
+        var root = root_status.get("root")
+        _target_root_value.text = _format_root_label(root)
+        _publish_rules_label.text = "Managed objects: direct Node3D children of Target Root that contain a MeshInstance3D."
+    else:
+        _target_root_value.text = "No sync root selected"
+        _publish_rules_label.text = "Click Create SceneSyncRoot, place 3D objects under it, then click Publish Children."
 
 
 func _refresh_publish_status(message: String) -> void:
@@ -188,6 +195,18 @@ func _candidate_message(node: Node) -> String:
     if bool(status.get("publishable", false)):
         return "%s is ready to publish." % String(status.get("name", "Selected node"))
     return "Skipped\nReason: %s" % String(status.get("reason", "not publishable"))
+
+
+func _format_root_label(root) -> String:
+    if not (root is Node):
+        return "No sync root selected"
+
+    var scene_root := _get_edited_scene_root()
+    if scene_root != null and root == scene_root:
+        return "%s (scene root)" % root.name
+    if scene_root != null and root is Node and root.is_inside_tree() and scene_root.is_inside_tree() and scene_root.is_ancestor_of(root):
+        return String(scene_root.get_path_to(root))
+    return root.name
 
 
 func _format_publish_result(result: Dictionary) -> String:

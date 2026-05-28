@@ -162,7 +162,7 @@ func sync_all_meshes() -> void:
 
 func get_publish_root_status() -> Dictionary:
     if sync_root != null and is_instance_valid(sync_root):
-        var root_path := String(sync_root.get_path()) if sync_root.is_inside_tree() else sync_root.name
+        var root_path := sync_root.name
         return {
             "ok": true,
             "root": sync_root,
@@ -236,12 +236,12 @@ func get_publish_candidate_status(node: Node) -> Dictionary:
         return _publish_candidate(false, node.name, "selected node is not Node3D")
     var root_status := get_publish_root_status()
     if not bool(root_status.get("ok", false)):
-        return _publish_candidate(false, node.name, "No sync root selected")
+        return _publish_candidate(false, node.name, "No sync root selected. Click Create SceneSyncRoot first.")
     var root = root_status.get("root")
     if root != null and node.get_parent() != root:
-        return _publish_candidate(false, node.name, "selected node is not a direct child of sync root")
+        return _publish_candidate(false, node.name, "selected node is not a direct child of Target Root. Move it under %s or use it as root." % root.name)
     if not _node_has_mesh(node as Node3D):
-        return _publish_candidate(false, node.name, "no mesh found in this node or children")
+        return _publish_candidate(false, node.name, "no mesh found in this node or children. Add a MeshInstance3D under this node.")
     return _publish_candidate(true, node.name, "")
 
 
