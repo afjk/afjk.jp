@@ -1690,9 +1690,7 @@ namespace Afjk.SceneSync.Editor
 
             Debug.Log("[SceneSync] scene-add received: objectId=" + objectId + " → not yet managed");
 
-            var nameMatch = System.Text.RegularExpressions.Regex.Match(
-                raw, "\"name\":\"([^\"]+)\"");
-            var name = nameMatch.Success ? nameMatch.Groups[1].Value : objectId;
+            var name = SceneSyncWireJson.ExtractString(raw, "name") ?? objectId;
             var visible = SceneSyncWireJson.ExtractBoolean(raw, "visible");
 
             float[] position = ExtractArray(raw, "\"position\":");
@@ -1728,10 +1726,7 @@ namespace Afjk.SceneSync.Editor
             if (string.IsNullOrEmpty(assetId) && !string.IsNullOrEmpty(assetJson))
                 assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
 
-            // Extract visualBasis from asset JSON
-            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
-                raw, "\"visualBasis\":\"([^\"]+)\"");
-            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+            var visualBasis = SceneSyncWireJson.ExtractString(assetJson, "visualBasis");
 
             // meshPath を保存
             if (!string.IsNullOrEmpty(meshPath))
@@ -1824,10 +1819,7 @@ namespace Afjk.SceneSync.Editor
             if (string.IsNullOrEmpty(assetId) && !string.IsNullOrEmpty(assetJson))
                 assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
 
-            // Extract visualBasis from asset JSON
-            var visualBasisMatch = System.Text.RegularExpressions.Regex.Match(
-                raw, "\"visualBasis\":\"([^\"]+)\"");
-            var visualBasis = visualBasisMatch.Success ? visualBasisMatch.Groups[1].Value : null;
+            var visualBasis = SceneSyncWireJson.ExtractString(assetJson, "visualBasis");
 
             // meshPath を保存
             _meshPaths[objectId] = meshPath;
@@ -1963,7 +1955,15 @@ namespace Afjk.SceneSync.Editor
                     || go.GetComponentInChildren<SkinnedMeshRenderer>() != null)
                 {
                     var glb = await PresenceClient.ExportGameObjectAsGlb(go);
-                    if (glb != null)
+                    if (glb == null)
+                    {
+                        Debug.LogWarning(
+                            $"[SceneSync] scene-state skipped because GLB export failed: " +
+                            $"objectId={objectId}, name={go.name}"
+                        );
+                        continue;
+                    }
+                    else
                     {
                         if (!IsGlbWithinUploadLimit(glb))
                         {
@@ -1980,11 +1980,6 @@ namespace Afjk.SceneSync.Editor
                         path = PresenceClient.GenerateRandomPath();
                         var assetId = PresenceClientRuntime.ComputeAssetId(glb);
                         pendingUploads.Add((objectId, glb, path, assetId));
-                        if (identity != null)
-                        {
-                            identity.AssetId = assetId;
-                            EditorUtility.SetDirty(identity);
-                        }
                     }
                 }
 
@@ -2064,9 +2059,7 @@ namespace Afjk.SceneSync.Editor
 
                 var identity = go.GetComponent<SceneSyncIdentity>();
                 var isUnityVisualBasis = identity == null || identity.Origin == SceneSyncOrigin.Unity;
-                var meshPathJson = path != null ? ",\"meshPath\":\"" + path + "\"" : "";
                 var assetId = identity != null ? identity.AssetId : null;
-                var assetIdJson = !string.IsNullOrEmpty(assetId) ? ",\"assetId\":\"" + SceneSyncWireJson.JsonEscape(assetId) + "\"" : "";
                 var wireMetadata = go.GetComponent<SceneSyncWireMetadata>();
                 var rawAssetJson = wireMetadata != null ? wireMetadata.AssetJson : null;
                 var rawMetadataJson = wireMetadata != null ? wireMetadata.MetadataJson : null;
@@ -2077,23 +2070,21 @@ namespace Afjk.SceneSync.Editor
                         assetId,
                         isUnityVisualBasis ? "unity" : null);
                 }
-                var assetJson = !string.IsNullOrWhiteSpace(rawAssetJson)
-                    ? ",\"asset\":" + rawAssetJson
-                    : "";
-                var metadataJson = !string.IsNullOrWhiteSpace(rawMetadataJson)
-                    ? ",\"metadata\":" + rawMetadataJson
-                    : "";
-
                 var pos = transform.position;
                 var rot = transform.rotation;
                 var scl = transform.localScale;
 
-                objectsJson.Append("\"" + objectId + "\":{\"name\":\"" + go.name + "\"" +
-                    ",\"position\":[" + pos.x + "," + pos.y + "," + (-pos.z) + "]" +
-                    ",\"rotation\":[" + rot.x + "," + rot.y + "," + (-rot.z) + "," + (-rot.w) + "]" +
-                    ",\"scale\":[" + scl.x + "," + scl.y + "," + scl.z + "]" +
-                    ",\"visible\":" + (go.activeSelf ? "true" : "false") +
-                    meshPathJson + assetIdJson + assetJson + metadataJson + "}");
+                objectsJson.Append(SceneSyncWireJson.BuildObjectJson(
+                    objectId,
+                    go.name,
+                    pos,
+                    rot,
+                    scl,
+                    go.activeSelf,
+                    path,
+                    assetId,
+                    rawAssetJson,
+                    rawMetadataJson));
             }
 
             objectsJson.Append("}");
