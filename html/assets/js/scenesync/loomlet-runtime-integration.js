@@ -97,6 +97,11 @@ function createRuntimeManager({
   getServerTime,
   getObjectRuntimeTime,
   isObjectBeingEdited,
+  getViewerPosition,
+  getViewerForward,
+  getObjectHoverState,
+  getLoomletHostEvents,
+  clearLoomletHostEvents,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
@@ -104,6 +109,61 @@ function createRuntimeManager({
 
   function makeBaseKey(key, target) {
     return `${key}:${target}`;
+  }
+
+  function buildHostInputsForObject(objectId) {
+    const inputs = {};
+
+    // Viewer inputs
+    if (getViewerPosition) {
+      const viewerPos = getViewerPosition();
+      if (viewerPos) {
+        inputs['viewer.position'] = viewerPos;
+      }
+    }
+    if (getViewerForward) {
+      const viewerFwd = getViewerForward();
+      if (viewerFwd) {
+        inputs['viewer.forward'] = viewerFwd;
+      }
+    }
+
+    // Object-scoped inputs
+    const obj = resolveTarget(objectId);
+    if (obj) {
+      if (obj.position) {
+        const pos = Array.isArray(obj.position) ? obj.position : [obj.position.x || 0, obj.position.y || 0, obj.position.z || 0];
+        inputs['self.position'] = pos;
+      }
+
+      if (obj.quaternion || obj.rotation) {
+        const quat = obj.quaternion || obj.rotation;
+        const rot = Array.isArray(quat)
+          ? quat
+          : [quat.x || 0, quat.y || 0, quat.z || 0, quat.w !== undefined ? quat.w : 1];
+        inputs['self.rotation'] = rot;
+      }
+
+      // Distance to viewer
+      if (getViewerPosition) {
+        const viewerPos = getViewerPosition();
+        if (viewerPos && obj.position) {
+          const objPos = Array.isArray(obj.position) ? obj.position : [obj.position.x || 0, obj.position.y || 0, obj.position.z || 0];
+          const dx = objPos[0] - viewerPos[0];
+          const dy = objPos[1] - viewerPos[1];
+          const dz = objPos[2] - viewerPos[2];
+          inputs['distanceToViewer'] = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+      }
+    }
+
+    // Interaction state inputs
+    const hoverState = getObjectHoverState?.(objectId);
+    inputs['isSelected'] = hoverState?.isSelected || false;
+    inputs['isHovered'] = hoverState?.isHovered || false;
+    inputs['isBeingEdited'] = isObjectBeingEdited?.(objectId) || false;
+
+    return inputs;
   }
 
   function restoreBehaviorBasesForScope(key) {
@@ -184,13 +244,34 @@ function createRuntimeManager({
       ? getObjectRuntimeTime(entry.scopeObjectId, now)
       : getServerTime();
 
+    // Build host inputs for object-scoped evaluations
+    const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId) : {};
+
+    // Gather host events for object-scoped evaluations
+    let events = [];
+    if (entry.scopeObjectId && getLoomletHostEvents) {
+      const eventNames = getLoomletHostEvents(entry.scopeObjectId);
+      if (eventNames && eventNames.size > 0) {
+        events = Array.from(eventNames).map((channel) => ({
+          channel,
+          timestamp: time,
+        }));
+      }
+    }
+
     entry.runtime.evaluateAt({
       time,
       scope: entry.scopeObjectId
         ? { type: 'object', id: entry.scopeObjectId }
         : { type: 'scene' },
-      events: [],
+      inputs,
+      events,
     }, now);
+
+    // Clear events after evaluation
+    if (entry.scopeObjectId && clearLoomletHostEvents) {
+      clearLoomletHostEvents(entry.scopeObjectId);
+    }
   }
 
   return {
@@ -293,12 +374,22 @@ export function createSceneSyncLoomIntegration({
   getObjectRuntimeTime,
   isObjectBeingEdited,
   showToast,
+  getViewerPosition,
+  getViewerForward,
+  getObjectHoverState,
+  getLoomletHostEvents,
+  clearLoomletHostEvents,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
     getServerTime,
     getObjectRuntimeTime,
     isObjectBeingEdited,
+    getViewerPosition,
+    getViewerForward,
+    getObjectHoverState,
+    getLoomletHostEvents,
+    clearLoomletHostEvents,
   });
 
   function isSceneGraphMessage(payload) {
