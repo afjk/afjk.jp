@@ -538,15 +538,17 @@ npm dist-tag ls com.afjk.scene-sync --registry https://upm.afjk.jp
 - 破壊的な unpublish は避け、正しい version を publish したうえで `latest` を付け替えて復旧する。
 
 ```bash
-npm dist-tag add com.afjk.scene-sync@0.19.5 latest --registry https://upm.afjk.jp
+npm dist-tag add com.afjk.scene-sync@<known-good-version> latest --registry https://upm.afjk.jp
 npm dist-tag ls com.afjk.scene-sync --registry https://upm.afjk.jp
 ```
+
+Example: after the accidental `v0.3.0` publish, `latest` was restored to `0.19.5`.
 
 ### version policy（release tag と package version）
 
 - `afjk.jp` release tag は `vX.Y.Z` を使う。
 - 現状の運用では、`vX.Y.Z` の Release 公開により `com.afjk.scene-sync@X.Y.Z` が publish される。
-- `com.afjk.scene-sync` は既存系列（`0.19.x`）を継続し、次回以降も `0.19.5+` のように進める。
+- `com.afjk.scene-sync` は既存系列（`0.19.x`）を継続し、既存の `latest` より大きい version を使う。
 - `com.afjk.loomlet-runtime` の version 系列は Loomlet リポジトリ側の方針に従う。
 
 ### package-only release の注意
