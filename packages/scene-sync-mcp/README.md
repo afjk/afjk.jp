@@ -6,6 +6,7 @@ Scene Sync is a real-time 3D scene synchronization system. This MCP server lets 
 - Redeem pairing codes to link to a user's Scene Sync room
 - Add and manipulate 3D objects (boxes, spheres, primitives, and image/video/text/GLB assets from URL)
 - Place objects precisely using world bounds, alignment, and size fitting helpers
+- Inspect one object at a time and select/focus targets for transparent AI edits
 - Replace existing media/text panels with new content (with Undo/Redo support)
 - Inspect camera pose
 - Access browser operation history (undo/redo)
@@ -14,6 +15,8 @@ Scene Sync is a real-time 3D scene synchronization system. This MCP server lets 
 - Take screenshots
 - Switch animation clips on animated GLB objects
 - Manage the link session
+
+The toolset follows the useful parts of Blender MCP-style workflows: inspect a target, select/focus it, place or resize it with measured bounds, then verify with a screenshot. It intentionally avoids arbitrary browser code execution and built-in asset search; Scene Sync MCP stays focused on safe observation and constrained scene edits.
 
 ## Installation
 
@@ -167,7 +170,7 @@ Input:
 ```
 
 ### scene_sync_status
-Check current link status and expiration time.
+Check current link status, expiration time, server URL, and supported capabilities.
 
 ### scene_sync_get_scene
 Get the current scene state (objects and environment). May take up to 5 seconds.
@@ -192,6 +195,28 @@ Returned objects may include world-space bounds:
 ```
 
 `bounds.world.size` is the actual size after scale is applied.
+
+### scene_sync_get_object
+Get details for one object without returning the full scene.
+
+Input:
+```json
+{
+  "objectId": "fox"
+}
+```
+
+The response includes transform, `bounds.world`, `asset`, `metadata`, and animation fields when available.
+
+### scene_sync_select_object
+Select an object in the linked browser so the user can see which target the AI is working on.
+
+Input:
+```json
+{
+  "objectId": "fox"
+}
+```
 
 ### scene_sync_add_box
 Add a box to the scene. High-level tool; use directly for requests like "add a red cube".
@@ -259,6 +284,60 @@ Input:
       "value": 0
     }
   }
+}
+```
+
+### scene_sync_verify_bounds_alignment
+Check whether bounds anchors are aligned within tolerance.
+
+Input:
+```json
+{
+  "sourceObjectId": "image-panel",
+  "targetObjectId": "wall",
+  "axes": {
+    "x": { "source": "center", "target": "center", "tolerance": 0.01 },
+    "y": { "source": "center", "target": "center", "tolerance": 0.01 },
+    "z": { "source": "min", "target": "max", "offset": 0.02, "tolerance": 0.01 }
+  }
+}
+```
+
+### scene_sync_place_on_floor
+Move an object so its bounds bottom rests on a floor Y value.
+
+Input:
+```json
+{
+  "objectId": "fox",
+  "y": 0,
+  "offset": 0
+}
+```
+
+### scene_sync_center_on_object
+Center a source object on a target object using bounds centers.
+
+Input:
+```json
+{
+  "sourceObjectId": "image-panel",
+  "targetObjectId": "wall",
+  "axes": ["x", "y"]
+}
+```
+
+### scene_sync_place_in_front_of
+Place a source object just in front of a target object's world Z max.
+
+Input:
+```json
+{
+  "sourceObjectId": "image-panel",
+  "targetObjectId": "wall",
+  "offset": 0.02,
+  "centerX": true,
+  "centerY": true
 }
 ```
 
@@ -529,6 +608,10 @@ Use these tools for production-like placement tasks:
 
 - `scene_sync_set_transform`: update position, rotation, and scale together
 - `scene_sync_align_bounds`: align object bounds to another object or to a world coordinate
+- `scene_sync_verify_bounds_alignment`: verify placement numerically after an operation
+- `scene_sync_place_on_floor`: common floor placement wrapper
+- `scene_sync_center_on_object`: common bounds-center wrapper
+- `scene_sync_place_in_front_of`: common front-of-target wrapper
 - `scene_sync_fit_bounds_size`: scale an object to a target world-space size
 
 Place an object on the floor at world Y=0:
@@ -575,6 +658,19 @@ Make a GLB model 1 meter tall:
 }
 ```
 
+Import a model and immediately normalize its largest bounds axis to 1.5 meters:
+
+```json
+{
+  "tool": "scene_sync_add_glb_from_url",
+  "arguments": {
+    "url": "https://example.com/model.glb",
+    "targetSize": 1.5,
+    "targetAxis": "max"
+  }
+}
+```
+
 ### scene_sync_undo
 Undo the last operation recorded in the Scene Sync history.
 
@@ -589,6 +685,21 @@ Note: Undo/Redo operates on the browser-side Scene Sync history. Some operations
 
 ### scene_sync_focus_object
 Focus the browser camera on an object (requires objectId).
+
+### scene_sync_focus_and_screenshot
+
+Focus the browser camera on an object and immediately take a screenshot.
+
+Input:
+
+```json
+{
+  "objectId": "fox",
+  "mode": "image",
+  "maxWidth": 768,
+  "quality": 0.7
+}
+```
 
 ### scene_sync_screenshot
 
@@ -716,6 +827,7 @@ Browser AI commands in `html/assets/js/scenesync/scene.js` should stay in sync w
 |---|---|---|
 | `getCameraPose` | `scene_sync_get_camera_pose` | supported |
 | `focusObject` | `scene_sync_focus_object` | supported |
+| `selectObject` | `scene_sync_select_object` | supported |
 | `screenshot` | `scene_sync_screenshot` | supported |
 | `uploadGlbFromUrl` | `scene_sync_add_glb_from_url` | supported |
 | `addImageFromUrl` | `scene_sync_add_image_from_url` | supported |

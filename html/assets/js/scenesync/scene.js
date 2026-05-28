@@ -5844,6 +5844,28 @@ async function handleAiCommand(from, payload) {
       case 'focusObject':
         result = focusCameraOnObject(payload.params?.objectId);
         break;
+      case 'selectObject': {
+        const objectId = typeof payload.params?.objectId === 'string' ? payload.params.objectId.trim() : '';
+        const obj = objectId ? managedObjects.get(objectId) : null;
+        if (!objectId) {
+          result = { ok: false, error: 'objectId is required' };
+          break;
+        }
+        if (!obj) {
+          result = { ok: false, error: `object not found: ${objectId}` };
+          break;
+        }
+
+        selectManagedObject(obj, { reason: 'ai-select-object' });
+        notifySelectionChanged('ai-select-object');
+        result = {
+          ok: true,
+          action: 'selectObject',
+          objectId,
+          selection: getCurrentSelectionPayload(),
+        };
+        break;
+      }
       case 'undo':
         if (!presenceState.historyManager.canUndo()) {
           result = { ok: false, error: 'nothing to undo' };
