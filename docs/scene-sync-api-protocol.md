@@ -123,6 +123,8 @@ OpenAPI 定義:
   "objects": {
     "obj-001": {
       "name": "Cube",
+      "origin": "unity",
+      "unityHierarchyPath": "SceneRoot/Cube",
       "position": [0, 0.5, 0],
       "rotation": [0, 0, 0, 1],
       "scale": [1, 1, 1],
@@ -139,6 +141,8 @@ OpenAPI 定義:
 `scene-state` は、単なる transform だけでなく、復元に必要な asset metadata も保持する。
 特に Unity 由来 GLB では `asset.visualBasis` を落としてはいけない。詳細は [座標系と visualBasis](./scene-sync-coordinate-system.md) を参照。
 
+Unity が publish した `origin: "unity"` object は Unity Hierarchy 上の既存 `GameObject` が実体を管理する。Unity client は受信時に `objectId`、`unityHierarchyPath`、最後に一意な `name` の順で既存 object を解決し、見つかった場合は新規 object を生成せずその object に transform / metadata を反映する。
+
 ### `scene-add`
 
 ```json
@@ -146,6 +150,8 @@ OpenAPI 定義:
   "kind": "scene-add",
   "objectId": "obj-002",
   "name": "Sphere",
+  "origin": "unity",
+  "unityHierarchyPath": "SceneRoot/Sphere",
   "position": [0, 0, 0],
   "rotation": [0, 0, 0, 1],
   "scale": [1, 1, 1],

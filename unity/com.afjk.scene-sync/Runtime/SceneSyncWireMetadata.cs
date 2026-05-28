@@ -193,11 +193,17 @@ namespace Afjk.SceneSync
             string meshPath,
             string assetId,
             string assetJson,
-            string metadataJson)
+            string metadataJson,
+            string origin = null,
+            string unityHierarchyPath = null)
         {
             var builder = new StringBuilder();
             builder.Append("\"").Append(JsonEscape(objectId)).Append("\":{");
             builder.Append("\"name\":\"").Append(JsonEscape(name)).Append("\"");
+            if (!string.IsNullOrWhiteSpace(origin))
+                builder.Append(",\"origin\":\"").Append(JsonEscape(origin)).Append("\"");
+            if (!string.IsNullOrWhiteSpace(unityHierarchyPath))
+                builder.Append(",\"unityHierarchyPath\":\"").Append(JsonEscape(unityHierarchyPath)).Append("\"");
             builder.Append(",\"position\":[")
                 .Append(FormatFloat(position.x)).Append(",")
                 .Append(FormatFloat(position.y)).Append(",")
@@ -222,6 +228,21 @@ namespace Afjk.SceneSync
                 builder.Append(",\"metadata\":").Append(metadataJson);
             builder.Append("}");
             return builder.ToString();
+        }
+
+        public static string GetUnityHierarchyPath(GameObject go)
+        {
+            if (go == null) return null;
+
+            var stack = new Stack<string>();
+            var current = go.transform;
+            while (current != null)
+            {
+                stack.Push(current.name);
+                current = current.parent;
+            }
+
+            return string.Join("/", stack);
         }
 
         public static string GetAssetType(string assetJson)
