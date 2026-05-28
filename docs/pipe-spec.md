@@ -492,17 +492,70 @@ graph LR
 - GitHub Release 公開（`release: published`）→ Unity package を UPM publish（`publish-upm.yml`）
 - `afjk.jp`（本番）への deploy は `deploy.yml` の手動実行（`workflow_dispatch`）のみ
 
-### release / deploy / package version の関係
+### Production deploy（`afjk.jp`）
 
-- GitHub Release の tag は `vX.Y.Z` を使う。
-- `publish-upm.yml` は release tag の `v` を除いた `X.Y.Z` を package version として publish する。
-- 本番 deploy は release event では起動しないため、必要時に Actions から明示的に実行する。
+#### 何が production deploy か
 
-### package-only release 手順
+- 本番環境 `afjk.jp` に対して、VPS 上の `~/github/afjk.jp` を `origin/main` に合わせて更新し、Docker サービスを再起動する運用。
+- `release: published` では本番 deploy は起動しない。GitHub Actions の **Deploy Production**（`.github/workflows/deploy.yml`）を手動実行したときだけ実行される。
 
-1. GitHub で `vX.Y.Z` の Release を公開する。
-2. `publish-upm.yml` が起動して UPM publish されることを確認する。
-3. 本番 deploy が不要な場合は `Deploy Production` workflow を実行しない。
+#### どの workflow が動くか
+
+- `.github/workflows/deploy.yml`
+  - trigger: `workflow_dispatch` のみ
+  - deploy 手順: `git fetch origin` → `git reset --hard origin/main` → `docker compose up ...`
+
+#### どのサービスが再起動されるか
+
+- `presence-server`（`--build` 付きで再作成）
+- `mediamtx`
+- `https-portal`（`--force-recreate`）
+- `verdaccio`（`--force-recreate`）
+
+#### deploy 前後の確認手順
+
+1. Actions で `Deploy Production` の直近成功履歴と対象 commit（`main` HEAD）を確認する。
+2. 手動で `Deploy Production` を実行する（不要なら実行しない）。
+3. 実行後、`https://afjk.jp/pipe` / `https://afjk.jp/scenesync` / `https://upm.afjk.jp` が応答することを確認する。
+4. Scene Sync 接続と UPM registry の疎通（`npm view`）を確認する。
+
+### Unity package publish（`com.afjk.scene-sync`）
+
+- `publish-upm.yml` は GitHub Release `published` イベントで起動し、release tag `vX.Y.Z` から `X.Y.Z` を取り出して `unity/com.afjk.scene-sync/package.json` の version として publish する。
+- publish 先は `https://upm.afjk.jp`（scoped registry: `com.afjk`）。
+- `com.afjk.scene-sync` は `com.afjk.loomlet-runtime` に依存するため、必要な Loomlet Runtime version が先に `upm.afjk.jp` に存在することを確認する。
+
+#### publish 後の確認コマンド
+
+```bash
+npm view com.afjk.scene-sync versions --json --registry https://upm.afjk.jp
+npm view com.afjk.scene-sync version --registry https://upm.afjk.jp
+npm dist-tag ls com.afjk.scene-sync --registry https://upm.afjk.jp
+```
+
+#### 誤 publish 時の復旧（dist-tag 修正）
+
+- 破壊的な unpublish は避け、正しい version を publish したうえで `latest` を付け替えて復旧する。
+
+```bash
+npm dist-tag add com.afjk.scene-sync@<known-good-version> latest --registry https://upm.afjk.jp
+npm dist-tag ls com.afjk.scene-sync --registry https://upm.afjk.jp
+```
+
+Example: after the accidental `v0.3.0` publish, `latest` was restored to `0.19.5`.
+
+### version policy（release tag と package version）
+
+- `afjk.jp` release tag は `vX.Y.Z` を使う。
+- 現状の運用では、`vX.Y.Z` の Release 公開により `com.afjk.scene-sync@X.Y.Z` が publish される。
+- `com.afjk.scene-sync` は既存系列（`0.19.x`）を継続し、既存の `latest` より大きい version を使う。
+- `com.afjk.loomlet-runtime` の version 系列は Loomlet リポジトリ側の方針に従う。
+
+### package-only release の注意
+
+- GitHub Release `published` は複数 workflow の起点になりうるため、何を起動するイベントかを事前に確認する。
+- package publish（`publish-upm.yml`）と production deploy（`deploy.yml`）を混同しない。
+- `afjk/afjk.jp#320` 対応後の前提として、production deploy と package release は分離されている（本番 deploy は手動実行のみ）。
 
 ---
 
