@@ -104,6 +104,7 @@ function createRuntimeManager({
   getGazeHit,
   getLoomletHostEvents,
   clearLoomletHostEvents,
+  getSceneClockStateForLoomlet,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
@@ -113,7 +114,7 @@ function createRuntimeManager({
     return `${key}:${target}`;
   }
 
-  function buildHostInputsForObject(objectId) {
+  function buildHostInputsForObject(objectId, objectTime, clockState) {
     const inputs = {};
 
     // Viewer inputs
@@ -201,6 +202,20 @@ function createRuntimeManager({
     inputs['target.gazeDwellTime'] = gazeDwellTime;
     inputs['target.gazeDistance'] = gazeDistance;
 
+    // Scene Clock time inputs (local-only, not broadcast)
+    // time.t = object graph が実評価される runtime time
+    // (selected object の場合は t=0, normal object の場合は Scene Clock time)
+    if (clockState) {
+      inputs['time.t'] = objectTime ?? 0;
+      inputs['time.delta'] = clockState.delta ?? 0;
+      inputs['time.sceneT'] = clockState.t;
+      inputs['time.sceneDelta'] = clockState.delta ?? 0;
+      inputs['time.isPaused'] = clockState.isPaused;
+      inputs['time.mode'] = clockState.mode;
+      inputs['time.rate'] = clockState.rate;
+      inputs['time.serverNow'] = clockState.serverNow;
+    }
+
     return inputs;
   }
 
@@ -277,13 +292,16 @@ function createRuntimeManager({
     definitions.delete(key);
   }
 
-  function evaluateRuntime(key, entry, now = performance.now()) {
+  function evaluateRuntime(key, entry, clockState, now = performance.now()) {
+    // object graph の実評価時刻を決定
+    // - selected/edited object: t=0
+    // - normal object: Scene Clock global time
     const time = entry.scopeObjectId && getObjectRuntimeTime
-      ? getObjectRuntimeTime(entry.scopeObjectId, now)
-      : getServerTime();
+      ? getObjectRuntimeTime(entry.scopeObjectId, now, clockState)
+      : (clockState?.t ?? getServerTime());
 
     // Build host inputs for object-scoped evaluations
-    const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId) : {};
+    const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId, time, clockState) : {};
 
     // Gather host events for object-scoped evaluations
     let events = [];
@@ -328,9 +346,11 @@ function createRuntimeManager({
         throw new Error(`Unsupported Scene Sync graph message type: ${message.type}`);
       }
     },
-    tick(now = performance.now()) {
+    tick(clockState = null, now = performance.now()) {
+      // clockState: Scene Clock state from host
+      // If not provided, fall back to server time
       for (const [key, entry] of runtimes) {
-        evaluateRuntime(key, entry, now);
+        evaluateRuntime(key, entry, clockState, now);
       }
     },
     exportState() {
@@ -420,6 +440,7 @@ export function createSceneSyncLoomIntegration({
   getGazeHit,
   getLoomletHostEvents,
   clearLoomletHostEvents,
+  getSceneClockStateForLoomlet,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
@@ -433,6 +454,7 @@ export function createSceneSyncLoomIntegration({
     getGazeHit,
     getLoomletHostEvents,
     clearLoomletHostEvents,
+    getSceneClockStateForLoomlet,
   });
 
   function isSceneGraphMessage(payload) {

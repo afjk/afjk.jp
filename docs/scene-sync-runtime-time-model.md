@@ -179,8 +179,50 @@ Touch / click / grab / trigger などの event は、発生時刻を environment
 
 ---
 
+## Scene Clock: Host-Controlled Global Time
+
+従来のモデルに加えて、MVP では **Scene Clock** という Host 所有のグローバル時刻制御システムが導入されました。
+
+### 使い分け
+
+**Object Runtime Time** (このドキュメント):
+- Per-object の選択状態に基づく時刻
+- selected object: `t = 0`
+- normal object: 経過時間ベース
+- 用途: object ごとの animation / behavior
+
+**Scene Clock** (新規):
+- グローバルな Host 所有時刻
+- pause / seek / reset / rate control 可能
+- local-only: room history に記録しない
+- 用途: シーン全体の再生制御、デモ・オーサリング
+
+### Loomlet への時刻供給
+
+Loomlet object graph は、実際に評価される時刻として以下を受け取る：
+
+```text
+time.t = object runtime time (選択中は 0)
+time.delta = object runtime の delta
+time.isPaused = Scene Clock の pause 状態
+time.mode = Scene Clock のモード ('server-follow' | 'local')
+time.rate = Scene Clock の再生速度
+time.serverNow = 常に現在の server time
+```
+
+### 重要: 時刻の独立性
+
+- Object Runtime Time の `t = 0` 凍結はそのまま保持される
+- 選択中 object は Scene Clock が動いていても `t = 0` で評価される
+- Scene Clock の pause / seek は local-only で、他クライアントに影響しない
+
+詳細は [Scene Sync Scene Clock](./scene-sync-scene-clock.md) を参照。
+
+---
+
 ## 関連ドキュメント
 
 - [Scene Sync Spec Index](./scene-sync-spec.md)
 - [Animation](./scene-sync-animation.md)
 - [Loom graph protocol](./scene-sync-loom-protocol.md)
+- [Scene Sync Scene Clock](./scene-sync-scene-clock.md) - Host-controlled global time system

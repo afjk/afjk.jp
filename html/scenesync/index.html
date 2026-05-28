@@ -1017,6 +1017,125 @@
         white-space: nowrap;
       }
     }
+
+    /* Scene Clock Debug Panel */
+    #scene-clock-panel {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      width: 280px;
+      max-height: 400px;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 8px;
+      padding: 12px;
+      color: #fff;
+      font: 13px/1.4 monospace;
+      z-index: 20;
+      border: 1px solid rgba(255,255,255,0.1);
+      overflow-y: auto;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #scene-clock-panel:not([hidden]) {
+      display: flex;
+    }
+    .scene-clock-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .scene-clock-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .scene-clock-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .scene-clock-display {
+      background: rgba(255,255,255,0.05);
+      padding: 12px;
+      border-radius: 4px;
+      text-align: center;
+    }
+    .scene-clock-time {
+      font-size: 24px;
+      font-weight: bold;
+      color: #4f8;
+      margin-bottom: 6px;
+    }
+    .scene-clock-info {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .scene-clock-badge {
+      display: inline-block;
+      background: rgba(68,136,255,0.3);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .scene-clock-badge.paused {
+      background: rgba(255,100,100,0.3);
+    }
+    .scene-clock-badge.local {
+      background: rgba(255,200,0,0.3);
+    }
+    .scene-clock-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .scene-clock-controls .chip {
+      flex: 1;
+      min-width: 60px;
+      font-size: 12px;
+      padding: 5px 8px;
+    }
+    .scene-clock-seek,
+    .scene-clock-rate {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .scene-clock-seek label,
+    .scene-clock-rate label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .scene-clock-seek span,
+    .scene-clock-rate span {
+      flex: 0 0 auto;
+      width: 60px;
+    }
+    .scene-clock-number-input {
+      flex: 1;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      padding: 4px 6px;
+      border-radius: 3px;
+      font: 12px/1.4 monospace;
+    }
+    .scene-clock-number-input:focus {
+      outline: none;
+      border-color: rgba(68,136,255,0.6);
+      background: rgba(255,255,255,0.15);
+    }
   </style>
 </head>
 <body>
@@ -1200,6 +1319,45 @@
   "status": "no-selection"
 }</pre>
       </section>
+    </div>
+  </aside>
+
+  <!-- Scene Clock Debug Panel -->
+  <aside id="scene-clock-panel" aria-label="Scene Clock Controls" hidden>
+    <div class="scene-clock-header">
+      <h3>Scene Clock</h3>
+      <button id="scene-clock-close" class="chip" type="button" title="Close">✕</button>
+    </div>
+    <div class="scene-clock-body">
+      <div class="scene-clock-display">
+        <div class="scene-clock-time">
+          <span id="scene-clock-time-value">0.00</span>s
+        </div>
+        <div class="scene-clock-info">
+          <span id="scene-clock-mode" class="scene-clock-badge">server-follow</span>
+          <span id="scene-clock-status" class="scene-clock-badge">running</span>
+        </div>
+      </div>
+
+      <div class="scene-clock-controls">
+        <button id="scene-clock-reset" class="chip" type="button">Reset</button>
+        <button id="scene-clock-toggle-pause" class="chip" type="button">Pause</button>
+        <button id="scene-clock-follow" class="chip" type="button">Follow Server</button>
+      </div>
+
+      <div class="scene-clock-seek">
+        <label>
+          <span>Seek (s):</span>
+          <input id="scene-clock-seek-input" class="scene-clock-number-input" type="number" min="0" step="0.1" value="0">
+        </label>
+      </div>
+
+      <div class="scene-clock-rate">
+        <label>
+          <span>Rate:</span>
+          <input id="scene-clock-rate-input" class="scene-clock-number-input" type="number" min="0" step="0.1" value="1">
+        </label>
+      </div>
     </div>
   </aside>
   <button id="add-btn" title="GLB/画像を追加">＋</button>
