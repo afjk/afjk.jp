@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using GLTFast;
 using UnityEditor;
@@ -14,6 +15,8 @@ namespace Afjk.SceneSync.Editor
         private const string ShowSceneSyncGizmosPrefKey = "Afjk.SceneSync.ShowSceneSyncGizmos";
         private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
         private const float DefaultMaxGlbUploadMiB = 50f;
+        private const int MaxPersistentGlbSizeBytes = 50 * 1024 * 1024;
+        private const long MaxPersistentGlbCacheBytes = 512L * 1024L * 1024L;
 
         internal static bool ShowSceneSyncGizmos
         {
@@ -2424,6 +2427,146 @@ namespace Afjk.SceneSync.Editor
                 go.transform.localScale = new Vector3(scale[0], scale[1], scale[2]);
         }
 
+        private string GetPersistentGlbCacheDirectory()
+        {
+            return System.IO.Path.Combine(Application.persistentDataPath, "SceneSyncGlbCache");
+        }
+
+        private static string SanitizeCacheKey(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            var invalid = System.IO.Path.GetInvalidFileNameChars();
+            var chars = value.ToCharArray();
+            for (var i = 0; i < chars.Length; i++)
+            {
+                if (Array.IndexOf(invalid, chars[i]) >= 0)
+                    chars[i] = '_';
+            }
+            return new string(chars);
+        }
+
+        private string GetPersistentGlbCachePath(string prefix, string key)
+        {
+            var sanitized = SanitizeCacheKey(key);
+            if (string.IsNullOrWhiteSpace(sanitized)) return null;
+            return System.IO.Path.Combine(GetPersistentGlbCacheDirectory(), prefix + "-" + sanitized + ".glb");
+        }
+
+        private bool TryLoadPersistentCachedGlb(string assetId, string meshPath, out byte[] glbBytes, out string source)
+        {
+            glbBytes = null;
+            source = null;
+
+            var candidates = new List<KeyValuePair<string, string>>();
+            if (!string.IsNullOrWhiteSpace(assetId))
+                candidates.Add(new KeyValuePair<string, string>("assetId", GetPersistentGlbCachePath("asset", assetId)));
+            if (!string.IsNullOrWhiteSpace(meshPath))
+                candidates.Add(new KeyValuePair<string, string>("meshPath", GetPersistentGlbCachePath("mesh", meshPath)));
+
+            foreach (var candidate in candidates)
+            {
+                var path = candidate.Value;
+                if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) continue;
+                try
+                {
+                    var bytes = System.IO.File.ReadAllBytes(path);
+                    if (bytes == null || bytes.Length == 0 || bytes.Length > MaxPersistentGlbSizeBytes) continue;
+                    TouchPersistentGlbCacheFile(path);
+                    glbBytes = bytes;
+                    source = candidate.Key;
+                    return true;
+                }
+                catch (Exception err)
+                {
+                    Debug.LogWarning("[SceneSync] Failed to read persistent GLB cache: " + path + "\n" + err.Message);
+                }
+            }
+
+            return false;
+        }
+
+        private void StorePersistentCachedGlb(byte[] glbBytes, string assetId, string meshPath)
+        {
+            if (glbBytes == null || glbBytes.Length == 0 || glbBytes.Length > MaxPersistentGlbSizeBytes) return;
+            if (glbBytes.LongLength > MaxPersistentGlbCacheBytes) return;
+
+            try
+            {
+                var dir = GetPersistentGlbCacheDirectory();
+                System.IO.Directory.CreateDirectory(dir);
+
+                if (!string.IsNullOrWhiteSpace(assetId))
+                {
+                    var assetPath = GetPersistentGlbCachePath("asset", assetId);
+                    if (!string.IsNullOrWhiteSpace(assetPath))
+                        System.IO.File.WriteAllBytes(assetPath, glbBytes);
+                }
+
+                if (!string.IsNullOrWhiteSpace(meshPath))
+                {
+                    var meshPathCachePath = GetPersistentGlbCachePath("mesh", meshPath);
+                    if (!string.IsNullOrWhiteSpace(meshPathCachePath))
+                        System.IO.File.WriteAllBytes(meshPathCachePath, glbBytes);
+                }
+
+                PrunePersistentGlbCache(dir);
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[SceneSync] Failed to write persistent GLB cache: " + err.Message);
+            }
+        }
+
+        private void TouchPersistentGlbCacheFile(string path)
+        {
+            try
+            {
+                System.IO.File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            }
+            catch
+            {
+                // Best effort only; cache reads should not fail because metadata updates are unavailable.
+            }
+        }
+
+        private void PrunePersistentGlbCache(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dir) || !System.IO.Directory.Exists(dir)) return;
+
+                var files = new System.IO.DirectoryInfo(dir)
+                    .EnumerateFiles("*.glb", System.IO.SearchOption.TopDirectoryOnly)
+                    .OrderBy(file => file.LastWriteTimeUtc)
+                    .ToList();
+
+                long totalBytes = 0;
+                foreach (var file in files)
+                    totalBytes += Math.Max(0L, file.Length);
+
+                foreach (var file in files)
+                {
+                    if (totalBytes <= MaxPersistentGlbCacheBytes) break;
+
+                    var length = Math.Max(0L, file.Length);
+                    try
+                    {
+                        file.Delete();
+                        totalBytes -= length;
+                    }
+                    catch (Exception err)
+                    {
+                        Debug.LogWarning("[SceneSync] Failed to prune persistent GLB cache file: " +
+                                         file.FullName + "\n" + err.Message);
+                    }
+                }
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[SceneSync] Failed to prune persistent GLB cache: " + err.Message);
+            }
+        }
+
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null,
@@ -2442,27 +2585,39 @@ namespace Afjk.SceneSync.Editor
                 var url = !string.IsNullOrWhiteSpace(assetUrl)
                     ? assetUrl
                     : GetBlobUrl() + "/" + meshPath;
-                Debug.Log("[SceneSync] Downloading mesh: " + url);
-
-                var http = new HttpClient();
-                var response = await http.GetAsync(url);
-
-                if (!response.IsSuccessStatusCode)
+                byte[] glbBytes = null;
+                if (TryLoadPersistentCachedGlb(assetId, meshPath, out var persistentGlb, out var persistentSource))
                 {
-                    Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
-                    var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
-                    ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
-                    ApplyMetadataBehaviorGraph(fallback, objectId, metadataJson);
-                    if (visible.HasValue) fallback.SetActive(visible.Value);
-                    fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
-                    ApplyTransform(fallback, position, rotation, scale);
-                    _managedObjects[objectId] = fallback;
-                    _knownObjectIds.Add(objectId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                    return;
+                    glbBytes = persistentGlb;
+                    Debug.Log("[SceneSync] Using persistent cached GLB by " + persistentSource + ": " +
+                              (!string.IsNullOrWhiteSpace(assetId) ? assetId : meshPath));
+                }
+                else
+                {
+                    Debug.Log("[SceneSync] Downloading mesh: " + url);
+
+                    var http = new HttpClient();
+                    var response = await http.GetAsync(url);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
+                        var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
+                        ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+                        ApplyMetadataBehaviorGraph(fallback, objectId, metadataJson);
+                        if (visible.HasValue) fallback.SetActive(visible.Value);
+                        fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+                        ApplyTransform(fallback, position, rotation, scale);
+                        _managedObjects[objectId] = fallback;
+                        _knownObjectIds.Add(objectId);
+                        _instanceToObjectId[fallback.GetInstanceID()] = objectId;
+                        return;
+                    }
+
+                    glbBytes = await response.Content.ReadAsByteArrayAsync();
+                    StorePersistentCachedGlb(glbBytes, assetId, meshPath);
                 }
 
-                var glbBytes = await response.Content.ReadAsByteArrayAsync();
                 var tempFileName = !string.IsNullOrEmpty(meshPath) ? meshPath : objectId;
                 var tempPath = System.IO.Path.Combine(
                     Application.temporaryCachePath, tempFileName + ".glb");
