@@ -101,8 +101,9 @@ namespace Afjk.SceneSync
             var colon = json.IndexOf(':', fieldIndex + token.Length);
             if (colon < 0) return null;
 
-            var objectStart = json.IndexOf('{', colon + 1);
-            if (objectStart < 0) return null;
+            var objectStart = colon + 1;
+            SkipWhitespace(json, ref objectStart);
+            if (objectStart >= json.Length || json[objectStart] != '{') return null;
 
             var objectEnd = FindMatching(json, objectStart, '{', '}');
             if (objectEnd < 0) return null;

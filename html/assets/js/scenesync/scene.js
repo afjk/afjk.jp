@@ -5225,6 +5225,7 @@ function handleHandoff(data) {
       filename: payload.filename,
       size: payload.size,
       mime: payload.mime,
+      recoveryRequestId: payload.recoveryRequestId,
     });
 
     if (canAccept) {

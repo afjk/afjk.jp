@@ -91,16 +91,7 @@ export function createExpiredGlbRecovery({
       }
 
       if (peerIndex >= peers.length) {
-        console.log('[ExpiredGlbRecovery] All peers exhausted for requestId:', requestId);
-        const recovery = pendingRecoveries.get(requestId);
-        pendingRecoveries.delete(requestId);
-        recoveryFailedCallbacks.forEach(cb => {
-          try {
-            cb({ objectId, requestId, reason: 'no-response', info: recovery?.info });
-          } catch (err) {
-            console.warn('[ExpiredGlbRecovery] Error in recovery failed callback:', err);
-          }
-        });
+        console.log('[ExpiredGlbRecovery] All peers requested for requestId:', requestId, 'waiting for file handoff or timeout');
         return;
       }
 
@@ -276,14 +267,36 @@ export function createExpiredGlbRecovery({
       recovery = pendingRecoveries.get(recoveryRequestId);
     }
 
+    let computedAssetId = null;
+    try {
+      computedAssetId = await computeAssetId(file);
+    } catch (err) {
+      console.warn('[ExpiredGlbRecovery] Failed to compute asset ID:', err);
+    }
+
     if (!recovery && fromPeerId) {
+      let fallback = null;
       for (const [, rec] of pendingRecoveries) {
         if (!rec.requestedPeerIds.has(fromPeerId)) {
           continue;
         }
-        recovery = rec;
-        break;
+        if (rec.expectedSize && rec.expectedSize !== file.size) {
+          continue;
+        }
+        if (computedAssetId && rec.assetId) {
+          if (rec.assetId === computedAssetId) {
+            recovery = rec;
+            break;
+          }
+          continue;
+        }
+        if (rec.assetId && file.name?.startsWith?.(rec.assetId)) {
+          recovery = rec;
+          break;
+        }
+        if (!fallback) fallback = rec;
       }
+      recovery ||= fallback;
     }
 
     if (!recovery) {
@@ -292,13 +305,6 @@ export function createExpiredGlbRecovery({
     }
 
     console.log('[ExpiredGlbRecovery] Matching recovered file to pending recovery:', recovery.requestId);
-
-    let computedAssetId = null;
-    try {
-      computedAssetId = await computeAssetId(file);
-    } catch (err) {
-      console.warn('[ExpiredGlbRecovery] Failed to compute asset ID:', err);
-    }
 
     if (recovery.assetId) {
       if (!computedAssetId) {
