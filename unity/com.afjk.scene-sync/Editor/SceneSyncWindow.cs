@@ -68,6 +68,7 @@ namespace Afjk.SceneSync.Editor
         private Dictionary<string, string> _locks = new Dictionary<string, string>(); // objectId → lockOwnerId
         private string _currentlyLockedObjectId;
         private Dictionary<string, string> _meshPaths = new Dictionary<string, string>(); // objectId → meshPath
+        private Dictionary<string, string> _pendingObjectLoomGraphs = new Dictionary<string, string>();
         private bool _sceneReceived = false;
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
@@ -1121,14 +1122,12 @@ namespace Afjk.SceneSync.Editor
                 var go = FindManagedObject(objectId);
                 if (go == null)
                 {
-                    Debug.LogWarning("[SceneSync] scene-graph-set target not found: objectId=" + objectId);
+                    _pendingObjectLoomGraphs[objectId] = graphJson;
+                    Debug.Log("[SceneSync] Queued Loomlet object graph until target is ready: objectId=" + objectId);
                     return;
                 }
 
-                SceneSyncLoomletBehaviour.SetObjectGraph(go, FindSceneSyncManager(), objectId, graphJson);
-                EditorUtility.SetDirty(go);
-                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
-                Debug.Log("[SceneSync] Bound Loomlet object graph: objectId=" + objectId);
+                ApplyOrQueueObjectLoomGraph(objectId, graphJson, go);
                 return;
             }
 
@@ -1151,6 +1150,7 @@ namespace Afjk.SceneSync.Editor
             {
                 var go = FindManagedObject(objectId);
                 SceneSyncLoomletBehaviour.ClearObjectGraph(go);
+                _pendingObjectLoomGraphs.Remove(objectId);
                 if (go != null) EditorUtility.SetDirty(go);
                 EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
                 Debug.Log("[SceneSync] Cleared Loomlet object graph: objectId=" + objectId);
@@ -1194,16 +1194,54 @@ namespace Afjk.SceneSync.Editor
             foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(loomGraphsJson, "objects"))
             {
                 var go = FindManagedObject(entry.Key);
-                if (go == null)
-                {
-                    Debug.LogWarning("[SceneSync] scene-state Loomlet graph target not found: objectId=" + entry.Key);
-                    continue;
-                }
-                SceneSyncLoomletBehaviour.SetObjectGraph(go, manager, entry.Key, entry.Value);
-                EditorUtility.SetDirty(go);
+                ApplyOrQueueObjectLoomGraph(entry.Key, entry.Value, go);
             }
 
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+        }
+
+        private void ApplyOrQueueObjectLoomGraph(string objectId, string graphJson, GameObject go)
+        {
+            if (string.IsNullOrWhiteSpace(objectId) || string.IsNullOrWhiteSpace(graphJson)) return;
+
+            if (go == null || IsImportPlaceholder(go, objectId))
+            {
+                _pendingObjectLoomGraphs[objectId] = graphJson;
+                Debug.Log("[SceneSync] Queued Loomlet object graph until target is ready: objectId=" + objectId);
+                return;
+            }
+
+            SceneSyncLoomletBehaviour.SetObjectGraph(go, FindSceneSyncManager(), objectId, graphJson);
+            _pendingObjectLoomGraphs.Remove(objectId);
+            EditorUtility.SetDirty(go);
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Debug.Log("[SceneSync] Bound Loomlet object graph: objectId=" + objectId);
+        }
+
+        private bool ApplyPendingObjectLoomGraph(string objectId, GameObject go)
+        {
+            if (go == null || string.IsNullOrWhiteSpace(objectId)) return false;
+            if (!_pendingObjectLoomGraphs.TryGetValue(objectId, out var graphJson) ||
+                string.IsNullOrWhiteSpace(graphJson))
+                return false;
+
+            SceneSyncLoomletBehaviour.SetObjectGraph(go, FindSceneSyncManager(), objectId, graphJson);
+            _pendingObjectLoomGraphs.Remove(objectId);
+            EditorUtility.SetDirty(go);
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Debug.Log("[SceneSync] Bound pending Loomlet object graph: objectId=" + objectId);
+            return true;
+        }
+
+        private static bool IsImportPlaceholder(GameObject go, string objectId)
+        {
+            if (go == null) return false;
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            return identity != null
+                   && identity.Temporary
+                   && identity.ObjectId == objectId
+                   && go.transform.childCount == 0
+                   && go.GetComponentsInChildren<Renderer>(true).Length == 0;
         }
 
         private void ApplyMetadataBehaviorGraph(GameObject go, string objectId, string metadataJson)
@@ -2611,6 +2649,7 @@ namespace Afjk.SceneSync.Editor
                         _managedObjects[objectId] = fallback;
                         _knownObjectIds.Add(objectId);
                         _instanceToObjectId[fallback.GetInstanceID()] = objectId;
+                        ApplyPendingObjectLoomGraph(objectId, fallback);
                         return;
                     }
 
@@ -2665,6 +2704,7 @@ namespace Afjk.SceneSync.Editor
                     _managedObjects[objectId] = go;
                     _knownObjectIds.Add(objectId);
                     _instanceToObjectId[go.GetInstanceID()] = objectId;
+                    ApplyPendingObjectLoomGraph(objectId, go);
                     Debug.Log("[SceneSync] Imported mesh: " + name);
                 }
                 else
@@ -2679,6 +2719,7 @@ namespace Afjk.SceneSync.Editor
                     _managedObjects[objectId] = fallback;
                     _knownObjectIds.Add(objectId);
                     _instanceToObjectId[fallback.GetInstanceID()] = objectId;
+                    ApplyPendingObjectLoomGraph(objectId, fallback);
                 }
 
                 // 一時ファイル削除
@@ -2710,7 +2751,7 @@ namespace Afjk.SceneSync.Editor
 
         private static void ApplyPickingRules()
         {
-            var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>();
+            var identities = UnityEngine.Object.FindObjectsByType<SceneSyncIdentity>(FindObjectsSortMode.None);
             foreach (var identity in identities)
             {
                 SceneSyncPickingUtility.ApplyImportedChildPicking(identity);
