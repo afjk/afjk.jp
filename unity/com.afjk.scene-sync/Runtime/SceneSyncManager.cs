@@ -55,6 +55,7 @@ namespace Afjk.SceneSync
         private const double PEER_RETRY_INTERVAL_MS = 4000;
         private const double COOLDOWN_MS = 30000;
         private const int MAX_GLB_SIZE = 50 * 1024 * 1024;
+        private const long MAX_PERSISTENT_GLB_CACHE_BYTES = 512L * 1024L * 1024L;
 
         private class ExpiredGlbRecovery
         {
@@ -405,6 +406,7 @@ namespace Afjk.SceneSync
                     _assetIdCache[assetId] = glb;
                 if (path != null)
                     _meshPathCache[path] = glb;
+                StorePersistentCachedGlb(glb, assetId, path);
 
                 var assetIdJson = assetId != null ? ",\"assetId\":\"" + SceneSyncWireJson.JsonEscape(assetId) + "\"" : "";
                 var payload = "{\"kind\":\"scene-mesh\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\",\"name\":\"" + SceneSyncWireJson.JsonEscape(go.name) + "\",\"meshPath\":\"" + SceneSyncWireJson.JsonEscape(path) + "\"" +
@@ -512,6 +514,152 @@ namespace Afjk.SceneSync
             {
                 Debug.LogWarning("[SceneSync] Failed to parse Piping display URL from: " + _presenceUrl);
                 return "https://pipe.afjk.jp";
+            }
+        }
+
+        private string GetPersistentGlbCacheDirectory()
+        {
+            return System.IO.Path.Combine(Application.persistentDataPath, "SceneSyncGlbCache");
+        }
+
+        private static string SanitizeCacheKey(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            var invalid = System.IO.Path.GetInvalidFileNameChars();
+            var chars = value.ToCharArray();
+            for (var i = 0; i < chars.Length; i++)
+            {
+                if (Array.IndexOf(invalid, chars[i]) >= 0)
+                    chars[i] = '_';
+            }
+            return new string(chars);
+        }
+
+        private string GetPersistentGlbCachePath(string prefix, string key)
+        {
+            var sanitized = SanitizeCacheKey(key);
+            if (string.IsNullOrWhiteSpace(sanitized)) return null;
+            return System.IO.Path.Combine(GetPersistentGlbCacheDirectory(), prefix + "-" + sanitized + ".glb");
+        }
+
+        private bool TryLoadPersistentCachedGlb(string assetId, string meshPath, out byte[] glbBytes, out string source)
+        {
+            glbBytes = null;
+            source = null;
+
+            var candidates = new List<KeyValuePair<string, string>>();
+            if (!string.IsNullOrWhiteSpace(assetId))
+                candidates.Add(new KeyValuePair<string, string>("assetId", GetPersistentGlbCachePath("asset", assetId)));
+            if (!string.IsNullOrWhiteSpace(meshPath))
+                candidates.Add(new KeyValuePair<string, string>("meshPath", GetPersistentGlbCachePath("mesh", meshPath)));
+
+            foreach (var candidate in candidates)
+            {
+                var path = candidate.Value;
+                if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) continue;
+                try
+                {
+                    var bytes = System.IO.File.ReadAllBytes(path);
+                    if (bytes == null || bytes.Length == 0 || bytes.Length > MAX_GLB_SIZE) continue;
+                    TouchPersistentGlbCacheFile(path);
+                    glbBytes = bytes;
+                    source = candidate.Key;
+                    if (!string.IsNullOrWhiteSpace(assetId))
+                        _assetIdCache[assetId] = bytes;
+                    if (!string.IsNullOrWhiteSpace(meshPath))
+                        _meshPathCache[meshPath] = bytes;
+                    return true;
+                }
+                catch (Exception err)
+                {
+                    Debug.LogWarning("[SceneSync] Failed to read persistent GLB cache: " + path + "\n" + err.Message);
+                }
+            }
+
+            return false;
+        }
+
+        private void StorePersistentCachedGlb(byte[] glbBytes, string assetId, string meshPath)
+        {
+            if (glbBytes == null || glbBytes.Length == 0 || glbBytes.Length > MAX_GLB_SIZE) return;
+            if (glbBytes.LongLength > MAX_PERSISTENT_GLB_CACHE_BYTES) return;
+
+            try
+            {
+                var dir = GetPersistentGlbCacheDirectory();
+                System.IO.Directory.CreateDirectory(dir);
+
+                if (!string.IsNullOrWhiteSpace(assetId))
+                {
+                    var assetPath = GetPersistentGlbCachePath("asset", assetId);
+                    if (!string.IsNullOrWhiteSpace(assetPath))
+                        System.IO.File.WriteAllBytes(assetPath, glbBytes);
+                }
+
+                if (!string.IsNullOrWhiteSpace(meshPath))
+                {
+                    var meshPathCachePath = GetPersistentGlbCachePath("mesh", meshPath);
+                    if (!string.IsNullOrWhiteSpace(meshPathCachePath))
+                        System.IO.File.WriteAllBytes(meshPathCachePath, glbBytes);
+                }
+
+                PrunePersistentGlbCache(dir);
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[SceneSync] Failed to write persistent GLB cache: " + err.Message);
+            }
+        }
+
+        private void TouchPersistentGlbCacheFile(string path)
+        {
+            try
+            {
+                System.IO.File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            }
+            catch
+            {
+                // Best effort only; cache reads should not fail because metadata updates are unavailable.
+            }
+        }
+
+        private void PrunePersistentGlbCache(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dir) || !System.IO.Directory.Exists(dir)) return;
+
+                var files = new System.IO.DirectoryInfo(dir)
+                    .EnumerateFiles("*.glb", System.IO.SearchOption.TopDirectoryOnly)
+                    .OrderBy(file => file.LastWriteTimeUtc)
+                    .ToList();
+
+                long totalBytes = 0;
+                foreach (var file in files)
+                {
+                    totalBytes += Math.Max(0L, file.Length);
+                }
+
+                foreach (var file in files)
+                {
+                    if (totalBytes <= MAX_PERSISTENT_GLB_CACHE_BYTES) break;
+
+                    var length = Math.Max(0L, file.Length);
+                    try
+                    {
+                        file.Delete();
+                        totalBytes -= length;
+                    }
+                    catch (Exception err)
+                    {
+                        Debug.LogWarning("[SceneSync] Failed to prune persistent GLB cache file: " +
+                                         file.FullName + "\n" + err.Message);
+                    }
+                }
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[SceneSync] Failed to prune persistent GLB cache: " + err.Message);
             }
         }
 
@@ -1036,6 +1184,11 @@ namespace Afjk.SceneSync
                 cachedGlb = glbByAssetId;
             else if (!string.IsNullOrEmpty(meshPath) && _meshPathCache.TryGetValue(meshPath, out var glbByMeshPath))
                 cachedGlb = glbByMeshPath;
+            else if (TryLoadPersistentCachedGlb(assetId, meshPath, out var persistentGlb, out var persistentSource))
+            {
+                Debug.Log("[ExpiredGlbRecovery] Using persistent cached GLB by " + persistentSource + ": " + cacheKey);
+                cachedGlb = persistentGlb;
+            }
 
             if (cachedGlb == null)
             {
@@ -2109,9 +2262,17 @@ namespace Afjk.SceneSync
             if (_runtimeFallbackImportMaterial != null)
                 return _runtimeFallbackImportMaterial;
 
-            var shader = Shader.Find("Universal Render Pipeline/Lit");
-            if (shader == null)
-                shader = Shader.Find("URP/Lit");
+            Shader shader = null;
+            if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline == null)
+            {
+                shader = Shader.Find("Standard");
+            }
+            else
+            {
+                shader = Shader.Find("Universal Render Pipeline/Lit");
+                if (shader == null)
+                    shader = Shader.Find("URP/Lit");
+            }
             if (shader == null)
                 shader = Shader.Find("Standard");
 
@@ -2244,6 +2405,12 @@ namespace Afjk.SceneSync
                 Debug.Log("[SceneSync] Using cached GLB by meshPath: " + meshPath);
                 glbBytes = cachedByMeshPath;
             }
+            else if (TryLoadPersistentCachedGlb(assetId, meshPath, out var persistentGlb, out var persistentSource))
+            {
+                Debug.Log("[SceneSync] Using persistent cached GLB by " + persistentSource + ": " +
+                    (persistentSource == "assetId" ? assetId : meshPath));
+                glbBytes = persistentGlb;
+            }
 
             // Download if not in cache
             if (glbBytes == null)
@@ -2300,6 +2467,7 @@ namespace Afjk.SceneSync
                     _assetIdCache[assetId] = glbBytes;
                 if (!string.IsNullOrEmpty(meshPath))
                     _meshPathCache[meshPath] = glbBytes;
+                StorePersistentCachedGlb(glbBytes, assetId, meshPath);
             }
 
             try
@@ -2645,8 +2813,8 @@ namespace Afjk.SceneSync
 
                 if (peerIndex >= peers.Count)
                 {
-                    Debug.Log("[ExpiredGlbRecovery] All peers exhausted for requestId: " + requestId);
-                    _pendingRecoveries.Remove(requestId);
+                    Debug.Log("[ExpiredGlbRecovery] All peers requested for requestId: " + requestId +
+                        "; waiting for file handoff or timeout");
                     onComplete?.Invoke();
                     return;
                 }
@@ -2712,6 +2880,40 @@ namespace Afjk.SceneSync
             return false;
         }
 
+        private ExpiredGlbRecovery FindMatchingRecovery(string fromPeerId, string filename, int size, string assetId = null)
+        {
+            ExpiredGlbRecovery fallback = null;
+
+            foreach (var kvp in _pendingRecoveries)
+            {
+                var rec = kvp.Value;
+                if (!rec.requestedPeerIds.Contains(fromPeerId))
+                    continue;
+
+                if (rec.expectedSize.HasValue && rec.expectedSize.Value != size)
+                    continue;
+
+                if (!string.IsNullOrEmpty(assetId) && !string.IsNullOrEmpty(rec.assetId))
+                {
+                    if (rec.assetId == assetId)
+                        return rec;
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(rec.assetId) &&
+                    !string.IsNullOrEmpty(filename) &&
+                    filename.StartsWith(rec.assetId, StringComparison.Ordinal))
+                {
+                    return rec;
+                }
+
+                if (fallback == null)
+                    fallback = rec;
+            }
+
+            return fallback;
+        }
+
         private async System.Threading.Tasks.Task HandleReceivedFile(string fromPeerId, string filename, byte[] data, string mime)
         {
             if (data == null || data.Length == 0)
@@ -2736,21 +2938,17 @@ namespace Afjk.SceneSync
                 return;
             }
 
-            // Find matching pending recovery
-            ExpiredGlbRecovery recovery = null;
-            foreach (var kvp in _pendingRecoveries)
+            string computedAssetId = null;
+            try
             {
-                var rec = kvp.Value;
-                if (!rec.requestedPeerIds.Contains(fromPeerId))
-                    continue;
-
-                if (rec.expectedSize.HasValue && rec.expectedSize.Value != data.Length)
-                    continue;
-
-                recovery = rec;
-                break;
+                computedAssetId = PresenceClientRuntime.ComputeAssetId(data);
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[ExpiredGlbRecovery] Failed to compute asset ID: " + err);
             }
 
+            var recovery = FindMatchingRecovery(fromPeerId, filename, data.Length, computedAssetId);
             if (recovery == null)
             {
                 Debug.Log("[ExpiredGlbRecovery] No matching pending recovery for this file from requestedPeerIds");
@@ -2759,18 +2957,8 @@ namespace Afjk.SceneSync
 
             Debug.Log("[ExpiredGlbRecovery] Matching recovered file to pending recovery: " + recovery.requestId);
 
-            string computedAssetId = null;
             if (recovery.assetId != null)
             {
-                try
-                {
-                    computedAssetId = PresenceClientRuntime.ComputeAssetId(data);
-                }
-                catch (Exception err)
-                {
-                    Debug.LogWarning("[ExpiredGlbRecovery] Failed to compute asset ID: " + err);
-                }
-
                 if (string.IsNullOrEmpty(computedAssetId))
                 {
                     Debug.LogWarning("[ExpiredGlbRecovery] Expected assetId but computation failed, ignoring file");
@@ -2794,6 +2982,7 @@ namespace Afjk.SceneSync
                     _assetIdCache[computedAssetId] = data;
                 if (recovery.meshPath != null)
                     _meshPathCache[recovery.meshPath] = data;
+                StorePersistentCachedGlb(data, computedAssetId ?? recovery.assetId, recovery.meshPath);
 
                 Debug.Log("[ExpiredGlbRecovery] Loading recovered GLB into object: " + recovery.objectId);
                 await LoadGlbFromBytes(recovery.objectId, data, computedAssetId ?? recovery.assetId);
