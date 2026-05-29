@@ -46,6 +46,7 @@ namespace Afjk.SceneSync
         private Dictionary<string, byte[]> _assetIdCache = new Dictionary<string, byte[]>(); // assetId → glb bytes
         private Dictionary<string, byte[]> _meshPathCache = new Dictionary<string, byte[]>(); // meshPath → glb bytes
         private Dictionary<string, ExpiredGlbRecovery> _pendingRecoveries = new Dictionary<string, ExpiredGlbRecovery>();
+        private Dictionary<string, string> _pendingObjectLoomGraphs = new Dictionary<string, string>();
         private Dictionary<string, double> _responderCooldowns = new Dictionary<string, double>(); // cacheKey-peerId → timestamp
         private string _activeOutgoingTransferId = null;
         private readonly HashSet<string> _remoteRemovedUnityObjectIds = new HashSet<string>();
@@ -1331,12 +1332,12 @@ namespace Afjk.SceneSync
                 var go = FindManagedObject(objectId);
                 if (go == null)
                 {
-                    Debug.LogWarning("[SceneSync] scene-graph-set target not found: objectId=" + objectId);
+                    _pendingObjectLoomGraphs[objectId] = graphJson;
+                    Debug.Log("[SceneSync] Queued Loomlet object graph until target is ready: objectId=" + objectId);
                     return;
                 }
 
-                SceneSyncLoomletBehaviour.SetObjectGraph(go, this, objectId, graphJson);
-                Debug.Log("[SceneSync] Bound Loomlet object graph: objectId=" + objectId);
+                ApplyOrQueueObjectLoomGraph(objectId, graphJson, go);
                 return;
             }
 
@@ -1350,6 +1351,7 @@ namespace Afjk.SceneSync
             {
                 var go = FindManagedObject(objectId);
                 SceneSyncLoomletBehaviour.ClearObjectGraph(go);
+                _pendingObjectLoomGraphs.Remove(objectId);
                 Debug.Log("[SceneSync] Cleared Loomlet object graph: objectId=" + objectId);
                 return;
             }
@@ -1387,13 +1389,54 @@ namespace Afjk.SceneSync
             foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(loomGraphsJson, "objects"))
             {
                 var go = FindManagedObject(entry.Key);
-                if (go == null)
-                {
-                    Debug.LogWarning("[SceneSync] scene-state Loomlet graph target not found: objectId=" + entry.Key);
-                    continue;
-                }
-                SceneSyncLoomletBehaviour.SetObjectGraph(go, this, entry.Key, entry.Value);
+                ApplyOrQueueObjectLoomGraph(entry.Key, entry.Value, go);
             }
+        }
+
+        private void ApplyOrQueueObjectLoomGraph(string objectId, string graphJson, GameObject go)
+        {
+            if (string.IsNullOrWhiteSpace(objectId) || string.IsNullOrWhiteSpace(graphJson)) return;
+
+            if (go == null || IsImportPlaceholder(go, objectId))
+            {
+                _pendingObjectLoomGraphs[objectId] = graphJson;
+                Debug.Log("[SceneSync] Queued Loomlet object graph until target is ready: objectId=" + objectId);
+                return;
+            }
+
+            SceneSyncLoomletBehaviour.SetObjectGraph(go, this, objectId, graphJson);
+            _pendingObjectLoomGraphs.Remove(objectId);
+            Debug.Log("[SceneSync] Bound Loomlet object graph: objectId=" + objectId);
+        }
+
+        private bool ApplyPendingObjectLoomGraph(string objectId, GameObject go)
+        {
+            if (go == null || string.IsNullOrWhiteSpace(objectId)) return false;
+            if (!_pendingObjectLoomGraphs.TryGetValue(objectId, out var graphJson) ||
+                string.IsNullOrWhiteSpace(graphJson))
+                return false;
+
+            SceneSyncLoomletBehaviour.SetObjectGraph(go, this, objectId, graphJson);
+            _pendingObjectLoomGraphs.Remove(objectId);
+            Debug.Log("[SceneSync] Bound pending Loomlet object graph: objectId=" + objectId);
+            return true;
+        }
+
+        private static string GetObjectLoomGraphJson(GameObject go)
+        {
+            var runner = go != null ? go.GetComponent<SceneSyncLoomletBehaviour>() : null;
+            return runner != null && !runner.SceneScope ? runner.GraphJson : null;
+        }
+
+        private static bool IsImportPlaceholder(GameObject go, string objectId)
+        {
+            if (go == null) return false;
+            var identity = go.GetComponent<SceneSyncIdentity>();
+            return identity != null
+                   && identity.Temporary
+                   && identity.ObjectId == objectId
+                   && go.transform.childCount == 0
+                   && go.GetComponentsInChildren<Renderer>(true).Length == 0;
         }
 
         private void ApplyMetadataBehaviorGraph(GameObject go, string objectId, string metadataJson)
@@ -1590,6 +1633,7 @@ namespace Afjk.SceneSync
             _knownObjectIds.Add(objectId);
             _instanceToObjectId[go.GetInstanceID()] = objectId;
             _remoteRemovedUnityObjectIds.Remove(objectId);
+            ApplyPendingObjectLoomGraph(objectId, go);
             OnObjectAdded?.Invoke(objectId, go);
         }
 
@@ -1765,6 +1809,7 @@ namespace Afjk.SceneSync
 
                 // 位置・回転・スケールを設定
                 ApplyTransform(go, position, rotation, scale);
+                ApplyPendingObjectLoomGraph(objectId, go);
 
                 OnObjectAdded?.Invoke(objectId, go);
             }
@@ -1775,6 +1820,7 @@ namespace Afjk.SceneSync
             var objectIdMatch = System.Text.RegularExpressions.Regex.Match(raw, "\"objectId\":\"([^\"]+)\"");
             if (!objectIdMatch.Success) return;
             var objectId = objectIdMatch.Groups[1].Value;
+            _pendingObjectLoomGraphs.Remove(objectId);
 
             var go = FindManagedObject(objectId);
 
@@ -2358,6 +2404,9 @@ namespace Afjk.SceneSync
         {
             var placeholder = _managedObjects[objectId];
             var placeholderInstanceId = placeholder.GetInstanceID();
+            var placeholderGraphJson = GetObjectLoomGraphJson(placeholder);
+            if (!string.IsNullOrWhiteSpace(placeholderGraphJson))
+                _pendingObjectLoomGraphs[objectId] = placeholderGraphJson;
 
             var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
             ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
@@ -2375,6 +2424,7 @@ namespace Afjk.SceneSync
             _managedObjects[objectId] = fallback;
 
             ApplyTransform(fallback, position, rotation, scale);
+            ApplyPendingObjectLoomGraph(objectId, fallback);
 
             Destroy(placeholder);
             return fallback;
@@ -2452,7 +2502,7 @@ namespace Afjk.SceneSync
                     if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         Debug.Log("[SceneSync] Blob expired, attempting recovery");
-                        _ = HandleMissingGlb(objectId, meshPath, null, assetId);
+                        HandleMissingGlb(objectId, meshPath, null, assetId);
                     }
 
                     var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
@@ -2514,6 +2564,9 @@ namespace Afjk.SceneSync
                 {
                     var placeholder = _managedObjects[objectId];
                     var placeholderInstanceId = placeholder.GetInstanceID();
+                    var placeholderGraphJson = GetObjectLoomGraphJson(placeholder);
+                    if (!string.IsNullOrWhiteSpace(placeholderGraphJson))
+                        _pendingObjectLoomGraphs[objectId] = placeholderGraphJson;
 
                     var go = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
@@ -2555,6 +2608,7 @@ namespace Afjk.SceneSync
 
                     // 位置・回転・スケールを設定
                     ApplyTransform(go, position, rotation, scale);
+                    ApplyPendingObjectLoomGraph(objectId, go);
 
                     // プレースホルダーを削除
                     Destroy(placeholder);
@@ -2773,7 +2827,7 @@ namespace Afjk.SceneSync
             return result;
         }
 
-        private async System.Threading.Tasks.Task HandleMissingGlb(string objectId, string meshPath, int? expectedSize, string assetId)
+        private void HandleMissingGlb(string objectId, string meshPath, int? expectedSize, string assetId)
         {
             var requestId = DateTime.Now.Ticks.ToString() + "-" + UnityEngine.Random.Range(0, 1000000).ToString("D6");
 
@@ -3033,6 +3087,10 @@ namespace Afjk.SceneSync
 
                 if (success)
                 {
+                    var existingGraphJson = GetObjectLoomGraphJson(go);
+                    if (!string.IsNullOrWhiteSpace(existingGraphJson))
+                        _pendingObjectLoomGraphs[objectId] = existingGraphJson;
+
                     ForgetObject(objectId, go);
                     Destroy(go);
 
@@ -3053,6 +3111,7 @@ namespace Afjk.SceneSync
                     ApplyFallbackMaterialToRenderers(newGo, replaceAll: false, reason: "post-recovery import");
                     PlayImportedAnimations(newGo);
                     ApplyTransform(newGo, position, rotation, scale);
+                    ApplyPendingObjectLoomGraph(objectId, newGo);
 
                     OnObjectAdded?.Invoke(objectId, newGo);
                 }
