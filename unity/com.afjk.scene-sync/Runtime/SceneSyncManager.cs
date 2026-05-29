@@ -55,6 +55,7 @@ namespace Afjk.SceneSync
         private const double PEER_RETRY_INTERVAL_MS = 4000;
         private const double COOLDOWN_MS = 30000;
         private const int MAX_GLB_SIZE = 50 * 1024 * 1024;
+        private const long MAX_PERSISTENT_GLB_CACHE_BYTES = 512L * 1024L * 1024L;
 
         private class ExpiredGlbRecovery
         {
@@ -560,6 +561,7 @@ namespace Afjk.SceneSync
                 {
                     var bytes = System.IO.File.ReadAllBytes(path);
                     if (bytes == null || bytes.Length == 0 || bytes.Length > MAX_GLB_SIZE) continue;
+                    TouchPersistentGlbCacheFile(path);
                     glbBytes = bytes;
                     source = candidate.Key;
                     if (!string.IsNullOrWhiteSpace(assetId))
@@ -580,6 +582,7 @@ namespace Afjk.SceneSync
         private void StorePersistentCachedGlb(byte[] glbBytes, string assetId, string meshPath)
         {
             if (glbBytes == null || glbBytes.Length == 0 || glbBytes.Length > MAX_GLB_SIZE) return;
+            if (glbBytes.LongLength > MAX_PERSISTENT_GLB_CACHE_BYTES) return;
 
             try
             {
@@ -599,10 +602,64 @@ namespace Afjk.SceneSync
                     if (!string.IsNullOrWhiteSpace(meshPathCachePath))
                         System.IO.File.WriteAllBytes(meshPathCachePath, glbBytes);
                 }
+
+                PrunePersistentGlbCache(dir);
             }
             catch (Exception err)
             {
                 Debug.LogWarning("[SceneSync] Failed to write persistent GLB cache: " + err.Message);
+            }
+        }
+
+        private void TouchPersistentGlbCacheFile(string path)
+        {
+            try
+            {
+                System.IO.File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            }
+            catch
+            {
+                // Best effort only; cache reads should not fail because metadata updates are unavailable.
+            }
+        }
+
+        private void PrunePersistentGlbCache(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dir) || !System.IO.Directory.Exists(dir)) return;
+
+                var files = new System.IO.DirectoryInfo(dir)
+                    .EnumerateFiles("*.glb", System.IO.SearchOption.TopDirectoryOnly)
+                    .OrderBy(file => file.LastWriteTimeUtc)
+                    .ToList();
+
+                long totalBytes = 0;
+                foreach (var file in files)
+                {
+                    totalBytes += Math.Max(0L, file.Length);
+                }
+
+                foreach (var file in files)
+                {
+                    if (totalBytes <= MAX_PERSISTENT_GLB_CACHE_BYTES) break;
+
+                    var length = Math.Max(0L, file.Length);
+                    try
+                    {
+                        file.Delete();
+                        totalBytes -= length;
+                    }
+                    catch (Exception err)
+                    {
+                        Debug.LogWarning("[SceneSync] Failed to prune persistent GLB cache file: " +
+                                         file.FullName + "\n" + err.Message);
+                    }
+                }
+            }
+            catch (Exception err)
+            {
+                Debug.LogWarning("[SceneSync] Failed to prune persistent GLB cache: " + err.Message);
             }
         }
 
