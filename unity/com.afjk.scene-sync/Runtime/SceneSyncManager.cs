@@ -1761,6 +1761,7 @@ namespace Afjk.SceneSync
                     {
                         _managedObjects[objectId] = candidate;
                         _knownObjectIds.Add(objectId);
+                        ApplyPendingObjectLoomGraph(objectId, candidate);
                         Debug.Log("[SceneSync] scene-add received for own Unity-authored object; skipping remote creation: " + objectId);
                         return;
                     }
