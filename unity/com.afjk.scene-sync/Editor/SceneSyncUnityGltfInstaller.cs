@@ -12,7 +12,7 @@ namespace Afjk.SceneSync.Editor
     internal static class SceneSyncUnityGltfInstaller
     {
         internal const string Define = "SCENESYNC_USE_UNITYGLTF";
-        internal const string PackageUrl = "https://github.com/KhronosGroup/UnityGLTF.git";
+        internal const string PackageUrl = "https://github.com/KhronosGroup/UnityGLTF.git#release/2.19.5";
 
         private static AddRequest _addRequest;
         private static ListRequest _listRequest;
