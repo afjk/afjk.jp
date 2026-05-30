@@ -12,7 +12,7 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
   // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
   {
-    src: '/assets/vendor/loomlet/0.1.2/loomlet-scenesync-runtime.browser.js',
+    src: '/assets/vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js',
     dest: 'viewer/loomlet/loomlet-scenesync-runtime.browser.js',
   },
 ];

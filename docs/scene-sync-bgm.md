@@ -106,7 +106,7 @@ BGM 削除ボタンは `scene-bgm` / `bgm: null` を broadcast して、各ク�
 この場合、各クライアントは次のように再生位置を計算する。
 
 ```js
-audioTime = offset + (serverNow - startTime)
+audioTime = offset + (hostNow - startTime)
 ```
 
 ただし、ブラウザの autoplay 制限は引き続き存在するため、音が実際に鳴り始めるタイミングとシーン時間は分けて扱う。ユーザーが音声を有効化した時点で、現在のシーン時間に対応した位置から再生する。

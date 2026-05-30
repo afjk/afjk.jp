@@ -28,12 +28,12 @@ test('Scene Sync Loomlet integration uses vendored runtime metadata', () => {
   });
 });
 
-test('Scene Sync Loomlet integration runs object-scoped legacy graphs', () => {
+test('Scene Sync Loomlet integration runs object-scoped graphs', () => {
   const object = makeObject();
   const integration = createSceneSyncLoomIntegration({
     getObjectById: (id) => id === 'box-1' ? object : null,
     send: () => {},
-    getServerTime: () => 2,
+    getHostTime: () => 2,
     getObjectRuntimeTime: () => 2,
     isObjectBeingEdited: () => false,
   });
@@ -43,13 +43,13 @@ test('Scene Sync Loomlet integration runs object-scoped legacy graphs', () => {
     scope: { object: 'box-1' },
     graph: {
       nodes: [
-        { id: 'clock', type: 'serverClock' },
+        { id: 'clock', type: 'clock' },
         { id: 'set', type: 'sceneSetPosition', params: { y: 1, z: 2 } },
       ],
       edges: [{ from: 'clock.t', to: 'set.x' }],
     },
   });
-  integration.tickObjectGraphs(2000);
+  integration.tickObjectGraphs(null, 2000);
 
   assert.deepEqual(
     { x: object.position.x, y: object.position.y, z: object.position.z },
@@ -64,7 +64,7 @@ test('Scene Sync Loomlet integration keeps offsetPosition relative to captured b
   const integration = createSceneSyncLoomIntegration({
     getObjectById: (id) => id === 'box-1' ? object : null,
     send: () => {},
-    getServerTime: () => 0,
+    getHostTime: () => 0,
     getObjectRuntimeTime: () => 0,
     isObjectBeingEdited: () => false,
   });
@@ -80,8 +80,8 @@ test('Scene Sync Loomlet integration keeps offsetPosition relative to captured b
     },
   });
 
-  integration.tickObjectGraphs(0);
-  integration.tickObjectGraphs(1000);
+  integration.tickObjectGraphs(null, 0);
+  integration.tickObjectGraphs(null, 1000);
 
   assert.deepEqual(
     { x: object.position.x, y: object.position.y, z: object.position.z },

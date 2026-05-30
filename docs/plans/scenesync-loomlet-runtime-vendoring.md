@@ -13,7 +13,7 @@ Loomlet is the source of truth for Scene Sync behavior graph playback. The pinne
 into:
 
 ```text
-html/assets/vendor/loomlet/0.1.2/loomlet-scenesync-runtime.browser.js
+html/assets/vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js
 ```
 
 Update it with:

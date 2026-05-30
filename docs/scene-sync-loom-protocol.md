@@ -129,7 +129,7 @@ Ongoing behavior graph は Scene Sync の runtime time model を使う。
 
 - selected object: `t = 0`
 - unselected object: `t = now - runtimeStartTime`
-- 将来: `serverNow` ベース
+- 将来: host-provided room time ベース
 
 詳細は [Runtime Time Model](./scene-sync-runtime-time-model.md) を参照。
 

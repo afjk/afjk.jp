@@ -56,7 +56,7 @@ Typical protocol payloads:
 - `scene-graph-patch`
 - `scene-graph-input`
 
-A Behavior Graph shares the definition of behavior, not per-frame transform results. Each client evaluates the graph locally against the same graph and synchronized inputs such as `serverClock`.
+A Behavior Graph shares the definition of behavior, not per-frame transform results. Each client evaluates the graph locally against the same graph and host-provided inputs such as `clock`.
 
 ---
 

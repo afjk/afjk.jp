@@ -82,7 +82,7 @@ AI / external tool は通常 avatar を持たないが、linked user の操作�
   "type": "grab-start",
   "objectId": "cube-1",
   "peerId": "peer-id",
-  "serverTime": 1770000000000
+  "hostTime": 1770000000000
 }
 ```
 

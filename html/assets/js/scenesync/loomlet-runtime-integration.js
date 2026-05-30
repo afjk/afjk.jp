@@ -1,7 +1,7 @@
 import {
   createSceneSyncRuntime,
   LoomletSceneSyncRuntimeVersion,
-} from '../../vendor/loomlet/0.1.2/loomlet-scenesync-runtime.browser.js';
+} from '../../vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js';
 
 export const LOOMLET_RUNTIME_METADATA = Object.freeze({
   version: LoomletSceneSyncRuntimeVersion,
@@ -94,7 +94,7 @@ function clonePosition(position) {
 
 function createRuntimeManager({
   resolveTarget,
-  getServerTime,
+  getHostTime,
   getObjectRuntimeTime,
   isObjectBeingEdited,
   getViewerPosition,
@@ -223,7 +223,7 @@ function createRuntimeManager({
       inputs['time.isPaused'] = clockState.isPaused;
       inputs['time.mode'] = clockState.mode;
       inputs['time.rate'] = clockState.rate;
-      inputs['time.serverNow'] = clockState.serverNow;
+      inputs['time.hostNow'] = clockState.hostNow;
     }
 
     return inputs;
@@ -308,7 +308,7 @@ function createRuntimeManager({
     // - normal object: Scene Clock global time
     const time = entry.scopeObjectId && getObjectRuntimeTime
       ? getObjectRuntimeTime(entry.scopeObjectId, now, clockState)
-      : (clockState?.t ?? getServerTime());
+      : (clockState?.t ?? getHostTime());
 
     // Build host inputs for object-scoped evaluations
     const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId, time, clockState, { getInputRoutingMode }) : {};
@@ -358,7 +358,7 @@ function createRuntimeManager({
     },
     tick(clockState = null, now = performance.now()) {
       // clockState: Scene Clock state from host
-      // If not provided, fall back to server time
+      // If not provided, fall back to host-provided time
       for (const [key, entry] of runtimes) {
         evaluateRuntime(key, entry, clockState, now);
       }
@@ -439,7 +439,7 @@ function createRuntimeManager({
 export function createSceneSyncLoomIntegration({
   getObjectById,
   send,
-  getServerTime,
+  getHostTime = () => performance.now() / 1000,
   getObjectRuntimeTime,
   isObjectBeingEdited,
   showToast,
@@ -455,7 +455,7 @@ export function createSceneSyncLoomIntegration({
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
-    getServerTime,
+    getHostTime,
     getObjectRuntimeTime,
     isObjectBeingEdited,
     getViewerPosition,
@@ -493,7 +493,13 @@ export function createSceneSyncLoomIntegration({
     exportState: () => manager.exportState(),
     importState: (state) => manager.importState(state),
     clearObjectGraph: (objectId) => manager.clearObjectGraph(objectId),
-    tickObjectGraphs: (now) => manager.tick(now),
+    tickObjectGraphs: (clockState = null, now) => {
+      if (typeof clockState === 'number' && now === undefined) {
+        manager.tick(null, clockState);
+        return;
+      }
+      manager.tick(clockState, now);
+    },
     onObjectSelected: () => {},
     onObjectDeselected: (objectId) => manager.resetBehaviorBasesForObject(objectId),
     dispose: () => manager.dispose(),

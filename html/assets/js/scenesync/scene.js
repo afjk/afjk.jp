@@ -1493,7 +1493,7 @@ function ensureObjectRuntime(obj) {
     enabled: true,
     speed: 1,
     startLocalTime: performance.now(),
-    startServerTime: null,
+    startHostTime: null,
     selectedTime: 0,
     ...(obj.userData.runtime || {}),
   };
@@ -1531,17 +1531,17 @@ function getObjectRuntimeTime(objectId, now = performance.now(), clockState = nu
   return Math.max(0, ((now - start) / 1000) * speed);
 }
 
-// TODO: Replace local performance.now() with synchronized server time.
-// Desired deterministic model:
+// The host owns the clock source used for shared runtime behavior.
+// Desired deterministic model when the host supplies a room clock:
 //
 // selected:
 //   t = 0
 //
 // unselected:
-//   t = ((serverNow - runtime.startServerTime) / 1000) * speed
+//   t = ((hostNow - runtime.startHostTime) / 1000) * speed
 //
 // On deselect:
-//   runtime.startServerTime = serverNow
+//   runtime.startHostTime = hostNow
 //
 // This should make GLB animation and Loomlet object graphs deterministic
 // for late joiners and multi-client synchronization.
@@ -4445,13 +4445,13 @@ const sceneInspectorState = {
 // time.delta = object evaluation delta
 // time.sceneDelta = Scene Clock global delta
 const sceneClockState = {
-  mode: 'server-follow',        // 'server-follow' | 'local'
+  mode: 'host-follow',          // 'host-follow' | 'local'
   paused: false,
   localTime: 0,                 // local mode でのみ使用
   pausedAt: null,               // 一時停止時の冷凍時刻
   seekOffset: 0,
   lastUpdateNow: performance.now(),
-  lastServerNow: Date.now() / 1000,  // server-follow mode の delta 計算用
+  lastHostNow: Date.now() / 1000,    // host-follow mode の delta 計算用
   rate: 1,                       // 再生速度倍率
 };
 
@@ -4465,7 +4465,7 @@ function getSceneClockTime(now = performance.now()) {
     return Math.max(0, sceneClockState.localTime + elapsed * sceneClockState.rate);
   }
 
-  // server-follow mode: server time を使用
+  // host-follow mode: host-provided wall-clock seconds
   return Date.now() / 1000;
 }
 
@@ -4481,10 +4481,10 @@ function getSceneClockDelta(now = performance.now()) {
     return delta;
   }
 
-  // server-follow mode: delta from last server time
-  const currentServerNow = Date.now() / 1000;
-  const delta = currentServerNow - sceneClockState.lastServerNow;
-  sceneClockState.lastServerNow = currentServerNow;
+  // host-follow mode: delta from last host time sample
+  const currentHostNow = Date.now() / 1000;
+  const delta = currentHostNow - sceneClockState.lastHostNow;
+  sceneClockState.lastHostNow = currentHostNow;
   return Math.max(0, delta);
 }
 
@@ -4498,7 +4498,7 @@ function getSceneClockStateForLoomlet(now = performance.now()) {
     isPaused: sceneClockState.paused,
     mode: sceneClockState.mode,
     rate: sceneClockState.rate,
-    serverNow: Date.now() / 1000,
+    hostNow: Date.now() / 1000,
   };
 }
 
@@ -4506,14 +4506,14 @@ function setSceneClockMode(mode, now = performance.now()) {
   if (mode === sceneClockState.mode) return;
 
   if (mode === 'local') {
-    // server-follow → local: 現在時刻を localTime として記録
+    // host-follow -> local: 現在時刻を localTime として記録
     const currentTime = getSceneClockTime(now);
     sceneClockState.localTime = currentTime;
     sceneClockState.lastUpdateNow = now;
     sceneClockState.paused = false;
     sceneClockState.pausedAt = null;
-  } else if (mode === 'server-follow') {
-    // local → server-follow: ローカル状態をクリア
+  } else if (mode === 'host-follow') {
+    // local -> host-follow: ローカル状態をクリア
     sceneClockState.localTime = 0;
     sceneClockState.paused = false;
     sceneClockState.pausedAt = null;
@@ -4558,15 +4558,15 @@ function resetSceneClock(now = performance.now()) {
   seekSceneClock(0, now);
 }
 
-function followServerClock(now = performance.now()) {
-  setSceneClockMode('server-follow', now);
+function followHostClock(now = performance.now()) {
+  setSceneClockMode('host-follow', now);
 }
 
 // ── Loom 統合初期化 ──────────────────────────────────
 const loomIntegration = createSceneSyncLoomIntegration({
   getObjectById: (objectId) => managedObjects.get(objectId) || null,
   send: (payload) => broadcast(payload),
-  getServerTime: () => Date.now() / 1000,
+  getHostTime: () => Date.now() / 1000,
   getObjectRuntimeTime,
   isObjectBeingEdited: (objectId) => {
     if (!objectId) return false;
@@ -4632,7 +4632,7 @@ sceneClockTogglePauseBtn?.addEventListener('click', () => {
 });
 
 sceneClockFollowBtn?.addEventListener('click', () => {
-  setSceneClockMode('server-follow');
+  setSceneClockMode('host-follow');
   updateSceneClockUI();
 });
 

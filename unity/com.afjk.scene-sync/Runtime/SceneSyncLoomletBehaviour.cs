@@ -136,7 +136,7 @@ namespace Afjk.SceneSync
             var registry = LoomletFunctionRegistry.CreateDefault();
 
             registry.Register("constant", new[] { "value" }, (inputs, context) => Out(Number(inputs, "value")));
-            registry.Register("serverClock", new string[0], (inputs, context) => new Dictionary<string, object> { ["t"] = context.Time });
+            registry.Register("clock", new string[0], (inputs, context) => new Dictionary<string, object> { ["t"] = context.Time });
             registry.Register("sine", new[] { "t", "freq", "amplitude", "phase", "offset" }, (inputs, context) => Out(
                 Math.Sin(Number(inputs, "t") * Number(inputs, "freq", 1) * 2 * Math.PI + Number(inputs, "phase")) *
                 Number(inputs, "amplitude", 1) + Number(inputs, "offset")));

@@ -123,7 +123,7 @@ test('export package construction', async (t) => {
       objects: {
         'box-1': {
           nodes: [
-            { id: 't', type: 'serverClock', params: {} },
+            { id: 't', type: 'clock', params: {} },
             { id: 'set', type: 'sceneSetPosition', params: { target: 'box-1' } },
           ],
           edges: [{ from: 't.t', to: 'set.x' }],
