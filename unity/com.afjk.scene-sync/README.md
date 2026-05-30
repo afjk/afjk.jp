@@ -91,23 +91,18 @@ Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` 
 
 ##### manifest.json による方法
 
-```json
-{
-  "dependencies": {
-    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git"
-  }
-}
-```
-
-バージョンを固定する場合:
+UnityGLTF は git package のため、default branch ではなく release tag 固定を推奨します。
 
 ```json
 {
   "dependencies": {
-    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git#release/2.14.1"
+    "org.khronos.unitygltf": "https://github.com/KhronosGroup/UnityGLTF.git#release/2.19.5"
   }
 }
 ```
+
+既存 project で UnityGLTF の PackageCache 由来の `.meta` 警告が出る場合は、Unity Editor を閉じてから
+`Library/PackageCache/org.khronos.unitygltf@*` を削除し、Unity に再取得させてください。
 
 ##### Package Manager UI による方法
 
@@ -115,7 +110,7 @@ Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` 
 2. **+** ボタン > **Add package from git URL** を選択
 3. 以下を入力:
    ```
-   https://github.com/KhronosGroup/UnityGLTF.git
+   https://github.com/KhronosGroup/UnityGLTF.git#release/2.19.5
    ```
 
 #### 有効化
