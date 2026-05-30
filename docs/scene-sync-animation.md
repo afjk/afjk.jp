@@ -15,7 +15,7 @@ Scene Sync における GLB animation と、将来的な time control / Loomlet 
 - playback speed
 - loop / once
 - selected object への一括 animation 操作
-- Scene Sync server time と同期した再生
+- Scene Sync host-provided time に合わせた再生
 - Loomlet graph からの animation control
 
 ---
@@ -97,9 +97,9 @@ Animation を複数 client で完全に同期したい場合、local `Date.now()
 
 方針:
 
-- host / server が同期時刻を提供する。
-- client は offset を推定し、shared time に基づいて animation time を計算する。
-- animation state は「今 clip X を serverTime T から再生している」と表現できるようにする。
+- host が用途に合う時刻を提供する。
+- client は host-provided time に基づいて animation time を計算する。
+- animation state は「今 clip X を hostTime T から再生している」と表現できるようにする。
 
 ---
 

@@ -92,7 +92,7 @@ SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. 
 
 ### Allowed node types:
 
-- `serverClock` — synchronized server-driven clock (recommended for shared animations)
+- `clock` — host-provided clock (`env.time`) for time-driven behavior
 - `constant` — constant value
 - `sine` — sine wave oscillator
 - `cosine` — cosine wave oscillator
@@ -105,7 +105,7 @@ SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. 
 - `sceneSetColor` — set object color (RGB)
 - `sceneSetVisible` — set object visibility
 
-Use `serverClock` for shared room animations. Avoid `clock` for AI-generated shared Scene Sync behaviors because local clocks can drift between clients.
+Use `clock` for time-driven Loomlet behavior. For shared behavior, Scene Sync should provide a suitable room time as `env.time`; Loomlet itself does not synchronize clocks.
 
 ### Forbidden node types:
 
@@ -200,8 +200,8 @@ Always prefer Object Behavior Graphs for object-specific behavior.
 - `edges` must be an array of edge connections
 - Every node must have a unique `id` string
 - Every edge must use `"nodeId.port"` format (e.g., `"clock.t"`, `"sine.out"`)
-- Use `serverClock` for synchronized animation across all clients
-- Use `clock` only for local-only timing (not recommended for shared behavior)
+- Use `clock` for time-driven animation
+- Treat the meaning of `clock` as host-provided `env.time`
 - Use small amplitudes first, usually `0.5` to `3.0`
 - Always set fixed values for axes that are not animated
 - For position animation:
@@ -238,7 +238,7 @@ Object `cube1` oscillates along the X axis with a sine wave.
   "scope": { "object": "cube1" },
   "graph": {
     "nodes": [
-      { "id": "clock", "type": "serverClock" },
+      { "id": "clock", "type": "clock" },
       {
         "id": "sine",
         "type": "sine",
@@ -275,7 +275,7 @@ Object `cube1` continuously rotates around the Y axis.
   "scope": { "object": "cube1" },
   "graph": {
     "nodes": [
-      { "id": "clock", "type": "serverClock" },
+      { "id": "clock", "type": "clock" },
       {
         "id": "angle",
         "type": "multiply",
@@ -312,7 +312,7 @@ This demonstrates how to **combine multiple effects in a single Object Behavior 
   "scope": { "object": "cube1" },
   "graph": {
     "nodes": [
-      { "id": "clock", "type": "serverClock" },
+      { "id": "clock", "type": "clock" },
       {
         "id": "sine_pos",
         "type": "sine",
@@ -373,7 +373,7 @@ curl -X POST "http://localhost:8787/api/room/loom-test/broadcast?name=AI" \
     "scope": { "object": "cube1" },
     "graph": {
       "nodes": [
-        { "id": "clock", "type": "serverClock" },
+        { "id": "clock", "type": "clock" },
         { "id": "sine", "type": "sine", "params": { "freq": 0.2, "amplitude": 2, "offset": 0 } },
         { "id": "pos", "type": "sceneSetPosition", "params": { "y": 0.5, "z": 0 } }
       ],
@@ -412,7 +412,7 @@ Before sending a Behavior Graph payload to the REST broadcast endpoint, verify:
 - Only allowed node types from the whitelist are used
 - Object scope sink nodes do not include `params.target`
 - Non-animated axes have fixed values in sink node `params`
-- Animation uses `serverClock` unless local-only timing is explicitly desired
+- Animation uses `clock` for host-provided time
 - Amplitude values are reasonable
 - Frequency values are appropriate for the effect
 - Loom animation results are NOT sent as `scene-delta`
@@ -441,7 +441,7 @@ Before sending a Behavior Graph payload to the REST broadcast endpoint, verify:
   "scope": { "object": "cube1" },
   "graph": {
     "nodes": [
-      { "id": "clock", "type": "serverClock" },
+      { "id": "clock", "type": "clock" },
       { "id": "angle", "type": "multiply", "params": { "b": 0.5 } },
       { "id": "rot", "type": "sceneSetRotation", "params": { "x": 0, "z": 0 } }
     ],

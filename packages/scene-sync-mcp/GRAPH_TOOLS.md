@@ -35,7 +35,7 @@ Set an **Object Behavior Graph** for one object.
   "objectId": "cat-123",
   "graph": {
     "nodes": [
-      { "id": "clock", "type": "serverClock" },
+      { "id": "clock", "type": "clock" },
       { "id": "jump", "type": "sine", "params": { "freq": 1.2, "amplitude": 0.35, "offset": 0.35 } },
       { "id": "pos", "type": "sceneSetPosition", "params": { "x": 3, "z": -2 } }
     ],
@@ -80,7 +80,7 @@ Clear the room-level **Scene Behavior Graph**.
 
 ## Supported node types
 
-- `serverClock`
+- `clock`
 - `sine`
 - `cosine`
 - `add`

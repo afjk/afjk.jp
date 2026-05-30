@@ -10,7 +10,7 @@ Loomlet object graph:
   output = graph.evaluate(t)
 ```
 
-この仕様は、動的なオブジェクトを編集しやすくしつつ、将来的な server time / Loomlet 制御へ自然に拡張するための共通モデルである。
+この仕様は、動的なオブジェクトを編集しやすくしつつ、将来的な host time / Loomlet 制御へ自然に拡張するための共通モデルである。
 
 ---
 
@@ -111,34 +111,34 @@ clip 実体は各クライアントが GLB から読み込む。
 
 ---
 
-## Future: server time
+## Future: host-provided room time
 
-将来的には `now` をローカル時刻ではなく、同期済み server time に置き換える。
+必要になった場合、`now` をローカル時刻ではなく host が供給する room time に置き換える。
 
 ```txt
 selected:
   t = 0
 
 unselected:
-  t = ((serverNow - runtime.startServerTime) / 1000) * speed
+  t = ((hostNow - runtime.startHostTime) / 1000) * speed
 ```
 
-選択解除時に `runtime.startServerTime = serverNow` を設定することで、途中参加クライアントでも GLB animation / Loomlet graph を同じ時間で評価できる。
+選択解除時に `runtime.startHostTime = hostNow` を設定することで、途中参加クライアントでも GLB animation / Loomlet graph を同じ時間基準で評価できる。
 
-### Clock sync
+### Clock source
 
-最初は軽量な ping / pong による offset 推定でよい。
+Loomlet runtime は時刻同期を行わない。Scene Sync host が用途に合う clock source を選び、その値を runtime time として渡す。
 
 ```txt
-client sends time-sync-request at local time t0
-server responds with serverNow
-client receives at local time t1
-RTT = t1 - t0
-estimatedOffset = serverNow + RTT / 2 - t1
-estimatedServerNow = localNow + estimatedOffset
+local playback time
+scene clock time
+room-local time
+host-supplied room time
+externally synchronized host time
+recorded timeline time
 ```
 
-この推定を数秒〜10秒程度の間隔で更新する。
+厳密な同期が必要な場合は、Scene Sync host / device / OS / network 側で同期済みの clock を作り、それを host time として渡す。
 
 ### Event time
 
@@ -150,7 +150,7 @@ Touch / click / grab / trigger などの event は、発生時刻を environment
   "eventId": "evt-001",
   "type": "object-click",
   "objectId": "button-1",
-  "serverTime": 1770000000000,
+  "hostTime": 1770000000000,
   "peerId": "..."
 }
 ```
@@ -162,7 +162,7 @@ Touch / click / grab / trigger などの event は、発生時刻を environment
 `OnStart` は scene load / graph start 時に発火する local event として扱う。
 
 - Scene Sync では `OnStart` を同期 event として broadcast しない。
-- 各 client の scene load timing はずれるため、同期が必要な処理は server time / explicit event を使う。
+- 各 client の scene load timing はずれるため、同期が必要な処理は host-provided time / explicit event を使う。
 - `OnStart` は local 初期化や preview 用に使う。
 
 ---
@@ -175,7 +175,7 @@ Touch / click / grab / trigger などの event は、発生時刻を environment
 - GLB animation は `mixer.update(delta)` だけに依存しない
 - GLB animation と Loomlet object graph は同じ runtime time model を使う
 - 将来の particles / physics / scripts / sounds も同じ `f(t)` モデルに乗せる
-- 同期が必要な animation / behavior は、将来的に server time 基準で評価する
+- 同期が必要な animation / behavior は、必要に応じて host-provided time 基準で評価する
 
 ---
 
@@ -205,9 +205,9 @@ Loomlet object graph は、実際に評価される時刻として以下を受�
 time.t = object runtime time (選択中は 0)
 time.delta = object runtime の delta
 time.isPaused = Scene Clock の pause 状態
-time.mode = Scene Clock のモード ('server-follow' | 'local')
+time.mode = Scene Clock のモード ('host-follow' | 'local')
 time.rate = Scene Clock の再生速度
-time.serverNow = 常に現在の server time
+time.hostNow = 現在の host-provided time
 ```
 
 ### 重要: 時刻の独立性

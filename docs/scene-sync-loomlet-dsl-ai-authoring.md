@@ -25,11 +25,10 @@ Do not invent new behavior payloads such as `scene-behavior`, `animateObject`, o
 When an AI is asked to write continuous behavior, prefer this output:
 
 ```loom
-import time
 import math
 import scene
 
-t = time.serverClock()
+t = clock()
 y = math.sine(t, freq: 0.6, amplitude: 0.4, offset: 1.2)
 
 scene.setPosition("sample-cube", x: 0, y: y, z: 0)
@@ -82,7 +81,7 @@ Use Behavior Graphs for animation-like requests such as "bounce the cat", "spin 
 
 The Scene Sync client currently allows these Behavior Graph node types:
 
-- `serverClock`
+- `clock`
 - `constant`
 - `sine`
 - `cosine`
@@ -95,7 +94,7 @@ The Scene Sync client currently allows these Behavior Graph node types:
 - `sceneSetColor`
 - `sceneSetVisible`
 
-Use `serverClock` for shared room animations. Avoid `clock` for AI-generated shared Scene Sync behaviors because local clocks can drift between clients.
+Use `clock` for time-driven Loomlet behavior. For shared behavior, Scene Sync should provide a suitable room time as `env.time`; Loomlet itself does not synchronize clocks.
 
 Loomlet DSL authoring should map to those runtime nodes through the compiler/adapter.
 
@@ -127,11 +126,10 @@ Scene Sync stores one Object Behavior Graph per object. Sending a new graph to t
 Therefore, combine related effects into one `.loom` program:
 
 ```loom
-import time
 import math
 import scene
 
-t = time.serverClock()
+t = clock()
 x = math.sine(t, freq: 0.2, amplitude: 2, offset: 0)
 g = math.sine(t, freq: 0.5, amplitude: 0.5, offset: 0.5)
 

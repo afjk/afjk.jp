@@ -653,7 +653,7 @@ describe('scene-graph protocol', () => {
 
       const graph = {
         nodes: [
-          { id: 'clock', type: 'serverClock' },
+          { id: 'clock', type: 'clock' },
           { id: 'sine', type: 'sine', params: { freq: 1, amplitude: 50 } }
         ],
         edges: [{ from: 'clock.t', to: 'sine.t' }]

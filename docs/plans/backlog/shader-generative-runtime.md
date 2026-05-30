@@ -13,7 +13,7 @@ GLSL / generative content を Scene Sync で扱うための runtime track を、
 - `iFrame`
 - `iMouse`
 - `iChannel0..3`
-- `iTime` synchronized with existing serverClock
+- `iTime` driven by the existing Scene Clock
 - plane / fullscreen / box / sphere / skybox targets
 - Web Three.js `ShaderMaterial` MVP
 - Godot future support
@@ -33,7 +33,7 @@ GLSL / generative content を Scene Sync で扱うための runtime track を、
 
 - shader carrier metadata shape を定義する
 - Web MVP target surface を plane first で絞る
-- `iTime` / serverClock alignment rule を整理する
+- `iTime` / clock alignment rule を整理する
 - code size / blob store threshold の初期方針を決める
 
 ## later tasks
@@ -68,4 +68,3 @@ GLSL / generative content を Scene Sync で扱うための runtime track を、
 
 - shader は direct sync primitive ではなく runtime-specific augmentation として扱う
 - large code は blob store reference 前提で考える
-

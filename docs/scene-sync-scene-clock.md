@@ -36,14 +36,14 @@ Used for: GLB animations, per-object Loomlet behavior evaluation
 A global time coordinate independent of selection state:
 
 ```text
-mode = 'server-follow':
-  t = current server time (synchronized across clients)
+mode = 'host-follow':
+  t = current host-provided time
 
 mode = 'local':
   t = controllable local time (pause, seek, reset, rate)
 ```
 
-Controlled by: Scene Clock API (reset, seek, pause, resume, follow server)
+Controlled by: Scene Clock API (reset, seek, pause, resume, follow host)
 
 Used for: global behavior control, demo/authoring animations
 
@@ -64,9 +64,9 @@ getSceneClockStateForLoomlet(now = performance.now())
       t: number,
       delta: number,
       isPaused: boolean,
-      mode: 'server-follow' | 'local',
+      mode: 'host-follow' | 'local',
       rate: number,
-      serverNow: number (always current server time),
+      hostNow: number (current host-provided time),
     }
 ```
 
@@ -90,10 +90,10 @@ resumeSceneClock(now = performance.now())
   → resumes from paused time
 
 setSceneClockMode(mode, now = performance.now())
-  → switches mode: 'server-follow' | 'local'
+  → switches mode: 'host-follow' | 'local'
 
-followServerClock(now = performance.now())
-  → alias for setSceneClockMode('server-follow')
+followHostClock(now = performance.now())
+  → alias for setSceneClockMode('host-follow')
 ```
 
 ## Loomlet Host Inputs
@@ -108,9 +108,9 @@ inputs['time.delta']     // frame delta for object evaluation
 inputs['time.sceneT']    // Scene Clock global time (same as time.t for normal objects)
 inputs['time.sceneDelta'] // Scene Clock global delta
 inputs['time.isPaused']  // whether Scene Clock is paused
-inputs['time.mode']      // 'server-follow' | 'local'
+inputs['time.mode']      // 'host-follow' | 'local'
 inputs['time.rate']      // playback rate multiplier (1.0 = normal)
-inputs['time.serverNow'] // always current synchronized server time
+inputs['time.hostNow'] // current host-provided time
 ```
 
 Inputs are read-only. Behavior graphs cannot modify time controls.
@@ -118,7 +118,7 @@ Inputs are read-only. Behavior graphs cannot modify time controls.
 ### Note on Delta
 
 - **local mode**: delta = frame-to-frame time delta with rate applied
-- **server-follow mode**: delta = server time delta since last frame
+- **host-follow mode**: delta = host time delta since last frame
 
 ## Example Loomlet Behavior
 
@@ -217,11 +217,11 @@ Each client maintains its own local Scene Clock state. Pausing on one client doe
 Scene Clock debug panel (`#scene-clock-panel`) provides manual time control:
 
 - **Time display**: current `t` in seconds
-- **Mode badge**: 'server-follow' | 'local'
+- **Mode badge**: 'host-follow' | 'local'
 - **Status badge**: 'running' | 'paused'
 - **Reset**: jump to t=0
 - **Pause/Resume**: toggle pause
-- **Follow Server**: return to server-follow mode
+- **Follow Host**: return to host-follow mode
 - **Seek input**: jump to arbitrary time
 - **Rate input**: playback speed multiplier
 

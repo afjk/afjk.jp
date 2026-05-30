@@ -12,11 +12,14 @@ const GRAPH_TOOL_PATCHED = Symbol.for('scene-sync-mcp.scene-graph-tools.patched'
 const GRAPH_TOOLS_REGISTERED = Symbol.for('scene-sync-mcp.scene-graph-tools.registered')
 
 const supportedGraphNodeTypes = [
-  'serverClock',
+  'clock',
   'sine',
   'cosine',
   'add',
+  'multiply',
+  'constant',
   'sceneSetPosition',
+  'sceneOffsetPosition',
   'sceneSetRotation',
   'sceneSetScale',
   'sceneSetColor',
