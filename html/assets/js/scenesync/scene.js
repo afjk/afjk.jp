@@ -2025,6 +2025,72 @@ function updateRecoveringOverlaysAnimation() {
 
 // ── GLB Animation Setup and Updates ──────────────────────
 
+function getClipTracks(clip) {
+  return Array.isArray(clip?.tracks) ? clip.tracks : [];
+}
+
+function isMorphWeightTrack(track) {
+  return typeof track?.name === 'string' && track.name.includes('.morphTargetInfluences');
+}
+
+function isTransformAnimationTrack(track) {
+  if (typeof track?.name !== 'string') return false;
+  return (
+    track.name.endsWith('.position') ||
+    track.name.endsWith('.quaternion') ||
+    track.name.endsWith('.scale')
+  );
+}
+
+function clipHasMorphWeightTracks(clip) {
+  return getClipTracks(clip).some(isMorphWeightTrack);
+}
+
+function clipHasTransformTracks(clip) {
+  return getClipTracks(clip).some(isTransformAnimationTrack);
+}
+
+function normalizeClipStemName(clip, index) {
+  let name = normalizeAnimationClipName(clip?.name || `Animation ${index}`);
+  for (let i = 0; i < 3; i += 1) {
+    name = name
+      .replace(/[._-]?(?:bone|bones|body|facial|face|morph|shape|blendshape|blendshapes)$/g, '')
+      .replace(/(?:[._-]\d+)$/g, '');
+  }
+  return name;
+}
+
+function getCompanionMorphClipIndices(clips, primaryClipIndex) {
+  const primaryClip = clips[primaryClipIndex];
+  if (!primaryClip) return [];
+  const primaryHasMorph = clipHasMorphWeightTracks(primaryClip);
+  const primaryHasTransform = clipHasTransformTracks(primaryClip);
+  if (primaryHasMorph && !primaryHasTransform) return [];
+
+  const morphOnlyCandidates = clips
+    .map((clip, index) => ({ clip, index }))
+    .filter(({ clip, index }) => (
+      index !== primaryClipIndex &&
+      clipHasMorphWeightTracks(clip) &&
+      !clipHasTransformTracks(clip)
+    ));
+
+  const primaryStem = normalizeClipStemName(primaryClip, primaryClipIndex);
+  const matching = morphOnlyCandidates
+    .filter(({ clip, index }) => normalizeClipStemName(clip, index) === primaryStem)
+    .map(({ index }) => index);
+
+  return matching;
+}
+
+function createLoopingAnimationAction(mixer, clip) {
+  const action = mixer.clipAction(clip);
+  action.reset();
+  action.setLoop(THREE.LoopRepeat, Infinity);
+  action.play();
+  return action;
+}
+
 function setupObjectGlbAnimation(objectId, model) {
   const clips = model.userData?.scenesync?.animations;
   if (!Array.isArray(clips) || clips.length === 0) return;
@@ -2044,11 +2110,12 @@ function setupObjectGlbAnimation(objectId, model) {
   const clipIndex = clampAnimationClipIndex(state.clip, clips.length);
   state.clip = clipIndex;
   const clip = clips[clipIndex];
-  const action = mixer.clipAction(clip);
-
-  action.reset();
-  action.setLoop(THREE.LoopRepeat, Infinity);
-  action.play();
+  const action = createLoopingAnimationAction(mixer, clip);
+  const companionClipIndices = getCompanionMorphClipIndices(clips, clipIndex);
+  const companionActions = companionClipIndices.map((index) => ({
+    clipIndex: index,
+    action: createLoopingAnimationAction(mixer, clips[index]),
+  }));
 
   model.userData.animationState = state;
   model.userData.scenesync = {
@@ -2063,6 +2130,7 @@ function setupObjectGlbAnimation(objectId, model) {
     clips,
     action,
     clipIndex,
+    companionActions,
   });
 }
 
@@ -2231,15 +2299,22 @@ function updateObjectGlbAnimationClip(objectId, nextClipIndex) {
     entry.action.stop();
     entry.mixer.uncacheAction(entry.clips[entry.clipIndex]);
   }
+  for (const companion of entry.companionActions || []) {
+    companion.action?.stop?.();
+    entry.mixer.uncacheAction(entry.clips[companion.clipIndex]);
+  }
 
   const clip = entry.clips[clipIndex];
-  const action = entry.mixer.clipAction(clip);
-  action.reset();
-  action.setLoop(THREE.LoopRepeat, Infinity);
-  action.play();
+  const action = createLoopingAnimationAction(entry.mixer, clip);
+  const companionClipIndices = getCompanionMorphClipIndices(entry.clips, clipIndex);
+  const companionActions = companionClipIndices.map((index) => ({
+    clipIndex: index,
+    action: createLoopingAnimationAction(entry.mixer, entry.clips[index]),
+  }));
 
   entry.action = action;
   entry.clipIndex = clipIndex;
+  entry.companionActions = companionActions;
 
   const obj = managedObjects.get(objectId);
   if (obj) {
@@ -2263,6 +2338,10 @@ function updateObjectGlbAnimationClip(objectId, nextClipIndex) {
     clipIndex,
     name: clip?.name || `Animation ${clipIndex}`,
     duration: clip?.duration || null,
+    companionMorphClips: companionClipIndices.map((index) => ({
+      index,
+      name: entry.clips[index]?.name || `Animation ${index}`,
+    })),
   });
 }
 
@@ -2392,6 +2471,17 @@ function updateObjectGlbAnimations(now = performance.now()) {
     entry.action.enabled = true;
     entry.action.paused = false;
     entry.action.time = clipTime;
+
+    for (const companion of entry.companionActions || []) {
+      const companionClip = entry.clips[companion.clipIndex];
+      if (!companionClip || !companion.action) continue;
+      const companionDuration = companionClip.duration || duration || 1;
+      companion.action.enabled = true;
+      companion.action.paused = false;
+      companion.action.time = state.mode === 'loop'
+        ? t % companionDuration
+        : Math.min(t, companionDuration);
+    }
 
     entry.mixer.update(0);
   }
