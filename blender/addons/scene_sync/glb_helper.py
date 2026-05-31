@@ -9,6 +9,8 @@ import tempfile
 import bpy
 from mathutils import Matrix
 
+from .glb_alpha_modes import normalize_glb_alpha_modes
+
 
 def _walk_hierarchy(root: bpy.types.Object) -> list[bpy.types.Object]:
     items = [root]
@@ -47,6 +49,17 @@ def object_has_animation(obj: bpy.types.Object) -> bool:
     return False
 
 
+def object_has_shape_keys(obj: bpy.types.Object) -> bool:
+    """Return true when the object hierarchy contains exportable shape keys."""
+    for item in _walk_hierarchy(obj):
+        data = getattr(item, "data", None)
+        shape_keys = getattr(data, "shape_keys", None)
+        key_blocks = getattr(shape_keys, "key_blocks", None)
+        if key_blocks and len(key_blocks) > 1:
+            return True
+    return False
+
+
 def _ensure_gltf_addon() -> bool:
     if "io_scene_gltf2" in bpy.context.preferences.addons:
         return True
@@ -56,6 +69,13 @@ def _ensure_gltf_addon() -> bool:
     except Exception:
         print("[SceneSync] glTF importer/exporter addon is not enabled")
         return False
+
+
+def _new_empty(name: str) -> bpy.types.Object:
+    bpy.ops.object.empty_add(type="PLAIN_AXES")
+    obj = bpy.context.active_object
+    obj.name = name
+    return obj
 
 
 def _export_gltf(kwargs: dict) -> None:
@@ -73,6 +93,7 @@ def export_object_as_glb(
     obj: bpy.types.Object,
     *,
     include_animations: bool = True,
+    normalize_alpha_modes: bool = True,
 ) -> bytes | None:
     """
     Export an object to GLB bytes.
@@ -113,11 +134,16 @@ def export_object_as_glb(
             item.select_set(True)
         bpy.context.view_layer.objects.active = export_root
 
+        has_shape_keys = object_has_shape_keys(export_root)
+        # Blender's glTF exporter warns that applying modifiers/transforms during
+        # export prevents shape keys from being exported.
+        export_apply = not has_shape_keys
+
         _export_gltf({
             "filepath": tmp,
             "use_selection": True,
             "export_format": "GLB",
-            "export_apply": True,
+            "export_apply": export_apply,
             "export_animations": include_animations,
             "export_frame_range": include_animations,
             "export_force_sampling": include_animations,
@@ -130,7 +156,28 @@ def export_object_as_glb(
         })
 
         with open(tmp, "rb") as f:
-            return f.read()
+            data = f.read()
+
+        if normalize_alpha_modes:
+            try:
+                normalized, report = normalize_glb_alpha_modes(data)
+                if report.get("changed"):
+                    materials = report.get("materials", [])
+                    print(
+                        f"[SceneSync] GLB alpha modes normalized for '{obj.name}': "
+                        f"{len(materials)} material(s)"
+                    )
+                    for material in materials:
+                        print(
+                            "[SceneSync]   "
+                            f"{material.get('name', material.get('index'))}: "
+                            f"{material.get('before')} -> {material.get('after')}"
+                        )
+                data = normalized
+            except Exception as e:
+                print(f"[SceneSync] GLB alpha mode normalization skipped for '{obj.name}': {e}")
+
+        return data
 
     except Exception as e:
         print(f"[SceneSync] GLB export failed for '{obj.name}': {e}")
@@ -172,23 +219,27 @@ def import_glb(data: bytes, name: str, visual_basis: str | None = None) -> bpy.t
         if not imported:
             return None
 
-        if len(imported) == 1:
+        imported_set = set(imported)
+        top_level = [item for item in imported if item.parent not in imported_set]
+
+        if visual_basis == "unity":
+            root = _new_empty(name)
+            visual = _new_empty(f"{name} Visual")
+            visual.parent = root
+            visual.rotation_euler.rotate_axis("Z", math.pi)
+            for item in top_level:
+                if item != root and item != visual:
+                    item.parent = visual
+        elif len(imported) == 1:
             root = imported[0]
         else:
-            bpy.ops.object.empty_add(type="PLAIN_AXES")
-            root = bpy.context.active_object
+            root = _new_empty(name)
             root.name = name
-            for item in imported:
+            for item in top_level:
                 if item != root and item.parent is None:
                     item.parent = root
 
         root.name = name
-
-        # Three.js applies a visual-only Y-axis 180-degree correction for
-        # Unity-authored carrier GLBs. In Blender's imported Z-up scene this is
-        # represented as a Z-axis visual correction on the imported root.
-        if visual_basis == "unity":
-            root.rotation_euler.rotate_axis("Z", math.pi)
 
         return root
 

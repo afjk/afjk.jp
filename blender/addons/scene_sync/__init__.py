@@ -637,10 +637,15 @@ def _publish_object(obj: bpy.types.Object, *, force_upload: bool = False) -> boo
 
     settings = _settings()
     include_animations = bool(getattr(settings, "export_animations", True))
+    normalize_alpha_modes = bool(getattr(settings, "normalize_glb_alpha_modes", True))
     has_animation = include_animations and object_has_animation(obj)
 
     loc, rot, scale = obj.matrix_world.decompose()
-    glb = export_object_as_glb(obj, include_animations=include_animations)
+    glb = export_object_as_glb(
+        obj,
+        include_animations=include_animations,
+        normalize_alpha_modes=normalize_alpha_modes,
+    )
     if not glb:
         return False
 
@@ -933,6 +938,12 @@ class SceneSyncSettings(PropertyGroup):
         description="Action / NLA / Armature / shape key animation を GLB carrier に含めます",
     )  # type: ignore[assignment]
 
+    normalize_glb_alpha_modes: BoolProperty(
+        name="GLB alpha modes を正規化",
+        default=True,
+        description="GLB export 後に材質の alphaMode を OPAQUE / MASK / BLEND に整理し、透明描画順の崩れを減らします",
+    )  # type: ignore[assignment]
+
 
 class SCENE_SYNC_PT_panel(Panel):
     bl_label = "Scene Sync"
@@ -977,6 +988,7 @@ class SCENE_SYNC_PT_panel(Panel):
         layout.separator()
         layout.prop(settings, "max_upload_mib")
         layout.prop(settings, "export_animations")
+        layout.prop(settings, "normalize_glb_alpha_modes")
 
         if connected and _state.peers:
             layout.separator()
