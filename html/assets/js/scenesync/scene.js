@@ -2080,7 +2080,11 @@ function getCompanionMorphClipIndices(clips, primaryClipIndex) {
     .filter(({ clip, index }) => normalizeClipStemName(clip, index) === primaryStem)
     .map(({ index }) => index);
 
-  return matching;
+  if (matching.length > 0) return matching;
+  if (!primaryHasMorph && primaryHasTransform && morphOnlyCandidates.length === 1) {
+    return [morphOnlyCandidates[0].index];
+  }
+  return [];
 }
 
 function createLoopingAnimationAction(mixer, clip) {
