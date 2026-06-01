@@ -174,6 +174,22 @@ function getNumericConfig(path, value) {
   return { min, max, step };
 }
 
+function getArrayItemLabel(arrayLabel, index, arrayLength) {
+  const key = String(arrayLabel ?? '').toLowerCase();
+  const axisLabels = ['x', 'y', 'z'];
+
+  if (['position', 'scale'].includes(key) && index < axisLabels.length) {
+    return axisLabels[index];
+  }
+
+  if (key === 'rotation') {
+    const labels = arrayLength === 4 ? ['x', 'y', 'z', 'w'] : axisLabels;
+    if (index < labels.length) return labels[index];
+  }
+
+  return `[${index}]`;
+}
+
 function renderPrimitiveControl(label, value, path) {
   const pathAttribute = makePathAttribute(path);
   const labelText = escapeHtml(formatLabel(label));
@@ -226,7 +242,9 @@ function renderPrimitiveControl(label, value, path) {
 
 function renderInspectorValue(value, path = [], label = 'Payload') {
   if (Array.isArray(value)) {
-    const rows = value.map((item, index) => renderInspectorValue(item, [...path, index], `[${index}]`)).join('');
+    const rows = value.map((item, index) => (
+      renderInspectorValue(item, [...path, index], getArrayItemLabel(label, index, value.length))
+    )).join('');
     return `
       <fieldset class="inspector-group">
         <legend>${escapeHtml(formatLabel(label))}</legend>

@@ -70,27 +70,27 @@ textarea {
   padding: 12px 14px;
 }
 
-input[type="checkbox"],
-input[type="color"],
-input[type="range"] {
+.inspector input[type="checkbox"],
+.inspector input[type="color"],
+.inspector input[type="range"] {
   width: auto;
   padding: 0;
 }
 
-input[type="checkbox"] {
+.inspector input[type="checkbox"] {
   width: 18px;
   height: 18px;
   accent-color: var(--accent);
 }
 
-input[type="color"] {
+.inspector input[type="color"] {
   width: 40px;
   height: 36px;
   border-radius: 8px;
   background: var(--bg-console);
 }
 
-input[type="range"] {
+.inspector input[type="range"] {
   accent-color: var(--accent);
 }
 
