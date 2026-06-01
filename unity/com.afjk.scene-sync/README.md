@@ -131,6 +131,19 @@ Window > Scene Sync の Export Settings で backend を選択:
 - **glTFast**: 常に glTFast を使用（Animation 非対応）
 - **UnityGltf**: 常に UnityGLTF を使用（Editor のみ）
 
+### Export Support
+
+Editor の補助メニューとして **Tools > Scene Sync > Support** を利用できます。
+
+- **Apply Transparent Name Hints To Selection**
+  - 選択中の Material または GameObject 配下の Material を走査します
+  - Material 名または Shader 名に `transparent` / `trans` / `alpha` / `cheek` / `glass` などのヒントがある場合、透明 Material として扱われるように設定します
+- **Report Animation Events In Selection**
+  - 選択中の AnimationClip、Prefab、GameObject 配下の AnimationClip を走査します
+  - Animation Event が含まれている場合、GLB にそのまま保持されない可能性を Console に警告します
+
+透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が Animation Event / MonoBehaviour callback に依存している場合は、GLB publish 前に transform / material / blend shape の animation curve として bake してください。
+
 ## 技術仕様
 
 詳細は [docs/scene-sync-spec.md](../../docs/scene-sync-spec.md) を参照。
