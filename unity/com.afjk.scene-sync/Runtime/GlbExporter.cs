@@ -32,6 +32,7 @@ namespace Afjk.SceneSync
 
 #if UNITY_EDITOR
         public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
+        public static Func<GameObject, IDisposable> EditorExportPreparationHandler { get; set; }
 
         public static bool IsUnityGltfExportAvailable => UnityGltfExportHandler != null;
 
@@ -52,6 +53,7 @@ namespace Afjk.SceneSync
             var originalPos = go.transform.position;
             var originalRot = go.transform.rotation;
             var originalScale = go.transform.localScale;
+            var editorExportPreparation = BeginEditorExportPreparation(go, backend);
             var materialRestores = BeginTemporaryTransparentMaterialOverrides(go);
 
             try
@@ -80,7 +82,27 @@ namespace Afjk.SceneSync
                 go.transform.rotation = originalRot;
                 go.transform.localScale = originalScale;
                 RestoreTemporaryMaterialOverrides(materialRestores);
+                editorExportPreparation?.Dispose();
             }
+        }
+
+        private static IDisposable BeginEditorExportPreparation(GameObject go, SceneSyncGlbExportBackend backend)
+        {
+#if UNITY_EDITOR
+            if (backend != SceneSyncGlbExportBackend.UnityGltf || EditorExportPreparationHandler == null)
+                return null;
+
+            try
+            {
+                return EditorExportPreparationHandler(go);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SceneSync] Editor export preparation failed: " + ex.Message);
+            }
+#endif
+
+            return null;
         }
 
         private static SceneSyncGlbExportBackend ResolveExportBackend(GameObject root)

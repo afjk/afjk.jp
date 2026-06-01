@@ -146,7 +146,9 @@ Editor の補助メニューとして **Tools > Scene Sync > Support** を利用
   - 選択中の GameObject 配下の Animation / Animator / serialized field から AnimationClip 候補を集めます
   - 任意の MonoBehaviour callback の実行結果までは推測できないため、curve として表現されている blend shape / material / transform などが対象です
 
-透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が Animation Event / MonoBehaviour callback に依存している場合は、GLB publish 前に transform / material / blend shape の animation curve として bake してください。
+UnityGLTF による publish 時は、名前付き clip を呼ぶ Animation Event を検出し、export 中だけ一時的な AnimatorOverrideController で焼き込み済み clip に差し替えます。元の AnimatorController や AnimationClip asset は変更しません。
+
+透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が任意の MonoBehaviour callback に依存している場合、その callback の実行結果までは自動推測できません。AnimationCurve として表現されている blend shape / material / transform などが自動 bake の対象です。
 
 ## 技術仕様
 
