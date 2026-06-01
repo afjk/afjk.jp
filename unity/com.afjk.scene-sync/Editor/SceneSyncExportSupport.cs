@@ -144,9 +144,11 @@ namespace Afjk.SceneSync.Editor
                 foreach (var clip in controllerClipList)
                 {
                     if (TryCreateCompositeEventBakedClip(
+                        animator.transform,
                         clip,
                         eventSourceClips,
                         context.NamedClips,
+                        context.BlendShapeSamplers,
                         out var compositeClip,
                         out var compositeAppliedEvents))
                     {
@@ -209,8 +211,8 @@ namespace Afjk.SceneSync.Editor
 
             Debug.Log(
                 $"Scene Sync export support: temporarily baked {bakedClipCount} clip(s) from " +
-                $"{appliedEventCount} named animation event(s) for GLB export " +
-                $"({compositeClipCount} motion clip(s) include baked event curves).");
+                $"{appliedEventCount} animation event/source application(s) for GLB export " +
+                $"({compositeClipCount} motion clip(s) include baked overlay curves).");
             return scope;
         }
 
@@ -303,6 +305,7 @@ namespace Afjk.SceneSync.Editor
             CollectClipsFromHierarchy(root, context.TargetClips);
             CollectClipsFromAsset(root, context.TargetClips);
             CollectSerializedClipsFromHierarchy(root, context.NamedClips);
+            CollectComponentBlendShapeSamplers(root, context.BlendShapeSamplers);
 
             foreach (var clip in context.TargetClips)
             {
@@ -336,6 +339,136 @@ namespace Afjk.SceneSync.Editor
                         clips.Add(clip);
                 }
             }
+        }
+
+        private static void CollectComponentBlendShapeSamplers(GameObject root, List<BlendShapeSampler> samplers)
+        {
+            if (root == null || samplers == null) return;
+
+            var components = new HashSet<Component>();
+            foreach (var component in root.GetComponentsInChildren<Component>(true))
+            {
+                if (component != null)
+                    components.Add(component);
+            }
+
+            foreach (var component in Resources.FindObjectsOfTypeAll<Component>())
+            {
+                if (component == null || component.gameObject == null)
+                    continue;
+                if (!component.gameObject.scene.IsValid() || EditorUtility.IsPersistent(component))
+                    continue;
+
+                components.Add(component);
+            }
+
+            foreach (var component in components)
+            {
+                if (component == null) continue;
+
+                var serializedObject = new SerializedObject(component);
+                var targetNameProperty = serializedObject.FindProperty("targetName");
+                var weightCurveProperty = serializedObject.FindProperty("weightCurve");
+                if (targetNameProperty == null ||
+                    targetNameProperty.propertyType != SerializedPropertyType.String ||
+                    weightCurveProperty == null ||
+                    weightCurveProperty.propertyType != SerializedPropertyType.AnimationCurve)
+                    continue;
+
+                var targetRenderer = FindSkinnedMeshRenderer(root, targetNameProperty.stringValue);
+                if (targetRenderer == null || targetRenderer.sharedMesh == null)
+                    continue;
+
+                var sourceAnimator = component.GetComponent<Animator>();
+                if (sourceAnimator == null)
+                    sourceAnimator = component.GetComponentInChildren<Animator>(true);
+                if (sourceAnimator == null || sourceAnimator.runtimeAnimatorController == null)
+                    continue;
+
+                var sampler = new BlendShapeSampler
+                {
+                    SourceRoot = sourceAnimator.transform,
+                    TargetRenderer = targetRenderer,
+                    WeightCurve = weightCurveProperty.animationCurveValue,
+                };
+
+                AddBlendShapeDriver(serializedObject, targetRenderer.sharedMesh, "A", sampler.Drivers);
+                AddBlendShapeDriver(serializedObject, targetRenderer.sharedMesh, "I", sampler.Drivers);
+                AddBlendShapeDriver(serializedObject, targetRenderer.sharedMesh, "U", sampler.Drivers);
+                AddBlendShapeDriver(serializedObject, targetRenderer.sharedMesh, "E", sampler.Drivers);
+                AddBlendShapeDriver(serializedObject, targetRenderer.sharedMesh, "O", sampler.Drivers);
+
+                if (sampler.Drivers.Count == 0)
+                    continue;
+
+                var sourceClips = new HashSet<AnimationClip>();
+                foreach (var clip in sourceAnimator.runtimeAnimatorController.animationClips)
+                {
+                    if (clip != null && sourceClips.Add(clip))
+                        sampler.SourceClips.Add(clip);
+                }
+
+                if (sampler.SourceClips.Count > 0)
+                    samplers.Add(sampler);
+            }
+        }
+
+        private static SkinnedMeshRenderer FindSkinnedMeshRenderer(GameObject root, string targetName)
+        {
+            if (root == null || string.IsNullOrWhiteSpace(targetName)) return null;
+
+            foreach (var renderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (renderer != null && renderer.name == targetName)
+                    return renderer;
+            }
+
+            return null;
+        }
+
+        private static void AddBlendShapeDriver(
+            SerializedObject serializedObject,
+            Mesh mesh,
+            string suffix,
+            List<BlendShapeDriver> drivers)
+        {
+            if (serializedObject == null || mesh == null || string.IsNullOrEmpty(suffix) || drivers == null)
+                return;
+
+            var nodeProperty = serializedObject.FindProperty("node" + suffix);
+            if (nodeProperty == null || nodeProperty.propertyType != SerializedPropertyType.ObjectReference)
+                return;
+
+            var node = nodeProperty.objectReferenceValue as Transform;
+            if (node == null) return;
+
+            var blendShapeIndex = FindBlendShapeIndex(mesh, suffix);
+            if (blendShapeIndex < 0) return;
+
+            drivers.Add(new BlendShapeDriver
+            {
+                Node = node,
+                BlendShapeIndex = blendShapeIndex,
+            });
+        }
+
+        private static int FindBlendShapeIndex(Mesh mesh, string suffix)
+        {
+            if (mesh == null || string.IsNullOrEmpty(suffix)) return -1;
+
+            var exactSuffix = "_" + suffix;
+            for (var i = 0; i < mesh.blendShapeCount; i++)
+            {
+                var name = mesh.GetBlendShapeName(i) ?? "";
+                if (name.EndsWith(exactSuffix, StringComparison.OrdinalIgnoreCase))
+                    return i;
+                if (name.EndsWith("." + suffix, StringComparison.OrdinalIgnoreCase))
+                    return i;
+                if (string.Equals(name, suffix, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            return -1;
         }
 
         private static void CollectClipsFromAsset(GameObject go, HashSet<AnimationClip> clips)
@@ -512,13 +645,13 @@ namespace Afjk.SceneSync.Editor
             AnimationClip sourceClip,
             AnimationClip targetClip,
             float timeOffset,
-            bool blendShapeOnly = false)
+            Func<EditorCurveBinding, bool> bindingFilter = null)
         {
             var copied = 0;
 
             foreach (var binding in AnimationUtility.GetCurveBindings(sourceClip))
             {
-                if (blendShapeOnly && !IsBlendShapeBinding(binding))
+                if (bindingFilter != null && !bindingFilter(binding))
                     continue;
 
                 var sourceCurve = AnimationUtility.GetEditorCurve(sourceClip, binding);
@@ -574,7 +707,7 @@ namespace Afjk.SceneSync.Editor
                     eventClip,
                     targetClip,
                     animationEvent.time,
-                    blendShapeOnly: true);
+                    IsBlendShapeBinding);
                 if (copied == 0) continue;
 
                 copiedCurveCount += copied;
@@ -585,9 +718,11 @@ namespace Afjk.SceneSync.Editor
         }
 
         private static bool TryCreateCompositeEventBakedClip(
+            Transform targetRoot,
             AnimationClip motionClip,
             List<AnimationClip> eventSourceClips,
             Dictionary<string, AnimationClip> namedClips,
+            List<BlendShapeSampler> blendShapeSamplers,
             out AnimationClip bakedClip,
             out int appliedEventCount)
         {
@@ -596,7 +731,8 @@ namespace Afjk.SceneSync.Editor
 
             if (!IsLikelyMotionClip(motionClip, namedClips))
                 return false;
-            if (eventSourceClips == null || eventSourceClips.Count == 0)
+            if ((eventSourceClips == null || eventSourceClips.Count == 0) &&
+                (blendShapeSamplers == null || blendShapeSamplers.Count == 0))
                 return false;
 
             var nextClip = new AnimationClip
@@ -609,22 +745,48 @@ namespace Afjk.SceneSync.Editor
             AnimationUtility.SetAnimationEvents(nextClip, Array.Empty<AnimationEvent>());
 
             var copiedCurveCount = 0;
-            foreach (var eventSourceClip in eventSourceClips)
+            if (eventSourceClips != null)
             {
-                if (eventSourceClip == null || eventSourceClip == motionClip)
-                    continue;
-                if (!AreClipDurationsCompatible(motionClip, eventSourceClip))
-                    continue;
+                foreach (var eventSourceClip in eventSourceClips)
+                {
+                    if (eventSourceClip == null || eventSourceClip == motionClip)
+                        continue;
+                    if (!AreClipDurationsCompatible(motionClip, eventSourceClip))
+                        continue;
 
-                var copied = CopyEventReferencedCurvesToClip(
-                    eventSourceClip,
-                    nextClip,
-                    namedClips,
-                    out var sourceAppliedEventCount);
-                if (copied == 0) continue;
+                    var overlayCopied = CopyCurvesWithOffset(
+                        eventSourceClip,
+                        nextClip,
+                        0f,
+                        IsEventSourceOverlayBinding);
+                    if (overlayCopied > 0)
+                    {
+                        copiedCurveCount += overlayCopied;
+                        appliedEventCount++;
+                    }
 
-                copiedCurveCount += copied;
-                appliedEventCount += sourceAppliedEventCount;
+                    var copied = CopyEventReferencedCurvesToClip(
+                        eventSourceClip,
+                        nextClip,
+                        namedClips,
+                        out var sourceAppliedEventCount);
+                    if (copied == 0) continue;
+
+                    copiedCurveCount += copied;
+                    appliedEventCount += sourceAppliedEventCount;
+                }
+            }
+
+            var drivenCopied = CopyDrivenBlendShapeCurvesToClip(
+                targetRoot,
+                motionClip,
+                nextClip,
+                blendShapeSamplers,
+                out var drivenSourceCount);
+            if (drivenCopied > 0)
+            {
+                copiedCurveCount += drivenCopied;
+                appliedEventCount += drivenSourceCount;
             }
 
             if (copiedCurveCount > 0)
@@ -635,6 +797,192 @@ namespace Afjk.SceneSync.Editor
 
             UnityEngine.Object.DestroyImmediate(nextClip);
             return false;
+        }
+
+        private static bool IsEventSourceOverlayBinding(EditorCurveBinding binding)
+        {
+            if (IsBlendShapeBinding(binding))
+                return true;
+
+            var text = ((binding.path ?? "") + " " + (binding.propertyName ?? "")).ToLowerInvariant();
+            return text.Contains("hand") ||
+                text.Contains("finger") ||
+                text.Contains("thumb") ||
+                text.Contains("index") ||
+                text.Contains("middle") ||
+                text.Contains("ring") ||
+                text.Contains("pinky") ||
+                text.Contains("little");
+        }
+
+        private static int CopyDrivenBlendShapeCurvesToClip(
+            Transform targetRoot,
+            AnimationClip motionClip,
+            AnimationClip targetClip,
+            List<BlendShapeSampler> samplers,
+            out int appliedSourceCount)
+        {
+            appliedSourceCount = 0;
+            if (targetRoot == null || motionClip == null || targetClip == null || samplers == null)
+                return 0;
+
+            var copiedCurveCount = 0;
+            foreach (var sampler in samplers)
+            {
+                if (sampler == null ||
+                    sampler.TargetRenderer == null ||
+                    sampler.TargetRenderer.sharedMesh == null ||
+                    sampler.SourceRoot == null ||
+                    sampler.WeightCurve == null ||
+                    sampler.Drivers.Count == 0)
+                    continue;
+                if (!IsTransformUnder(sampler.TargetRenderer.transform, targetRoot))
+                    continue;
+
+                foreach (var sourceClip in sampler.SourceClips)
+                {
+                    if (sourceClip == null || !AreClipDurationsCompatible(motionClip, sourceClip))
+                        continue;
+
+                    var copied = CopyDrivenBlendShapeCurvesFromSource(targetRoot, sourceClip, targetClip, sampler);
+                    if (copied == 0) continue;
+
+                    copiedCurveCount += copied;
+                    appliedSourceCount++;
+                }
+            }
+
+            return copiedCurveCount;
+        }
+
+        private static bool IsTransformUnder(Transform child, Transform root)
+        {
+            if (child == null || root == null) return false;
+
+            var current = child;
+            while (current != null)
+            {
+                if (current == root)
+                    return true;
+                current = current.parent;
+            }
+
+            return false;
+        }
+
+        private static int CopyDrivenBlendShapeCurvesFromSource(
+            Transform targetRoot,
+            AnimationClip sourceClip,
+            AnimationClip targetClip,
+            BlendShapeSampler sampler)
+        {
+            var nodeCurves = new List<AnimationCurve>();
+            var sampleTimes = new List<float>
+            {
+                0f,
+                Mathf.Max(0f, sourceClip.length),
+            };
+
+            foreach (var driver in sampler.Drivers)
+            {
+                var curve = FindLocalPositionZCurve(sourceClip, sampler.SourceRoot, driver.Node);
+                nodeCurves.Add(curve);
+                if (curve == null) continue;
+
+                foreach (var key in curve.keys)
+                {
+                    AddSampleTime(sampleTimes, key.time);
+                }
+            }
+
+            var targetPath = AnimationUtility.CalculateTransformPath(sampler.TargetRenderer.transform, targetRoot);
+            var copied = 0;
+
+            for (var driverIndex = 0; driverIndex < sampler.Drivers.Count; driverIndex++)
+            {
+                var driver = sampler.Drivers[driverIndex];
+                var blendShapeName = sampler.TargetRenderer.sharedMesh.GetBlendShapeName(driver.BlendShapeIndex);
+                if (string.IsNullOrEmpty(blendShapeName)) continue;
+
+                var binding = new EditorCurveBinding
+                {
+                    path = targetPath,
+                    type = typeof(SkinnedMeshRenderer),
+                    propertyName = "blendShape." + blendShapeName,
+                };
+                var targetCurve = AnimationUtility.GetEditorCurve(targetClip, binding) ?? new AnimationCurve();
+
+                foreach (var time in sampleTimes)
+                {
+                    var value = EvaluateDrivenBlendShape(sampler, nodeCurves, driverIndex, time);
+                    SetOrAddKey(targetCurve, new Keyframe(time, value, 0f, 0f));
+                }
+
+                AnimationUtility.SetEditorCurve(targetClip, binding, targetCurve);
+                copied++;
+            }
+
+            return copied;
+        }
+
+        private static AnimationCurve FindLocalPositionZCurve(
+            AnimationClip clip,
+            Transform sourceRoot,
+            Transform node)
+        {
+            if (clip == null || sourceRoot == null || node == null) return null;
+
+            var path = AnimationUtility.CalculateTransformPath(node, sourceRoot);
+            foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+            {
+                if (binding.path != path) continue;
+
+                var propertyName = binding.propertyName ?? "";
+                if (!propertyName.EndsWith(".z", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (propertyName.IndexOf("position", StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                return AnimationUtility.GetEditorCurve(clip, binding);
+            }
+
+            return null;
+        }
+
+        private static float EvaluateDrivenBlendShape(
+            BlendShapeSampler sampler,
+            List<AnimationCurve> nodeCurves,
+            int targetDriverIndex,
+            float time)
+        {
+            var total = 100f;
+
+            for (var i = 0; i < sampler.Drivers.Count; i++)
+            {
+                var curve = i < nodeCurves.Count ? nodeCurves[i] : null;
+                var z = curve != null ? curve.Evaluate(time) : sampler.Drivers[i].Node.localPosition.z;
+                var value = total * Mathf.Clamp01(sampler.WeightCurve.Evaluate(z));
+                if (i == targetDriverIndex)
+                    return value;
+
+                total -= value;
+            }
+
+            return 0f;
+        }
+
+        private static void AddSampleTime(List<float> sampleTimes, float time)
+        {
+            if (sampleTimes == null) return;
+
+            for (var i = 0; i < sampleTimes.Count; i++)
+            {
+                if (Mathf.Abs(sampleTimes[i] - time) <= 0.00001f)
+                    return;
+            }
+
+            sampleTimes.Add(time);
+            sampleTimes.Sort();
         }
 
         private static bool TryCreateBakedEventClip(
@@ -761,6 +1109,22 @@ namespace Afjk.SceneSync.Editor
             public readonly HashSet<AnimationClip> TargetClips = new HashSet<AnimationClip>();
             public readonly Dictionary<string, AnimationClip> NamedClips =
                 new Dictionary<string, AnimationClip>(StringComparer.OrdinalIgnoreCase);
+            public readonly List<BlendShapeSampler> BlendShapeSamplers = new List<BlendShapeSampler>();
+        }
+
+        private sealed class BlendShapeSampler
+        {
+            public Transform SourceRoot;
+            public SkinnedMeshRenderer TargetRenderer;
+            public AnimationCurve WeightCurve;
+            public readonly List<BlendShapeDriver> Drivers = new List<BlendShapeDriver>();
+            public readonly List<AnimationClip> SourceClips = new List<AnimationClip>();
+        }
+
+        private struct BlendShapeDriver
+        {
+            public Transform Node;
+            public int BlendShapeIndex;
         }
 
         private sealed class AnimationExportOverrideScope : IDisposable

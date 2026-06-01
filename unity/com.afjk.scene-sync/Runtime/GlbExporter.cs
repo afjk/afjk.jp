@@ -59,9 +59,9 @@ namespace Afjk.SceneSync
             var originalRot = go.transform.rotation;
             var originalScale = go.transform.localScale;
             var editorExportPreparation = BeginEditorExportPreparation(go, backend);
-            var materialRestores = ApplyTransparentNameHintsForExport
-                ? BeginTemporaryTransparentMaterialOverrides(go)
-                : null;
+            var materialRestores = BeginTemporaryTransparentMaterialOverrides(
+                go,
+                ApplyTransparentNameHintsForExport);
 
             try
             {
@@ -266,7 +266,9 @@ namespace Afjk.SceneSync
             public Material[] Materials;
         }
 
-        private static List<MaterialRestore> BeginTemporaryTransparentMaterialOverrides(GameObject root)
+        private static List<MaterialRestore> BeginTemporaryTransparentMaterialOverrides(
+            GameObject root,
+            bool applyNameHints)
         {
             var restores = new List<MaterialRestore>();
             if (root == null) return restores;
@@ -282,7 +284,7 @@ namespace Afjk.SceneSync
                 for (var i = 0; i < materials.Length; i++)
                 {
                     var material = materials[i];
-                    if (!ShouldTreatAsTransparentForExport(material)) continue;
+                    if (!ShouldTreatAsTransparentForExport(material, applyNameHints)) continue;
 
                     if (nextMaterials == null)
                         nextMaterials = (Material[])materials.Clone();
@@ -336,21 +338,33 @@ namespace Afjk.SceneSync
             }
         }
 
-        private static bool ShouldTreatAsTransparentForExport(Material material)
+        private static bool ShouldTreatAsTransparentForExport(Material material, bool applyNameHints)
         {
             if (material == null) return false;
 
             var renderType = material.GetTag("RenderType", false, "");
             if (renderType == "Transparent" || renderType == "Fade" || renderType == "TransparentCutout")
-                return false;
+                return true;
+
+            if (material.renderQueue >= (int)UnityEngine.Rendering.RenderQueue.Transparent)
+                return true;
 
             var materialName = material.name ?? "";
             var shaderName = material.shader != null ? material.shader.name ?? "" : "";
-            var combined = (materialName + " " + shaderName).ToLowerInvariant();
+            var shaderLower = shaderName.ToLowerInvariant();
+            if (shaderLower.Contains("transparent") ||
+                shaderLower.Contains("fade") ||
+                shaderLower.Contains("alpha"))
+                return true;
+
+            if (!applyNameHints)
+                return false;
+
+            var materialLower = materialName.ToLowerInvariant();
 
             foreach (var hint in TransparentNameHints)
             {
-                if (combined.Contains(hint))
+                if (materialLower.Contains(hint))
                     return true;
             }
 
