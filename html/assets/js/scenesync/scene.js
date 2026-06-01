@@ -1506,7 +1506,7 @@ function isRuntimeFrozenForSelection(objectId) {
   return selectedObjectIds.has(objectId);
 }
 
-function getObjectRuntimeTime(objectId, now = performance.now(), clockState = null) {
+function getObjectRuntimeTime(objectId, now = performance.now(), clockState = null, options = {}) {
   const obj = managedObjects.get(objectId);
   if (!obj) return 0;
 
@@ -1514,7 +1514,7 @@ function getObjectRuntimeTime(objectId, now = performance.now(), clockState = nu
   if (!runtime?.enabled) return 0;
 
   // selected/edited object: freeze to t=0
-  if (isRuntimeFrozenForSelection(objectId)) {
+  if (!options.ignoreSelectionFreeze && isRuntimeFrozenForSelection(objectId)) {
     return runtime.selectedTime ?? 0;
   }
 
@@ -2494,7 +2494,9 @@ function updateObjectGlbAnimations(now = performance.now()) {
     const clip = entry.clips[entry.clipIndex] || entry.clips[0];
     if (!clip || !entry.action) continue;
 
-    const baseTime = getObjectRuntimeTime(objectId, now);
+    const baseTime = getObjectRuntimeTime(objectId, now, null, {
+      ignoreSelectionFreeze: true,
+    });
     const animationSpeed = Number.isFinite(state.speed) ? state.speed : 1;
     const t = baseTime * animationSpeed;
     const duration = clip.duration || 1;
