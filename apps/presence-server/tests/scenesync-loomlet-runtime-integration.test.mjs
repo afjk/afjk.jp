@@ -89,7 +89,7 @@ test('Scene Sync Loomlet integration keeps offsetPosition relative to captured b
   );
 });
 
-test('Scene Sync Loomlet integration applies object audio effects', () => {
+test('Scene Sync Loomlet integration pauses object audio effects while edited', () => {
   const object = makeObject();
   const effects = [];
   const integration = createSceneSyncLoomIntegration({
@@ -126,4 +126,5 @@ test('Scene Sync Loomlet integration applies object audio effects', () => {
   assert.equal(effects[0].type, 'scene.setAudio');
   assert.equal(effects[0].objectId, 'box-1');
   assert.equal(effects[0].url, 'https://example.com/sound.mp3');
+  assert.equal(effects[0].pausedAtStart, true);
 });

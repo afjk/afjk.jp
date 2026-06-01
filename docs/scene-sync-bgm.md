@@ -147,6 +147,9 @@ Object Audio は、`asset.type = audio` の独立オブジェクトというよ�
 
 これはアニメーション拡張に近い位置付けになる可能性が高い。
 
+現在の Object Audio 実装では、ブラウザの autoplay 制限により remote participant 側で自動再生がブロックされる場合がある。
+BGM と同等の unlock UI は未実装で、ブロック時は toast による通知のみを行う。
+
 将来の payload 例:
 
 ```js

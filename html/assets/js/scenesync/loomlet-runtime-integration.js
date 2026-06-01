@@ -251,6 +251,11 @@ function createRuntimeManager({
     const objectId = effect?.objectId;
 
     if (effect?.type === 'scene.setAudio') {
+      if (!objectId) return;
+      if (isObjectBeingEdited?.(objectId)) {
+        applyObjectAudioEffect?.({ ...effect, pausedAtStart: true });
+        return;
+      }
       applyObjectAudioEffect?.(effect);
       return;
     }

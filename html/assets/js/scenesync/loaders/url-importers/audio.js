@@ -64,7 +64,7 @@ export async function importAudioUrl(url, ctx) {
     const showToast = typeof ctx?.showToast === 'function' ? ctx.showToast : console.error;
     showToast({
       type: 'error',
-      message: `BGM URL の設定に失敗しました: ${err?.message || 'Unknown error'}`,
+      message: `音声URLの設定に失敗しました: ${err?.message || 'Unknown error'}`,
     });
     throw err;
   }

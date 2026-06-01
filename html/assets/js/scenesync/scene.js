@@ -8156,6 +8156,12 @@ function syncObjectAudioPlayback(objectId, state) {
   const config = state?.current;
   if (!audio || !config) return;
 
+  if (state.pausedAtStart) {
+    audio.pause();
+    seekAudioElement(audio, 0);
+    return;
+  }
+
   const objectTime = getObjectRuntimeTime(objectId, performance.now());
   const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
   const targetTime = duration
@@ -8198,6 +8204,8 @@ function applyObjectAudioEffect(effect) {
   }
 
   const state = getOrCreateObjectAudioState(objectId);
+  state.pausedAtStart = effect.pausedAtStart === true;
+
   if (shouldRecreateObjectAudio(state, config)) {
     if (state.audio) {
       state.audio.pause();
