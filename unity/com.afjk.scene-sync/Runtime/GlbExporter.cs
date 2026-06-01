@@ -17,6 +17,18 @@ namespace Afjk.SceneSync
     public static class GlbExporter
     {
         public static SceneSyncGlbExportBackend ConfiguredBackend { get; set; } = SceneSyncGlbExportBackend.Auto;
+        private static readonly string[] TransparentNameHints =
+        {
+            "glass",
+            "lens",
+            "wing",
+            "cheek",
+            "shadow",
+            "fade",
+            "trans",
+            "alpha",
+            "semi",
+        };
 
 #if UNITY_EDITOR
         public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
@@ -40,6 +52,7 @@ namespace Afjk.SceneSync
             var originalPos = go.transform.position;
             var originalRot = go.transform.rotation;
             var originalScale = go.transform.localScale;
+            var materialRestores = BeginTemporaryTransparentMaterialOverrides(go);
 
             try
             {
@@ -66,6 +79,7 @@ namespace Afjk.SceneSync
                 go.transform.position = originalPos;
                 go.transform.rotation = originalRot;
                 go.transform.localScale = originalScale;
+                RestoreTemporaryMaterialOverrides(materialRestores);
             }
         }
 
@@ -209,5 +223,125 @@ namespace Afjk.SceneSync
             }
         }
 #endif
+
+        private struct MaterialRestore
+        {
+            public Renderer Renderer;
+            public Material[] Materials;
+        }
+
+        private static List<MaterialRestore> BeginTemporaryTransparentMaterialOverrides(GameObject root)
+        {
+            var restores = new List<MaterialRestore>();
+            if (root == null) return restores;
+
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null) continue;
+
+                var materials = renderer.sharedMaterials;
+                if (materials == null || materials.Length == 0) continue;
+
+                Material[] nextMaterials = null;
+                for (var i = 0; i < materials.Length; i++)
+                {
+                    var material = materials[i];
+                    if (!ShouldTreatAsTransparentForExport(material)) continue;
+
+                    if (nextMaterials == null)
+                        nextMaterials = (Material[])materials.Clone();
+                    var copy = new Material(material)
+                    {
+                        name = material.name
+                    };
+                    ConfigureTransparentMaterialForExport(copy);
+                    nextMaterials[i] = copy;
+                }
+
+                if (nextMaterials == null) continue;
+
+                restores.Add(new MaterialRestore
+                {
+                    Renderer = renderer,
+                    Materials = materials,
+                });
+                renderer.sharedMaterials = nextMaterials;
+            }
+
+            return restores;
+        }
+
+        private static void RestoreTemporaryMaterialOverrides(List<MaterialRestore> restores)
+        {
+            if (restores == null) return;
+
+            foreach (var restore in restores)
+            {
+                if (restore.Renderer == null) continue;
+
+                var current = restore.Renderer.sharedMaterials;
+                restore.Renderer.sharedMaterials = restore.Materials;
+
+                if (current == null) continue;
+                foreach (var material in current)
+                {
+                    if (material == null) continue;
+                    if (restore.Materials != null && Array.IndexOf(restore.Materials, material) >= 0) continue;
+
+                    if (Application.isPlaying)
+                    {
+                        UnityEngine.Object.Destroy(material);
+                    }
+                    else
+                    {
+                        UnityEngine.Object.DestroyImmediate(material);
+                    }
+                }
+            }
+        }
+
+        private static bool ShouldTreatAsTransparentForExport(Material material)
+        {
+            if (material == null) return false;
+
+            var renderType = material.GetTag("RenderType", false, "");
+            if (renderType == "Transparent" || renderType == "Fade" || renderType == "TransparentCutout")
+                return false;
+
+            var materialName = material.name ?? "";
+            var shaderName = material.shader != null ? material.shader.name ?? "" : "";
+            var combined = (materialName + " " + shaderName).ToLowerInvariant();
+
+            foreach (var hint in TransparentNameHints)
+            {
+                if (combined.Contains(hint))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void ConfigureTransparentMaterialForExport(Material material)
+        {
+            if (material == null) return;
+
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+            if (material.HasProperty("_Mode"))
+                material.SetFloat("_Mode", 3f);
+            if (material.HasProperty("_Surface"))
+                material.SetFloat("_Surface", 1f);
+            if (material.HasProperty("_SrcBlend"))
+                material.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            if (material.HasProperty("_DstBlend"))
+                material.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            if (material.HasProperty("_ZWrite"))
+                material.SetFloat("_ZWrite", 0f);
+
+            material.EnableKeyword("_ALPHABLEND_ON");
+            material.DisableKeyword("_ALPHATEST_ON");
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        }
     }
 }
