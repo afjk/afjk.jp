@@ -34,12 +34,14 @@ const OBJECT_TARGET_NODE_TYPES = new Set([
   'sceneSetScale',
   'sceneSetColor',
   'sceneSetVisible',
+  'sceneSetAudio',
   'scene.setPosition',
   'scene.offsetPosition',
   'scene.setRotation',
   'scene.setScale',
   'scene.setColor',
   'scene.setVisible',
+  'scene.setAudio',
 ]);
 
 function graphForRuntime(graph, scopeObjectId) {
@@ -106,6 +108,7 @@ function createRuntimeManager({
   clearLoomletHostEvents,
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
+  applyObjectAudioEffect,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
@@ -246,6 +249,12 @@ function createRuntimeManager({
 
   function applySceneEffect(effect, key) {
     const objectId = effect?.objectId;
+
+    if (effect?.type === 'scene.setAudio') {
+      applyObjectAudioEffect?.(effect);
+      return;
+    }
+
     if (!objectId || isObjectBeingEdited?.(objectId)) return;
 
     const object = resolveTarget(objectId);
@@ -452,6 +461,7 @@ export function createSceneSyncLoomIntegration({
   clearLoomletHostEvents,
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
+  applyObjectAudioEffect,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
@@ -467,6 +477,7 @@ export function createSceneSyncLoomIntegration({
     clearLoomletHostEvents,
     getSceneClockStateForLoomlet,
     getInputRoutingMode,
+    applyObjectAudioEffect,
   });
 
   function isSceneGraphMessage(payload) {

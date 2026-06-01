@@ -13,6 +13,25 @@ export async function importAudioUrl(url, ctx) {
   }
 
   try {
+    const objectId = typeof ctx?.resolveObjectAudioTarget === 'function'
+      ? ctx.resolveObjectAudioTarget()
+      : null;
+
+    if (objectId) {
+      const setObjectAudioComponent = requireFn('setObjectAudioComponent');
+      const showToast = requireFn('showToast');
+      const payload = setObjectAudioComponent(objectId, {
+        url,
+        playOnAwake: true,
+        loop: true,
+      });
+      showToast({
+        type: 'success',
+        message: 'オブジェクトに音声を設定しました',
+      });
+      return { objectId, payload };
+    }
+
     const broadcastSceneBgm = requireFn('broadcastSceneBgm');
     const applySceneBgm = requireFn('applySceneBgm');
     const showToast = requireFn('showToast');
