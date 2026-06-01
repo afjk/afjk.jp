@@ -131,6 +131,25 @@ Window > Scene Sync の Export Settings で backend を選択:
 - **glTFast**: 常に glTFast を使用（Animation 非対応）
 - **UnityGltf**: 常に UnityGLTF を使用（Editor のみ）
 
+### Export Support
+
+Editor の補助メニューとして **Tools > Scene Sync > Support** を利用できます。
+
+- **Apply Transparent Name Hints To Selection**
+  - 選択中の Material または GameObject 配下の Material を走査します
+  - Material 名または Shader 名に `transparent` / `trans` / `alpha` / `cheek` / `glass` などのヒントがある場合、透明 Material として扱われるように設定します
+- **Report Animation Events In Selection**
+  - 選択中の AnimationClip、Prefab、GameObject 配下の AnimationClip を走査します
+  - Animation Event が含まれている場合、GLB にそのまま保持されない可能性を Console に警告します
+- **Bake Event-Named Clip Curves To New Clips**
+  - Animation Event の `stringParameter` または `functionName` が別の AnimationClip 名と一致する場合、その clip の curve を event 時刻へコピーした publish 用 clip を作成します
+  - 選択中の GameObject 配下の Animation / Animator / serialized field から AnimationClip 候補を集めます
+  - 任意の MonoBehaviour callback の実行結果までは推測できないため、curve として表現されている blend shape / material / transform などが対象です
+
+UnityGLTF による publish 時は、名前付き clip を呼ぶ Animation Event を検出し、export 中だけ一時的な AnimatorOverrideController で焼き込み済み clip に差し替えます。元の AnimatorController や AnimationClip asset は変更しません。
+
+透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が任意の MonoBehaviour callback に依存している場合、その callback の実行結果までは自動推測できません。AnimationCurve として表現されている blend shape / material / transform などが自動 bake の対象です。
+
 ## 技術仕様
 
 詳細は [docs/scene-sync-spec.md](../../docs/scene-sync-spec.md) を参照。

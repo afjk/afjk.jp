@@ -14,6 +14,7 @@ namespace Afjk.SceneSync.Editor
     {
         private const string ShowSceneSyncGizmosPrefKey = "Afjk.SceneSync.ShowSceneSyncGizmos";
         private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
+        private const string ApplyTransparentNameHintsForExportPrefKey = "Afjk.SceneSync.ApplyTransparentNameHintsForExport";
         private const float DefaultMaxGlbUploadMiB = 50f;
         private const int MaxPersistentGlbSizeBytes = 50 * 1024 * 1024;
         private const long MaxPersistentGlbCacheBytes = 512L * 1024L * 1024L;
@@ -59,6 +60,7 @@ namespace Afjk.SceneSync.Editor
         private bool _connected;
         private List<PeerInfo> _peers = new List<PeerInfo>();
         private float _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
+        private bool _applyTransparentNameHintsForExport;
 
         private Dictionary<string, TransformSnapshot> _lastSnapshots = new Dictionary<string, TransformSnapshot>();
         private double _lastSendTime;
@@ -78,6 +80,8 @@ namespace Afjk.SceneSync.Editor
         private bool _showManagedUnityObjects = true;
         private Vector2 _scrollPosition;
         private bool _isSceneSwitching = false;
+        private bool _isManualDisconnect = false;
+        private bool _publishInProgress = false;
         private string _envId = null;
 
         private void OnEnable()
@@ -87,6 +91,8 @@ namespace Afjk.SceneSync.Editor
             {
                 _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
             }
+            _applyTransparentNameHintsForExport = EditorPrefs.GetBool(ApplyTransparentNameHintsForExportPrefKey, false);
+            GlbExporter.ApplyTransparentNameHintsForExport = _applyTransparentNameHintsForExport;
 
             SceneSyncUnityGltfInstaller.RefreshUnityGltfPackageStatus();
 
@@ -94,14 +100,20 @@ namespace Afjk.SceneSync.Editor
             _client.OnConnected += () =>
             {
                 _connected = true;
+                SyncRoomToSceneSyncManager();
                 RebindPublishedUnityObjects();
                 Repaint();
             };
             _client.OnDisconnected += () =>
             {
+                var wasConnected = _connected;
                 _connected = false;
                 _sceneReceived = false;
                 _firstPeersReceived = false;
+                if (wasConnected && !_isSceneSwitching && !_isManualDisconnect)
+                {
+                    ClearTemporaryObjects();
+                }
                 Repaint();
             };
             _client.OnPeersUpdated += (peers) =>
@@ -125,6 +137,8 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.hierarchyChanged += OnHierarchyChanged;
             EditorSceneManager.sceneClosing += OnSceneClosing;
             EditorSceneManager.sceneOpened += OnSceneOpened;
+
+            SyncRoomFromSceneSyncManager();
         }
 
         private void OnDisable()
@@ -133,7 +147,9 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             EditorSceneManager.sceneClosing -= OnSceneClosing;
             EditorSceneManager.sceneOpened -= OnSceneOpened;
+            _isManualDisconnect = true;
             _client?.Disconnect();
+            _isManualDisconnect = false;
         }
 
         private string GetBlobUrl()
@@ -166,6 +182,38 @@ namespace Afjk.SceneSync.Editor
         private bool IsGlbWithinUploadLimit(byte[] glb)
         {
             return glb != null && glb.Length <= MaxGlbUploadBytes;
+        }
+
+        private async System.Threading.Tasks.Task<bool> EnsureConnectedForPublishBroadcast()
+        {
+            if (_client != null && _client.IsConnected)
+            {
+                _connected = true;
+                return true;
+            }
+
+            if (_client == null) return false;
+
+            Debug.LogWarning(
+                "[SceneSync] Connection closed before publish broadcast. " +
+                "Reconnecting to send the scene update."
+            );
+
+            var reconnectRoom = !string.IsNullOrWhiteSpace(_client.Room)
+                ? _client.Room
+                : _room;
+            _room = reconnectRoom ?? "";
+
+            _connected = false;
+            await _client.ConnectAsync(_presenceUrl, reconnectRoom, _nickname);
+
+            if (_client.IsConnected)
+            {
+                _connected = true;
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -263,14 +311,22 @@ namespace Afjk.SceneSync.Editor
 
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
             _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
+            EditorGUI.BeginChangeCheck();
             _room = EditorGUILayout.TextField("Room", _room);
+            if (EditorGUI.EndChangeCheck())
+            {
+                SyncRoomToSceneSyncManager();
+            }
             _nickname = EditorGUILayout.TextField("Nickname", _nickname);
             GUILayout.Space(8);
+
+            DrawConnectionStatus();
 
             if (!_connected)
             {
                 if (GUILayout.Button("Connect"))
                 {
+                    SyncRoomToSceneSyncManager();
                     _ = _client.ConnectAsync(_presenceUrl, _room, _nickname);
                 }
             }
@@ -296,9 +352,30 @@ namespace Afjk.SceneSync.Editor
                 if (GUILayout.Button("Disconnect"))
                 {
                     ClearTemporaryObjects();
+                    _isManualDisconnect = true;
                     _client.Disconnect();
+                    _isManualDisconnect = false;
                 }
             }
+        }
+
+        private void DrawConnectionStatus()
+        {
+            var connected = _connected && _client != null && _client.IsConnected;
+            var previousColor = GUI.color;
+            GUI.color = connected ? new Color(0.1f, 0.65f, 0.2f) : new Color(0.85f, 0.15f, 0.12f);
+
+            var activeRoom = connected && _client != null && !string.IsNullOrEmpty(_client.Room)
+                ? _client.Room
+                : _room;
+            GUILayout.Label(
+                (connected ? "● Connected" : "● Disconnected") +
+                (string.IsNullOrWhiteSpace(activeRoom) ? "" : "  Room: " + activeRoom),
+                EditorStyles.boldLabel
+            );
+
+            GUI.color = previousColor;
+            GUILayout.Space(4);
         }
 
         private void DrawQuickGuide()
@@ -322,7 +399,8 @@ namespace Afjk.SceneSync.Editor
                 "Remote objects:\n" +
                 "- Remote GLB objects are temporary.\n" +
                 "- Move the Scene Sync root, not imported children.\n" +
-                "- Temporary objects are removed on manual Disconnect.",
+                "- Temporary objects are removed on Disconnect.\n" +
+                "- Fix Remote Object Selection is only needed if imported child meshes become selectable.",
                 MessageType.Info
             );
         }
@@ -441,23 +519,32 @@ namespace Afjk.SceneSync.Editor
         {
             GUILayout.Label("Actions", EditorStyles.boldLabel);
 
-            using (new EditorGUI.DisabledScope(!_connected))
+            using (new EditorGUI.DisabledScope(!_connected || _publishInProgress))
             {
                 if (GUILayout.Button("Publish Selected"))
                 {
-                    PublishSelectedObjects();
+                    QueuePublishSelectedObjects();
                 }
 
                 if (GUILayout.Button("Publish Managed Objects"))
                 {
-                    PublishManagedObjects();
+                    QueuePublishManagedObjects();
                 }
             }
 
-            if (GUILayout.Button("Apply Picking Rules"))
+            if (_publishInProgress)
+            {
+                EditorGUILayout.LabelField("Publishing...", EditorStyles.miniLabel);
+            }
+
+            if (GUILayout.Button("Fix Remote Object Selection"))
             {
                 ApplyPickingRules();
             }
+            EditorGUILayout.LabelField(
+                "Repair only: makes imported remote roots selectable while imported child meshes stay unpickable.",
+                EditorStyles.wordWrappedMiniLabel
+            );
 
             var showSceneSyncGizmos = EditorGUILayout.ToggleLeft("Show Scene Sync Gizmos", ShowSceneSyncGizmos);
             if (showSceneSyncGizmos != ShowSceneSyncGizmos)
@@ -488,6 +575,26 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Space(8);
 
             DrawUnityGltfStatusSection();
+
+            GUILayout.Space(8);
+
+            EditorGUI.BeginChangeCheck();
+            var applyTransparentNameHintsForExport = EditorGUILayout.Toggle(
+                "Apply Transparent Name Hints",
+                _applyTransparentNameHintsForExport
+            );
+            if (EditorGUI.EndChangeCheck())
+            {
+                _applyTransparentNameHintsForExport = applyTransparentNameHintsForExport;
+                GlbExporter.ApplyTransparentNameHintsForExport = _applyTransparentNameHintsForExport;
+                EditorPrefs.SetBool(ApplyTransparentNameHintsForExportPrefKey, _applyTransparentNameHintsForExport);
+            }
+
+            EditorGUILayout.HelpBox(
+                "Off by default. When enabled, export temporarily treats materials with transparent-looking material or shader names as transparent. " +
+                "For safer permanent changes, use Tools > Scene Sync > Support > Apply Transparent Name Hints To Selection.",
+                MessageType.Info
+            );
 
             GUILayout.Space(8);
 
@@ -675,8 +782,34 @@ namespace Afjk.SceneSync.Editor
 
             if (manager != null)
             {
+                manager.ConfiguredRoom = _room;
+                MarkManagerDirty(manager);
                 Selection.activeGameObject = manager.gameObject;
             }
+        }
+
+        private void SyncRoomFromSceneSyncManager()
+        {
+            if (_connected) return;
+
+            var manager = FindSceneSyncManager();
+            if (manager == null) return;
+
+            var managerRoom = manager.ConfiguredRoom ?? "";
+
+            if (_room == managerRoom) return;
+            _room = managerRoom;
+            Repaint();
+        }
+
+        private void SyncRoomToSceneSyncManager()
+        {
+            var manager = FindSceneSyncManager();
+            if (manager == null) return;
+            if (manager.ConfiguredRoom == _room) return;
+
+            manager.ConfiguredRoom = _room;
+            MarkManagerDirty(manager);
         }
 
         private SceneSyncManager FindSceneSyncManager()
@@ -847,6 +980,7 @@ namespace Afjk.SceneSync.Editor
 
             // Restore _connected from _client state
             // (The next manual Connect action will establish a fresh connection)
+            SyncRoomFromSceneSyncManager();
         }
 
         private void RebindPublishedUnityObjects()
@@ -1604,7 +1738,47 @@ namespace Afjk.SceneSync.Editor
             return identity;
         }
 
-        private async void PublishSelectedObjects()
+        private void QueuePublishSelectedObjects()
+        {
+            QueuePublishOperation(PublishSelectedObjectsAsync);
+        }
+
+        private void QueuePublishManagedObjects()
+        {
+            QueuePublishOperation(PublishManagedObjectsAsync);
+        }
+
+        private void QueuePublishOperation(Func<System.Threading.Tasks.Task> operation)
+        {
+            if (_publishInProgress)
+            {
+                Debug.LogWarning("[SceneSync] Publish is already in progress.");
+                return;
+            }
+
+            _publishInProgress = true;
+            Repaint();
+
+            EditorApplication.delayCall += async () =>
+            {
+                try
+                {
+                    if (operation != null)
+                        await operation();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                }
+                finally
+                {
+                    _publishInProgress = false;
+                    Repaint();
+                }
+            };
+        }
+
+        private async System.Threading.Tasks.Task PublishSelectedObjectsAsync()
         {
             if (!_connected)
             {
@@ -1639,7 +1813,7 @@ namespace Afjk.SceneSync.Editor
             }
         }
 
-        private async void PublishManagedObjects()
+        private async System.Threading.Tasks.Task PublishManagedObjectsAsync()
         {
             if (!_connected)
             {
@@ -1832,16 +2006,17 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
-            _meshPaths[objectId] = path;
-            identity.MeshPath = path;
-            identity.AssetId = assetId;
-            identity.State = SceneSyncState.Synced;
-            EditorUtility.SetDirty(identity);
-            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
-
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
+            var preferredAnimationClipName = GlbExporter.LastExportPreferredAnimationClipName;
+            if (!string.IsNullOrWhiteSpace(preferredAnimationClipName))
+            {
+                Debug.Log("[SceneSync] Initial GLB animation clip: " + preferredAnimationClipName);
+            }
+            var animationPayload = !string.IsNullOrWhiteSpace(preferredAnimationClipName)
+                ? ",\"animation\":{\"enabled\":true,\"clipName\":\"" + JsonEscape(preferredAnimationClipName) + "\",\"mode\":\"loop\",\"speed\":1}"
+                : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + JsonEscape(objectId) + "\",\"name\":\"" + JsonEscape(go.name) + "\"" +
                 ",\"origin\":\"unity\"" +
                 ",\"unityHierarchyPath\":\"" + JsonEscape(SceneSyncWireJson.GetUnityHierarchyPath(go)) + "\"" +
@@ -1850,8 +2025,42 @@ namespace Afjk.SceneSync.Editor
                 ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
                 ",\"meshPath\":\"" + JsonEscape(path) + "\"" +
                 (!string.IsNullOrEmpty(assetId) ? ",\"assetId\":\"" + JsonEscape(assetId) + "\"" : "") +
-                ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") + "}";
-            await _client.Broadcast(payload);
+                ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") +
+                animationPayload + "}";
+
+            if (!await EnsureConnectedForPublishBroadcast())
+            {
+                identity.State = SceneSyncState.Error;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                Debug.LogError(
+                    $"[SceneSync] Publish aborted because the connection could not be restored before broadcast: " +
+                    $"{go.name}, objectId={objectId}, path={path}"
+                );
+                return;
+            }
+
+            var broadcasted = await _client.Broadcast(payload);
+            if (!broadcasted)
+            {
+                identity.State = SceneSyncState.Error;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                Debug.LogError(
+                    $"[SceneSync] Publish aborted because scene update broadcast failed: " +
+                    $"{go.name}, objectId={objectId}, path={path}"
+                );
+                return;
+            }
+
+            _meshPaths[objectId] = path;
+            identity.MeshPath = path;
+            identity.AssetId = assetId;
+            identity.State = SceneSyncState.Synced;
+            EditorUtility.SetDirty(identity);
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
 
             _managedObjects[objectId] = go;
             _instanceToObjectId[go.GetInstanceID()] = objectId;

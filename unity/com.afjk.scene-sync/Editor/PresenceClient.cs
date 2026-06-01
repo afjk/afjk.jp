@@ -101,19 +101,19 @@ namespace Afjk.SceneSync.Editor
             OnDisconnected?.Invoke();
         }
 
-        public async Task Broadcast(string payloadJson)
+        public async Task<bool> Broadcast(string payloadJson)
         {
-            await SendRaw("{\"type\":\"broadcast\",\"payload\":" + payloadJson + "}");
+            return await SendRaw("{\"type\":\"broadcast\",\"payload\":" + payloadJson + "}");
         }
 
-        public async Task SendHandoff(string targetId, string payloadJson)
+        public async Task<bool> SendHandoff(string targetId, string payloadJson)
         {
-            await SendRaw("{\"type\":\"handoff\",\"targetId\":\"" + targetId + "\",\"payload\":" + payloadJson + "}");
+            return await SendRaw("{\"type\":\"handoff\",\"targetId\":\"" + targetId + "\",\"payload\":" + payloadJson + "}");
         }
 
-        private async Task SendRaw(string text)
+        private async Task<bool> SendRaw(string text)
         {
-            if (!IsConnected) return;
+            if (!IsConnected) return false;
             var bytes = Encoding.UTF8.GetBytes(text);
             try
             {
@@ -123,10 +123,12 @@ namespace Afjk.SceneSync.Editor
                     true,
                     _cts.Token
                 );
+                return true;
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] Send failed: " + ex.Message);
+                return false;
             }
         }
 

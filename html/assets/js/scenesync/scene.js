@@ -2111,7 +2111,25 @@ function setupObjectGlbAnimation(objectId, model) {
   };
 
   const mixer = new THREE.AnimationMixer(model);
-  const clipIndex = clampAnimationClipIndex(state.clip, clips.length);
+  let clipIndex = clampAnimationClipIndex(state.clip, clips.length);
+  const requestedClipName = typeof state.clipName === 'string' && state.clipName.trim()
+    ? state.clipName.trim()
+    : null;
+  let requestedClipResolution = null;
+  if (requestedClipName) {
+    requestedClipResolution = resolveAnimationClipIndex(model, { clipName: requestedClipName });
+    if (requestedClipResolution.ok) {
+      clipIndex = requestedClipResolution.clipIndex;
+      state.clipName = requestedClipResolution.clipName;
+    } else {
+      console.warn('[SceneSync] GLB animation clipName was not found', {
+        objectId,
+        requestedClipName,
+        availableClipNames: clips.map((clip) => clip?.name || '(unnamed)'),
+        error: requestedClipResolution.error,
+      });
+    }
+  }
   state.clip = clipIndex;
   const clip = clips[clipIndex];
   const action = createLoopingAnimationAction(mixer, clip);
@@ -2120,6 +2138,17 @@ function setupObjectGlbAnimation(objectId, model) {
     clipIndex: index,
     action: createLoopingAnimationAction(mixer, clips[index]),
   }));
+
+  if (requestedClipName || clips.length > 1) {
+    console.info('[SceneSync] GLB animation selected', {
+      objectId,
+      clipIndex,
+      clipName: clip?.name || `Animation ${clipIndex}`,
+      requestedClipName,
+      matchedBy: requestedClipResolution?.matchedBy || null,
+      companionClipIndices,
+    });
+  }
 
   model.userData.animationState = state;
   model.userData.scenesync = {
@@ -2159,6 +2188,7 @@ function getObjectAnimationState(obj) {
   return {
     enabled: raw.enabled !== false,
     clip: Number.isInteger(raw.clip) ? raw.clip : 0,
+    clipName: typeof raw.clipName === 'string' ? raw.clipName : null,
     mode: raw.mode === 'once' ? 'once' : 'loop',
     speed: Number.isFinite(raw.speed) ? raw.speed : 1,
   };

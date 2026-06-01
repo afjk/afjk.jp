@@ -17,9 +17,24 @@ namespace Afjk.SceneSync
     public static class GlbExporter
     {
         public static SceneSyncGlbExportBackend ConfiguredBackend { get; set; } = SceneSyncGlbExportBackend.Auto;
+        public static bool ApplyTransparentNameHintsForExport { get; set; } = false;
+        private static readonly string[] TransparentNameHints =
+        {
+            "glass",
+            "lens",
+            "wing",
+            "cheek",
+            "shadow",
+            "fade",
+            "trans",
+            "alpha",
+            "semi",
+        };
 
 #if UNITY_EDITOR
         public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
+        public static Func<GameObject, IDisposable> EditorExportPreparationHandler { get; set; }
+        public static string LastExportPreferredAnimationClipName { get; set; }
 
         public static bool IsUnityGltfExportAvailable => UnityGltfExportHandler != null;
 
@@ -37,9 +52,16 @@ namespace Afjk.SceneSync
 
         public static async Task<byte[]> ExportGameObjectAsGlb(GameObject go, SceneSyncGlbExportBackend backend)
         {
+#if UNITY_EDITOR
+            LastExportPreferredAnimationClipName = null;
+#endif
             var originalPos = go.transform.position;
             var originalRot = go.transform.rotation;
             var originalScale = go.transform.localScale;
+            var editorExportPreparation = BeginEditorExportPreparation(go, backend);
+            var materialRestores = ApplyTransparentNameHintsForExport
+                ? BeginTemporaryTransparentMaterialOverrides(go)
+                : null;
 
             try
             {
@@ -66,7 +88,28 @@ namespace Afjk.SceneSync
                 go.transform.position = originalPos;
                 go.transform.rotation = originalRot;
                 go.transform.localScale = originalScale;
+                RestoreTemporaryMaterialOverrides(materialRestores);
+                editorExportPreparation?.Dispose();
             }
+        }
+
+        private static IDisposable BeginEditorExportPreparation(GameObject go, SceneSyncGlbExportBackend backend)
+        {
+#if UNITY_EDITOR
+            if (backend != SceneSyncGlbExportBackend.UnityGltf || EditorExportPreparationHandler == null)
+                return null;
+
+            try
+            {
+                return EditorExportPreparationHandler(go);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SceneSync] Editor export preparation failed: " + ex.Message);
+            }
+#endif
+
+            return null;
         }
 
         private static SceneSyncGlbExportBackend ResolveExportBackend(GameObject root)
@@ -193,21 +236,148 @@ namespace Afjk.SceneSync
                     "[SceneSync] UnityGLTF exporter handler is not registered. " +
                     "Falling back to glTFast; animations will not be exported."
                 );
+                LastExportPreferredAnimationClipName = null;
                 return await ExportWithGltfFast(go);
             }
 
             try
             {
                 var bytes = UnityGltfExportHandler(go);
+                if (bytes == null || bytes.Length == 0)
+                {
+                    LastExportPreferredAnimationClipName = null;
+                    return bytes;
+                }
                 Debug.Log("[SceneSync] Export backend: UnityGLTF with animations.");
                 return bytes;
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] UnityGLTF export failed: " + ex.Message);
+                LastExportPreferredAnimationClipName = null;
                 return await ExportWithGltfFast(go);
             }
         }
 #endif
+
+        private struct MaterialRestore
+        {
+            public Renderer Renderer;
+            public Material[] Materials;
+        }
+
+        private static List<MaterialRestore> BeginTemporaryTransparentMaterialOverrides(GameObject root)
+        {
+            var restores = new List<MaterialRestore>();
+            if (root == null) return restores;
+
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null) continue;
+
+                var materials = renderer.sharedMaterials;
+                if (materials == null || materials.Length == 0) continue;
+
+                Material[] nextMaterials = null;
+                for (var i = 0; i < materials.Length; i++)
+                {
+                    var material = materials[i];
+                    if (!ShouldTreatAsTransparentForExport(material)) continue;
+
+                    if (nextMaterials == null)
+                        nextMaterials = (Material[])materials.Clone();
+                    var copy = new Material(material)
+                    {
+                        name = material.name
+                    };
+                    ConfigureTransparentMaterialForExport(copy);
+                    nextMaterials[i] = copy;
+                }
+
+                if (nextMaterials == null) continue;
+
+                restores.Add(new MaterialRestore
+                {
+                    Renderer = renderer,
+                    Materials = materials,
+                });
+                renderer.sharedMaterials = nextMaterials;
+            }
+
+            return restores;
+        }
+
+        private static void RestoreTemporaryMaterialOverrides(List<MaterialRestore> restores)
+        {
+            if (restores == null) return;
+
+            foreach (var restore in restores)
+            {
+                if (restore.Renderer == null) continue;
+
+                var current = restore.Renderer.sharedMaterials;
+                restore.Renderer.sharedMaterials = restore.Materials;
+
+                if (current == null) continue;
+                foreach (var material in current)
+                {
+                    if (material == null) continue;
+                    if (restore.Materials != null && Array.IndexOf(restore.Materials, material) >= 0) continue;
+
+                    if (Application.isPlaying)
+                    {
+                        UnityEngine.Object.Destroy(material);
+                    }
+                    else
+                    {
+                        UnityEngine.Object.DestroyImmediate(material);
+                    }
+                }
+            }
+        }
+
+        private static bool ShouldTreatAsTransparentForExport(Material material)
+        {
+            if (material == null) return false;
+
+            var renderType = material.GetTag("RenderType", false, "");
+            if (renderType == "Transparent" || renderType == "Fade" || renderType == "TransparentCutout")
+                return false;
+
+            var materialName = material.name ?? "";
+            var shaderName = material.shader != null ? material.shader.name ?? "" : "";
+            var combined = (materialName + " " + shaderName).ToLowerInvariant();
+
+            foreach (var hint in TransparentNameHints)
+            {
+                if (combined.Contains(hint))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void ConfigureTransparentMaterialForExport(Material material)
+        {
+            if (material == null) return;
+
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+            if (material.HasProperty("_Mode"))
+                material.SetFloat("_Mode", 3f);
+            if (material.HasProperty("_Surface"))
+                material.SetFloat("_Surface", 1f);
+            if (material.HasProperty("_SrcBlend"))
+                material.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            if (material.HasProperty("_DstBlend"))
+                material.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            if (material.HasProperty("_ZWrite"))
+                material.SetFloat("_ZWrite", 0f);
+
+            material.EnableKeyword("_ALPHABLEND_ON");
+            material.DisableKeyword("_ALPHATEST_ON");
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        }
     }
 }
