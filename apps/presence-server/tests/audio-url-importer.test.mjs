@@ -26,6 +26,53 @@ test('importAudioUrl', async (t) => {
     assert.equal(result.payload.kind, 'scene-bgm');
   });
 
+  await t.test('sets object audio when an object target is resolved', async () => {
+    let setCalled = false;
+    const mockCtx = {
+      resolveObjectAudioTarget: () => 'speaker-1',
+      setObjectAudioComponent: (objectId, audio) => {
+        setCalled = true;
+        assert.equal(objectId, 'speaker-1');
+        assert.equal(audio.url, 'https://example.com/sound.mp3');
+        assert.equal(audio.playOnAwake, true);
+        assert.equal(audio.loop, true);
+        return { type: 'scene-graph-set', scope: { object: objectId } };
+      },
+      showToast: (toast) => {
+        assert.equal(toast.type, 'success');
+      },
+    };
+
+    const result = await importAudioUrl('https://example.com/sound.mp3', mockCtx);
+    assert.equal(setCalled, true);
+    assert.equal(result.objectId, 'speaker-1');
+    assert.equal(result.payload.type, 'scene-graph-set');
+  });
+
+  await t.test('object audio does not require BGM functions', async () => {
+    const mockCtx = {
+      resolveObjectAudioTarget: () => 'speaker-1',
+      setObjectAudioComponent: () => ({ type: 'scene-graph-set' }),
+      showToast: () => {},
+    };
+
+    await importAudioUrl('https://example.com/sound.mp3', mockCtx);
+  });
+
+  await t.test('rejects object audio context missing setter', async () => {
+    const mockCtx = {
+      resolveObjectAudioTarget: () => 'speaker-1',
+      showToast: () => {},
+    };
+
+    try {
+      await importAudioUrl('https://example.com/sound.mp3', mockCtx);
+      assert.fail('should throw error when setObjectAudioComponent is missing');
+    } catch (err) {
+      assert.match(err.message, /audio importer requires ctx.setObjectAudioComponent/);
+    }
+  });
+
   await t.test('rejects incomplete context: missing broadcastSceneBgm', async () => {
     const mockCtx = {
       applySceneBgm: () => {},

@@ -88,3 +88,43 @@ test('Scene Sync Loomlet integration keeps offsetPosition relative to captured b
     { x: 11, y: 22, z: 33 }
   );
 });
+
+test('Scene Sync Loomlet integration pauses object audio effects while edited', () => {
+  const object = makeObject();
+  const effects = [];
+  const integration = createSceneSyncLoomIntegration({
+    getObjectById: (id) => id === 'box-1' ? object : null,
+    send: () => {},
+    getHostTime: () => 0,
+    getObjectRuntimeTime: () => 0,
+    isObjectBeingEdited: () => true,
+    applyObjectAudioEffect: (effect) => effects.push(effect),
+  });
+
+  integration.handlePayload({
+    type: 'scene-graph-set',
+    scope: { object: 'box-1' },
+    graph: {
+      nodes: [
+        {
+          id: 'audio',
+          type: 'sceneSetAudio',
+          params: {
+            target: 'box-1',
+            url: 'https://example.com/sound.mp3',
+            playOnAwake: true,
+            loop: true,
+          },
+        },
+      ],
+      edges: [],
+    },
+  });
+  integration.tickObjectGraphs(null, 0);
+
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].type, 'scene.setAudio');
+  assert.equal(effects[0].objectId, 'box-1');
+  assert.equal(effects[0].url, 'https://example.com/sound.mp3');
+  assert.equal(effects[0].pausedAtStart, true);
+});

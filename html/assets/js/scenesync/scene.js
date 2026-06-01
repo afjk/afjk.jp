@@ -1361,6 +1361,9 @@ const sceneBgmState = {
   autoplayBlocked: false,
 };
 
+// objectId -> { audio, current, autoplayBlocked }
+const objectAudioStates = new Map();
+
 // ── トランスフォームツイーン（AI/GPT アニメーション） ────────
 
 const activeTransformTweens = new Map();
@@ -3956,6 +3959,7 @@ function deleteObjectById(objectId, options = {}) {
   locks.delete(objectId);
 
   disposeObjectGlbAnimation(objectId);
+  disposeObjectAudio(objectId);
 
   // 削除前にオブジェクト情報を保存
   const name = attached.userData.name || objectId;
@@ -4626,6 +4630,122 @@ function getSceneClockStateForLoomlet(now = performance.now()) {
   };
 }
 
+// ── Object Audio Component / Loomlet graph helpers ─────────
+
+const OBJECT_AUDIO_NODE_TYPES = new Set(['scene.setAudio', 'sceneSetAudio']);
+
+function normalizeObjectAudioConfig(audio) {
+  if (!audio || typeof audio !== 'object') return null;
+  const url = typeof audio.url === 'string' ? audio.url.trim() : '';
+  if (!url) return null;
+  return {
+    url,
+    playOnAwake: audio.playOnAwake !== false,
+    loop: audio.loop !== false,
+  };
+}
+
+function removeObjectAudioNodes(graph) {
+  const source = graph && typeof graph === 'object' ? graph : {};
+  const removedIds = new Set();
+  const nodes = Array.isArray(source.nodes)
+    ? source.nodes.filter((node) => {
+        if (OBJECT_AUDIO_NODE_TYPES.has(node?.type)) {
+          removedIds.add(node.id);
+          return false;
+        }
+        return true;
+      })
+    : [];
+  const edges = Array.isArray(source.edges)
+    ? source.edges.filter((edge) => {
+        const fromId = String(edge?.from || '').split('.')[0];
+        const toId = String(edge?.to || '').split('.')[0];
+        return !removedIds.has(fromId) && !removedIds.has(toId);
+      })
+    : [];
+  return { nodes, edges };
+}
+
+function makeObjectAudioGraphNode(objectId, audio) {
+  return {
+    id: 'objectAudio',
+    type: 'sceneSetAudio',
+    params: {
+      target: objectId,
+      url: audio.url,
+      playOnAwake: audio.playOnAwake !== false,
+      loop: audio.loop !== false,
+    },
+  };
+}
+
+function upsertObjectAudioGraph(baseGraph, objectId, audio) {
+  const graph = removeObjectAudioNodes(baseGraph);
+  const normalized = normalizeObjectAudioConfig(audio);
+  if (normalized) {
+    graph.nodes.push(makeObjectAudioGraphNode(objectId, normalized));
+  }
+  return graph;
+}
+
+function graphHasExecutableNodes(graph) {
+  return Array.isArray(graph?.nodes) && graph.nodes.length > 0;
+}
+
+function createObjectAudioGraphOperation(objectId, audio) {
+  const current = loomIntegration?.exportState?.()?.objects?.[objectId] || { nodes: [], edges: [] };
+  const graph = upsertObjectAudioGraph(current, objectId, audio);
+  if (!graphHasExecutableNodes(graph)) {
+    return { type: 'scene-graph-clear', scope: { object: objectId } };
+  }
+  return { type: 'scene-graph-set', scope: { object: objectId }, graph };
+}
+
+function getObjectAudioConfigFromGraph(graph) {
+  const node = Array.isArray(graph?.nodes)
+    ? graph.nodes.find((entry) => OBJECT_AUDIO_NODE_TYPES.has(entry?.type))
+    : null;
+  if (!node) return null;
+  return normalizeObjectAudioConfig(node.params || null);
+}
+
+function getObjectAudioConfigFromLoomState(loomState, objectId) {
+  return getObjectAudioConfigFromGraph(loomState?.objects?.[objectId]);
+}
+
+function applySceneGraphOperation(operation) {
+  if (!operation || typeof operation.type !== 'string' || !operation.type.startsWith('scene-graph-')) {
+    return false;
+  }
+  const objectId = operation.scope && typeof operation.scope === 'object' ? operation.scope.object : null;
+  if (objectId && (
+    operation.type === 'scene-graph-clear' ||
+    ((operation.type === 'scene-graph-set' || operation.type === 'scene-graph-patch') && !getObjectAudioConfigFromGraph(operation.graph))
+  )) {
+    disposeObjectAudio(objectId);
+  }
+  loomIntegration.handlePayload(operation);
+  notifySceneStateChanged('scene-graph-operation-applied');
+  return true;
+}
+
+function setObjectAudioComponent(objectId, audio, options = {}) {
+  const normalized = normalizeObjectAudioConfig(audio);
+  if (!objectId) throw new Error('objectId is required');
+  if (normalized && !/^https?:\/\//i.test(normalized.url)) {
+    throw new Error('audio url must start with http(s)');
+  }
+
+  const operation = createObjectAudioGraphOperation(objectId, normalized);
+  applySceneGraphOperation(operation);
+  if (options.broadcast !== false) {
+    broadcast(operation);
+  }
+  notifySelectionChanged('object-audio-updated');
+  return operation;
+}
+
 function setSceneClockMode(mode, now = performance.now()) {
   if (mode === sceneClockState.mode) return;
 
@@ -4723,6 +4843,7 @@ const loomIntegration = createSceneSyncLoomIntegration({
   clearLoomletHostEvents: clearLoomletHostEventsForObject,
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
+  applyObjectAudioEffect,
 });
 
 // ── Scene Clock Debug UI 制御 ────────────────────────────
@@ -5787,7 +5908,7 @@ function handleHandoff(data) {
 }
 
 function handleSceneGraphMessage(msg) {
-  loomIntegration.handlePayload(msg);
+  applySceneGraphOperation(msg);
 }
 
 function sendAiResult(targetId, requestId, result = {}) {
@@ -6130,6 +6251,18 @@ function createSceneUrlImportContext(options = {}) {
     broadcastSceneAdd: broadcast,
     applySceneBgm,
     broadcastSceneBgm: broadcast,
+    setObjectAudioComponent,
+    resolveObjectAudioTarget: () => {
+      const explicitObjectId = extraImporterContext?.objectId;
+      if (explicitObjectId && managedObjects.has(explicitObjectId)) return explicitObjectId;
+      const hitObjectId = sourceContext?.hitObjectId;
+      if (hitObjectId && managedObjects.has(hitObjectId)) return hitObjectId;
+      if (selectedObjectIds.size === 1) {
+        const [selected] = Array.from(selectedObjectIds);
+        if (managedObjects.has(selected)) return selected;
+      }
+      return null;
+    },
     showToast,
     generateObjectId: generateObjectIdOverride || ((prefix) => generateObjectId(prefix)),
     getSpawnTransform: () => ({
@@ -6303,6 +6436,11 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
   const animationClips = serializeObjectAnimationClipSummariesForExternalUse(obj);
   if (animationClips.length > 0) {
     result.animationClips = animationClips;
+  }
+
+  const audio = getObjectAudioConfigFromLoomState(loomIntegration.exportState(), objectId);
+  if (audio) {
+    result.audio = audio;
   }
 
   return result;
@@ -7973,6 +8111,119 @@ function updateBgmControls() {
   clearButton.style.display = sceneBgmState.current ? 'block' : 'none';
 }
 
+function disposeObjectAudio(objectId) {
+  const state = objectAudioStates.get(objectId);
+  if (!state) return;
+  state.audio?.pause?.();
+  if (state.audio) {
+    state.audio.src = '';
+    state.audio.load?.();
+  }
+  objectAudioStates.delete(objectId);
+}
+
+function getOrCreateObjectAudioState(objectId) {
+  let state = objectAudioStates.get(objectId);
+  if (!state) {
+    state = {
+      audio: null,
+      current: null,
+      autoplayBlocked: false,
+    };
+    objectAudioStates.set(objectId, state);
+  }
+  return state;
+}
+
+function shouldRecreateObjectAudio(state, config) {
+  return !state.audio ||
+    state.current?.url !== config.url ||
+    state.current?.loop !== config.loop ||
+    state.current?.playOnAwake !== config.playOnAwake;
+}
+
+function seekAudioElement(audio, targetTime) {
+  if (!Number.isFinite(targetTime) || targetTime < 0) return;
+  if (!Number.isFinite(audio.duration) && targetTime > 0) return;
+  if (Math.abs((audio.currentTime || 0) - targetTime) < 0.25) return;
+  try {
+    audio.currentTime = targetTime;
+  } catch {}
+}
+
+function syncObjectAudioPlayback(objectId, state) {
+  const audio = state?.audio;
+  const config = state?.current;
+  if (!audio || !config) return;
+
+  if (state.pausedAtStart) {
+    audio.pause();
+    seekAudioElement(audio, 0);
+    return;
+  }
+
+  const objectTime = getObjectRuntimeTime(objectId, performance.now());
+  const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+  const targetTime = duration
+    ? config.loop
+      ? objectTime % duration
+      : Math.min(objectTime, duration)
+    : 0;
+
+  seekAudioElement(audio, targetTime);
+
+  if (!config.playOnAwake || (duration && !config.loop && objectTime >= duration)) {
+    audio.pause();
+    return;
+  }
+
+  if (audio.paused) {
+    audio.play().then(() => {
+      state.autoplayBlocked = false;
+    }).catch((err) => {
+      if (!state.autoplayBlocked) {
+        console.warn('[SceneSync] object audio autoplay blocked:', err?.message);
+        showToast?.({
+          type: 'warning',
+          message: 'オブジェクト音声の自動再生がブロックされました',
+        });
+      }
+      state.autoplayBlocked = true;
+    });
+  }
+}
+
+function applyObjectAudioEffect(effect) {
+  const objectId = effect?.objectId;
+  if (!objectId || !managedObjects.has(objectId)) return;
+
+  const config = normalizeObjectAudioConfig(effect);
+  if (!config) {
+    disposeObjectAudio(objectId);
+    return;
+  }
+
+  const state = getOrCreateObjectAudioState(objectId);
+  state.pausedAtStart = effect.pausedAtStart === true;
+
+  if (shouldRecreateObjectAudio(state, config)) {
+    if (state.audio) {
+      state.audio.pause();
+      state.audio.src = '';
+      state.audio.load?.();
+    }
+    const audio = new Audio();
+    audio.src = config.url;
+    audio.loop = config.loop;
+    audio.preload = 'auto';
+    state.audio = audio;
+    state.current = config;
+    state.autoplayBlocked = false;
+  }
+
+  syncObjectAudioPlayback(objectId, state);
+}
+
 // ── Undo/Redo 処理 ──────────────────────────────────────
 
 function performUndo() {
@@ -7998,6 +8249,10 @@ function performRedo() {
 }
 
 function applyOperationToScene(operation) {
+  if (applySceneGraphOperation(operation)) {
+    return;
+  }
+
   switch (operation.kind) {
     case 'scene-add': {
       addOrUpdateObject(operation.objectId, operation);
@@ -9597,6 +9852,7 @@ const EDITABLE_SCENE_OBJECT_FIELDS = new Set([
   'scale',
   'visible',
   'asset',
+  'audio',
 ]);
 
 const EDITABLE_TEXT_ASSET_FIELDS = new Set([
@@ -9648,6 +9904,27 @@ function validateColorValue(value, path, errors) {
     errors.push(`${path} must be a string or number color value.`);
   }
   return valid;
+}
+
+function validateInspectorAudioValue(value, path, errors) {
+  if (value === null) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push(`${path} must be an object or null.`);
+    return false;
+  }
+  if (typeof value.url !== 'string' || !/^https?:\/\//i.test(value.url.trim())) {
+    errors.push(`${path}.url must be an http(s) URL.`);
+    return false;
+  }
+  if (value.playOnAwake !== undefined && typeof value.playOnAwake !== 'boolean') {
+    errors.push(`${path}.playOnAwake must be a boolean.`);
+    return false;
+  }
+  if (value.loop !== undefined && typeof value.loop !== 'boolean') {
+    errors.push(`${path}.loop must be a boolean.`);
+    return false;
+  }
+  return true;
 }
 
 function validateFontSize(value, path, errors) {
@@ -9792,6 +10069,7 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       objectId,
     };
     const changedFields = [];
+    const graphActions = [];
 
     const editedLabel = typeof editedObject.label === 'string' ? editedObject.label : undefined;
     const editedName = typeof editedObject.name === 'string'
@@ -9960,6 +10238,13 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       }
     }
 
+    if (!valuesEqual(baseObject.audio ?? null, editedObject.audio ?? null)) {
+      if (validateInspectorAudioValue(editedObject.audio ?? null, `objects.${objectId}.audio`, errors)) {
+        graphActions.push(createObjectAudioGraphOperation(objectId, editedObject.audio ?? null));
+        changedFields.push('audio');
+      }
+    }
+
     const objectKeys = new Set([
       ...Object.keys(baseObject || {}),
       ...Object.keys(editedObject || {}),
@@ -9976,7 +10261,10 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
     }
 
     if (changedFields.length > 0) {
-      actions.push(objectDelta);
+      if (Object.keys(objectDelta).length > 2) {
+        actions.push(objectDelta);
+      }
+      actions.push(...graphActions);
       changedFieldsByObject.push({ objectId, fields: changedFields });
     }
   }
@@ -10277,7 +10565,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (sceneInspectorEditMetaEl) {
     const baseTime = baseSnapshot?.generatedAt || 'unknown';
     sceneInspectorEditMetaEl.textContent =
-      `Base snapshot captured at ${baseTime}.\nApplied fields: existing object \`name\`, \`position\`, \`rotation\`, \`scale\`, \`visible\`, and primitive \`asset.color\`.\nIgnored fields: root metadata, object add/remove, ids, locks, room, connection, environment, Loom graph state, \`meshPath\`, and all other non-editable fields.`;
+      `Base snapshot captured at ${baseTime}.\nApplied fields: existing object \`name\`, \`position\`, \`rotation\`, \`scale\`, \`visible\`, \`audio\`, and primitive \`asset.color\`.\nIgnored fields: root metadata, object add/remove, ids, locks, room, connection, environment, raw Loom graph state, \`meshPath\`, and all other non-editable fields.`;
   }
 
   const hasErrors = sceneInspectorState.validationErrors.length > 0;
@@ -10645,6 +10933,7 @@ function tryExitSceneInspectorObjectEditMode() {
 
 function buildSceneInspectorSnapshot() {
   const objects = {};
+  const loomGraphState = loomIntegration.exportState();
   const sortedEntries = Array.from(managedObjects.entries())
     .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
 
@@ -10679,6 +10968,11 @@ function buildSceneInspectorSnapshot() {
       entry.animationClips = getObjectAnimationClipSummaries(obj);
     }
 
+    const audio = getObjectAudioConfigFromLoomState(loomGraphState, objectId);
+    if (audio) {
+      entry.audio = audio;
+    }
+
     objects[objectId] = entry;
   }
 
@@ -10703,7 +10997,6 @@ function buildSceneInspectorSnapshot() {
     generatedAt: new Date().toISOString(),
   };
 
-  const loomGraphState = loomIntegration.exportState();
   if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
     snapshot.loomGraphs = loomGraphState;
   }

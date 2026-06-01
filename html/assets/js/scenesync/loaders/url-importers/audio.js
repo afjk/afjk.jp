@@ -13,6 +13,25 @@ export async function importAudioUrl(url, ctx) {
   }
 
   try {
+    const objectId = typeof ctx?.resolveObjectAudioTarget === 'function'
+      ? ctx.resolveObjectAudioTarget()
+      : null;
+
+    if (objectId) {
+      const setObjectAudioComponent = requireFn('setObjectAudioComponent');
+      const showToast = requireFn('showToast');
+      const payload = setObjectAudioComponent(objectId, {
+        url,
+        playOnAwake: true,
+        loop: true,
+      });
+      showToast({
+        type: 'success',
+        message: 'オブジェクトに音声を設定しました',
+      });
+      return { objectId, payload };
+    }
+
     const broadcastSceneBgm = requireFn('broadcastSceneBgm');
     const applySceneBgm = requireFn('applySceneBgm');
     const showToast = requireFn('showToast');
@@ -45,7 +64,7 @@ export async function importAudioUrl(url, ctx) {
     const showToast = typeof ctx?.showToast === 'function' ? ctx.showToast : console.error;
     showToast({
       type: 'error',
-      message: `BGM URL の設定に失敗しました: ${err?.message || 'Unknown error'}`,
+      message: `音声URLの設定に失敗しました: ${err?.message || 'Unknown error'}`,
     });
     throw err;
   }
