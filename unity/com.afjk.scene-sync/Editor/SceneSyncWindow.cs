@@ -14,6 +14,7 @@ namespace Afjk.SceneSync.Editor
     {
         private const string ShowSceneSyncGizmosPrefKey = "Afjk.SceneSync.ShowSceneSyncGizmos";
         private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
+        private const string ApplyTransparentNameHintsForExportPrefKey = "Afjk.SceneSync.ApplyTransparentNameHintsForExport";
         private const float DefaultMaxGlbUploadMiB = 50f;
         private const int MaxPersistentGlbSizeBytes = 50 * 1024 * 1024;
         private const long MaxPersistentGlbCacheBytes = 512L * 1024L * 1024L;
@@ -59,6 +60,7 @@ namespace Afjk.SceneSync.Editor
         private bool _connected;
         private List<PeerInfo> _peers = new List<PeerInfo>();
         private float _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
+        private bool _applyTransparentNameHintsForExport;
 
         private Dictionary<string, TransformSnapshot> _lastSnapshots = new Dictionary<string, TransformSnapshot>();
         private double _lastSendTime;
@@ -89,6 +91,8 @@ namespace Afjk.SceneSync.Editor
             {
                 _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
             }
+            _applyTransparentNameHintsForExport = EditorPrefs.GetBool(ApplyTransparentNameHintsForExportPrefKey, false);
+            GlbExporter.ApplyTransparentNameHintsForExport = _applyTransparentNameHintsForExport;
 
             SceneSyncUnityGltfInstaller.RefreshUnityGltfPackageStatus();
 
@@ -195,8 +199,13 @@ namespace Afjk.SceneSync.Editor
                 "Reconnecting to send the scene update."
             );
 
+            var reconnectRoom = !string.IsNullOrWhiteSpace(_client.Room)
+                ? _client.Room
+                : _room;
+            _room = reconnectRoom ?? "";
+
             _connected = false;
-            await _client.ConnectAsync(_presenceUrl, _room, _nickname);
+            await _client.ConnectAsync(_presenceUrl, reconnectRoom, _nickname);
 
             if (_client.IsConnected)
             {
@@ -570,6 +579,26 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Space(8);
 
             EditorGUI.BeginChangeCheck();
+            var applyTransparentNameHintsForExport = EditorGUILayout.Toggle(
+                "Apply Transparent Name Hints",
+                _applyTransparentNameHintsForExport
+            );
+            if (EditorGUI.EndChangeCheck())
+            {
+                _applyTransparentNameHintsForExport = applyTransparentNameHintsForExport;
+                GlbExporter.ApplyTransparentNameHintsForExport = _applyTransparentNameHintsForExport;
+                EditorPrefs.SetBool(ApplyTransparentNameHintsForExportPrefKey, _applyTransparentNameHintsForExport);
+            }
+
+            EditorGUILayout.HelpBox(
+                "Off by default. When enabled, export temporarily treats materials with transparent-looking material or shader names as transparent. " +
+                "For safer permanent changes, use Tools > Scene Sync > Support > Apply Transparent Name Hints To Selection.",
+                MessageType.Info
+            );
+
+            GUILayout.Space(8);
+
+            EditorGUI.BeginChangeCheck();
             var newMaxGlbUploadMiB = EditorGUILayout.FloatField("Max GLB Upload Size (MiB)", _maxGlbUploadMiB);
             if (EditorGUI.EndChangeCheck())
             {
@@ -761,13 +790,14 @@ namespace Afjk.SceneSync.Editor
 
         private void SyncRoomFromSceneSyncManager()
         {
+            if (_connected) return;
+
             var manager = FindSceneSyncManager();
             if (manager == null) return;
 
-            var managerRoom = manager.ConfiguredRoom;
-            if (string.IsNullOrEmpty(managerRoom)) return;
-            if (_connected) return;
+            var managerRoom = manager.ConfiguredRoom ?? "";
 
+            if (_room == managerRoom) return;
             _room = managerRoom;
             Repaint();
         }

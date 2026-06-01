@@ -17,6 +17,7 @@ namespace Afjk.SceneSync
     public static class GlbExporter
     {
         public static SceneSyncGlbExportBackend ConfiguredBackend { get; set; } = SceneSyncGlbExportBackend.Auto;
+        public static bool ApplyTransparentNameHintsForExport { get; set; } = false;
         private static readonly string[] TransparentNameHints =
         {
             "glass",
@@ -58,7 +59,9 @@ namespace Afjk.SceneSync
             var originalRot = go.transform.rotation;
             var originalScale = go.transform.localScale;
             var editorExportPreparation = BeginEditorExportPreparation(go, backend);
-            var materialRestores = BeginTemporaryTransparentMaterialOverrides(go);
+            var materialRestores = ApplyTransparentNameHintsForExport
+                ? BeginTemporaryTransparentMaterialOverrides(go)
+                : null;
 
             try
             {
@@ -233,18 +236,25 @@ namespace Afjk.SceneSync
                     "[SceneSync] UnityGLTF exporter handler is not registered. " +
                     "Falling back to glTFast; animations will not be exported."
                 );
+                LastExportPreferredAnimationClipName = null;
                 return await ExportWithGltfFast(go);
             }
 
             try
             {
                 var bytes = UnityGltfExportHandler(go);
+                if (bytes == null || bytes.Length == 0)
+                {
+                    LastExportPreferredAnimationClipName = null;
+                    return bytes;
+                }
                 Debug.Log("[SceneSync] Export backend: UnityGLTF with animations.");
                 return bytes;
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] UnityGLTF export failed: " + ex.Message);
+                LastExportPreferredAnimationClipName = null;
                 return await ExportWithGltfFast(go);
             }
         }
