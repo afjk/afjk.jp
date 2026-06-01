@@ -141,6 +141,10 @@ Editor の補助メニューとして **Tools > Scene Sync > Support** を利用
 - **Report Animation Events In Selection**
   - 選択中の AnimationClip、Prefab、GameObject 配下の AnimationClip を走査します
   - Animation Event が含まれている場合、GLB にそのまま保持されない可能性を Console に警告します
+- **Bake Event-Named Clip Curves To New Clips**
+  - Animation Event の `stringParameter` または `functionName` が別の AnimationClip 名と一致する場合、その clip の curve を event 時刻へコピーした publish 用 clip を作成します
+  - 選択中の GameObject 配下の Animation / Animator / serialized field から AnimationClip 候補を集めます
+  - 任意の MonoBehaviour callback の実行結果までは推測できないため、curve として表現されている blend shape / material / transform などが対象です
 
 透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が Animation Event / MonoBehaviour callback に依存している場合は、GLB publish 前に transform / material / blend shape の animation curve として bake してください。
 
