@@ -11,6 +11,7 @@ namespace Afjk.SceneSync.Editor
     {
         private const string BakedClipSuffix = "_scenesync_baked";
         private const float StepKeyEpsilon = 1f / 1200f;
+        private const float DrivenBlendShapeSampleRate = 30f;
         private static readonly string[] TransparentNameHints =
         {
             "glass",
@@ -841,7 +842,7 @@ namespace Afjk.SceneSync.Editor
 
                 foreach (var sourceClip in sampler.SourceClips)
                 {
-                    if (sourceClip == null || !AreClipDurationsCompatible(motionClip, sourceClip))
+                    if (sourceClip == null)
                         continue;
 
                     var copied = CopyDrivenBlendShapeCurvesFromSource(targetRoot, sourceClip, targetClip, sampler);
@@ -882,6 +883,7 @@ namespace Afjk.SceneSync.Editor
                 0f,
                 Mathf.Max(0f, sourceClip.length),
             };
+            var hasSourceCurve = false;
 
             foreach (var driver in sampler.Drivers)
             {
@@ -889,14 +891,22 @@ namespace Afjk.SceneSync.Editor
                 nodeCurves.Add(curve);
                 if (curve == null) continue;
 
+                hasSourceCurve = true;
                 foreach (var key in curve.keys)
                 {
                     AddSampleTime(sampleTimes, key.time);
                 }
             }
 
+            if (!hasSourceCurve)
+                return 0;
+
+            AddUniformSampleTimes(sampleTimes, sourceClip.length, DrivenBlendShapeSampleRate);
+
             var targetPath = AnimationUtility.CalculateTransformPath(sampler.TargetRenderer.transform, targetRoot);
             var copied = 0;
+            var sourceLength = Mathf.Max(0f, sourceClip.length);
+            var targetLength = Mathf.Max(0f, targetClip.length);
 
             for (var driverIndex = 0; driverIndex < sampler.Drivers.Count; driverIndex++)
             {
@@ -912,10 +922,11 @@ namespace Afjk.SceneSync.Editor
                 };
                 var targetCurve = AnimationUtility.GetEditorCurve(targetClip, binding) ?? new AnimationCurve();
 
-                foreach (var time in sampleTimes)
+                foreach (var sourceTime in sampleTimes)
                 {
-                    var value = EvaluateDrivenBlendShape(sampler, nodeCurves, driverIndex, time);
-                    SetOrAddKey(targetCurve, new Keyframe(time, value, 0f, 0f));
+                    var targetTime = MapSourceTimeToTargetTime(sourceTime, sourceLength, targetLength);
+                    var value = EvaluateDrivenBlendShape(sampler, nodeCurves, driverIndex, sourceTime);
+                    SetOrAddKey(targetCurve, new Keyframe(targetTime, value, 0f, 0f));
                 }
 
                 AnimationUtility.SetEditorCurve(targetClip, binding, targetCurve);
@@ -935,7 +946,7 @@ namespace Afjk.SceneSync.Editor
             var path = AnimationUtility.CalculateTransformPath(node, sourceRoot);
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
-                if (binding.path != path) continue;
+                if (!IsTransformPathMatch(binding.path, path, node.name)) continue;
 
                 var propertyName = binding.propertyName ?? "";
                 if (!propertyName.EndsWith(".z", StringComparison.OrdinalIgnoreCase))
@@ -947,6 +958,28 @@ namespace Afjk.SceneSync.Editor
             }
 
             return null;
+        }
+
+        private static bool IsTransformPathMatch(string bindingPath, string expectedPath, string nodeName)
+        {
+            bindingPath = bindingPath ?? "";
+            expectedPath = expectedPath ?? "";
+            nodeName = nodeName ?? "";
+
+            if (bindingPath == expectedPath)
+                return true;
+            if (!string.IsNullOrEmpty(expectedPath) &&
+                bindingPath.EndsWith("/" + expectedPath, StringComparison.Ordinal))
+                return true;
+            if (!string.IsNullOrEmpty(nodeName))
+            {
+                if (bindingPath == nodeName)
+                    return true;
+                if (bindingPath.EndsWith("/" + nodeName, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         private static float EvaluateDrivenBlendShape(
@@ -983,6 +1016,27 @@ namespace Afjk.SceneSync.Editor
 
             sampleTimes.Add(time);
             sampleTimes.Sort();
+        }
+
+        private static void AddUniformSampleTimes(List<float> sampleTimes, float length, float sampleRate)
+        {
+            if (sampleTimes == null || length <= StepKeyEpsilon || sampleRate <= 0f)
+                return;
+
+            var step = 1f / sampleRate;
+            for (var time = step; time < length; time += step)
+            {
+                AddSampleTime(sampleTimes, time);
+            }
+        }
+
+        private static float MapSourceTimeToTargetTime(float sourceTime, float sourceLength, float targetLength)
+        {
+            if (sourceLength <= StepKeyEpsilon || targetLength <= StepKeyEpsilon)
+                return Mathf.Clamp(sourceTime, 0f, Mathf.Max(0f, targetLength));
+
+            var normalized = Mathf.Clamp01(sourceTime / sourceLength);
+            return normalized * targetLength;
         }
 
         private static bool TryCreateBakedEventClip(
