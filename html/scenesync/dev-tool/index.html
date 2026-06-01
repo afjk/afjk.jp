@@ -49,12 +49,17 @@
         <div class="panel-head">
           <h2>Payload</h2>
           <div class="actions">
+            <div class="editor-toggle" role="tablist" aria-label="Payload editor mode">
+              <button id="inspectorModeButton" type="button" class="is-active" role="tab" aria-selected="true" data-editor-mode="inspector">Inspector</button>
+              <button id="jsonModeButton" type="button" role="tab" aria-selected="false" data-editor-mode="json">JSON</button>
+            </div>
             <button id="formatButton" type="button">Format</button>
             <button id="sendButton" type="button">Send</button>
             <button id="snapshotButton" type="button">Fetch Snapshot</button>
           </div>
         </div>
-        <textarea id="payloadInput" spellcheck="false" aria-label="Scene Sync JSON payload"></textarea>
+        <div id="payloadInspector" class="inspector" role="tabpanel" aria-labelledby="inspectorModeButton"></div>
+        <textarea id="payloadInput" class="json-editor is-hidden" spellcheck="false" aria-label="Scene Sync JSON payload" role="tabpanel" aria-labelledby="jsonModeButton"></textarea>
         <div class="route-bar">
           <span>Resolved route</span>
           <code id="resolvedRoute">broadcast</code>
