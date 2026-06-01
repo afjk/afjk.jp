@@ -27,6 +27,7 @@ const elements = {
   sessionStatus: document.querySelector('#sessionStatus'),
   sessionMeta: document.querySelector('#sessionMeta'),
   payloadInput: document.querySelector('#payloadInput'),
+  payloadInspector: document.querySelector('#payloadInspector'),
   previewOutput: document.querySelector('#previewOutput'),
   validationOutput: document.querySelector('#validationOutput'),
   responseOutput: document.querySelector('#responseOutput'),
@@ -37,6 +38,7 @@ const elements = {
   snapshotButton: document.querySelector('#snapshotButton'),
   clearHistoryButton: document.querySelector('#clearHistoryButton'),
   historyList: document.querySelector('#historyList'),
+  editorModeButtons: document.querySelectorAll('[data-editor-mode]'),
 };
 
 function loadJson(key, fallback) {
@@ -115,6 +117,180 @@ function renderValidation(errors) {
   elements.validationOutput.classList.add('console-error');
 }
 
+function formatLabel(value) {
+  const raw = String(value ?? 'Value')
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+  return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Value';
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function makePathAttribute(path) {
+  return escapeHtml(JSON.stringify(path));
+}
+
+function getObjectMeta(value) {
+  if (!isPlainObject(value)) return '';
+  const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : '';
+  const objectId = typeof value.objectId === 'string' && value.objectId.trim() ? value.objectId.trim() : '';
+  if (name && objectId) return `${name} / ${objectId}`;
+  return name || objectId;
+}
+
+function getNumericConfig(path, value) {
+  const key = String(path[path.length - 1] ?? '').toLowerCase();
+  const parent = String(path[path.length - 2] ?? '').toLowerCase();
+  const absValue = Math.abs(Number(value) || 0);
+  let min = -100;
+  let max = 100;
+  let step = 0.01;
+
+  if (['position'].includes(parent) || ['x', 'y', 'z'].includes(key)) {
+    min = -20;
+    max = 20;
+  } else if (['scale'].includes(parent) || key.includes('scale')) {
+    min = 0;
+    max = 10;
+  } else if (['rotation'].includes(parent) || key.includes('rotation')) {
+    min = -1;
+    max = 1;
+  } else if (['opacity', 'alpha', 'volume', 'weight', 'intensity'].some((token) => key.includes(token))) {
+    min = 0;
+    max = 1;
+    step = 0.001;
+  }
+
+  if (absValue > Math.max(Math.abs(min), Math.abs(max))) {
+    const range = Math.ceil(absValue * 1.25);
+    min = Math.min(min, -range);
+    max = Math.max(max, range);
+  }
+
+  return { min, max, step };
+}
+
+function getArrayItemLabel(arrayLabel, index, arrayLength) {
+  const key = String(arrayLabel ?? '').toLowerCase();
+  const axisLabels = ['x', 'y', 'z'];
+
+  if (['position', 'scale'].includes(key) && index < axisLabels.length) {
+    return axisLabels[index];
+  }
+
+  if (key === 'rotation') {
+    const labels = arrayLength === 4 ? ['x', 'y', 'z', 'w'] : axisLabels;
+    if (index < labels.length) return labels[index];
+  }
+
+  return `[${index}]`;
+}
+
+function renderPrimitiveControl(label, value, path) {
+  const pathAttribute = makePathAttribute(path);
+  const labelText = escapeHtml(formatLabel(label));
+
+  if (typeof value === 'boolean') {
+    return `
+      <label class="inspector-row inspector-row-boolean">
+        <span>${labelText}</span>
+        <input type="checkbox" ${value ? 'checked' : ''} data-inspector-type="boolean" data-inspector-path="${pathAttribute}">
+      </label>
+    `;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const { min, max, step } = getNumericConfig(path, value);
+    const safeValue = escapeHtml(String(value));
+    return `
+      <label class="inspector-row inspector-row-number">
+        <span>${labelText}</span>
+        <div class="number-field">
+          <input type="range" min="${min}" max="${max}" step="${step}" value="${safeValue}" data-inspector-type="number" data-inspector-path="${pathAttribute}">
+          <input type="number" step="${step}" value="${safeValue}" data-inspector-type="number" data-inspector-path="${pathAttribute}">
+        </div>
+      </label>
+    `;
+  }
+
+  if (typeof value === 'string') {
+    const safeValue = escapeHtml(value);
+    const isColor = /^#[0-9a-f]{6}$/i.test(value);
+    return `
+      <label class="inspector-row inspector-row-text">
+        <span>${labelText}</span>
+        <div class="${isColor ? 'text-field text-field-color' : 'text-field'}">
+          ${isColor ? `<input type="color" value="${safeValue}" data-inspector-type="string" data-inspector-path="${pathAttribute}">` : ''}
+          <input type="text" value="${safeValue}" spellcheck="false" data-inspector-type="string" data-inspector-path="${pathAttribute}">
+        </div>
+      </label>
+    `;
+  }
+
+  const jsonValue = value === null ? 'null' : JSON.stringify(value);
+  return `
+    <label class="inspector-row inspector-row-text">
+      <span>${labelText}</span>
+      <input type="text" value="${escapeHtml(jsonValue)}" spellcheck="false" data-inspector-type="json" data-inspector-path="${pathAttribute}">
+    </label>
+  `;
+}
+
+function renderInspectorValue(value, path = [], label = 'Payload') {
+  if (Array.isArray(value)) {
+    const rows = value.map((item, index) => (
+      renderInspectorValue(item, [...path, index], getArrayItemLabel(label, index, value.length))
+    )).join('');
+    return `
+      <fieldset class="inspector-group">
+        <legend>${escapeHtml(formatLabel(label))}</legend>
+        <div class="inspector-children">${rows || '<p class="inspector-empty">[]</p>'}</div>
+      </fieldset>
+    `;
+  }
+
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value);
+    const meta = getObjectMeta(value);
+    const rows = entries.map(([key, item]) => renderInspectorValue(item, [...path, key], key)).join('');
+    return `
+      <fieldset class="inspector-group">
+        <legend>
+          <span>${escapeHtml(formatLabel(label))}</span>
+          ${meta ? `<small>${escapeHtml(meta)}</small>` : ''}
+        </legend>
+        <div class="inspector-children">${rows || '<p class="inspector-empty">{}</p>'}</div>
+      </fieldset>
+    `;
+  }
+
+  return renderPrimitiveControl(label, value, path);
+}
+
+function renderInspector(parsed) {
+  if (!parsed) {
+    elements.payloadInspector.innerHTML = '<p class="inspector-empty">Preview unavailable.</p>';
+    return;
+  }
+
+  elements.payloadInspector.innerHTML = renderInspectorValue(parsed);
+}
+
+function setEditorMode(mode) {
+  const isJson = mode === 'json';
+  elements.payloadInput.classList.toggle('is-hidden', !isJson);
+  elements.payloadInspector.classList.toggle('is-hidden', isJson);
+  elements.editorModeButtons.forEach((button) => {
+    const isActive = button.dataset.editorMode === mode;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-selected', String(isActive));
+  });
+}
+
 function validatePayload(value) {
   const errors = [];
   let parsed = null;
@@ -172,13 +348,73 @@ function validatePayload(value) {
   return { errors, parsed, route };
 }
 
-function syncPayloadState() {
+function syncPayloadState(options = {}) {
+  const { renderInspectorView = true } = options;
   const { errors, parsed, route } = validatePayload(elements.payloadInput.value);
   renderValidation(errors);
   elements.resolvedRoute.textContent = route;
   elements.previewOutput.textContent = parsed ? JSON.stringify(parsed, null, 2) : 'Preview unavailable.';
   elements.sendButton.disabled = errors.length > 0;
+  if (renderInspectorView) {
+    renderInspector(parsed);
+  }
   return { errors, parsed, route };
+}
+
+function setValueAtPath(root, path, value) {
+  let target = root;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    target = target[path[index]];
+  }
+  target[path[path.length - 1]] = value;
+}
+
+function mirrorInspectorControls(path, value) {
+  const serializedPath = JSON.stringify(path);
+  elements.payloadInspector.querySelectorAll('[data-inspector-path]').forEach((control) => {
+    if (control.dataset.inspectorPath !== serializedPath) return;
+    if (control.type === 'checkbox') {
+      control.checked = Boolean(value);
+    } else {
+      control.value = String(value);
+    }
+  });
+}
+
+function readInspectorValue(control) {
+  if (control.dataset.inspectorType === 'boolean') {
+    return control.checked;
+  }
+  if (control.dataset.inspectorType === 'number') {
+    if (['', '-', '.', '-.'].includes(control.value)) return undefined;
+    const number = Number(control.value);
+    return Number.isFinite(number) ? number : undefined;
+  }
+  if (control.dataset.inspectorType === 'json') {
+    try {
+      return JSON.parse(control.value);
+    } catch {
+      return undefined;
+    }
+  }
+  return control.value;
+}
+
+function handleInspectorInput(event) {
+  const control = event.target.closest('[data-inspector-path]');
+  if (!control) return;
+
+  const path = JSON.parse(control.dataset.inspectorPath);
+  const value = readInspectorValue(control);
+  if (value === undefined) return;
+
+  const { parsed } = validatePayload(elements.payloadInput.value);
+  if (!parsed) return;
+
+  setValueAtPath(parsed, path, value);
+  elements.payloadInput.value = JSON.stringify(parsed, null, 2);
+  mirrorInspectorControls(path, value);
+  syncPayloadState({ renderInspectorView: false });
 }
 
 function renderResult(target, value, isError = false) {
@@ -351,6 +587,11 @@ function bindEvents() {
     updateSessionStatus();
   });
   elements.payloadInput.addEventListener('input', syncPayloadState);
+  elements.payloadInspector.addEventListener('input', handleInspectorInput);
+  elements.payloadInspector.addEventListener('change', handleInspectorInput);
+  elements.editorModeButtons.forEach((button) => {
+    button.addEventListener('click', () => setEditorMode(button.dataset.editorMode));
+  });
   elements.redeemButton.addEventListener('click', handleRedeem);
   elements.formatButton.addEventListener('click', () => {
     const { parsed } = syncPayloadState();
