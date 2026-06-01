@@ -180,6 +180,33 @@ namespace Afjk.SceneSync.Editor
             return glb != null && glb.Length <= MaxGlbUploadBytes;
         }
 
+        private async System.Threading.Tasks.Task<bool> EnsureConnectedForPublishBroadcast()
+        {
+            if (_client != null && _client.IsConnected)
+            {
+                _connected = true;
+                return true;
+            }
+
+            if (_client == null) return false;
+
+            Debug.LogWarning(
+                "[SceneSync] Connection closed before publish broadcast. " +
+                "Reconnecting to send the scene update."
+            );
+
+            _connected = false;
+            await _client.ConnectAsync(_presenceUrl, _room, _nickname);
+
+            if (_client.IsConnected)
+            {
+                _connected = true;
+                return true;
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// 同期対象かどうかを判定する。
         /// MeshFilter または SkinnedMeshRenderer を持つオブジェクトのみ対象。
@@ -1949,13 +1976,6 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
-            _meshPaths[objectId] = path;
-            identity.MeshPath = path;
-            identity.AssetId = assetId;
-            identity.State = SceneSyncState.Synced;
-            EditorUtility.SetDirty(identity);
-            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
-
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
@@ -1977,7 +1997,40 @@ namespace Afjk.SceneSync.Editor
                 (!string.IsNullOrEmpty(assetId) ? ",\"assetId\":\"" + JsonEscape(assetId) + "\"" : "") +
                 ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") +
                 animationPayload + "}";
-            await _client.Broadcast(payload);
+
+            if (!await EnsureConnectedForPublishBroadcast())
+            {
+                identity.State = SceneSyncState.Error;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                Debug.LogError(
+                    $"[SceneSync] Publish aborted because the connection could not be restored before broadcast: " +
+                    $"{go.name}, objectId={objectId}, path={path}"
+                );
+                return;
+            }
+
+            var broadcasted = await _client.Broadcast(payload);
+            if (!broadcasted)
+            {
+                identity.State = SceneSyncState.Error;
+                EditorUtility.SetDirty(identity);
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                Debug.LogError(
+                    $"[SceneSync] Publish aborted because scene update broadcast failed: " +
+                    $"{go.name}, objectId={objectId}, path={path}"
+                );
+                return;
+            }
+
+            _meshPaths[objectId] = path;
+            identity.MeshPath = path;
+            identity.AssetId = assetId;
+            identity.State = SceneSyncState.Synced;
+            EditorUtility.SetDirty(identity);
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
 
             _managedObjects[objectId] = go;
             _instanceToObjectId[go.GetInstanceID()] = objectId;
