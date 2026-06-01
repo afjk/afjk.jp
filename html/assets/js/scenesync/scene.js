@@ -2111,7 +2111,14 @@ function setupObjectGlbAnimation(objectId, model) {
   };
 
   const mixer = new THREE.AnimationMixer(model);
-  const clipIndex = clampAnimationClipIndex(state.clip, clips.length);
+  let clipIndex = clampAnimationClipIndex(state.clip, clips.length);
+  if (typeof state.clipName === 'string' && state.clipName.trim()) {
+    const resolution = resolveAnimationClipIndex(model, { clipName: state.clipName });
+    if (resolution.ok) {
+      clipIndex = resolution.clipIndex;
+      state.clipName = resolution.clipName;
+    }
+  }
   state.clip = clipIndex;
   const clip = clips[clipIndex];
   const action = createLoopingAnimationAction(mixer, clip);
@@ -2159,6 +2166,7 @@ function getObjectAnimationState(obj) {
   return {
     enabled: raw.enabled !== false,
     clip: Number.isInteger(raw.clip) ? raw.clip : 0,
+    clipName: typeof raw.clipName === 'string' ? raw.clipName : null,
     mode: raw.mode === 'once' ? 'once' : 'loop',
     speed: Number.isFinite(raw.speed) ? raw.speed : 1,
   };

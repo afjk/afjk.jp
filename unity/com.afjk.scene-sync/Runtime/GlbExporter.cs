@@ -33,6 +33,7 @@ namespace Afjk.SceneSync
 #if UNITY_EDITOR
         public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
         public static Func<GameObject, IDisposable> EditorExportPreparationHandler { get; set; }
+        public static string LastExportPreferredAnimationClipName { get; set; }
 
         public static bool IsUnityGltfExportAvailable => UnityGltfExportHandler != null;
 
@@ -50,6 +51,9 @@ namespace Afjk.SceneSync
 
         public static async Task<byte[]> ExportGameObjectAsGlb(GameObject go, SceneSyncGlbExportBackend backend)
         {
+#if UNITY_EDITOR
+            LastExportPreferredAnimationClipName = null;
+#endif
             var originalPos = go.transform.position;
             var originalRot = go.transform.rotation;
             var originalScale = go.transform.localScale;

@@ -113,6 +113,9 @@ namespace Afjk.SceneSync.Editor
             var scope = new AnimationExportOverrideScope();
             var bakedClipCount = 0;
             var appliedEventCount = 0;
+            var eventClipCount = 0;
+            var preferredClipName = "";
+            var preferredClipEventCount = 0;
 
             foreach (var animator in root.GetComponentsInChildren<Animator>(true))
             {
@@ -127,13 +130,24 @@ namespace Afjk.SceneSync.Editor
                 {
                     if (clip == null || !controllerClips.Add(clip)) continue;
 
+                    var events = AnimationUtility.GetAnimationEvents(clip);
+                    if (events != null && events.Length > 0)
+                        eventClipCount++;
+
                     if (!TryCreateBakedEventClip(clip, context.NamedClips, out var bakedClip, out var appliedToClip))
                         continue;
 
+                    bakedClip.name = clip.name;
                     overridePairs.Add(new KeyValuePair<AnimationClip, AnimationClip>(clip, bakedClip));
                     scope.AddTemporaryObject(bakedClip);
                     bakedClipCount++;
                     appliedEventCount += appliedToClip;
+
+                    if (appliedToClip > preferredClipEventCount)
+                    {
+                        preferredClipName = clip.name;
+                        preferredClipEventCount = appliedToClip;
+                    }
                 }
 
                 if (overridePairs.Count == 0) continue;
@@ -149,7 +163,17 @@ namespace Afjk.SceneSync.Editor
             }
 
             if (!scope.HasChanges)
+            {
+                if (eventClipCount > 0)
+                {
+                    Debug.LogWarning(
+                        $"Scene Sync export support: found {eventClipCount} animation clip(s) with event(s), " +
+                        "but no event-referenced clip curves were matched for GLB export.");
+                }
                 return null;
+            }
+
+            GlbExporter.LastExportPreferredAnimationClipName = preferredClipName;
 
             Debug.Log(
                 $"Scene Sync export support: temporarily baked {bakedClipCount} clip(s) from " +
@@ -496,11 +520,7 @@ namespace Afjk.SceneSync.Editor
             if (key.time > StepKeyEpsilon)
             {
                 var previousValue = curve.length > 0 ? curve.Evaluate(key.time - StepKeyEpsilon) : 0f;
-                var previousKey = new Keyframe(key.time - StepKeyEpsilon, previousValue)
-                {
-                    inSlope = 0f,
-                    outSlope = 0f,
-                };
+                var previousKey = new Keyframe(key.time - StepKeyEpsilon, previousValue, 0f, 0f);
                 SetOrAddKey(curve, previousKey);
             }
 

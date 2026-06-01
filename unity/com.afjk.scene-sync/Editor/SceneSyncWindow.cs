@@ -1913,6 +1913,10 @@ namespace Afjk.SceneSync.Editor
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
+            var preferredAnimationClipName = GlbExporter.LastExportPreferredAnimationClipName;
+            var animationPayload = !string.IsNullOrWhiteSpace(preferredAnimationClipName)
+                ? ",\"animation\":{\"enabled\":true,\"clipName\":\"" + JsonEscape(preferredAnimationClipName) + "\",\"mode\":\"loop\",\"speed\":1}"
+                : "";
             var payload = "{\"kind\":\"scene-add\",\"objectId\":\"" + JsonEscape(objectId) + "\",\"name\":\"" + JsonEscape(go.name) + "\"" +
                 ",\"origin\":\"unity\"" +
                 ",\"unityHierarchyPath\":\"" + JsonEscape(SceneSyncWireJson.GetUnityHierarchyPath(go)) + "\"" +
@@ -1921,7 +1925,8 @@ namespace Afjk.SceneSync.Editor
                 ",\"scale\":[" + FormatFloat(scl.x) + "," + FormatFloat(scl.y) + "," + FormatFloat(scl.z) + "]" +
                 ",\"meshPath\":\"" + JsonEscape(path) + "\"" +
                 (!string.IsNullOrEmpty(assetId) ? ",\"assetId\":\"" + JsonEscape(assetId) + "\"" : "") +
-                ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") + "}";
+                ",\"asset\":" + SceneSyncWireJson.BuildMeshAssetJson(path, assetId, "unity") +
+                animationPayload + "}";
             await _client.Broadcast(payload);
 
             _managedObjects[objectId] = go;
