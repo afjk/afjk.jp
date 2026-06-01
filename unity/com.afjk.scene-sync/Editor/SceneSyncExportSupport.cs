@@ -112,6 +112,7 @@ namespace Afjk.SceneSync.Editor
             var context = CollectAnimationContext(root);
             var scope = new AnimationExportOverrideScope();
             var bakedClipCount = 0;
+            var compositeClipCount = 0;
             var appliedEventCount = 0;
             var eventClipCount = 0;
             var preferredClipName = "";
@@ -125,14 +126,45 @@ namespace Afjk.SceneSync.Editor
                 var controller = animator.runtimeAnimatorController;
                 var overridePairs = new List<KeyValuePair<AnimationClip, AnimationClip>>();
                 var controllerClips = new HashSet<AnimationClip>();
+                var controllerClipList = new List<AnimationClip>();
+                var eventSourceClips = new List<AnimationClip>();
 
                 foreach (var clip in controller.animationClips)
                 {
                     if (clip == null || !controllerClips.Add(clip)) continue;
+                    controllerClipList.Add(clip);
 
-                    var events = AnimationUtility.GetAnimationEvents(clip);
-                    if (events != null && events.Length > 0)
+                    if (HasNamedEventReferences(clip, context.NamedClips))
+                    {
                         eventClipCount++;
+                        eventSourceClips.Add(clip);
+                    }
+                }
+
+                foreach (var clip in controllerClipList)
+                {
+                    if (TryCreateCompositeEventBakedClip(
+                        clip,
+                        eventSourceClips,
+                        context.NamedClips,
+                        out var compositeClip,
+                        out var compositeAppliedEvents))
+                    {
+                        compositeClip.name = clip.name;
+                        overridePairs.Add(new KeyValuePair<AnimationClip, AnimationClip>(clip, compositeClip));
+                        scope.AddTemporaryObject(compositeClip);
+                        bakedClipCount++;
+                        compositeClipCount++;
+                        appliedEventCount += compositeAppliedEvents;
+
+                        if (string.IsNullOrEmpty(preferredClipName) || compositeAppliedEvents > preferredClipEventCount)
+                        {
+                            preferredClipName = clip.name;
+                            preferredClipEventCount = compositeAppliedEvents;
+                        }
+
+                        continue;
+                    }
 
                     if (!TryCreateBakedEventClip(clip, context.NamedClips, out var bakedClip, out var appliedToClip))
                         continue;
@@ -143,7 +175,7 @@ namespace Afjk.SceneSync.Editor
                     bakedClipCount++;
                     appliedEventCount += appliedToClip;
 
-                    if (appliedToClip > preferredClipEventCount)
+                    if (string.IsNullOrEmpty(preferredClipName) && appliedToClip > preferredClipEventCount)
                     {
                         preferredClipName = clip.name;
                         preferredClipEventCount = appliedToClip;
@@ -177,7 +209,8 @@ namespace Afjk.SceneSync.Editor
 
             Debug.Log(
                 $"Scene Sync export support: temporarily baked {bakedClipCount} clip(s) from " +
-                $"{appliedEventCount} named animation event(s) for GLB export.");
+                $"{appliedEventCount} named animation event(s) for GLB export " +
+                $"({compositeClipCount} motion clip(s) include baked event curves).");
             return scope;
         }
 
@@ -416,12 +449,78 @@ namespace Afjk.SceneSync.Editor
             return false;
         }
 
-        private static int CopyCurvesWithOffset(AnimationClip sourceClip, AnimationClip targetClip, float timeOffset)
+        private static bool HasNamedEventReferences(AnimationClip clip, Dictionary<string, AnimationClip> namedClips)
+        {
+            if (clip == null) return false;
+
+            var events = AnimationUtility.GetAnimationEvents(clip);
+            if (events == null || events.Length == 0) return false;
+
+            foreach (var animationEvent in events)
+            {
+                if (TryFindNamedClip(animationEvent, namedClips, clip, out _))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsLikelyMotionClip(AnimationClip clip, Dictionary<string, AnimationClip> namedClips)
+        {
+            if (clip == null || clip.name.EndsWith(BakedClipSuffix, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (HasNamedEventReferences(clip, namedClips))
+                return false;
+
+            return HasNonBlendShapeCurves(clip);
+        }
+
+        private static bool HasNonBlendShapeCurves(AnimationClip clip)
+        {
+            if (clip == null) return false;
+
+            foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+            {
+                if (!IsBlendShapeBinding(binding))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsBlendShapeBinding(EditorCurveBinding binding)
+        {
+            var propertyName = binding.propertyName ?? "";
+            return propertyName.StartsWith("blendShape.", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool AreClipDurationsCompatible(AnimationClip motionClip, AnimationClip eventSourceClip)
+        {
+            if (motionClip == null || eventSourceClip == null) return false;
+
+            var motionLength = Mathf.Max(0f, motionClip.length);
+            var eventLength = Mathf.Max(0f, eventSourceClip.length);
+            if (motionLength <= StepKeyEpsilon || eventLength <= StepKeyEpsilon)
+                return false;
+
+            var tolerance = Mathf.Max(0.5f, motionLength * 0.02f);
+            return Mathf.Abs(motionLength - eventLength) <= tolerance;
+        }
+
+        private static int CopyCurvesWithOffset(
+            AnimationClip sourceClip,
+            AnimationClip targetClip,
+            float timeOffset,
+            bool blendShapeOnly = false)
         {
             var copied = 0;
 
             foreach (var binding in AnimationUtility.GetCurveBindings(sourceClip))
             {
+                if (blendShapeOnly && !IsBlendShapeBinding(binding))
+                    continue;
+
                 var sourceCurve = AnimationUtility.GetEditorCurve(sourceClip, binding);
                 if (sourceCurve == null) continue;
 
@@ -451,6 +550,91 @@ namespace Afjk.SceneSync.Editor
             }
 
             return copied;
+        }
+
+        private static int CopyEventReferencedCurvesToClip(
+            AnimationClip eventSourceClip,
+            AnimationClip targetClip,
+            Dictionary<string, AnimationClip> namedClips,
+            out int appliedEventCount)
+        {
+            appliedEventCount = 0;
+            if (eventSourceClip == null || targetClip == null) return 0;
+
+            var events = AnimationUtility.GetAnimationEvents(eventSourceClip);
+            if (events == null || events.Length == 0) return 0;
+
+            var copiedCurveCount = 0;
+            foreach (var animationEvent in events)
+            {
+                if (!TryFindNamedClip(animationEvent, namedClips, eventSourceClip, out var eventClip))
+                    continue;
+
+                var copied = CopyCurvesWithOffset(
+                    eventClip,
+                    targetClip,
+                    animationEvent.time,
+                    blendShapeOnly: true);
+                if (copied == 0) continue;
+
+                copiedCurveCount += copied;
+                appliedEventCount++;
+            }
+
+            return copiedCurveCount;
+        }
+
+        private static bool TryCreateCompositeEventBakedClip(
+            AnimationClip motionClip,
+            List<AnimationClip> eventSourceClips,
+            Dictionary<string, AnimationClip> namedClips,
+            out AnimationClip bakedClip,
+            out int appliedEventCount)
+        {
+            bakedClip = null;
+            appliedEventCount = 0;
+
+            if (!IsLikelyMotionClip(motionClip, namedClips))
+                return false;
+            if (eventSourceClips == null || eventSourceClips.Count == 0)
+                return false;
+
+            var nextClip = new AnimationClip
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            EditorUtility.CopySerialized(motionClip, nextClip);
+            nextClip.name = motionClip.name + BakedClipSuffix;
+            nextClip.hideFlags = HideFlags.HideAndDontSave;
+            AnimationUtility.SetAnimationEvents(nextClip, Array.Empty<AnimationEvent>());
+
+            var copiedCurveCount = 0;
+            foreach (var eventSourceClip in eventSourceClips)
+            {
+                if (eventSourceClip == null || eventSourceClip == motionClip)
+                    continue;
+                if (!AreClipDurationsCompatible(motionClip, eventSourceClip))
+                    continue;
+
+                var copied = CopyEventReferencedCurvesToClip(
+                    eventSourceClip,
+                    nextClip,
+                    namedClips,
+                    out var sourceAppliedEventCount);
+                if (copied == 0) continue;
+
+                copiedCurveCount += copied;
+                appliedEventCount += sourceAppliedEventCount;
+            }
+
+            if (copiedCurveCount > 0)
+            {
+                bakedClip = nextClip;
+                return true;
+            }
+
+            UnityEngine.Object.DestroyImmediate(nextClip);
+            return false;
         }
 
         private static bool TryCreateBakedEventClip(
