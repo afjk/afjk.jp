@@ -78,6 +78,7 @@ namespace Afjk.SceneSync.Editor
         private bool _showManagedUnityObjects = true;
         private Vector2 _scrollPosition;
         private bool _isSceneSwitching = false;
+        private bool _isManualDisconnect = false;
         private string _envId = null;
 
         private void OnEnable()
@@ -94,14 +95,20 @@ namespace Afjk.SceneSync.Editor
             _client.OnConnected += () =>
             {
                 _connected = true;
+                SyncRoomToSceneSyncManager();
                 RebindPublishedUnityObjects();
                 Repaint();
             };
             _client.OnDisconnected += () =>
             {
+                var wasConnected = _connected;
                 _connected = false;
                 _sceneReceived = false;
                 _firstPeersReceived = false;
+                if (wasConnected && !_isSceneSwitching && !_isManualDisconnect)
+                {
+                    ClearTemporaryObjects();
+                }
                 Repaint();
             };
             _client.OnPeersUpdated += (peers) =>
@@ -125,6 +132,8 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.hierarchyChanged += OnHierarchyChanged;
             EditorSceneManager.sceneClosing += OnSceneClosing;
             EditorSceneManager.sceneOpened += OnSceneOpened;
+
+            SyncRoomFromSceneSyncManager();
         }
 
         private void OnDisable()
@@ -133,7 +142,9 @@ namespace Afjk.SceneSync.Editor
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             EditorSceneManager.sceneClosing -= OnSceneClosing;
             EditorSceneManager.sceneOpened -= OnSceneOpened;
+            _isManualDisconnect = true;
             _client?.Disconnect();
+            _isManualDisconnect = false;
         }
 
         private string GetBlobUrl()
@@ -263,14 +274,22 @@ namespace Afjk.SceneSync.Editor
 
             _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
             _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
+            EditorGUI.BeginChangeCheck();
             _room = EditorGUILayout.TextField("Room", _room);
+            if (EditorGUI.EndChangeCheck())
+            {
+                SyncRoomToSceneSyncManager();
+            }
             _nickname = EditorGUILayout.TextField("Nickname", _nickname);
             GUILayout.Space(8);
+
+            DrawConnectionStatus();
 
             if (!_connected)
             {
                 if (GUILayout.Button("Connect"))
                 {
+                    SyncRoomToSceneSyncManager();
                     _ = _client.ConnectAsync(_presenceUrl, _room, _nickname);
                 }
             }
@@ -296,9 +315,30 @@ namespace Afjk.SceneSync.Editor
                 if (GUILayout.Button("Disconnect"))
                 {
                     ClearTemporaryObjects();
+                    _isManualDisconnect = true;
                     _client.Disconnect();
+                    _isManualDisconnect = false;
                 }
             }
+        }
+
+        private void DrawConnectionStatus()
+        {
+            var connected = _connected && _client != null && _client.IsConnected;
+            var previousColor = GUI.color;
+            GUI.color = connected ? new Color(0.1f, 0.65f, 0.2f) : new Color(0.85f, 0.15f, 0.12f);
+
+            var activeRoom = connected && _client != null && !string.IsNullOrEmpty(_client.Room)
+                ? _client.Room
+                : _room;
+            GUILayout.Label(
+                (connected ? "● Connected" : "● Disconnected") +
+                (string.IsNullOrWhiteSpace(activeRoom) ? "" : "  Room: " + activeRoom),
+                EditorStyles.boldLabel
+            );
+
+            GUI.color = previousColor;
+            GUILayout.Space(4);
         }
 
         private void DrawQuickGuide()
@@ -322,7 +362,8 @@ namespace Afjk.SceneSync.Editor
                 "Remote objects:\n" +
                 "- Remote GLB objects are temporary.\n" +
                 "- Move the Scene Sync root, not imported children.\n" +
-                "- Temporary objects are removed on manual Disconnect.",
+                "- Temporary objects are removed on Disconnect.\n" +
+                "- Fix Remote Object Selection is only needed if imported child meshes become selectable.",
                 MessageType.Info
             );
         }
@@ -454,10 +495,14 @@ namespace Afjk.SceneSync.Editor
                 }
             }
 
-            if (GUILayout.Button("Apply Picking Rules"))
+            if (GUILayout.Button("Fix Remote Object Selection"))
             {
                 ApplyPickingRules();
             }
+            EditorGUILayout.LabelField(
+                "Repair only: makes imported remote roots selectable while imported child meshes stay unpickable.",
+                EditorStyles.wordWrappedMiniLabel
+            );
 
             var showSceneSyncGizmos = EditorGUILayout.ToggleLeft("Show Scene Sync Gizmos", ShowSceneSyncGizmos);
             if (showSceneSyncGizmos != ShowSceneSyncGizmos)
@@ -675,8 +720,33 @@ namespace Afjk.SceneSync.Editor
 
             if (manager != null)
             {
+                manager.ConfiguredRoom = _room;
+                MarkManagerDirty(manager);
                 Selection.activeGameObject = manager.gameObject;
             }
+        }
+
+        private void SyncRoomFromSceneSyncManager()
+        {
+            var manager = FindSceneSyncManager();
+            if (manager == null) return;
+
+            var managerRoom = manager.ConfiguredRoom;
+            if (string.IsNullOrEmpty(managerRoom)) return;
+            if (_connected) return;
+
+            _room = managerRoom;
+            Repaint();
+        }
+
+        private void SyncRoomToSceneSyncManager()
+        {
+            var manager = FindSceneSyncManager();
+            if (manager == null) return;
+            if (manager.ConfiguredRoom == _room) return;
+
+            manager.ConfiguredRoom = _room;
+            MarkManagerDirty(manager);
         }
 
         private SceneSyncManager FindSceneSyncManager()
@@ -847,6 +917,7 @@ namespace Afjk.SceneSync.Editor
 
             // Restore _connected from _client state
             // (The next manual Connect action will establish a fresh connection)
+            SyncRoomFromSceneSyncManager();
         }
 
         private void RebindPublishedUnityObjects()

@@ -70,7 +70,12 @@ namespace Afjk.SceneSync
         }
 
         public bool IsConnected => _connected;
-        public string Room => _client?.Room;
+        public string Room => _client != null && !string.IsNullOrEmpty(_client.Room) ? _client.Room : _room;
+        public string ConfiguredRoom
+        {
+            get => _room;
+            set => _room = value ?? "";
+        }
         public List<PeerInfo> Peers => _peers;
         public GameObject SelectedObject => _selectedObject;
         public bool IncludeManagerChildren
