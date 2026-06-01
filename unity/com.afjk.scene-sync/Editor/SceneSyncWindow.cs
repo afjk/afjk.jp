@@ -79,6 +79,7 @@ namespace Afjk.SceneSync.Editor
         private Vector2 _scrollPosition;
         private bool _isSceneSwitching = false;
         private bool _isManualDisconnect = false;
+        private bool _publishInProgress = false;
         private string _envId = null;
 
         private void OnEnable()
@@ -482,17 +483,22 @@ namespace Afjk.SceneSync.Editor
         {
             GUILayout.Label("Actions", EditorStyles.boldLabel);
 
-            using (new EditorGUI.DisabledScope(!_connected))
+            using (new EditorGUI.DisabledScope(!_connected || _publishInProgress))
             {
                 if (GUILayout.Button("Publish Selected"))
                 {
-                    PublishSelectedObjects();
+                    QueuePublishSelectedObjects();
                 }
 
                 if (GUILayout.Button("Publish Managed Objects"))
                 {
-                    PublishManagedObjects();
+                    QueuePublishManagedObjects();
                 }
+            }
+
+            if (_publishInProgress)
+            {
+                EditorGUILayout.LabelField("Publishing...", EditorStyles.miniLabel);
             }
 
             if (GUILayout.Button("Fix Remote Object Selection"))
@@ -1675,7 +1681,47 @@ namespace Afjk.SceneSync.Editor
             return identity;
         }
 
-        private async void PublishSelectedObjects()
+        private void QueuePublishSelectedObjects()
+        {
+            QueuePublishOperation(PublishSelectedObjectsAsync);
+        }
+
+        private void QueuePublishManagedObjects()
+        {
+            QueuePublishOperation(PublishManagedObjectsAsync);
+        }
+
+        private void QueuePublishOperation(Func<System.Threading.Tasks.Task> operation)
+        {
+            if (_publishInProgress)
+            {
+                Debug.LogWarning("[SceneSync] Publish is already in progress.");
+                return;
+            }
+
+            _publishInProgress = true;
+            Repaint();
+
+            EditorApplication.delayCall += async () =>
+            {
+                try
+                {
+                    if (operation != null)
+                        await operation();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                }
+                finally
+                {
+                    _publishInProgress = false;
+                    Repaint();
+                }
+            };
+        }
+
+        private async System.Threading.Tasks.Task PublishSelectedObjectsAsync()
         {
             if (!_connected)
             {
@@ -1710,7 +1756,7 @@ namespace Afjk.SceneSync.Editor
             }
         }
 
-        private async void PublishManagedObjects()
+        private async System.Threading.Tasks.Task PublishManagedObjectsAsync()
         {
             if (!_connected)
             {
@@ -1914,6 +1960,10 @@ namespace Afjk.SceneSync.Editor
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
             var preferredAnimationClipName = GlbExporter.LastExportPreferredAnimationClipName;
+            if (!string.IsNullOrWhiteSpace(preferredAnimationClipName))
+            {
+                Debug.Log("[SceneSync] Initial GLB animation clip: " + preferredAnimationClipName);
+            }
             var animationPayload = !string.IsNullOrWhiteSpace(preferredAnimationClipName)
                 ? ",\"animation\":{\"enabled\":true,\"clipName\":\"" + JsonEscape(preferredAnimationClipName) + "\",\"mode\":\"loop\",\"speed\":1}"
                 : "";
