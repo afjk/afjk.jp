@@ -70,3 +70,59 @@ The first implementation adds:
 - `minimal` shell that hides the built-in editor chrome and mounts a small overlay for quick swap testing.
 
 This is a scaffold, not the final split. Future work should move current editor UI event wiring out of `scene.js` and into `shells/editor/`, while gradually exposing stable scene commands from core.
+
+## Editor Shell v1 structure
+
+The Editor Shell is expanded with Layout and Input Adapter scaffolding:
+
+### Directory structure
+
+```text
+html/assets/js/scenesync/shells/editor/
+├─ editor-shell.js              (main shell entry, mounts layouts)
+├─ editor-actions.js            (wrapper for core.commands)
+├─ editor-shell.css
+├─ layouts/
+│  ├─ desktop-editor-layout.js  (desktop UI layout)
+│  ├─ mobile-editor-layout.js   (mobile UI layout)
+│  └─ xr-editor-layout.js       (XR/immersive layout - placeholder)
+└─ inputs/
+   ├─ mouse-input-adapter.js    (mouse/pointer input - placeholder)
+   ├─ touch-input-adapter.js    (touch input - placeholder)
+   └─ xr-input-adapter.js       (WebXR input - placeholder)
+```
+
+### Editor Actions
+
+`editor-actions.js` provides a command wrapper interface for the Editor Shell. The core scene.js passes `core.commands` which are then accessed via `createEditorActions(core)`. This isolates the shell from direct DOM manipulation.
+
+Current commands:
+- `openAddMenu()` - trigger object add dialog
+- `undo()` / `redo()` - history navigation
+- `deleteSelected()` - remove selected objects
+- `exportScene()` - export to GLB/JSON
+- `openHelp()` - show help dialog
+- `startAiLink()` - initiate AI pairing
+- `openSceneInspector()` / `closeSceneInspector()` - scene inspector visibility
+
+### Layouts
+
+Layouts are surface-specific presenters. The Editor Shell mounts the appropriate layout based on device mode detection (`scene-sync-device-mobile` class).
+
+- **Desktop Layout**: adds `scene-sync-layout-desktop-editor` class. Currently wraps existing desktop UI.
+- **Mobile Layout**: adds `scene-sync-layout-mobile-editor` class. Currently wraps existing mobile UI.
+- **XR Layout**: adds `scene-sync-layout-xr-editor` class. Placeholder for WebXR/MR editing UI.
+
+### Input Adapters
+
+Input adapters are placeholders for future input event routing:
+
+- **Mouse Input Adapter** (`mouse-input-adapter.js`): pointer-based controls
+- **Touch Input Adapter** (`touch-input-adapter.js`): touch gesture handling
+- **XR Input Adapter** (`xr-input-adapter.js`): WebXR controller/hand tracking
+
+These are currently mounted but inactive. Future work will route interaction handling through adapters instead of direct DOM event listeners.
+
+### Minimal Shell
+
+The `minimal` shell remains experimental/testing-focused and shows how a Shell can provide a completely different UI while sharing the same core. It demonstrates the command API in action with a minimal button panel.
