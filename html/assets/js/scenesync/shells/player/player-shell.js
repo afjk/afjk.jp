@@ -160,15 +160,12 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
       const seekEl = panel.querySelector('[data-player-seek]');
       seekEl?.addEventListener('pointerdown', () => { isSeeking = true; });
       seekEl?.addEventListener('input', (e) => {
-        // Live preview while dragging (no seek yet)
+        // Live preview while dragging (does not commit seek)
         const timeEl = panel.querySelector('[data-player-current-time]');
         if (timeEl) timeEl.textContent = formatTime(parseFloat(e.target.value));
       });
       seekEl?.addEventListener('change', (e) => {
-        actions.seek(parseFloat(e.target.value));
-        isSeeking = false;
-      });
-      seekEl?.addEventListener('pointerup', (e) => {
+        // `change` fires once when the thumb is released on both desktop and mobile
         actions.seek(parseFloat(e.target.value));
         isSeeking = false;
       });
