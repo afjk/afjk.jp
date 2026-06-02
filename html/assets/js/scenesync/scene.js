@@ -2484,7 +2484,7 @@ function registerLoadedGlbAnimation(objectId, model, reason = 'unknown') {
   }
 }
 
-function updateObjectGlbAnimations(now = performance.now()) {
+function updateObjectGlbAnimations(now = performance.now(), clockState = null) {
   for (const [objectId, entry] of glbAnimationMixers) {
     const obj = managedObjects.get(objectId);
     if (!obj) {
@@ -2503,7 +2503,7 @@ function updateObjectGlbAnimations(now = performance.now()) {
     const clip = entry.clips[entry.clipIndex] || entry.clips[0];
     if (!clip || !entry.action) continue;
 
-    const baseTime = getObjectRuntimeTime(objectId, now);
+    const baseTime = getObjectRuntimeTime(objectId, now, clockState);
     const animationSpeed = Number.isFinite(state.speed) ? state.speed : 1;
     const t = baseTime * animationSpeed;
     const duration = clip.duration || 1;
@@ -4338,10 +4338,10 @@ renderer.setAnimationLoop((time, frame) => {
   }
 
   const now = performance.now();
-  updateObjectGlbAnimations(now);
+  const sceneClockStateForTick = getSceneClockStateForLoomlet(now);
+  updateObjectGlbAnimations(now, sceneClockStateForTick);
   updateGazeStateFromCamera();
   updateGazeDwellState(now);
-  const sceneClockStateForTick = getSceneClockStateForLoomlet(now);
   loomIntegration?.tickObjectGraphs?.(sceneClockStateForTick);
   audioSourceController.tick(now);
 
