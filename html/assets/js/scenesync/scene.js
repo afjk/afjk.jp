@@ -4759,6 +4759,20 @@ function applyObjectAudioSourcesPatch(objectId, patch) {
   return merged;
 }
 
+// 受信した scene-delta の audioSources を適用する。
+// - object（map）: 部分 patch（キー値 null はそのキーを削除）
+// - null: 全 AudioSource を削除（clear-all）
+function applyIncomingAudioSources(objectId, value) {
+  if (value === undefined) return;
+  if (value === null) {
+    setObjectAudioSourcesFull(objectId, {});
+    return;
+  }
+  if (typeof value === 'object') {
+    applyObjectAudioSourcesPatch(objectId, value);
+  }
+}
+
 // オブジェクトの audioSources を完全置換する（scene-add / scene-state 復元用）。
 function setObjectAudioSourcesFull(objectId, map) {
   const obj = managedObjects.get(objectId);
@@ -4807,7 +4821,10 @@ const audioSourceHostApi = {
   setClip: (objectId, name, url) => {
     audioSourceController.setClip(objectId, name, url);
     // component（audioSources）へも反映し、他クライアントへ broadcast する。
-    return addOrUpdateAudioSource(objectId, { url }, { name });
+    // 既存の volume/loop/playOnAwake/offset/playbackRate/spatial/sync を保持し url だけ差し替える。
+    const resolvedName = name || DEFAULT_AUDIO_SOURCE_NAME;
+    const current = managedObjects.get(objectId)?.userData?.audioSources?.[resolvedName] || {};
+    return addOrUpdateAudioSource(objectId, { ...current, url }, { name: resolvedName });
   },
   syncToAnimation: (objectId, name, opts) => audioSourceController.syncToAnimation(objectId, name, opts),
   unsync: (objectId, name) => audioSourceController.unsync(objectId, name),
@@ -5615,6 +5632,7 @@ function handleHandoff(data) {
               visible: mergedInfo.visible ?? true,
               asset: cloneJsonSafe(mergedInfo.asset),
               metadata: cloneJsonSafe(mergedInfo.metadata || null),
+              audioSources: cloneJsonSafe(getObjectAudioSourcesForSerialize(managedObjects.get(payload.objectId)) || {}),
             };
 
             presenceState.historyManager?.push(
@@ -5639,8 +5657,8 @@ function handleHandoff(data) {
           animation: payload.animation,
         });
       }
-      if (payload.audioSources && typeof payload.audioSources === 'object') {
-        applyObjectAudioSourcesPatch(payload.objectId, payload.audioSources);
+      if (payload.audioSources !== undefined) {
+        applyIncomingAudioSources(payload.objectId, payload.audioSources);
         console.debug('[scene-delta] audioSources applied', {
           objectId: payload.objectId,
           audioSources: payload.audioSources,
@@ -7622,6 +7640,7 @@ function createContentReplaceSnapshot(obj, fallbackObjectId = null) {
     visible: obj.visible !== false,
     asset: cloneJsonSafe(obj.userData?.asset || null),
     metadata: cloneJsonSafe(obj.userData?.metadata || null),
+    audioSources: cloneJsonSafe(getObjectAudioSourcesForSerialize(obj) || {}),
   };
 }
 
@@ -7697,12 +7716,16 @@ async function replaceObjectContent(objectId, input, options = {}) {
       ? input.name.trim()
       : existing.userData?.name || objectId;
 
+  // コンテンツ差し替えではオブジェクトを作り直すため、既存の AudioSource component を保持する。
+  const preservedAudioSources = getObjectAudioSourcesForSerialize(existing) || {};
+
   const deltaPayload = {
     kind: 'scene-delta',
     objectId,
     ...(input.name ? { name: nextName } : {}),
     asset: newAsset,
     metadata: newMetadata,
+    audioSources: preservedAudioSources,
   };
 
   broadcast(deltaPayload);
@@ -7716,6 +7739,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
     visible: existing.visible !== false,
     asset: newAsset,
     metadata: newMetadata,
+    audioSources: preservedAudioSources,
   };
   addOrUpdateObject(objectId, mergedInfo, { ...options, pushHistory: false });
 
@@ -7729,6 +7753,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
       visible: existing.visible !== false,
       asset: cloneJsonSafe(newAsset),
       metadata: cloneJsonSafe(newMetadata),
+      audioSources: cloneJsonSafe(preservedAudioSources),
     };
 
     presenceState.historyManager?.push(
@@ -8196,6 +8221,9 @@ function applyOperationToScene(operation) {
             metadata: hasMetadata
               ? cloneJsonSafe(operation.metadata)
               : cloneJsonSafe(obj.userData?.metadata || null),
+            audioSources: Object.prototype.hasOwnProperty.call(operation, 'audioSources')
+              ? cloneJsonSafe(operation.audioSources)
+              : cloneJsonSafe(getObjectAudioSourcesForSerialize(obj) || {}),
           };
 
           addOrUpdateObject(operation.objectId, mergedInfo, {
@@ -8215,6 +8243,9 @@ function applyOperationToScene(operation) {
         }
         if (operation.animation && typeof operation.animation === 'object') {
           applyObjectAnimationDelta(obj, operation.animation);
+        }
+        if (operation.audioSources !== undefined) {
+          applyIncomingAudioSources(operation.objectId, operation.audioSources);
         }
       }
       notifySceneStateChanged('undo-redo-scene-delta');

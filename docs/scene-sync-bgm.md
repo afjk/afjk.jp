@@ -173,6 +173,7 @@ type SceneSyncAudioSource = {
 ### payload（scene-delta / scene-add）
 
 `audioSources` は map（部分 patch）として流す。値が `null` のキーはその AudioSource を削除する。
+`audioSources` 自体を `null` にすると、そのオブジェクトの全 AudioSource を削除する（clear-all）。
 
 ```json
 {
@@ -214,7 +215,7 @@ audioSource.stop(objectId, name = 'default')
 audioSource.seek(objectId, name = 'default', time)
 audioSource.playOneShot(objectId, name = 'default', options?)  // 毎回頭から鳴らす単発再生
 audioSource.setVolume(objectId, name = 'default', volume)
-audioSource.setClip(objectId, name = 'default', url)
+audioSource.setClip(objectId, name = 'default', url)  // 既存の volume/loop/playOnAwake 等を保持し url のみ差し替え
 audioSource.syncToAnimation(objectId, name = 'default', { animationClipName?, offset, resyncOnLoop?, driftThreshold? })
 audioSource.unsync(objectId, name = 'default')
 ```

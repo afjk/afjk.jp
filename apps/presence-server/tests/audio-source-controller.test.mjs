@@ -82,17 +82,20 @@ test('AudioSource controller', async (t) => {
     assert.equal(controller.getObjectAudioSources('speaker-1').default.volume, 0.25);
   });
 
-  await t.test('setClip swaps the underlying url and keeps playing', () => {
+  await t.test('setClip swaps the underlying url, keeps playing, and preserves config', () => {
     const { controller, created } = makeHarness();
     controller.setObjectAudioSources('speaker-1', {
-      default: { type: 'audioSource', name: 'default', url: 'https://x/a.mp3' },
+      default: { type: 'audioSource', name: 'default', url: 'https://x/a.mp3', loop: true, volume: 0.4 },
     });
     controller.play('speaker-1', 'default');
     controller.setClip('speaker-1', 'default', 'https://x/b.mp3');
     const last = created[created.length - 1];
     assert.equal(last.url, 'https://x/b.mp3');
     assert.equal(last.paused, false);
-    assert.equal(controller.getObjectAudioSources('speaker-1').default.url, 'https://x/b.mp3');
+    const config = controller.getObjectAudioSources('speaker-1').default;
+    assert.equal(config.url, 'https://x/b.mp3');
+    assert.equal(config.loop, true);
+    assert.equal(config.volume, 0.4);
   });
 
   await t.test('playOneShot creates a non-looping transient audio', () => {
