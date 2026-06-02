@@ -4683,8 +4683,12 @@ function setSceneClockMode(mode, now = performance.now()) {
 function pauseSceneClock(now = performance.now()) {
   if (sceneClockState.paused) return;
 
+  const currentTime = getSceneClockTime(now);
+
   sceneClockState.paused = true;
-  sceneClockState.pausedAt = getSceneClockTime(now);
+  sceneClockState.pausedAt = currentTime;
+  sceneClockState.localTime = currentTime;
+  sceneClockState.lastUpdateNow = now;
 }
 
 function resumeSceneClock(now = performance.now()) {
@@ -4706,10 +4710,18 @@ function seekSceneClock(t, now = performance.now()) {
     setSceneClockMode('local', now);
   }
 
+  const wasPaused = sceneClockState.paused;
+
   sceneClockState.localTime = t;
   sceneClockState.lastUpdateNow = now;
-  sceneClockState.paused = false;
-  sceneClockState.pausedAt = null;
+
+  if (wasPaused) {
+    sceneClockState.paused = true;
+    sceneClockState.pausedAt = t;
+  } else {
+    sceneClockState.paused = false;
+    sceneClockState.pausedAt = null;
+  }
 }
 
 function resetSceneClock(now = performance.now()) {
