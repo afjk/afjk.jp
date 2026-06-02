@@ -288,7 +288,32 @@ export function createAudioSourceController(deps = {}) {
 
   // ── tick ──────────────────────────────────────────────
 
-  function tickEntry(objectId, name, entry, nowMs) {
+  function getTimelineTargetTime(objectId, entry, nowMs, clockState) {
+    const audio = entry.audio;
+    const duration = Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : null;
+    const runtimeTime = getObjectRuntimeTime(objectId, nowMs, clockState);
+    if (!duration && clockState?.mode === 'host-follow' && runtimeTime > 3600) {
+      return null;
+    }
+    let target = (entry.config.offset || 0) + runtimeTime;
+    if (duration) {
+      target = entry.config.loop ? ((target % duration) + duration) % duration : Math.min(target, duration);
+    }
+    return Math.max(0, target);
+  }
+
+  function applyTransportPlaybackRate(audio, config, clockState) {
+    if (!audio) return;
+    const sourceRate = typeof config.playbackRate === 'number' && config.playbackRate > 0
+      ? config.playbackRate
+      : 1;
+    const transportRate = Number.isFinite(clockState?.rate) && clockState.rate > 0
+      ? clockState.rate
+      : 1;
+    try { audio.playbackRate = sourceRate * transportRate; } catch { /* noop */ }
+  }
+
+  function tickEntry(objectId, name, entry, nowMs, clockState = null) {
     const config = entry.config;
     if (!config?.url) return;
 
@@ -306,12 +331,8 @@ export function createAudioSourceController(deps = {}) {
       entry.started = true;
       entry.desiredState = 'playing';
       const audio = ensureAudio(entry);
-      const runtimeTime = getObjectRuntimeTime(objectId, nowMs);
-      const duration = Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : null;
-      if (duration) {
-        const base = (config.offset || 0) + runtimeTime;
-        safeSeek(audio, config.loop ? base % duration : Math.min(base, duration));
-      }
+      applyTransportPlaybackRate(audio, config, clockState);
+      safeSeek(audio, getTimelineTargetTime(objectId, entry, nowMs, clockState));
     }
 
     if (entry.desiredState === 'stopped') {
@@ -326,11 +347,15 @@ export function createAudioSourceController(deps = {}) {
     // desiredState === 'playing'
     const audio = ensureAudio(entry);
     if (!audio) return;
+    applyTransportPlaybackRate(audio, config, clockState);
 
+    const transportPaused = Boolean(clockState?.isPaused) || clockState?.rate === 0;
     const sync = config.sync;
+    let syncedToAnimation = false;
     if (sync?.mode === 'animation' && typeof getAnimationSample === 'function') {
       const sample = getAnimationSample(objectId, sync.animationClipName);
       if (sample && Number.isFinite(sample.time)) {
+        syncedToAnimation = true;
         const driftThreshold = Number.isFinite(sync.driftThreshold) ? sync.driftThreshold : 0.05;
         const offset = (sync.offset || 0) + (config.offset || 0);
         const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
@@ -349,13 +374,34 @@ export function createAudioSourceController(deps = {}) {
       }
     }
 
+    if (transportPaused) {
+      safePause(audio);
+      if (!syncedToAnimation) {
+        safeSeek(audio, getTimelineTargetTime(objectId, entry, nowMs, clockState));
+      }
+      return;
+    }
+
+    if (!syncedToAnimation) {
+      const driftThreshold = 0.15;
+      const target = getTimelineTargetTime(objectId, entry, nowMs, clockState);
+      if (!Number.isFinite(target)) {
+        tryPlay(entry, objectId, name);
+        return;
+      }
+      const drift = Math.abs((audio.currentTime || 0) - target);
+      if (drift > driftThreshold) {
+        safeSeek(audio, target);
+      }
+    }
+
     tryPlay(entry, objectId, name);
   }
 
-  function tick(nowMs = now()) {
+  function tick(nowMs = now(), clockState = null) {
     for (const [objectId, map] of objects) {
       for (const [name, entry] of map) {
-        tickEntry(objectId, name, entry, nowMs);
+        tickEntry(objectId, name, entry, nowMs, clockState);
       }
     }
   }
