@@ -118,7 +118,7 @@ Wires the following buttons to editor actions:
 - `#scene-inspector-toggle` → `toggleSceneInspector()`
 - `#scene-inspector-close` → `closeSceneInspector()`
 
-Note: `#add-btn` remains in scene.js as its implementation is deferred.
+Note: `#add-btn` click is wired through scene.js to `openAddMenu()`. The Layout does not re-wire it to avoid double-firing with DragDropManager.
 
 Adds `scene-sync-layout-desktop-editor` class.
 
@@ -169,3 +169,14 @@ The Editor Shell has been expanded to handle lightweight UI event wiring in layo
 **Input Adapters**: Remain as placeholders. Not yet wired to runtime input.
 
 This approach keeps heavy business logic in scene.js while moving lightweight UI event dispatch to the appropriate layout, improving maintainability as the shell architecture grows.
+
+## Editor Shell v3: Add Trigger Commandization
+
+The Add button trigger is now exposed as `core.commands.openAddMenu()`:
+
+- `openAddMenu` is a real function in scene.js, not a `dom.addBtn.click()` wrapper
+- Desktop: calls `dom.fileInput?.click()` directly (no self-click on `#add-btn`)
+- Mobile: calls `openMobileActionSheet()` directly
+- Editor Shell / Minimal Shell can call `core.commands.openAddMenu()` safely without recursion
+- `#add-btn` click listener in scene.js delegates to `openAddMenu()` (mobile path only; DragDropManager handles the desktop click path)
+- Actual file import and mobile add sheet internals remain in scene.js

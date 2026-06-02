@@ -9404,11 +9404,19 @@ function closeMobileRoomSheet() {
   closeSheet('mobile-room-sheet');
 }
 
+function openAddMenu() {
+  if (isMobileUi()) {
+    openMobileActionSheet();
+    return;
+  }
+  dom.fileInput?.click();
+}
+
 dom.addBtn?.addEventListener('click', (event) => {
   if (!isMobileUi()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  openMobileActionSheet();
+  openAddMenu();
 }, true);
 
 // ── クリップボード貼り付け ────────────────────────────────────────────
@@ -11972,7 +11980,7 @@ logDiagnosticFlags();
 nicknameChip?.addEventListener('click', editNickname);
 mountSceneSyncShellFromDom({
   commands: {
-    openAddMenu: () => dom.addBtn?.click(),
+    openAddMenu,
     undo: () => {
       if (presenceState.historyManager.canUndo()) performUndo();
     },
