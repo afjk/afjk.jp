@@ -4569,6 +4569,7 @@ const sceneInspectorState = {
   validationErrors: [],
   diffSummary: null,
   lastAppliedSummary: null,
+  preview: createSceneInspectorPreviewState(),
   objectEditor: {
     isEditing: false,
     objectId: null,
@@ -4579,6 +4580,7 @@ const sceneInspectorState = {
     validationErrors: [],
     diffSummary: null,
     lastAppliedSummary: null,
+    preview: createSceneInspectorPreviewState(),
   },
 };
 
@@ -10486,6 +10488,113 @@ function buildObjectBlockDiff(objectId, baseObject, editedObject) {
   return buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot);
 }
 
+function createSceneInspectorPreviewState() {
+  return {
+    applied: false,
+    fieldMask: {},
+    operation: null,
+  };
+}
+
+function clearSceneInspectorPreviewState(previewState) {
+  if (!previewState) return;
+  previewState.applied = false;
+  previewState.fieldMask = {};
+  previewState.operation = null;
+}
+
+function hasSceneInspectorPreview(previewState) {
+  return Boolean(previewState?.applied);
+}
+
+function buildSceneInspectorPreviewFieldMask(summary) {
+  const fieldMask = {};
+  for (const entry of summary?.changedFieldsByObject || []) {
+    if (!entry?.objectId || !Array.isArray(entry.fields)) continue;
+    const fields = fieldMask[entry.objectId] || [];
+    for (const field of entry.fields) {
+      if (typeof field === 'string' && !fields.includes(field)) {
+        fields.push(field);
+      }
+    }
+    if (fields.length > 0) {
+      fieldMask[entry.objectId] = fields;
+    }
+  }
+  return fieldMask;
+}
+
+function readInspectorValueAtPath(root, path) {
+  let target = root;
+  for (const key of path) {
+    if (target == null || typeof target !== 'object') return undefined;
+    target = target[key];
+  }
+  return target;
+}
+
+function setOrDeleteInspectorValueAtPath(root, path, value) {
+  if (!root || typeof root !== 'object' || path.length === 0) return;
+  let target = root;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const key = path[index];
+    if (target[key] == null || typeof target[key] !== 'object') {
+      if (value === undefined) return;
+      target[key] = {};
+    }
+    target = target[key];
+  }
+  const lastKey = path[path.length - 1];
+  if (value === undefined) {
+    delete target[lastKey];
+  } else {
+    target[lastKey] = cloneInspectorValue(value);
+  }
+}
+
+function applyBaseInspectorField(targetObject, baseObject, field) {
+  if (!targetObject || !baseObject || typeof field !== 'string') return;
+
+  if (['name', 'position', 'rotation', 'scale', 'visible', 'audioSources'].includes(field)) {
+    setOrDeleteInspectorValueAtPath(targetObject, [field], baseObject[field]);
+    return;
+  }
+
+  if (field.startsWith('asset.')) {
+    const path = field.split('.');
+    setOrDeleteInspectorValueAtPath(
+      targetObject,
+      path,
+      readInspectorValueAtPath(baseObject, path)
+    );
+  }
+}
+
+function buildSceneInspectorPreviewRevertSnapshot(currentSnapshot, baseSnapshot, fieldMask) {
+  const targetSnapshot = cloneInspectorValue(currentSnapshot);
+  const targetObjects = targetSnapshot?.objects || {};
+  const baseObjects = baseSnapshot?.objects || {};
+
+  for (const [objectId, fields] of Object.entries(fieldMask || {})) {
+    const targetObject = targetObjects[objectId];
+    const baseObject = baseObjects[objectId];
+    if (!targetObject || !baseObject || !Array.isArray(fields)) continue;
+    for (const field of fields) {
+      applyBaseInspectorField(targetObject, baseObject, field);
+    }
+  }
+
+  return targetSnapshot;
+}
+
+function buildSceneInspectorObjectPreviewRevertTarget(currentObject, baseObject, fields) {
+  const targetObject = cloneInspectorValue(currentObject);
+  for (const field of fields || []) {
+    applyBaseInspectorField(targetObject, baseObject, field);
+  }
+  return targetObject;
+}
+
 function captureEditorScrollPosition(element) {
   if (!element) return null;
   return {
@@ -10811,6 +10920,8 @@ function resetSceneInspectorObjectEditor({ preserveObjectId = false } = {}) {
     editorMode: 'inspector',
     validationErrors: [],
     diffSummary: null,
+    lastAppliedSummary: null,
+    preview: createSceneInspectorPreviewState(),
   };
 }
 
@@ -10858,19 +10969,23 @@ function renderSceneInspectorAnimationControls(selectedObject) {
 }
 
 function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
+  let selectedObject = buildSelectedObjectInspectorContext(snapshot);
+  let objectEditorState = sceneInspectorState.objectEditor;
+
+  if (objectEditorState.isEditing && objectEditorState.objectId !== selectedObject.objectId) {
+    revertSceneInspectorObjectPreview();
+    resetSceneInspectorObjectEditor();
+    snapshot = buildSceneInspectorSnapshot();
+    selectedObject = buildSelectedObjectInspectorContext(snapshot);
+    objectEditorState = sceneInspectorState.objectEditor;
+  }
+
   const roomLabel = snapshot.room || 'no-room';
   const selectedLabel = snapshot.selection.objectId || 'none';
-  const selectedObject = buildSelectedObjectInspectorContext(snapshot);
-  let objectEditorState = sceneInspectorState.objectEditor;
   const objectPathPrefix = selectedObject.objectId ? `objects.${selectedObject.objectId}` : '';
   if (sceneInspectorSummaryEl) {
     sceneInspectorSummaryEl.textContent =
       `Room ${roomLabel} | ${snapshot.objectCount} objects | selected ${selectedLabel} | ${new Date().toLocaleTimeString()}`;
-  }
-
-  if (objectEditorState.isEditing && objectEditorState.objectId !== selectedObject.objectId) {
-    resetSceneInspectorObjectEditor();
-    objectEditorState = sceneInspectorState.objectEditor;
   }
 
   if (sceneInspectorOutputEl && !sceneInspectorState.isEditing) {
@@ -11025,7 +11140,11 @@ function buildSceneInspectorEditSnapshot() {
 }
 
 function enterSceneInspectorEditMode() {
-  resetSceneInspectorObjectEditor();
+  if (sceneInspectorState.objectEditor.isEditing) {
+    exitSceneInspectorObjectEditMode({ revertPreview: true, refresh: false });
+  } else {
+    resetSceneInspectorObjectEditor();
+  }
   const snapshot = buildSceneInspectorEditSnapshot();
   sceneInspectorState.isEditing = true;
   sceneInspectorState.baseSnapshot = snapshot;
@@ -11042,8 +11161,13 @@ function enterSceneInspectorEditMode() {
   }
 }
 
-function exitSceneInspectorEditMode() {
+function exitSceneInspectorEditMode({ revertPreview = true, refresh = true } = {}) {
   blurActiveEditableElement();
+  if (revertPreview) {
+    revertSceneInspectorPreview();
+  } else {
+    clearSceneInspectorPreviewState(sceneInspectorState.preview);
+  }
   sceneInspectorState.isEditing = false;
   sceneInspectorState.baseSnapshot = null;
   sceneInspectorState.parsedSnapshot = null;
@@ -11052,12 +11176,12 @@ function exitSceneInspectorEditMode() {
   sceneInspectorState.validationErrors = [];
   sceneInspectorState.diffSummary = null;
   sceneInspectorState.lastAppliedSummary = null;
-  refreshSceneInspector();
+  if (refresh) refreshSceneInspector();
 }
 
 function enterSceneInspectorObjectEditMode() {
   if (sceneInspectorState.isEditing) {
-    exitSceneInspectorEditMode();
+    exitSceneInspectorEditMode({ revertPreview: true, refresh: false });
   }
   const snapshot = buildSceneInspectorSnapshot();
   const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
@@ -11076,6 +11200,7 @@ function enterSceneInspectorObjectEditMode() {
     validationErrors: [],
     diffSummary: null,
     lastAppliedSummary: null,
+    preview: createSceneInspectorPreviewState(),
   };
   renderSceneInspector(snapshot);
   updateSceneInspectorObjectDraftPreview();
@@ -11084,78 +11209,27 @@ function enterSceneInspectorObjectEditMode() {
   }
 }
 
-function exitSceneInspectorObjectEditMode() {
+function exitSceneInspectorObjectEditMode({ revertPreview = true, refresh = true } = {}) {
   blurActiveEditableElement();
+  if (revertPreview) {
+    revertSceneInspectorObjectPreview();
+  } else {
+    clearSceneInspectorPreviewState(sceneInspectorState.objectEditor.preview);
+  }
   resetSceneInspectorObjectEditor();
-  refreshSceneInspector();
+  if (refresh) refreshSceneInspector();
 }
 
 function validateSceneInspectorDraft() {
   const scrollState = captureEditorScrollPosition(sceneInspectorEditorEl);
-  const draftText = sceneInspectorEditorEl?.value ?? sceneInspectorState.draftText;
-  sceneInspectorState.draftText = draftText;
-
-  let parsedSnapshot;
-  try {
-    parsedSnapshot = JSON.parse(draftText);
-  } catch (error) {
-    sceneInspectorState.parsedSnapshot = null;
-    sceneInspectorState.validationErrors = [`Invalid JSON: ${error.message}`];
-    sceneInspectorState.diffSummary = null;
-    renderSceneInspector();
-    restoreEditorScrollPosition(sceneInspectorEditorEl, scrollState);
-    return null;
-  }
-
-  sceneInspectorState.parsedSnapshot = parsedSnapshot;
-
-  const result = buildSceneInspectorEditableDiff(
-    sceneInspectorState.baseSnapshot,
-    parsedSnapshot
-  );
-  sceneInspectorState.validationErrors = result.errors;
-  sceneInspectorState.diffSummary = result.summary;
-  renderSceneInspector();
+  const result = updateSceneInspectorDraftPreview();
   restoreEditorScrollPosition(sceneInspectorEditorEl, scrollState);
   return result;
 }
 
 function validateSceneInspectorObjectDraft() {
   const scrollState = captureEditorScrollPosition(sceneInspectorObjectEditorEl);
-  const objectEditorState = sceneInspectorState.objectEditor;
-  const draftText = sceneInspectorObjectEditorEl?.value ?? objectEditorState.draftText;
-  objectEditorState.draftText = draftText;
-
-  let parsedObject;
-  try {
-    parsedObject = JSON.parse(draftText);
-  } catch (error) {
-    objectEditorState.parsedObject = null;
-    objectEditorState.validationErrors = [`Invalid JSON: ${error.message}`];
-    objectEditorState.diffSummary = null;
-    renderSceneInspector();
-    restoreEditorScrollPosition(sceneInspectorObjectEditorEl, scrollState);
-    return null;
-  }
-
-  if (!parsedObject || typeof parsedObject !== 'object' || Array.isArray(parsedObject)) {
-    objectEditorState.parsedObject = null;
-    objectEditorState.validationErrors = ['Selected object JSON block must be an object.'];
-    objectEditorState.diffSummary = null;
-    renderSceneInspector();
-    restoreEditorScrollPosition(sceneInspectorObjectEditorEl, scrollState);
-    return null;
-  }
-
-  objectEditorState.parsedObject = parsedObject;
-  const result = buildObjectBlockDiff(
-    objectEditorState.objectId,
-    objectEditorState.baseObject,
-    parsedObject
-  );
-  objectEditorState.validationErrors = result.errors;
-  objectEditorState.diffSummary = result.summary;
-  renderSceneInspector();
+  const result = updateSceneInspectorObjectDraftPreview();
   restoreEditorScrollPosition(sceneInspectorObjectEditorEl, scrollState);
   return result;
 }
@@ -11177,26 +11251,81 @@ function applySceneInspectorPreviewOperation(operation) {
   }
 }
 
-function applySceneInspectorDraftLivePreview(parsedSnapshot) {
+function revertSceneInspectorPreview() {
+  const previewState = sceneInspectorState.preview;
+  if (!hasSceneInspectorPreview(previewState) || !sceneInspectorState.baseSnapshot) {
+    clearSceneInspectorPreviewState(previewState);
+    return false;
+  }
+
   const currentSnapshot = buildSceneInspectorEditSnapshot();
-  const result = buildSceneInspectorEditableDiff(currentSnapshot, parsedSnapshot);
-  if (result.errors.length > 0 || !result.operation) return;
-  applySceneInspectorPreviewOperation(result.operation);
+  const targetSnapshot = buildSceneInspectorPreviewRevertSnapshot(
+    currentSnapshot,
+    sceneInspectorState.baseSnapshot,
+    previewState.fieldMask
+  );
+  const result = buildSceneInspectorEditableDiff(currentSnapshot, targetSnapshot);
+  if (result.errors.length === 0 && result.operation) {
+    applySceneInspectorPreviewOperation(result.operation);
+  } else if (result.errors.length > 0) {
+    console.warn('[scene-inspector] preview revert failed:', result.errors);
+  }
+  clearSceneInspectorPreviewState(previewState);
+  return true;
 }
 
-function applySceneInspectorObjectDraftLivePreview(parsedObject) {
+function revertSceneInspectorObjectPreview() {
   const objectEditorState = sceneInspectorState.objectEditor;
-  const snapshot = buildSceneInspectorSnapshot();
-  const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
-  if (!objectId || objectId !== objectEditorState.objectId || !objectSnapshot) return;
+  const previewState = objectEditorState.preview;
+  if (!hasSceneInspectorPreview(previewState) || !objectEditorState.baseObject) {
+    clearSceneInspectorPreviewState(previewState);
+    return false;
+  }
 
-  const result = buildObjectBlockDiff(
-    objectEditorState.objectId,
-    objectSnapshot,
-    parsedObject
+  const objectIds = Object.keys(previewState.fieldMask || {});
+  const objectId = objectIds[0] || objectEditorState.objectId;
+  const fields = previewState.fieldMask?.[objectId] || [];
+  const currentObject = buildSceneInspectorSnapshot().objects?.[objectId];
+  if (!objectId || !currentObject || fields.length === 0) {
+    clearSceneInspectorPreviewState(previewState);
+    return false;
+  }
+
+  const targetObject = buildSceneInspectorObjectPreviewRevertTarget(
+    currentObject,
+    objectEditorState.baseObject,
+    fields
   );
-  if (result.errors.length > 0 || !result.operation) return;
+  const result = buildObjectBlockDiff(
+    objectId,
+    currentObject,
+    targetObject
+  );
+  if (result.errors.length === 0 && result.operation) {
+    applySceneInspectorPreviewOperation(result.operation);
+  } else if (result.errors.length > 0) {
+    console.warn('[scene-inspector] object preview revert failed:', result.errors);
+  }
+  clearSceneInspectorPreviewState(previewState);
+  return true;
+}
+
+function applySceneInspectorDraftLivePreview(result) {
+  revertSceneInspectorPreview();
+  if (!result?.operation) return;
   applySceneInspectorPreviewOperation(result.operation);
+  sceneInspectorState.preview.applied = true;
+  sceneInspectorState.preview.fieldMask = buildSceneInspectorPreviewFieldMask(result.summary);
+  sceneInspectorState.preview.operation = cloneInspectorValue(result.operation);
+}
+
+function applySceneInspectorObjectDraftLivePreview(result) {
+  revertSceneInspectorObjectPreview();
+  if (!result?.operation) return;
+  applySceneInspectorPreviewOperation(result.operation);
+  sceneInspectorState.objectEditor.preview.applied = true;
+  sceneInspectorState.objectEditor.preview.fieldMask = buildSceneInspectorPreviewFieldMask(result.summary);
+  sceneInspectorState.objectEditor.preview.operation = cloneInspectorValue(result.operation);
 }
 
 function updateSceneInspectorDraftPreview() {
@@ -11212,6 +11341,7 @@ function updateSceneInspectorDraftPreview() {
     sceneInspectorState.parsedSnapshot = null;
     sceneInspectorState.validationErrors = [`Invalid JSON: ${error.message}`];
     sceneInspectorState.diffSummary = null;
+    revertSceneInspectorPreview();
     renderSceneInspectorDraftPreview();
     return null;
   }
@@ -11223,10 +11353,12 @@ function updateSceneInspectorDraftPreview() {
   );
   sceneInspectorState.validationErrors = result.errors;
   sceneInspectorState.diffSummary = result.summary;
-  renderSceneInspectorDraftPreview();
-  if (result.errors.length === 0) {
-    applySceneInspectorDraftLivePreview(parsedSnapshot);
+  if (result.errors.length > 0) {
+    revertSceneInspectorPreview();
+  } else {
+    applySceneInspectorDraftLivePreview(result);
   }
+  renderSceneInspectorDraftPreview();
   return result;
 }
 
@@ -11244,6 +11376,7 @@ function updateSceneInspectorObjectDraftPreview() {
     objectEditorState.parsedObject = null;
     objectEditorState.validationErrors = [`Invalid JSON: ${error.message}`];
     objectEditorState.diffSummary = null;
+    revertSceneInspectorObjectPreview();
     renderSceneInspectorObjectDraftPreview();
     return null;
   }
@@ -11252,6 +11385,7 @@ function updateSceneInspectorObjectDraftPreview() {
     objectEditorState.parsedObject = null;
     objectEditorState.validationErrors = ['Selected object JSON block must be an object.'];
     objectEditorState.diffSummary = null;
+    revertSceneInspectorObjectPreview();
     renderSceneInspectorObjectDraftPreview();
     return null;
   }
@@ -11264,16 +11398,18 @@ function updateSceneInspectorObjectDraftPreview() {
   );
   objectEditorState.validationErrors = result.errors;
   objectEditorState.diffSummary = result.summary;
-  renderSceneInspectorObjectDraftPreview();
-  if (result.errors.length === 0) {
-    applySceneInspectorObjectDraftLivePreview(parsedObject);
+  if (result.errors.length > 0) {
+    revertSceneInspectorObjectPreview();
+  } else {
+    applySceneInspectorObjectDraftLivePreview(result);
   }
+  renderSceneInspectorObjectDraftPreview();
   return result;
 }
 
 function applySceneInspectorDraft() {
   const scrollState = captureEditorScrollPosition(sceneInspectorEditorEl);
-  const result = validateSceneInspectorDraft();
+  const result = updateSceneInspectorDraftPreview();
   if (!result) return;
   if (result.errors.length > 0) return;
   if (!result.operation) {
@@ -11284,17 +11420,23 @@ function applySceneInspectorDraft() {
 
   const changedObjects = result.summary?.changedObjectCount || 0;
   const changedFields = result.summary?.changedFieldCount || 0;
+  const previewAlreadyApplied = hasSceneInspectorPreview(sceneInspectorState.preview)
+    && valuesEqual(sceneInspectorState.preview.operation, result.operation);
   sceneInspectorState.lastAppliedSummary = result.summary;
-  applyOperationToScene(result.operation);
+  if (!previewAlreadyApplied) {
+    applyOperationToScene(result.operation);
+  }
   broadcast(result.operation);
+  clearSceneInspectorPreviewState(sceneInspectorState.preview);
   notifySceneStateChanged('scene-inspector-json-edit-applied');
   showToast(`Scene JSON broadcast complete: ${changedFields} field(s) across ${changedObjects} object(s).`);
-  exitSceneInspectorEditMode();
+  exitSceneInspectorEditMode({ revertPreview: false });
+  restoreEditorScrollPosition(sceneInspectorEditorEl, scrollState);
 }
 
 function applySceneInspectorObjectDraft() {
   const scrollState = captureEditorScrollPosition(sceneInspectorObjectEditorEl);
-  const result = validateSceneInspectorObjectDraft();
+  const result = updateSceneInspectorObjectDraftPreview();
   if (!result) return;
   if (result.errors.length > 0) return;
   if (!result.operation) {
@@ -11305,13 +11447,19 @@ function applySceneInspectorObjectDraft() {
 
   const objectId = sceneInspectorState.objectEditor.objectId;
   const changedFields = result.summary?.changedFieldCount || 0;
+  const previewAlreadyApplied = hasSceneInspectorPreview(sceneInspectorState.objectEditor.preview)
+    && valuesEqual(sceneInspectorState.objectEditor.preview.operation, result.operation);
   sceneInspectorState.objectEditor.lastAppliedSummary = result.summary;
-  applyOperationToScene(result.operation);
+  if (!previewAlreadyApplied) {
+    applyOperationToScene(result.operation);
+  }
   broadcast(result.operation);
+  clearSceneInspectorPreviewState(sceneInspectorState.objectEditor.preview);
   notifySceneStateChanged('scene-inspector-object-json-edit-applied');
   notifySelectionChanged('scene-inspector-object-json-edit-applied');
   showToast(`Object ${objectId} broadcast complete: ${changedFields} field(s) applied.`);
-  exitSceneInspectorObjectEditMode();
+  exitSceneInspectorObjectEditMode({ revertPreview: false });
+  restoreEditorScrollPosition(sceneInspectorObjectEditorEl, scrollState);
 }
 
 function formatSceneInspectorDraft() {
@@ -11320,20 +11468,22 @@ function formatSceneInspectorDraft() {
     sceneInspectorState.draftText = formatJsonText(sceneInspectorEditorEl?.value ?? sceneInspectorState.draftText);
     if (sceneInspectorEditorEl) sceneInspectorEditorEl.value = sceneInspectorState.draftText;
     sceneInspectorState.parsedSnapshot = JSON.parse(sceneInspectorState.draftText);
-    sceneInspectorState.validationErrors = [];
-    sceneInspectorState.diffSummary = null;
-    renderSceneInspector(sceneInspectorState.parsedSnapshot);
+    updateSceneInspectorDraftPreview();
     showToast('Scene JSON formatted');
   } catch (error) {
+    sceneInspectorState.draftText = sceneInspectorEditorEl?.value ?? sceneInspectorState.draftText;
+    sceneInspectorState.parsedSnapshot = null;
     sceneInspectorState.validationErrors = [`Invalid JSON: ${error.message}`];
     sceneInspectorState.diffSummary = null;
-    renderSceneInspector();
+    revertSceneInspectorPreview();
+    renderSceneInspectorDraftPreview();
   }
   restoreEditorScrollPosition(sceneInspectorEditorEl, scrollState);
 }
 
 function resetSceneInspectorDraftToCurrent() {
   const scrollState = captureEditorScrollPosition(sceneInspectorEditorEl);
+  revertSceneInspectorPreview();
   const snapshot = buildSceneInspectorEditSnapshot();
   sceneInspectorState.baseSnapshot = snapshot;
   sceneInspectorState.parsedSnapshot = cloneInspectorValue(snapshot);
@@ -11349,28 +11499,31 @@ function resetSceneInspectorDraftToCurrent() {
 
 function formatSceneInspectorObjectDraft() {
   const scrollState = captureEditorScrollPosition(sceneInspectorObjectEditorEl);
+  const objectEditorState = sceneInspectorState.objectEditor;
   try {
-    sceneInspectorState.objectEditor.draftText = formatJsonText(
-      sceneInspectorObjectEditorEl?.value ?? sceneInspectorState.objectEditor.draftText
+    objectEditorState.draftText = formatJsonText(
+      sceneInspectorObjectEditorEl?.value ?? objectEditorState.draftText
     );
     if (sceneInspectorObjectEditorEl) {
-      sceneInspectorObjectEditorEl.value = sceneInspectorState.objectEditor.draftText;
+      sceneInspectorObjectEditorEl.value = objectEditorState.draftText;
     }
-    sceneInspectorState.objectEditor.parsedObject = JSON.parse(sceneInspectorState.objectEditor.draftText);
-    sceneInspectorState.objectEditor.validationErrors = [];
-    sceneInspectorState.objectEditor.diffSummary = null;
-    renderSceneInspector();
+    objectEditorState.parsedObject = JSON.parse(objectEditorState.draftText);
+    updateSceneInspectorObjectDraftPreview();
     showToast('Selected object JSON formatted');
   } catch (error) {
-    sceneInspectorState.objectEditor.validationErrors = [`Invalid JSON: ${error.message}`];
-    sceneInspectorState.objectEditor.diffSummary = null;
-    renderSceneInspector();
+    objectEditorState.draftText = sceneInspectorObjectEditorEl?.value ?? objectEditorState.draftText;
+    objectEditorState.parsedObject = null;
+    objectEditorState.validationErrors = [`Invalid JSON: ${error.message}`];
+    objectEditorState.diffSummary = null;
+    revertSceneInspectorObjectPreview();
+    renderSceneInspectorObjectDraftPreview();
   }
   restoreEditorScrollPosition(sceneInspectorObjectEditorEl, scrollState);
 }
 
 function resetSceneInspectorObjectDraftToCurrent() {
   const scrollState = captureEditorScrollPosition(sceneInspectorObjectEditorEl);
+  revertSceneInspectorObjectPreview();
   const snapshot = buildSceneInspectorSnapshot();
   const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
   if (!objectId || !objectSnapshot) {
@@ -11391,24 +11544,22 @@ function resetSceneInspectorObjectDraftToCurrent() {
 }
 
 function tryExitSceneInspectorEditMode() {
-  if (isSceneInspectorDirty()) {
-    if (sceneInspectorState.baseSnapshot) {
-      applySceneInspectorDraftLivePreview(sceneInspectorState.baseSnapshot);
-    }
+  const hadPreview = hasSceneInspectorPreview(sceneInspectorState.preview);
+  const wasDirty = isSceneInspectorDirty();
+  exitSceneInspectorEditMode({ revertPreview: true });
+  if (hadPreview || wasDirty) {
     showToast('Scene Inspector preview reverted');
   }
-  exitSceneInspectorEditMode();
   return true;
 }
 
 function tryExitSceneInspectorObjectEditMode() {
-  if (isSceneInspectorObjectDirty()) {
-    if (sceneInspectorState.objectEditor.baseObject) {
-      applySceneInspectorObjectDraftLivePreview(sceneInspectorState.objectEditor.baseObject);
-    }
+  const hadPreview = hasSceneInspectorPreview(sceneInspectorState.objectEditor.preview);
+  const wasDirty = isSceneInspectorObjectDirty();
+  exitSceneInspectorObjectEditMode({ revertPreview: true });
+  if (hadPreview || wasDirty) {
     showToast('Selected object preview reverted');
   }
-  exitSceneInspectorObjectEditMode();
   return true;
 }
 
@@ -11881,6 +12032,14 @@ function notifyConnectionStateChanged(reason) {
 }
 
 function setSceneInspectorOpen(nextOpen) {
+  if (!nextOpen) {
+    if (sceneInspectorState.objectEditor.isEditing) {
+      exitSceneInspectorObjectEditMode({ revertPreview: true, refresh: false });
+    }
+    if (sceneInspectorState.isEditing) {
+      exitSceneInspectorEditMode({ revertPreview: true, refresh: false });
+    }
+  }
   sceneInspectorState.isOpen = nextOpen;
   sceneInspectorPanel?.classList.toggle('open', nextOpen);
   sceneInspectorToggleBtn?.classList.toggle('active', nextOpen);
@@ -12004,6 +12163,7 @@ document.addEventListener('click', (event) => {
   setMobilePeersOpen(false);
 });
 sceneInspectorRefreshBtn?.addEventListener('click', refreshSceneInspector);
+sceneInspectorCloseBtn?.addEventListener('click', () => setSceneInspectorOpen(false));
 sceneInspectorCopyBtn?.addEventListener('click', () => {
   const text = sceneInspectorState.isEditing
     ? (sceneInspectorEditorEl?.value || sceneInspectorState.draftText)
