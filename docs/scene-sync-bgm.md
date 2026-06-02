@@ -134,39 +134,111 @@ scene.bgm.volume = volume
 
 最初は `scene.time` を Scene Clock の共通入力として扱い、BGM もアニメーションも同じ時間軸を見る形が自然。
 
-## Object Audio との関係
+## AudioSource component（object-level audio）
 
 BGM は scene-level audio として扱う。
 
-一方で、将来の object-level audio は別物として扱う。
+object-level audio は **AudioSource component** として実装済み。
 
-- BGM: シーン全体に 1 つだけ設定する背景音
-- Object Audio: 特定のオブジェクトに付与する音声 component / extension
+- BGM: シーン全体に 1 つだけ設定する背景音（`scene-bgm`）
+- AudioSource: 特定のオブジェクトに付与する音声再生 component（Unity の Audio Source 相当）
 
-Object Audio は、`asset.type = audio` の独立オブジェクトというより、既存オブジェクトに付く component に近い。
+AudioSource は `asset.type = audio` の独立オブジェクトではなく、既存オブジェクトに付く component。
+1 つのオブジェクトは name をキーにした複数の AudioSource を持てる（`audioSources` map）。
 
-これはアニメーション拡張に近い位置付けになる可能性が高い。
+実装:
 
-現在の Object Audio 実装では、ブラウザの autoplay 制限により remote participant 側で自動再生がブロックされる場合がある。
-BGM と同等の unlock UI は未実装で、ブロック時は toast による通知のみを行う。
+- データモデル: `html/assets/js/scenesync/audio/audio-source.js`
+- 再生エンジン / host API: `html/assets/js/scenesync/audio/audio-source-controller.js`
+- viewer 統合: `html/assets/js/scenesync/scene.js`
 
-将来の payload 例:
+### AudioSource 型
 
-```js
+```ts
+type SceneSyncAudioSource = {
+  type: 'audioSource';
+  name: string;              // default: 'default'
+  url: string;
+  volume: number;            // default: 1
+  loop: boolean;             // default: false
+  playOnAwake: boolean;      // default: false
+  offset: number;            // seconds, default: 0
+  playbackRate: number;      // default: 1
+  spatial: boolean;          // default: true（初期実装では未対応でも可）
+  state?: 'stopped' | 'playing' | 'paused';
+  sync?: AudioSourceSync;    // animation 同期補助
+};
+```
+
+### payload（scene-delta / scene-add）
+
+`audioSources` は map（部分 patch）として流す。値が `null` のキーはその AudioSource を削除する。
+`audioSources` 自体を `null` にすると、そのオブジェクトの全 AudioSource を削除する（clear-all）。
+
+```json
 {
-  kind: "scene-delta",
-  objectId: "speaker-1",
-  audio: {
-    url: "https://example.com/se.mp3",
-    mode: "positional",
-    loop: true,
-    volume: 1,
-    playing: true
+  "kind": "scene-delta",
+  "objectId": "speaker-1",
+  "audioSources": {
+    "default": {
+      "type": "audioSource",
+      "name": "default",
+      "url": "https://example.com/sound.mp3",
+      "volume": 1,
+      "loop": true,
+      "playOnAwake": true,
+      "offset": 0,
+      "playbackRate": 1,
+      "spatial": true
+    }
   }
 }
 ```
 
-ただし、object-level audio はまだ実装しない。
+`scene-state` / scene-request 応答にも各オブジェクトの `audioSources` を含めるため、後から参加したクライアントにも復元される。
+
+### D&D / ペースト
+
+- オブジェクト上に音声 URL を D&D / ペースト → そのオブジェクトに `default` という名前の AudioSource を追加/更新する（初期値 `playOnAwake: true`, `loop: true`）。
+- 空間/床/背景的な場所の場合 → 従来通り `scene-bgm` fallback。
+
+### host API（Loomlet 連携の受け皿）
+
+再生条件・演出ロジック（ボタンSE・衝突音・キャラクター音声切替・MusicVideo 的演出）は Scene Sync 本体に組み込まず、Loomlet 側がこの低レベル API を呼んで実装する。
+
+`window.sceneSyncAudioSource`（および `loomIntegration` 経由の audioSource effect）で公開:
+
+```ts
+audioSource.play(objectId, name = 'default')
+audioSource.pause(objectId, name = 'default')
+audioSource.stop(objectId, name = 'default')
+audioSource.seek(objectId, name = 'default', time)
+audioSource.playOneShot(objectId, name = 'default', options?)  // 毎回頭から鳴らす単発再生
+audioSource.setVolume(objectId, name = 'default', volume)
+audioSource.setClip(objectId, name = 'default', url)  // 既存の volume/loop/playOnAwake 等を保持し url のみ差し替え
+audioSource.syncToAnimation(objectId, name = 'default', { animationClipName?, offset, resyncOnLoop?, driftThreshold? })
+audioSource.unsync(objectId, name = 'default')
+```
+
+Loomlet runtime からは `audioSource.*` 種別の scene effect として届き、host 側 API へ委譲される。
+
+### Animation 同期補助
+
+```ts
+type AudioSourceSync = {
+  mode: 'none' | 'animation';
+  animationClipName?: string;
+  offset: number;           // seconds
+  resyncOnLoop: boolean;    // default: true
+  driftThreshold?: number;  // seconds
+};
+```
+
+- Animation time を master にし、audio currentTime を `animationTime + offset` に合わせる。
+- ドリフトが `driftThreshold`（既定 0.05s）を超えたら再同期する。Animation が loop すると大きなドリフトとして検出され、自動的に loop 先頭 + offset へ再同期される。
+
+現在の AudioSource 実装では、ブラウザの autoplay 制限により remote participant 側で自動再生がブロックされる場合がある。
+ブロック時は toast による通知を行う。
 
 ## glTF export / import
 
@@ -218,8 +290,8 @@ BGM の glTF export / import はまだ実装しない。
 4. サーバー時間同期 / Scene Clock
 5. Loomlet からの BGM 操作
 6. glTF export / import
-7. Object Audio
-8. Positional Audio
+7. ~~Object Audio~~（AudioSource component として実装済み）
+8. Positional Audio（AudioSource.spatial の実再生）
 9. Audio Reactive / FFT / 波形解析
 
 必要になるまで、同期や高度な再生制御は入れない。まずは「URLを落とすとBGMが鳴る」という軽い体験を保つ。

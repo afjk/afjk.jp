@@ -26,17 +26,22 @@ test('importAudioUrl', async (t) => {
     assert.equal(result.payload.kind, 'scene-bgm');
   });
 
-  await t.test('sets object audio when an object target is resolved', async () => {
+  await t.test('adds an AudioSource component when an object target is resolved', async () => {
     let setCalled = false;
     const mockCtx = {
       resolveObjectAudioTarget: () => 'speaker-1',
-      setObjectAudioComponent: (objectId, audio) => {
+      addOrUpdateAudioSource: (objectId, audio) => {
         setCalled = true;
         assert.equal(objectId, 'speaker-1');
+        assert.equal(audio.name, 'default');
         assert.equal(audio.url, 'https://example.com/sound.mp3');
         assert.equal(audio.playOnAwake, true);
         assert.equal(audio.loop, true);
-        return { type: 'scene-graph-set', scope: { object: objectId } };
+        return {
+          kind: 'scene-delta',
+          objectId,
+          audioSources: { default: { type: 'audioSource', name: 'default', url: audio.url } },
+        };
       },
       showToast: (toast) => {
         assert.equal(toast.type, 'success');
@@ -46,13 +51,14 @@ test('importAudioUrl', async (t) => {
     const result = await importAudioUrl('https://example.com/sound.mp3', mockCtx);
     assert.equal(setCalled, true);
     assert.equal(result.objectId, 'speaker-1');
-    assert.equal(result.payload.type, 'scene-graph-set');
+    assert.equal(result.payload.kind, 'scene-delta');
+    assert.ok(result.payload.audioSources.default);
   });
 
   await t.test('object audio does not require BGM functions', async () => {
     const mockCtx = {
       resolveObjectAudioTarget: () => 'speaker-1',
-      setObjectAudioComponent: () => ({ type: 'scene-graph-set' }),
+      addOrUpdateAudioSource: () => ({ kind: 'scene-delta', objectId: 'speaker-1', audioSources: {} }),
       showToast: () => {},
     };
 
@@ -67,9 +73,9 @@ test('importAudioUrl', async (t) => {
 
     try {
       await importAudioUrl('https://example.com/sound.mp3', mockCtx);
-      assert.fail('should throw error when setObjectAudioComponent is missing');
+      assert.fail('should throw error when addOrUpdateAudioSource is missing');
     } catch (err) {
-      assert.match(err.message, /audio importer requires ctx.setObjectAudioComponent/);
+      assert.match(err.message, /audio importer requires ctx.addOrUpdateAudioSource/);
     }
   });
 

@@ -32,6 +32,47 @@ function hasFiniteNumberArray(value, size) {
     && value.every(item => typeof item === 'number' && Number.isFinite(item));
 }
 
+// AudioSource component map（audioSources）のバリデーション。
+// value が null のキーは「その AudioSource を削除する」patch を意味する。
+// 完全な型の正規化は html/assets/js/scenesync/audio/audio-source.js が担当する。
+function validateAudioSourcesMap(map, maxStringLength, maxUrlLength = 2048) {
+  if (map === null) return { ok: true };
+  if (typeof map !== 'object' || Array.isArray(map)) {
+    return { ok: false, reason: 'audioSources must be an object map or null' };
+  }
+  for (const [name, source] of Object.entries(map)) {
+    if (!isReasonableString(name, maxStringLength)) {
+      return { ok: false, reason: 'audioSources keys must be reasonable strings' };
+    }
+    if (source === null) continue;
+    if (typeof source !== 'object' || Array.isArray(source)) {
+      return { ok: false, reason: `audioSources.${name} must be an object or null` };
+    }
+    if (!isReasonableString(source.url, maxUrlLength)) {
+      return { ok: false, reason: `audioSources.${name}.url must be a reasonable string` };
+    }
+    if (source.volume !== undefined && (typeof source.volume !== 'number' || !Number.isFinite(source.volume))) {
+      return { ok: false, reason: `audioSources.${name}.volume must be a finite number` };
+    }
+    if (source.loop !== undefined && typeof source.loop !== 'boolean') {
+      return { ok: false, reason: `audioSources.${name}.loop must be a boolean` };
+    }
+    if (source.playOnAwake !== undefined && typeof source.playOnAwake !== 'boolean') {
+      return { ok: false, reason: `audioSources.${name}.playOnAwake must be a boolean` };
+    }
+    if (source.offset !== undefined && (typeof source.offset !== 'number' || !Number.isFinite(source.offset))) {
+      return { ok: false, reason: `audioSources.${name}.offset must be a finite number` };
+    }
+    if (source.playbackRate !== undefined && (typeof source.playbackRate !== 'number' || !Number.isFinite(source.playbackRate))) {
+      return { ok: false, reason: `audioSources.${name}.playbackRate must be a finite number` };
+    }
+    if (source.spatial !== undefined && typeof source.spatial !== 'boolean') {
+      return { ok: false, reason: `audioSources.${name}.spatial must be a boolean` };
+    }
+  }
+  return { ok: true };
+}
+
 export function validateSceneSyncPayload(payload, options = {}) {
   const {
     maxStringLength = 128,
@@ -70,6 +111,14 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-env' && !ENV_IDS.has(payload.envId)) {
     return { ok: false, reason: 'envId is invalid' };
+  }
+
+  // audioSources は scene-add / scene-delta などでオブジェクトに AudioSource を付与する。
+  if (payload.audioSources !== undefined) {
+    const audioValidation = validateAudioSourcesMap(payload.audioSources, maxStringLength);
+    if (!audioValidation.ok) {
+      return audioValidation;
+    }
   }
 
   if (payload.kind === 'scene-bgm') {

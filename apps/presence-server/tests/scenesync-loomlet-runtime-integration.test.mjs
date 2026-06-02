@@ -89,16 +89,16 @@ test('Scene Sync Loomlet integration keeps offsetPosition relative to captured b
   );
 });
 
-test('Scene Sync Loomlet integration pauses object audio effects while edited', () => {
+test('Scene Sync Loomlet integration ignores removed sceneSetAudio graph nodes', () => {
+  // scene.setAudio / sceneSetAudio graph nodes are no longer object-target node types.
+  // Such a node must not move the object position or throw.
   const object = makeObject();
-  const effects = [];
   const integration = createSceneSyncLoomIntegration({
     getObjectById: (id) => id === 'box-1' ? object : null,
     send: () => {},
     getHostTime: () => 0,
     getObjectRuntimeTime: () => 0,
-    isObjectBeingEdited: () => true,
-    applyObjectAudioEffect: (effect) => effects.push(effect),
+    isObjectBeingEdited: () => false,
   });
 
   integration.handlePayload({
@@ -109,22 +109,16 @@ test('Scene Sync Loomlet integration pauses object audio effects while edited', 
         {
           id: 'audio',
           type: 'sceneSetAudio',
-          params: {
-            target: 'box-1',
-            url: 'https://example.com/sound.mp3',
-            playOnAwake: true,
-            loop: true,
-          },
+          params: { url: 'https://example.com/sound.mp3', playOnAwake: true, loop: true },
         },
       ],
       edges: [],
     },
   });
-  integration.tickObjectGraphs(null, 0);
 
-  assert.equal(effects.length, 1);
-  assert.equal(effects[0].type, 'scene.setAudio');
-  assert.equal(effects[0].objectId, 'box-1');
-  assert.equal(effects[0].url, 'https://example.com/sound.mp3');
-  assert.equal(effects[0].pausedAtStart, true);
+  assert.doesNotThrow(() => integration.tickObjectGraphs(null, 0));
+  assert.deepEqual(
+    { x: object.position.x, y: object.position.y, z: object.position.z },
+    { x: 0, y: 0, z: 0 }
+  );
 });

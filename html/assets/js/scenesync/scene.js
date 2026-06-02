@@ -38,6 +38,15 @@ import { createHistoryManager, HistoryManager } from './history/history-manager.
 import { createUserManager } from './user/user-manager.js';
 import { createLinkManager } from './link/link-manager.js';
 import { createSceneSyncLoomIntegration } from './loomlet-runtime-integration.js';
+import {
+  normalizeAudioSource,
+  normalizeAudioSourcesMap,
+  mergeAudioSourcesPatch,
+  validateAudioSourcesMap,
+  isHttpUrl,
+  DEFAULT_AUDIO_SOURCE_NAME,
+} from './audio/audio-source.js';
+import { createAudioSourceController } from './audio/audio-source-controller.js';
 import { computeAssetId } from './assets/asset-id.js';
 import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
@@ -1360,9 +1369,6 @@ const sceneBgmState = {
   current: null,
   autoplayBlocked: false,
 };
-
-// objectId -> { audio, current, autoplayBlocked }
-const objectAudioStates = new Map();
 
 // ── トランスフォームツイーン（AI/GPT アニメーション） ────────
 
@@ -3959,7 +3965,7 @@ function deleteObjectById(objectId, options = {}) {
   locks.delete(objectId);
 
   disposeObjectGlbAnimation(objectId);
-  disposeObjectAudio(objectId);
+  audioSourceController.disposeObject(objectId);
 
   // 削除前にオブジェクト情報を保存
   const name = attached.userData.name || objectId;
@@ -4337,6 +4343,7 @@ renderer.setAnimationLoop((time, frame) => {
   updateGazeDwellState(now);
   const sceneClockStateForTick = getSceneClockStateForLoomlet(now);
   loomIntegration?.tickObjectGraphs?.(sceneClockStateForTick);
+  audioSourceController.tick(now);
 
   // Update Scene Clock debug UI
   if (!sceneClockPanelEl?.hidden) {
@@ -4640,120 +4647,15 @@ function getSceneClockStateForLoomlet(now = performance.now()) {
   };
 }
 
-// ── Object Audio Component / Loomlet graph helpers ─────────
-
-const OBJECT_AUDIO_NODE_TYPES = new Set(['scene.setAudio', 'sceneSetAudio']);
-
-function normalizeObjectAudioConfig(audio) {
-  if (!audio || typeof audio !== 'object') return null;
-  const url = typeof audio.url === 'string' ? audio.url.trim() : '';
-  if (!url) return null;
-  return {
-    url,
-    playOnAwake: audio.playOnAwake !== false,
-    loop: audio.loop !== false,
-  };
-}
-
-function removeObjectAudioNodes(graph) {
-  const source = graph && typeof graph === 'object' ? graph : {};
-  const removedIds = new Set();
-  const nodes = Array.isArray(source.nodes)
-    ? source.nodes.filter((node) => {
-        if (OBJECT_AUDIO_NODE_TYPES.has(node?.type)) {
-          removedIds.add(node.id);
-          return false;
-        }
-        return true;
-      })
-    : [];
-  const edges = Array.isArray(source.edges)
-    ? source.edges.filter((edge) => {
-        const fromId = String(edge?.from || '').split('.')[0];
-        const toId = String(edge?.to || '').split('.')[0];
-        return !removedIds.has(fromId) && !removedIds.has(toId);
-      })
-    : [];
-  return { nodes, edges };
-}
-
-function makeObjectAudioGraphNode(objectId, audio) {
-  return {
-    id: 'objectAudio',
-    type: 'sceneSetAudio',
-    params: {
-      target: objectId,
-      url: audio.url,
-      playOnAwake: audio.playOnAwake !== false,
-      loop: audio.loop !== false,
-    },
-  };
-}
-
-function upsertObjectAudioGraph(baseGraph, objectId, audio) {
-  const graph = removeObjectAudioNodes(baseGraph);
-  const normalized = normalizeObjectAudioConfig(audio);
-  if (normalized) {
-    graph.nodes.push(makeObjectAudioGraphNode(objectId, normalized));
-  }
-  return graph;
-}
-
-function graphHasExecutableNodes(graph) {
-  return Array.isArray(graph?.nodes) && graph.nodes.length > 0;
-}
-
-function createObjectAudioGraphOperation(objectId, audio) {
-  const current = loomIntegration?.exportState?.()?.objects?.[objectId] || { nodes: [], edges: [] };
-  const graph = upsertObjectAudioGraph(current, objectId, audio);
-  if (!graphHasExecutableNodes(graph)) {
-    return { type: 'scene-graph-clear', scope: { object: objectId } };
-  }
-  return { type: 'scene-graph-set', scope: { object: objectId }, graph };
-}
-
-function getObjectAudioConfigFromGraph(graph) {
-  const node = Array.isArray(graph?.nodes)
-    ? graph.nodes.find((entry) => OBJECT_AUDIO_NODE_TYPES.has(entry?.type))
-    : null;
-  if (!node) return null;
-  return normalizeObjectAudioConfig(node.params || null);
-}
-
-function getObjectAudioConfigFromLoomState(loomState, objectId) {
-  return getObjectAudioConfigFromGraph(loomState?.objects?.[objectId]);
-}
+// ── Loomlet graph operation helpers ─────────
 
 function applySceneGraphOperation(operation) {
   if (!operation || typeof operation.type !== 'string' || !operation.type.startsWith('scene-graph-')) {
     return false;
   }
-  const objectId = operation.scope && typeof operation.scope === 'object' ? operation.scope.object : null;
-  if (objectId && (
-    operation.type === 'scene-graph-clear' ||
-    ((operation.type === 'scene-graph-set' || operation.type === 'scene-graph-patch') && !getObjectAudioConfigFromGraph(operation.graph))
-  )) {
-    disposeObjectAudio(objectId);
-  }
   loomIntegration.handlePayload(operation);
   notifySceneStateChanged('scene-graph-operation-applied');
   return true;
-}
-
-function setObjectAudioComponent(objectId, audio, options = {}) {
-  const normalized = normalizeObjectAudioConfig(audio);
-  if (!objectId) throw new Error('objectId is required');
-  if (normalized && !/^https?:\/\//i.test(normalized.url)) {
-    throw new Error('audio url must start with http(s)');
-  }
-
-  const operation = createObjectAudioGraphOperation(objectId, normalized);
-  applySceneGraphOperation(operation);
-  if (options.broadcast !== false) {
-    broadcast(operation);
-  }
-  notifySelectionChanged('object-audio-updated');
-  return operation;
 }
 
 function setSceneClockMode(mode, now = performance.now()) {
@@ -4817,31 +4719,133 @@ function followHostClock(now = performance.now()) {
 }
 
 // ── Loom 統合初期化 ──────────────────────────────────
+function isObjectBeingEditedNow(objectId) {
+  if (!objectId) return false;
+
+  if (selectedObjectIds.has(objectId)) return true;
+
+  const transformObjectId = transformCtrl.object?.userData?.objectId;
+  if (transformObjectId === objectId) return true;
+
+  if (xrState.twoHand?.active && xrState.twoHand.object?.userData?.objectId === objectId) {
+    return true;
+  }
+
+  for (const grabber of xrState.grabbers || []) {
+    if (grabber.active && grabber.object?.userData?.objectId === objectId) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// 指定 GLB clip の現在再生位置を返す（AudioSource の animation 同期補助に使用）。
+function getObjectAnimationSampleForAudio(objectId, clipName) {
+  const entry = glbAnimationMixers.get(objectId);
+  if (!entry || !entry.action) return null;
+  const clip = entry.clips?.[entry.clipIndex] || entry.clips?.[0];
+  if (!clip) return null;
+  if (clipName && clip.name && clip.name !== clipName) return null;
+  return { time: entry.action.time || 0, duration: clip.duration || 0 };
+}
+
+// ── AudioSource component / playback controller ─────────
+const audioSourceController = createAudioSourceController({
+  getObjectRuntimeTime: (objectId, nowMs) => getObjectRuntimeTime(objectId, nowMs),
+  getAnimationSample: getObjectAnimationSampleForAudio,
+  isObjectBeingEdited: isObjectBeingEditedNow,
+  showToast,
+});
+
+// 既存の audioSources に部分 patch を適用し、再生エンジンへ反映する。
+function applyObjectAudioSourcesPatch(objectId, patch) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return null;
+  const merged = mergeAudioSourcesPatch(obj.userData.audioSources, patch);
+  obj.userData.audioSources = merged;
+  audioSourceController.setObjectAudioSources(objectId, merged);
+  notifySceneStateChanged('object-audio-sources-updated');
+  return merged;
+}
+
+// 受信した scene-delta の audioSources を適用する。
+// - object（map）: 部分 patch（キー値 null はそのキーを削除）
+// - null: 全 AudioSource を削除（clear-all）
+function applyIncomingAudioSources(objectId, value) {
+  if (value === undefined) return;
+  if (value === null) {
+    setObjectAudioSourcesFull(objectId, {});
+    return;
+  }
+  if (typeof value === 'object') {
+    applyObjectAudioSourcesPatch(objectId, value);
+  }
+}
+
+// オブジェクトの audioSources を完全置換する（scene-add / scene-state 復元用）。
+function setObjectAudioSourcesFull(objectId, map) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return null;
+  const normalized = normalizeAudioSourcesMap(map);
+  obj.userData.audioSources = normalized;
+  audioSourceController.setObjectAudioSources(objectId, normalized);
+  return normalized;
+}
+
+function getObjectAudioSourcesForSerialize(obj) {
+  const map = obj?.userData?.audioSources;
+  if (!map || typeof map !== 'object') return null;
+  const normalized = normalizeAudioSourcesMap(map);
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+// 音声 URL をオブジェクトの AudioSource component として追加/更新し broadcast する。
+// audioInput が url を持たない場合は、その name の AudioSource を削除する。
+function addOrUpdateAudioSource(objectId, audioInput, options = {}) {
+  if (!objectId) throw new Error('objectId is required');
+  const name = options.name || audioInput?.name || DEFAULT_AUDIO_SOURCE_NAME;
+  const source = normalizeAudioSource({ ...audioInput, name }, { name });
+  if (source && !isHttpUrl(source.url)) {
+    throw new Error('audio url must start with http(s)');
+  }
+  const patch = { [name]: source }; // source が null なら削除
+  applyObjectAudioSourcesPatch(objectId, patch);
+  const payload = { kind: 'scene-delta', objectId, audioSources: patch };
+  if (options.broadcast !== false) {
+    broadcast(payload);
+  }
+  notifySelectionChanged('object-audio-updated');
+  return payload;
+}
+
+// Loomlet から呼ばれる低レベル AudioSource 操作 API（host 側の受け皿）。
+// 再生条件・演出ロジックは Loomlet 側で実装する。
+const audioSourceHostApi = {
+  play: (objectId, name) => audioSourceController.play(objectId, name),
+  pause: (objectId, name) => audioSourceController.pause(objectId, name),
+  stop: (objectId, name) => audioSourceController.stop(objectId, name),
+  seek: (objectId, name, time) => audioSourceController.seek(objectId, name, time),
+  playOneShot: (objectId, name, opts) => audioSourceController.playOneShot(objectId, name, opts),
+  setVolume: (objectId, name, volume) => audioSourceController.setVolume(objectId, name, volume),
+  setClip: (objectId, name, url) => {
+    audioSourceController.setClip(objectId, name, url);
+    // component（audioSources）へも反映し、他クライアントへ broadcast する。
+    // 既存の volume/loop/playOnAwake/offset/playbackRate/spatial/sync を保持し url だけ差し替える。
+    const resolvedName = name || DEFAULT_AUDIO_SOURCE_NAME;
+    const current = managedObjects.get(objectId)?.userData?.audioSources?.[resolvedName] || {};
+    return addOrUpdateAudioSource(objectId, { ...current, url }, { name: resolvedName });
+  },
+  syncToAnimation: (objectId, name, opts) => audioSourceController.syncToAnimation(objectId, name, opts),
+  unsync: (objectId, name) => audioSourceController.unsync(objectId, name),
+};
+
 const loomIntegration = createSceneSyncLoomIntegration({
   getObjectById: (objectId) => managedObjects.get(objectId) || null,
   send: (payload) => broadcast(payload),
   getHostTime: () => Date.now() / 1000,
   getObjectRuntimeTime,
-  isObjectBeingEdited: (objectId) => {
-    if (!objectId) return false;
-
-    if (selectedObjectIds.has(objectId)) return true;
-
-    const transformObjectId = transformCtrl.object?.userData?.objectId;
-    if (transformObjectId === objectId) return true;
-
-    if (xrState.twoHand?.active && xrState.twoHand.object?.userData?.objectId === objectId) {
-      return true;
-    }
-
-    for (const grabber of xrState.grabbers || []) {
-      if (grabber.active && grabber.object?.userData?.objectId === objectId) {
-        return true;
-      }
-    }
-
-    return false;
-  },
+  isObjectBeingEdited: isObjectBeingEditedNow,
   showToast,
   // Host input providers for Loomlet behavior evaluation
   getViewerPosition: getViewerPositionForLoomlet,
@@ -4853,7 +4857,7 @@ const loomIntegration = createSceneSyncLoomIntegration({
   clearLoomletHostEvents: clearLoomletHostEventsForObject,
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
-  applyObjectAudioEffect,
+  audioSource: audioSourceHostApi,
 });
 
 // ── Scene Clock Debug UI 制御 ────────────────────────────
@@ -5427,6 +5431,11 @@ async function respondToSceneRequest(from) {
       );
     }
 
+    const audioSources = getObjectAudioSourcesForSerialize(obj);
+    if (audioSources) {
+      entry.audioSources = audioSources;
+    }
+
     objects[objectId] = entry;
   }
 
@@ -5618,6 +5627,8 @@ function handleHandoff(data) {
             metadata: hasPayloadMetadata
               ? cloneJsonSafe(payload.metadata)
               : obj.userData?.metadata,
+            // コンテンツ差し替え時も既存の AudioSource component を保持する。
+            audioSources: payload.audioSources ?? obj.userData?.audioSources,
           };
           addOrUpdateObject(payload.objectId, mergedInfo);
 
@@ -5631,6 +5642,7 @@ function handleHandoff(data) {
               visible: mergedInfo.visible ?? true,
               asset: cloneJsonSafe(mergedInfo.asset),
               metadata: cloneJsonSafe(mergedInfo.metadata || null),
+              audioSources: cloneJsonSafe(getObjectAudioSourcesForSerialize(managedObjects.get(payload.objectId)) || {}),
             };
 
             presenceState.historyManager?.push(
@@ -5653,6 +5665,13 @@ function handleHandoff(data) {
         console.debug('[scene-delta] animation applied', {
           objectId: payload.objectId,
           animation: payload.animation,
+        });
+      }
+      if (payload.audioSources !== undefined) {
+        applyIncomingAudioSources(payload.objectId, payload.audioSources);
+        console.debug('[scene-delta] audioSources applied', {
+          objectId: payload.objectId,
+          audioSources: payload.audioSources,
         });
       }
 
@@ -6261,7 +6280,7 @@ function createSceneUrlImportContext(options = {}) {
     broadcastSceneAdd: broadcast,
     applySceneBgm,
     broadcastSceneBgm: broadcast,
-    setObjectAudioComponent,
+    addOrUpdateAudioSource,
     resolveObjectAudioTarget: () => {
       const explicitObjectId = extraImporterContext?.objectId;
       if (explicitObjectId && managedObjects.has(explicitObjectId)) return explicitObjectId;
@@ -6448,9 +6467,9 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
     result.animationClips = animationClips;
   }
 
-  const audio = getObjectAudioConfigFromLoomState(loomIntegration.exportState(), objectId);
-  if (audio) {
-    result.audio = audio;
+  const audioSources = getObjectAudioSourcesForSerialize(obj);
+  if (audioSources) {
+    result.audioSources = audioSources;
   }
 
   return result;
@@ -6905,6 +6924,9 @@ function addOrUpdateObject(objectId, info, options = {}) {
   applyObjectName(existing, info.name);
   applyTransform(existing, info);
   applyObjectVisibility(existing, info.visible);
+  if (info.audioSources !== undefined) {
+    setObjectAudioSourcesFull(objectId, info.audioSources);
+  }
   notifySceneStateChanged('managed-object-updated');
 }
 
@@ -7628,6 +7650,7 @@ function createContentReplaceSnapshot(obj, fallbackObjectId = null) {
     visible: obj.visible !== false,
     asset: cloneJsonSafe(obj.userData?.asset || null),
     metadata: cloneJsonSafe(obj.userData?.metadata || null),
+    audioSources: cloneJsonSafe(getObjectAudioSourcesForSerialize(obj) || {}),
   };
 }
 
@@ -7703,12 +7726,16 @@ async function replaceObjectContent(objectId, input, options = {}) {
       ? input.name.trim()
       : existing.userData?.name || objectId;
 
+  // コンテンツ差し替えではオブジェクトを作り直すため、既存の AudioSource component を保持する。
+  const preservedAudioSources = getObjectAudioSourcesForSerialize(existing) || {};
+
   const deltaPayload = {
     kind: 'scene-delta',
     objectId,
     ...(input.name ? { name: nextName } : {}),
     asset: newAsset,
     metadata: newMetadata,
+    audioSources: preservedAudioSources,
   };
 
   broadcast(deltaPayload);
@@ -7722,6 +7749,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
     visible: existing.visible !== false,
     asset: newAsset,
     metadata: newMetadata,
+    audioSources: preservedAudioSources,
   };
   addOrUpdateObject(objectId, mergedInfo, { ...options, pushHistory: false });
 
@@ -7735,6 +7763,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
       visible: existing.visible !== false,
       asset: cloneJsonSafe(newAsset),
       metadata: cloneJsonSafe(newMetadata),
+      audioSources: cloneJsonSafe(preservedAudioSources),
     };
 
     presenceState.historyManager?.push(
@@ -7868,6 +7897,10 @@ function replaceManagedObject(objectId, nextObject, info) {
   managedObjects.set(objectId, nextObject);
 
   setupObjectGlbAnimation(objectId, nextObject);
+
+  if (info.audioSources !== undefined) {
+    setObjectAudioSourcesFull(objectId, info.audioSources);
+  }
 
   console.debug('[scene-add] applied transform', {
     objectId: nextObject.userData?.objectId || null,
@@ -8121,119 +8154,6 @@ function updateBgmControls() {
   clearButton.style.display = sceneBgmState.current ? 'block' : 'none';
 }
 
-function disposeObjectAudio(objectId) {
-  const state = objectAudioStates.get(objectId);
-  if (!state) return;
-  state.audio?.pause?.();
-  if (state.audio) {
-    state.audio.src = '';
-    state.audio.load?.();
-  }
-  objectAudioStates.delete(objectId);
-}
-
-function getOrCreateObjectAudioState(objectId) {
-  let state = objectAudioStates.get(objectId);
-  if (!state) {
-    state = {
-      audio: null,
-      current: null,
-      autoplayBlocked: false,
-    };
-    objectAudioStates.set(objectId, state);
-  }
-  return state;
-}
-
-function shouldRecreateObjectAudio(state, config) {
-  return !state.audio ||
-    state.current?.url !== config.url ||
-    state.current?.loop !== config.loop ||
-    state.current?.playOnAwake !== config.playOnAwake;
-}
-
-function seekAudioElement(audio, targetTime) {
-  if (!Number.isFinite(targetTime) || targetTime < 0) return;
-  if (!Number.isFinite(audio.duration) && targetTime > 0) return;
-  if (Math.abs((audio.currentTime || 0) - targetTime) < 0.25) return;
-  try {
-    audio.currentTime = targetTime;
-  } catch {}
-}
-
-function syncObjectAudioPlayback(objectId, state) {
-  const audio = state?.audio;
-  const config = state?.current;
-  if (!audio || !config) return;
-
-  if (state.pausedAtStart) {
-    audio.pause();
-    seekAudioElement(audio, 0);
-    return;
-  }
-
-  const objectTime = getObjectRuntimeTime(objectId, performance.now());
-  const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
-  const targetTime = duration
-    ? config.loop
-      ? objectTime % duration
-      : Math.min(objectTime, duration)
-    : 0;
-
-  seekAudioElement(audio, targetTime);
-
-  if (!config.playOnAwake || (duration && !config.loop && objectTime >= duration)) {
-    audio.pause();
-    return;
-  }
-
-  if (audio.paused) {
-    audio.play().then(() => {
-      state.autoplayBlocked = false;
-    }).catch((err) => {
-      if (!state.autoplayBlocked) {
-        console.warn('[SceneSync] object audio autoplay blocked:', err?.message);
-        showToast?.({
-          type: 'warning',
-          message: 'オブジェクト音声の自動再生がブロックされました',
-        });
-      }
-      state.autoplayBlocked = true;
-    });
-  }
-}
-
-function applyObjectAudioEffect(effect) {
-  const objectId = effect?.objectId;
-  if (!objectId || !managedObjects.has(objectId)) return;
-
-  const config = normalizeObjectAudioConfig(effect);
-  if (!config) {
-    disposeObjectAudio(objectId);
-    return;
-  }
-
-  const state = getOrCreateObjectAudioState(objectId);
-  state.pausedAtStart = effect.pausedAtStart === true;
-
-  if (shouldRecreateObjectAudio(state, config)) {
-    if (state.audio) {
-      state.audio.pause();
-      state.audio.src = '';
-      state.audio.load?.();
-    }
-    const audio = new Audio();
-    audio.src = config.url;
-    audio.loop = config.loop;
-    audio.preload = 'auto';
-    state.audio = audio;
-    state.current = config;
-    state.autoplayBlocked = false;
-  }
-
-  syncObjectAudioPlayback(objectId, state);
-}
-
 // ── Undo/Redo 処理 ──────────────────────────────────────
 
 function performUndo() {
@@ -8311,6 +8231,9 @@ function applyOperationToScene(operation) {
             metadata: hasMetadata
               ? cloneJsonSafe(operation.metadata)
               : cloneJsonSafe(obj.userData?.metadata || null),
+            audioSources: Object.prototype.hasOwnProperty.call(operation, 'audioSources')
+              ? cloneJsonSafe(operation.audioSources)
+              : cloneJsonSafe(getObjectAudioSourcesForSerialize(obj) || {}),
           };
 
           addOrUpdateObject(operation.objectId, mergedInfo, {
@@ -8330,6 +8253,9 @@ function applyOperationToScene(operation) {
         }
         if (operation.animation && typeof operation.animation === 'object') {
           applyObjectAnimationDelta(obj, operation.animation);
+        }
+        if (operation.audioSources !== undefined) {
+          applyIncomingAudioSources(operation.objectId, operation.audioSources);
         }
       }
       notifySceneStateChanged('undo-redo-scene-delta');
@@ -9412,7 +9338,11 @@ window.__sceneSyncDebug = {
   dragDropManager,
   getSelection: getCurrentSelectionPayload,
   getActiveTransformTweenCount: () => activeTransformTweens.size,
+  audioSource: audioSourceHostApi,
 };
+
+// Loomlet host 連携用の AudioSource 操作 API（play/pause/stop/seek/playOneShot/setVolume/setClip/syncToAnimation/unsync）。
+window.sceneSyncAudioSource = audioSourceHostApi;
 
 function isMobileUi() {
   return isSceneSyncMobileDevice();
@@ -9862,7 +9792,7 @@ const EDITABLE_SCENE_OBJECT_FIELDS = new Set([
   'scale',
   'visible',
   'asset',
-  'audio',
+  'audioSources',
 ]);
 
 const EDITABLE_TEXT_ASSET_FIELDS = new Set([
@@ -9916,22 +9846,10 @@ function validateColorValue(value, path, errors) {
   return valid;
 }
 
-function validateInspectorAudioValue(value, path, errors) {
-  if (value === null) return true;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push(`${path} must be an object or null.`);
-    return false;
-  }
-  if (typeof value.url !== 'string' || !/^https?:\/\//i.test(value.url.trim())) {
-    errors.push(`${path}.url must be an http(s) URL.`);
-    return false;
-  }
-  if (value.playOnAwake !== undefined && typeof value.playOnAwake !== 'boolean') {
-    errors.push(`${path}.playOnAwake must be a boolean.`);
-    return false;
-  }
-  if (value.loop !== undefined && typeof value.loop !== 'boolean') {
-    errors.push(`${path}.loop must be a boolean.`);
+function validateInspectorAudioSourcesValue(value, path, errors) {
+  const result = validateAudioSourcesMap(value, { maxStringLength: 128 });
+  if (!result.ok) {
+    errors.push(`${path}: ${result.reason}.`);
     return false;
   }
   return true;
@@ -10248,10 +10166,10 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       }
     }
 
-    if (!valuesEqual(baseObject.audio ?? null, editedObject.audio ?? null)) {
-      if (validateInspectorAudioValue(editedObject.audio ?? null, `objects.${objectId}.audio`, errors)) {
-        graphActions.push(createObjectAudioGraphOperation(objectId, editedObject.audio ?? null));
-        changedFields.push('audio');
+    if (!valuesEqual(baseObject.audioSources ?? null, editedObject.audioSources ?? null)) {
+      if (validateInspectorAudioSourcesValue(editedObject.audioSources ?? null, `objects.${objectId}.audioSources`, errors)) {
+        objectDelta.audioSources = editedObject.audioSources ?? {};
+        changedFields.push('audioSources');
       }
     }
 
@@ -11329,9 +11247,9 @@ function buildSceneInspectorSnapshot() {
       entry.animationClips = getObjectAnimationClipSummaries(obj);
     }
 
-    const audio = getObjectAudioConfigFromLoomState(loomGraphState, objectId);
-    if (audio) {
-      entry.audio = audio;
+    const audioSources = getObjectAudioSourcesForSerialize(obj);
+    if (audioSources) {
+      entry.audioSources = audioSources;
     }
 
     objects[objectId] = entry;

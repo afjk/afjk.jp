@@ -182,6 +182,7 @@ export class HistoryManager {
         ...(after.asset !== undefined ? { asset: after.asset } : {}),
         ...(after.metadata !== undefined ? { metadata: after.metadata } : {}),
         ...(after.visible !== undefined ? { visible: after.visible } : {}),
+        ...(after.audioSources !== undefined ? { audioSources: after.audioSources } : {}),
       },
       backward: {
         kind: 'scene-delta',
@@ -193,6 +194,7 @@ export class HistoryManager {
         ...(before.asset !== undefined ? { asset: before.asset } : {}),
         ...(before.metadata !== undefined ? { metadata: before.metadata } : {}),
         ...(before.visible !== undefined ? { visible: before.visible } : {}),
+        ...(before.audioSources !== undefined ? { audioSources: before.audioSources } : {}),
       },
     };
   }

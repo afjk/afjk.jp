@@ -34,14 +34,26 @@ const OBJECT_TARGET_NODE_TYPES = new Set([
   'sceneSetScale',
   'sceneSetColor',
   'sceneSetVisible',
-  'sceneSetAudio',
   'scene.setPosition',
   'scene.offsetPosition',
   'scene.setRotation',
   'scene.setScale',
   'scene.setColor',
   'scene.setVisible',
-  'scene.setAudio',
+]);
+
+// Loomlet が emit する AudioSource 操作 effect。
+// 実際の再生は host 側の AudioSource API（audioSource）へ委譲する。
+const AUDIO_SOURCE_EFFECT_TYPES = new Set([
+  'audioSource.play',
+  'audioSource.pause',
+  'audioSource.stop',
+  'audioSource.seek',
+  'audioSource.playOneShot',
+  'audioSource.setVolume',
+  'audioSource.setClip',
+  'audioSource.syncToAnimation',
+  'audioSource.unsync',
 ]);
 
 function graphForRuntime(graph, scopeObjectId) {
@@ -108,11 +120,30 @@ function createRuntimeManager({
   clearLoomletHostEvents,
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
-  applyObjectAudioEffect,
+  audioSource,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
   const behaviorBases = new Map();
+
+  function routeAudioSourceEffect(effect) {
+    if (!audioSource) return;
+    const objectId = effect.objectId || effect.target;
+    if (!objectId) return;
+    const name = effect.name || 'default';
+    switch (effect.type) {
+      case 'audioSource.play': audioSource.play?.(objectId, name); break;
+      case 'audioSource.pause': audioSource.pause?.(objectId, name); break;
+      case 'audioSource.stop': audioSource.stop?.(objectId, name); break;
+      case 'audioSource.seek': audioSource.seek?.(objectId, name, effect.time ?? 0); break;
+      case 'audioSource.playOneShot': audioSource.playOneShot?.(objectId, name, effect.options || {}); break;
+      case 'audioSource.setVolume': audioSource.setVolume?.(objectId, name, effect.volume ?? 1); break;
+      case 'audioSource.setClip': audioSource.setClip?.(objectId, name, effect.url); break;
+      case 'audioSource.syncToAnimation': audioSource.syncToAnimation?.(objectId, name, effect.sync || effect.options || {}); break;
+      case 'audioSource.unsync': audioSource.unsync?.(objectId, name); break;
+      default: break;
+    }
+  }
 
   function makeBaseKey(key, target) {
     return `${key}:${target}`;
@@ -250,13 +281,8 @@ function createRuntimeManager({
   function applySceneEffect(effect, key) {
     const objectId = effect?.objectId;
 
-    if (effect?.type === 'scene.setAudio') {
-      if (!objectId) return;
-      if (isObjectBeingEdited?.(objectId)) {
-        applyObjectAudioEffect?.({ ...effect, pausedAtStart: true });
-        return;
-      }
-      applyObjectAudioEffect?.(effect);
+    if (effect?.type && AUDIO_SOURCE_EFFECT_TYPES.has(effect.type)) {
+      routeAudioSourceEffect(effect);
       return;
     }
 
@@ -466,7 +492,7 @@ export function createSceneSyncLoomIntegration({
   clearLoomletHostEvents,
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
-  applyObjectAudioEffect,
+  audioSource,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
@@ -482,7 +508,7 @@ export function createSceneSyncLoomIntegration({
     clearLoomletHostEvents,
     getSceneClockStateForLoomlet,
     getInputRoutingMode,
-    applyObjectAudioEffect,
+    audioSource,
   });
 
   function isSceneGraphMessage(payload) {
