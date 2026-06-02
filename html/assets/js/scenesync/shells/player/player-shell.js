@@ -30,6 +30,7 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
   let removeStateListener = null;
   let rafId = null;
   let isSeeking = false;
+  let lastSeekValue = null;
 
   function getClockState(core) {
     return core?.getSceneClockState?.() ?? {};
@@ -160,13 +161,25 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
       const seekEl = panel.querySelector('[data-player-seek]');
       seekEl?.addEventListener('pointerdown', () => { isSeeking = true; });
       seekEl?.addEventListener('input', (e) => {
-        // Live preview while dragging (does not commit seek)
+        const value = parseFloat(e.target.value);
+        if (!Number.isFinite(value)) return;
+
         const timeEl = panel.querySelector('[data-player-current-time]');
-        if (timeEl) timeEl.textContent = formatTime(parseFloat(e.target.value));
+        if (timeEl) timeEl.textContent = formatTime(value);
+
+        if (lastSeekValue !== value) {
+          lastSeekValue = value;
+          actions.seek(value);
+        }
       });
       seekEl?.addEventListener('change', (e) => {
-        // `change` fires once when the thumb is released on both desktop and mobile
-        actions.seek(parseFloat(e.target.value));
+        const value = parseFloat(e.target.value);
+        if (Number.isFinite(value)) {
+          if (lastSeekValue !== value) {
+            lastSeekValue = value;
+            actions.seek(value);
+          }
+        }
         isSeeking = false;
       });
 
@@ -199,6 +212,7 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
       panel = null;
       actions = null;
       isSeeking = false;
+      lastSeekValue = null;
       document.body.classList.remove(BODY_CLASS);
       delete document.body.dataset.sceneSyncShell;
     },
