@@ -4559,6 +4559,7 @@ const stampPreviewGizmoState = {
 const sceneInspectorState = {
   isOpen: false,
   isEditing: false,
+  isApplyingLivePreview: false,
   refreshTimer: null,
   lastReason: null,
   baseSnapshot: null,
@@ -9902,6 +9903,31 @@ function validateNumberArray(value, size, path, errors) {
   return true;
 }
 
+function formatInspectorAngleDegrees(radians) {
+  const degrees = Number(THREE.MathUtils.radToDeg(radians).toFixed(3));
+  return Object.is(degrees, -0) ? 0 : degrees;
+}
+
+function quaternionToInspectorEulerDegrees(quaternion) {
+  const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ');
+  return [
+    formatInspectorAngleDegrees(euler.x),
+    formatInspectorAngleDegrees(euler.y),
+    formatInspectorAngleDegrees(euler.z),
+  ];
+}
+
+function inspectorEulerDegreesToQuaternionArray(rotation) {
+  return new THREE.Quaternion()
+    .setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(rotation[0]),
+      THREE.MathUtils.degToRad(rotation[1]),
+      THREE.MathUtils.degToRad(rotation[2]),
+      'XYZ'
+    ))
+    .toArray();
+}
+
 function validateColorValue(value, path, errors) {
   const valid = typeof value === 'string' || typeof value === 'number';
   if (!valid) {
@@ -10080,8 +10106,8 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
     }
 
     if (!valuesEqual(baseObject.rotation, editedObject.rotation)) {
-      if (validateNumberArray(editedObject.rotation, 4, `objects.${objectId}.rotation`, errors)) {
-        objectDelta.rotation = [...editedObject.rotation];
+      if (validateNumberArray(editedObject.rotation, 3, `objects.${objectId}.rotation`, errors)) {
+        objectDelta.rotation = inspectorEulerDegreesToQuaternionArray(editedObject.rotation);
         changedFields.push('rotation');
       }
     }
@@ -10363,6 +10389,74 @@ function formatSceneInspectorValidationMessage(summary, options = {}) {
   return lines.join('\n');
 }
 
+function renderSceneInspectorDraftPreview() {
+  const hasErrors = sceneInspectorState.validationErrors.length > 0;
+  const summary = sceneInspectorState.diffSummary;
+  const hasWarnings = sceneInspectorState.isEditing && !hasErrors && !!summary
+    && (summary.actionCount === 0 || summary.ignoredEntries.length > 0);
+
+  sceneInspectorValidationEl.hidden = !sceneInspectorState.isEditing || (!hasErrors && !hasWarnings);
+  sceneInspectorValidationEl?.classList.toggle('is-error', hasErrors);
+  sceneInspectorValidationEl?.classList.toggle('is-warning', hasWarnings);
+  if (sceneInspectorValidationEl) {
+    if (hasErrors) {
+      sceneInspectorValidationEl.textContent = sceneInspectorState.validationErrors
+        .map((message) => `- ${message}`)
+        .join('\n');
+    } else if (hasWarnings) {
+      sceneInspectorValidationEl.textContent = formatSceneInspectorValidationMessage(summary);
+    } else {
+      sceneInspectorValidationEl.textContent = '';
+    }
+  }
+
+  const summaryText = sceneInspectorState.isEditing ? formatSceneInspectorSummary(summary) : '';
+  sceneInspectorDiffEl.hidden = !sceneInspectorState.isEditing || !summaryText;
+  if (sceneInspectorDiffEl) {
+    sceneInspectorDiffEl.textContent = summaryText;
+  }
+  updateSceneInspectorMode();
+}
+
+function renderSceneInspectorObjectDraftPreview() {
+  const objectEditor = sceneInspectorState.objectEditor;
+  const objectPathPrefix = objectEditor.objectId ? `objects.${objectEditor.objectId}` : '';
+  const hasErrors = objectEditor.validationErrors.length > 0;
+  const summary = objectEditor.diffSummary;
+  const hasWarnings = objectEditor.isEditing && !hasErrors && !!summary
+    && (summary.actionCount === 0 || summary.ignoredEntries.length > 0);
+
+  sceneInspectorObjectValidationEl.hidden = !objectEditor.isEditing || (!hasErrors && !hasWarnings);
+  sceneInspectorObjectValidationEl?.classList.toggle('is-error', hasErrors);
+  sceneInspectorObjectValidationEl?.classList.toggle('is-warning', hasWarnings);
+  if (sceneInspectorObjectValidationEl) {
+    if (hasErrors) {
+      sceneInspectorObjectValidationEl.textContent = objectEditor.validationErrors
+        .map((message) => `- ${trimSceneInspectorPathPrefix(message, `${objectPathPrefix}.`)}`)
+        .join('\n');
+    } else if (hasWarnings) {
+      sceneInspectorObjectValidationEl.textContent = formatSceneInspectorValidationMessage(summary, {
+        ignoredPrefix: `${objectPathPrefix}.`,
+      });
+    } else {
+      sceneInspectorObjectValidationEl.textContent = '';
+    }
+  }
+
+  const summaryText = objectEditor.isEditing
+    ? formatSceneInspectorSummary(summary, {
+        changedPrefix: objectPathPrefix,
+        changedLabel: objectEditor.objectId,
+        ignoredPrefix: `${objectPathPrefix}.`,
+      })
+    : '';
+  sceneInspectorObjectDiffEl.hidden = !objectEditor.isEditing || !summaryText;
+  if (sceneInspectorObjectDiffEl) {
+    sceneInspectorObjectDiffEl.textContent = summaryText;
+  }
+  updateSceneInspectorMode();
+}
+
 function buildSelectedObjectInspectorContext(snapshot) {
   const objectId = snapshot.selection.objectId;
   if (!objectId) {
@@ -10496,7 +10590,7 @@ function getInspectorArrayItemLabel(arrayLabel, index, arrayLength) {
   }
 
   if (key === 'rotation') {
-    const labels = arrayLength === 4 ? ['x', 'y', 'z', 'w'] : axisLabels;
+    const labels = arrayLength === 3 ? ['x deg', 'y deg', 'z deg'] : axisLabels;
     if (index < labels.length) return labels[index];
   }
 
@@ -10511,15 +10605,16 @@ function getInspectorNumberConfig(path, value) {
   let max = 100;
   let step = 0.01;
 
-  if (parent === 'position' || ['x', 'y', 'z'].includes(key)) {
+  if (parent === 'rotation' || key.includes('rotation')) {
+    min = -180;
+    max = 180;
+    step = 1;
+  } else if (parent === 'position' || ['x', 'y', 'z'].includes(key)) {
     min = -20;
     max = 20;
   } else if (parent === 'scale' || key.includes('scale')) {
     min = 0;
     max = 10;
-  } else if (parent === 'rotation' || key.includes('rotation')) {
-    min = -1;
-    max = 1;
   } else if (['opacity', 'alpha', 'volume', 'weight', 'intensity'].some((token) => key.includes(token))) {
     min = 0;
     max = 1;
@@ -10941,6 +11036,7 @@ function enterSceneInspectorEditMode() {
   sceneInspectorState.diffSummary = null;
   sceneInspectorState.lastAppliedSummary = null;
   renderSceneInspector(snapshot);
+  updateSceneInspectorDraftPreview();
   if (sceneInspectorState.editorMode === 'json' && focusTextInputIfSafe(sceneInspectorEditorEl)) {
     sceneInspectorEditorEl?.setSelectionRange(0, 0);
   }
@@ -10982,6 +11078,7 @@ function enterSceneInspectorObjectEditMode() {
     lastAppliedSummary: null,
   };
   renderSceneInspector(snapshot);
+  updateSceneInspectorObjectDraftPreview();
   if (sceneInspectorState.objectEditor.editorMode === 'json' && focusTextInputIfSafe(sceneInspectorObjectEditorEl)) {
     sceneInspectorObjectEditorEl?.setSelectionRange(0, 0);
   }
@@ -11063,6 +11160,117 @@ function validateSceneInspectorObjectDraft() {
   return result;
 }
 
+function applySceneInspectorPreviewOperation(operation) {
+  if (!operation) return;
+
+  const wasApplyingLivePreview = sceneInspectorState.isApplyingLivePreview;
+  sceneInspectorState.isApplyingLivePreview = true;
+  try {
+    applyOperationToScene(operation);
+    updateSelectionState({
+      reason: 'scene-inspector-live-preview',
+      broadcastLock: false,
+      broadcastUnlock: false,
+    });
+  } finally {
+    sceneInspectorState.isApplyingLivePreview = wasApplyingLivePreview;
+  }
+}
+
+function applySceneInspectorDraftLivePreview(parsedSnapshot) {
+  const currentSnapshot = buildSceneInspectorEditSnapshot();
+  const result = buildSceneInspectorEditableDiff(currentSnapshot, parsedSnapshot);
+  if (result.errors.length > 0 || !result.operation) return;
+  applySceneInspectorPreviewOperation(result.operation);
+}
+
+function applySceneInspectorObjectDraftLivePreview(parsedObject) {
+  const objectEditorState = sceneInspectorState.objectEditor;
+  const snapshot = buildSceneInspectorSnapshot();
+  const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
+  if (!objectId || objectId !== objectEditorState.objectId || !objectSnapshot) return;
+
+  const result = buildObjectBlockDiff(
+    objectEditorState.objectId,
+    objectSnapshot,
+    parsedObject
+  );
+  if (result.errors.length > 0 || !result.operation) return;
+  applySceneInspectorPreviewOperation(result.operation);
+}
+
+function updateSceneInspectorDraftPreview() {
+  if (!sceneInspectorState.isEditing || !sceneInspectorState.baseSnapshot) return null;
+
+  const draftText = sceneInspectorEditorEl?.value ?? sceneInspectorState.draftText;
+  sceneInspectorState.draftText = draftText;
+
+  let parsedSnapshot;
+  try {
+    parsedSnapshot = JSON.parse(draftText);
+  } catch (error) {
+    sceneInspectorState.parsedSnapshot = null;
+    sceneInspectorState.validationErrors = [`Invalid JSON: ${error.message}`];
+    sceneInspectorState.diffSummary = null;
+    renderSceneInspectorDraftPreview();
+    return null;
+  }
+
+  sceneInspectorState.parsedSnapshot = parsedSnapshot;
+  const result = buildSceneInspectorEditableDiff(
+    sceneInspectorState.baseSnapshot,
+    parsedSnapshot
+  );
+  sceneInspectorState.validationErrors = result.errors;
+  sceneInspectorState.diffSummary = result.summary;
+  renderSceneInspectorDraftPreview();
+  if (result.errors.length === 0) {
+    applySceneInspectorDraftLivePreview(parsedSnapshot);
+  }
+  return result;
+}
+
+function updateSceneInspectorObjectDraftPreview() {
+  const objectEditorState = sceneInspectorState.objectEditor;
+  if (!objectEditorState.isEditing || !objectEditorState.baseObject) return null;
+
+  const draftText = sceneInspectorObjectEditorEl?.value ?? objectEditorState.draftText;
+  objectEditorState.draftText = draftText;
+
+  let parsedObject;
+  try {
+    parsedObject = JSON.parse(draftText);
+  } catch (error) {
+    objectEditorState.parsedObject = null;
+    objectEditorState.validationErrors = [`Invalid JSON: ${error.message}`];
+    objectEditorState.diffSummary = null;
+    renderSceneInspectorObjectDraftPreview();
+    return null;
+  }
+
+  if (!parsedObject || typeof parsedObject !== 'object' || Array.isArray(parsedObject)) {
+    objectEditorState.parsedObject = null;
+    objectEditorState.validationErrors = ['Selected object JSON block must be an object.'];
+    objectEditorState.diffSummary = null;
+    renderSceneInspectorObjectDraftPreview();
+    return null;
+  }
+
+  objectEditorState.parsedObject = parsedObject;
+  const result = buildObjectBlockDiff(
+    objectEditorState.objectId,
+    objectEditorState.baseObject,
+    parsedObject
+  );
+  objectEditorState.validationErrors = result.errors;
+  objectEditorState.diffSummary = result.summary;
+  renderSceneInspectorObjectDraftPreview();
+  if (result.errors.length === 0) {
+    applySceneInspectorObjectDraftLivePreview(parsedObject);
+  }
+  return result;
+}
+
 function applySceneInspectorDraft() {
   const scrollState = captureEditorScrollPosition(sceneInspectorEditorEl);
   const result = validateSceneInspectorDraft();
@@ -11134,6 +11342,7 @@ function resetSceneInspectorDraftToCurrent() {
   sceneInspectorState.validationErrors = [];
   sceneInspectorState.diffSummary = null;
   renderSceneInspector(snapshot);
+  updateSceneInspectorDraftPreview();
   showToast('Scene JSON editor reset to current scene');
   restoreEditorScrollPosition(sceneInspectorEditorEl, scrollState);
 }
@@ -11176,14 +11385,17 @@ function resetSceneInspectorObjectDraftToCurrent() {
   sceneInspectorState.objectEditor.validationErrors = [];
   sceneInspectorState.objectEditor.diffSummary = null;
   renderSceneInspector(snapshot);
+  updateSceneInspectorObjectDraftPreview();
   showToast('Selected object editor reset to current object');
   restoreEditorScrollPosition(sceneInspectorObjectEditorEl, scrollState);
 }
 
 function tryExitSceneInspectorEditMode() {
   if (isSceneInspectorDirty()) {
-    showToast('Scene JSON editor has unsaved changes. Reset or broadcast before canceling.');
-    return false;
+    if (sceneInspectorState.baseSnapshot) {
+      applySceneInspectorDraftLivePreview(sceneInspectorState.baseSnapshot);
+    }
+    showToast('Scene Inspector preview reverted');
   }
   exitSceneInspectorEditMode();
   return true;
@@ -11191,8 +11403,10 @@ function tryExitSceneInspectorEditMode() {
 
 function tryExitSceneInspectorObjectEditMode() {
   if (isSceneInspectorObjectDirty()) {
-    showToast('Selected object editor has unsaved changes. Reset or broadcast before canceling.');
-    return false;
+    if (sceneInspectorState.objectEditor.baseObject) {
+      applySceneInspectorObjectDraftLivePreview(sceneInspectorState.objectEditor.baseObject);
+    }
+    showToast('Selected object preview reverted');
   }
   exitSceneInspectorObjectEditMode();
   return true;
@@ -11200,27 +11414,23 @@ function tryExitSceneInspectorObjectEditMode() {
 
 function syncSceneInspectorDraftFromJsonInput() {
   sceneInspectorState.draftText = sceneInspectorEditorEl?.value ?? sceneInspectorState.draftText;
-  sceneInspectorState.validationErrors = [];
-  sceneInspectorState.diffSummary = null;
   try {
     sceneInspectorState.parsedSnapshot = JSON.parse(sceneInspectorState.draftText);
   } catch {
     sceneInspectorState.parsedSnapshot = null;
   }
-  updateSceneInspectorMode();
+  updateSceneInspectorDraftPreview();
 }
 
 function syncSceneInspectorObjectDraftFromJsonInput() {
   const objectEditor = sceneInspectorState.objectEditor;
   objectEditor.draftText = sceneInspectorObjectEditorEl?.value ?? objectEditor.draftText;
-  objectEditor.validationErrors = [];
-  objectEditor.diffSummary = null;
   try {
     objectEditor.parsedObject = JSON.parse(objectEditor.draftText);
   } catch {
     objectEditor.parsedObject = null;
   }
-  updateSceneInspectorMode();
+  updateSceneInspectorObjectDraftPreview();
 }
 
 function handleSceneInspectorFormInput(event) {
@@ -11241,11 +11451,9 @@ function handleSceneInspectorFormInput(event) {
   setInspectorValueAtPath(parsedSnapshot, path, value);
   sceneInspectorState.parsedSnapshot = parsedSnapshot;
   sceneInspectorState.draftText = JSON.stringify(parsedSnapshot, null, 2);
-  sceneInspectorState.validationErrors = [];
-  sceneInspectorState.diffSummary = null;
   if (sceneInspectorEditorEl) sceneInspectorEditorEl.value = sceneInspectorState.draftText;
   mirrorInspectorControls(sceneInspectorFormEl, path, value);
-  updateSceneInspectorMode();
+  updateSceneInspectorDraftPreview();
 }
 
 function handleSceneInspectorObjectFormInput(event) {
@@ -11267,11 +11475,9 @@ function handleSceneInspectorObjectFormInput(event) {
   setInspectorValueAtPath(parsedObject, path, value);
   objectEditor.parsedObject = parsedObject;
   objectEditor.draftText = JSON.stringify(parsedObject, null, 2);
-  objectEditor.validationErrors = [];
-  objectEditor.diffSummary = null;
   if (sceneInspectorObjectEditorEl) sceneInspectorObjectEditorEl.value = objectEditor.draftText;
   mirrorInspectorControls(sceneInspectorObjectFormEl, path, value);
-  updateSceneInspectorMode();
+  updateSceneInspectorObjectDraftPreview();
 }
 
 function buildSceneInspectorSnapshot() {
@@ -11285,7 +11491,7 @@ function buildSceneInspectorSnapshot() {
       name: obj.userData?.name || obj.name || objectId,
       type: obj.type,
       position: obj.position.toArray(),
-      rotation: obj.quaternion.toArray(),
+      rotation: quaternionToInspectorEulerDegrees(obj.quaternion),
       scale: obj.scale.toArray(),
       visible: obj.visible !== false,
       childCount: obj.children?.length || 0,
@@ -11362,6 +11568,7 @@ function scheduleSceneInspectorRefresh() {
 
 function notifyInspectorStateChanged(reason = 'unknown') {
   sceneInspectorState.lastReason = reason;
+  if (sceneInspectorState.isApplyingLivePreview) return;
   scheduleSceneInspectorRefresh();
 }
 
@@ -11659,6 +11866,7 @@ function notifySceneStateChanged(reason) {
   notifyInspectorStateChanged(`scene:${reason}`);
   notifySceneSyncShellStateChanged(`scene:${reason}`);
   syncSceneUiState();
+  if (sceneInspectorState.isApplyingLivePreview) return;
   scheduleSaveRoomSnapshot(reason);
 }
 
