@@ -4343,7 +4343,7 @@ renderer.setAnimationLoop((time, frame) => {
   updateGazeStateFromCamera();
   updateGazeDwellState(now);
   loomIntegration?.tickObjectGraphs?.(sceneClockStateForTick);
-  audioSourceController.tick(now);
+  audioSourceController.tick(now, sceneClockStateForTick);
 
   // Update Scene Clock debug UI
   if (!sceneClockPanelEl?.hidden) {
@@ -4813,7 +4813,7 @@ function getObjectAnimationSampleForAudio(objectId, clipName) {
 
 // ── AudioSource component / playback controller ─────────
 const audioSourceController = createAudioSourceController({
-  getObjectRuntimeTime: (objectId, nowMs) => getObjectRuntimeTime(objectId, nowMs),
+  getObjectRuntimeTime: (objectId, nowMs, clockState) => getObjectRuntimeTime(objectId, nowMs, clockState),
   getAnimationSample: getObjectAnimationSampleForAudio,
   isObjectBeingEdited: isObjectBeingEditedNow,
   showToast,
