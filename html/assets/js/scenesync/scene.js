@@ -10453,14 +10453,14 @@ function updateSceneInspectorMode() {
   const parts = [];
 
   if (sceneInspectorState.isEditing) {
-    parts.push('<span class="scene-inspector-mode-badge">Editing Scene JSON</span>');
+    parts.push('<span class="scene-inspector-mode-badge">Editing Scene</span>');
     if (isSceneInspectorDirty()) {
       parts.push('<span class="scene-inspector-mode-dirty">Unsaved scene changes</span>');
     }
   }
 
   if (sceneInspectorState.objectEditor.isEditing) {
-    parts.push('<span class="scene-inspector-mode-badge object">Editing Selected Object JSON</span>');
+    parts.push('<span class="scene-inspector-mode-badge object">Editing Selected Object</span>');
     if (isSceneInspectorObjectDirty()) {
       parts.push('<span class="scene-inspector-mode-dirty">Unsaved object changes</span>');
     }
@@ -10680,6 +10680,8 @@ function mirrorInspectorControls(container, path, value) {
     if (control.dataset.inspectorPath !== serializedPath) return;
     if (control.type === 'checkbox') {
       control.checked = Boolean(value);
+    } else if (control.dataset.inspectorType === 'json') {
+      control.value = value === null ? 'null' : JSON.stringify(value);
     } else {
       control.value = String(value);
     }
@@ -10704,6 +10706,8 @@ function updateSceneInspectorEditorModeUi() {
   if (sceneInspectorEditorEl) sceneInspectorEditorEl.hidden = !isEditing || !isJson;
   sceneInspectorModeInspectorBtn?.classList.toggle('active', !isJson);
   sceneInspectorModeJsonBtn?.classList.toggle('active', isJson);
+  sceneInspectorModeInspectorBtn?.setAttribute('aria-selected', String(!isJson));
+  sceneInspectorModeJsonBtn?.setAttribute('aria-selected', String(isJson));
 }
 
 function updateSceneInspectorObjectEditorModeUi() {
@@ -10715,6 +10719,8 @@ function updateSceneInspectorObjectEditorModeUi() {
   if (sceneInspectorObjectEditorEl) sceneInspectorObjectEditorEl.hidden = !isEditing || !isJson;
   sceneInspectorObjectModeInspectorBtn?.classList.toggle('active', !isJson);
   sceneInspectorObjectModeJsonBtn?.classList.toggle('active', isJson);
+  sceneInspectorObjectModeInspectorBtn?.setAttribute('aria-selected', String(!isJson));
+  sceneInspectorObjectModeJsonBtn?.setAttribute('aria-selected', String(isJson));
 }
 
 function resetSceneInspectorObjectEditor({ preserveObjectId = false } = {}) {
@@ -10807,7 +10813,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (isEditing && sceneInspectorEditorEl && sceneInspectorEditorEl.value !== sceneInspectorState.draftText) {
     sceneInspectorEditorEl.value = sceneInspectorState.draftText;
   }
-  if (isEditing) {
+  if (isEditing && sceneInspectorState.editorMode === 'inspector') {
     let inspectorSnapshot = sceneInspectorState.parsedSnapshot;
     if (!inspectorSnapshot) {
       try {
@@ -10817,6 +10823,8 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
       }
     }
     renderSceneInspectorForm(sceneInspectorFormEl, inspectorSnapshot, 'scene');
+  } else if (sceneInspectorFormEl) {
+    sceneInspectorFormEl.innerHTML = '';
   }
   updateSceneInspectorEditorModeUi();
 
@@ -10882,7 +10890,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (objectEditorIsEditing && sceneInspectorObjectEditorEl && sceneInspectorObjectEditorEl.value !== objectEditorState.draftText) {
     sceneInspectorObjectEditorEl.value = objectEditorState.draftText;
   }
-  if (objectEditorIsEditing) {
+  if (objectEditorIsEditing && objectEditorState.editorMode === 'inspector') {
     let inspectorObject = objectEditorState.parsedObject;
     if (!inspectorObject) {
       try {
@@ -10892,6 +10900,8 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
       }
     }
     renderSceneInspectorForm(sceneInspectorObjectFormEl, inspectorObject, 'object');
+  } else if (sceneInspectorObjectFormEl) {
+    sceneInspectorObjectFormEl.innerHTML = '';
   }
   updateSceneInspectorObjectEditorModeUi();
 

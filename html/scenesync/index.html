@@ -1399,7 +1399,7 @@
       <div class="scene-inspector-actions">
         <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
         <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
-        <button id="scene-inspector-edit" class="chip primary" type="button">Edit JSON</button>
+        <button id="scene-inspector-edit" class="chip primary" type="button">Edit Scene</button>
         <button id="scene-inspector-format" class="chip" type="button" hidden>Format JSON</button>
         <button id="scene-inspector-reset" class="chip" type="button" hidden>Reset to Current</button>
         <button id="scene-inspector-validate" class="chip" type="button" hidden>Validate</button>
@@ -1414,8 +1414,8 @@
       <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>
       <div id="scene-inspector-diff" class="scene-inspector-diff" hidden></div>
       <div id="scene-inspector-editor-mode" class="scene-inspector-editor-mode" role="tablist" aria-label="Scene editor mode" hidden>
-        <button id="scene-inspector-mode-inspector" class="chip active" type="button" data-scene-inspector-editor-mode="inspector">Inspector</button>
-        <button id="scene-inspector-mode-json" class="chip" type="button" data-scene-inspector-editor-mode="json">JSON</button>
+        <button id="scene-inspector-mode-inspector" class="chip active" type="button" role="tab" aria-selected="true" data-scene-inspector-editor-mode="inspector">Inspector</button>
+        <button id="scene-inspector-mode-json" class="chip" type="button" role="tab" aria-selected="false" data-scene-inspector-editor-mode="json">JSON</button>
       </div>
       <div id="scene-inspector-form" class="scene-inspector-form" hidden></div>
       <textarea id="scene-inspector-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
@@ -1452,7 +1452,7 @@
           </label>
         </div>
         <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
-          <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
+          <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object</button>
           <button id="scene-inspector-object-format" class="chip" type="button" hidden>Format JSON</button>
           <button id="scene-inspector-object-reset" class="chip" type="button" hidden>Reset to Current</button>
           <button id="scene-inspector-object-validate" class="chip" type="button" hidden>Validate / Preview</button>
@@ -1465,8 +1465,8 @@
         <div id="scene-inspector-object-validation" class="scene-inspector-validation" hidden></div>
         <div id="scene-inspector-object-diff" class="scene-inspector-diff" hidden></div>
         <div id="scene-inspector-object-editor-mode" class="scene-inspector-editor-mode" role="tablist" aria-label="Selected object editor mode" hidden>
-          <button id="scene-inspector-object-mode-inspector" class="chip active" type="button" data-scene-inspector-object-editor-mode="inspector">Inspector</button>
-          <button id="scene-inspector-object-mode-json" class="chip" type="button" data-scene-inspector-object-editor-mode="json">JSON</button>
+          <button id="scene-inspector-object-mode-inspector" class="chip active" type="button" role="tab" aria-selected="true" data-scene-inspector-object-editor-mode="inspector">Inspector</button>
+          <button id="scene-inspector-object-mode-json" class="chip" type="button" role="tab" aria-selected="false" data-scene-inspector-object-editor-mode="json">JSON</button>
         </div>
         <div id="scene-inspector-object-form" class="scene-inspector-form" hidden></div>
         <textarea id="scene-inspector-object-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
