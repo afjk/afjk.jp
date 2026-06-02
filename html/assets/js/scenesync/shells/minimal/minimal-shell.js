@@ -32,6 +32,8 @@ function getConnectionText(core) {
 function getSelectionText(core) {
   const selection = core?.getSelection?.();
   const ids = Array.isArray(selection?.objectIds) ? selection.objectIds : [];
+  const label = typeof selection?.label === 'string' ? selection.label.trim() : '';
+  if (ids.length === 0 && label && label !== 'No object selected') return `Selection: ${label}`;
   if (ids.length === 0) return 'Selection: none';
   if (ids.length === 1) return `Selection: ${ids[0]}`;
   return `Selection: ${ids.length} objects`;

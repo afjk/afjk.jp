@@ -26,6 +26,7 @@ function createDomBackedCommands() {
 
 function createDomBackedCore(extraCore = {}) {
   const listeners = new Set();
+  let removeExtraStateListener = null;
 
   const notify = (reason) => {
     for (const listener of listeners) {
@@ -39,6 +40,15 @@ function createDomBackedCore(extraCore = {}) {
   const observer = new MutationObserver(() => notify('dom-mutated'));
   if (statusEl) observer.observe(statusEl, { childList: true, subtree: true, characterData: true });
   if (selectionOutputEl) observer.observe(selectionOutputEl, { childList: true, subtree: true, characterData: true });
+
+  if (typeof extraCore.onStateChange === 'function') {
+    const removeListener = extraCore.onStateChange((event = {}) => {
+      notify(event.reason || 'core-state-changed');
+    });
+    if (typeof removeListener === 'function') {
+      removeExtraStateListener = removeListener;
+    }
+  }
 
   return {
     ...extraCore,
@@ -56,6 +66,19 @@ function createDomBackedCore(extraCore = {}) {
       };
     },
     getSelection() {
+      const coreSelection = extraCore.getSelection?.();
+      if (coreSelection) {
+        const objectIds = Array.isArray(coreSelection.objectIds)
+          ? coreSelection.objectIds
+          : Array.isArray(coreSelection.selectedObjectIds)
+            ? coreSelection.selectedObjectIds
+            : [];
+        return {
+          ...coreSelection,
+          objectIds,
+        };
+      }
+
       const label = selectionOutputEl?.textContent?.trim() || '';
       return {
         label,
@@ -68,6 +91,8 @@ function createDomBackedCore(extraCore = {}) {
     },
     dispose() {
       observer.disconnect();
+      removeExtraStateListener?.();
+      removeExtraStateListener = null;
       listeners.clear();
       extraCore.dispose?.();
     },
