@@ -1,0 +1,51 @@
+.scene-sync-shell-minimal #settings-panel,
+.scene-sync-shell-minimal #peers-panel,
+.scene-sync-shell-minimal #scene-inspector-panel,
+.scene-sync-shell-minimal #scene-clock-panel,
+.scene-sync-shell-minimal #add-btn,
+.scene-sync-shell-minimal #history-toolbar,
+.scene-sync-shell-minimal #mobile-toolbar,
+.scene-sync-shell-minimal #mode,
+.scene-sync-shell-minimal #xr-toggle-btn,
+.scene-sync-shell-minimal #xr-calibrate-btn {
+  display: none !important;
+}
+
+.scene-sync-minimal-shell-panel {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 220;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font: 13px/1.45 monospace;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.scene-sync-minimal-shell-title {
+  font-weight: 700;
+}
+
+.scene-sync-minimal-shell-note {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+}
+
+.scene-sync-minimal-shell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scene-sync-minimal-shell-actions .chip {
+  justify-content: center;
+}

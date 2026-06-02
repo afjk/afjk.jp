@@ -22,7 +22,7 @@ import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { resolveDroppedUrl } from './loaders/url-resolver.js';
 import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL, estimateTextPanelLayout } from './components/text-panel-renderer.js';
 import { dispatchUrlImport } from './loaders/url-importers/index.js';
-import { getSceneSyncDom } from './ui/dom.js';
+import { getSceneSyncDom, mountSceneSyncShellFromDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
 import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
@@ -6508,6 +6508,28 @@ function getCurrentSelectionPayload() {
   };
 }
 
+const sceneSyncShellStateListeners = new Set();
+
+function getSceneSyncShellSelection() {
+  const selection = getCurrentSelectionPayload();
+  return {
+    ...selection,
+    objectIds: selection.selectedObjectIds,
+  };
+}
+
+function notifySceneSyncShellStateChanged(reason) {
+  for (const listener of sceneSyncShellStateListeners) {
+    listener({ reason });
+  }
+}
+
+function onSceneSyncShellStateChange(listener) {
+  if (typeof listener !== 'function') return () => {};
+  sceneSyncShellStateListeners.add(listener);
+  return () => sceneSyncShellStateListeners.delete(listener);
+}
+
 function resolveAiCommandObjectId(params = {}) {
   const explicit = typeof params.objectId === 'string' ? params.objectId.trim() : '';
   if (explicit) return explicit;
@@ -11593,16 +11615,19 @@ function broadcastSelectedObjectAnimationDelta(delta) {
 
 function notifySceneStateChanged(reason) {
   notifyInspectorStateChanged(`scene:${reason}`);
+  notifySceneSyncShellStateChanged(`scene:${reason}`);
   syncSceneUiState();
   scheduleSaveRoomSnapshot(reason);
 }
 
 function notifySelectionChanged(reason) {
   notifyInspectorStateChanged(`selection:${reason}`);
+  notifySceneSyncShellStateChanged(`selection:${reason}`);
 }
 
 function notifyConnectionStateChanged(reason) {
   notifyInspectorStateChanged(`connection:${reason}`);
+  notifySceneSyncShellStateChanged(`connection:${reason}`);
 }
 
 function setSceneInspectorOpen(nextOpen) {
@@ -11972,6 +11997,21 @@ logDiagnosticFlags();
 
 nicknameChip?.addEventListener('click', editNickname);
 document.getElementById('help-btn')?.addEventListener('click', openHelpDialog);
+mountSceneSyncShellFromDom({
+  commands: {
+    openAddMenu: () => dom.addBtn?.click(),
+    undo: () => {
+      if (presenceState.historyManager.canUndo()) performUndo();
+    },
+    redo: () => {
+      if (presenceState.historyManager.canRedo()) performRedo();
+    },
+    deleteSelected: deleteSelectedObjects,
+    exportScene: triggerExport,
+  },
+  getSelection: getSceneSyncShellSelection,
+  onStateChange: onSceneSyncShellStateChange,
+});
 updateNicknameLabel();
 renderRoomSection();
 syncSceneUiState();

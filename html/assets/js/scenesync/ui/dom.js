@@ -1,3 +1,17 @@
+import { mountSceneSyncShell } from '../shells/shell-bootstrap.js';
+
+let sceneSyncShellMountPromise = null;
+
+export function mountSceneSyncShellFromDom(core = {}) {
+  if (!sceneSyncShellMountPromise) {
+    sceneSyncShellMountPromise = mountSceneSyncShell(core).catch((error) => {
+      console.warn('[SceneSyncShell] failed to mount shell:', error);
+      return null;
+    });
+  }
+  return sceneSyncShellMountPromise;
+}
+
 export function getSceneSyncDom() {
   return {
     envSelect: document.getElementById('env-select'),
