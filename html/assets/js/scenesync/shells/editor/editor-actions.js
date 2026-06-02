@@ -12,9 +12,6 @@ export function createEditorActions(core) {
     startAiLink() {
       core?.commands?.startAiLink?.();
     },
-    openAiLink() {
-      core?.commands?.openAiLink?.();
-    },
     undo() {
       core?.commands?.undo?.();
     },

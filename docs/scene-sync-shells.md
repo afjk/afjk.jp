@@ -101,27 +101,71 @@ Current commands:
 - `deleteSelected()` - remove selected objects
 - `exportScene()` - export to GLB/JSON
 - `openHelp()` - show help dialog
-- `startAiLink()` - initiate AI pairing
+- `startAiLink()` - initiate AI pairing (with isLinked state check)
 - `openSceneInspector()` / `closeSceneInspector()` - scene inspector visibility
+- `toggleSceneInspector()` - toggle scene inspector open/closed
+- `closeMobileActionSheet()` - close mobile action sheet
 
 ### Layouts
 
 Layouts are surface-specific presenters. The Editor Shell mounts the appropriate layout based on device mode detection (`scene-sync-device-mobile` class).
 
-- **Desktop Layout**: adds `scene-sync-layout-desktop-editor` class. Currently wraps existing desktop UI.
-- **Mobile Layout**: adds `scene-sync-layout-mobile-editor` class. Currently wraps existing mobile UI.
-- **XR Layout**: adds `scene-sync-layout-xr-editor` class. Placeholder for WebXR/MR editing UI.
+#### Desktop Layout
+Wires the following buttons to editor actions:
+- `#export-btn` → `exportScene()`
+- `#help-btn` → `openHelp()`
+- `#link-btn` → `startAiLink()`
+- `#scene-inspector-toggle` → `toggleSceneInspector()`
+- `#scene-inspector-close` → `closeSceneInspector()`
+
+Note: `#add-btn` remains in scene.js as its implementation is deferred.
+
+Adds `scene-sync-layout-desktop-editor` class.
+
+#### Mobile Layout
+Wires the following buttons to editor actions with mobile-specific handling (closes action sheet before executing action):
+- `#mobile-export-btn` → closes sheet + `exportScene()`
+- `#mobile-help-btn` → closes sheet + `openHelp()`
+- `#mobile-link-open-btn` → closes sheet + `startAiLink()`
+- `#mobile-dev-open-btn` → closes sheet + `toggleSceneInspector()`
+
+Adds `scene-sync-layout-mobile-editor` class.
+
+#### XR Layout
+Placeholder for WebXR/MR editing UI. Not yet wired. Adds `scene-sync-layout-xr-editor` class.
 
 ### Input Adapters
 
-Input adapters are placeholders for future input event routing:
+Input adapters are currently placeholders and not wired to runtime input yet:
 
 - **Mouse Input Adapter** (`mouse-input-adapter.js`): pointer-based controls
 - **Touch Input Adapter** (`touch-input-adapter.js`): touch gesture handling
 - **XR Input Adapter** (`xr-input-adapter.js`): WebXR controller/hand tracking
 
-These are currently placeholders and not wired yet. The Editor Shell mounts a layout but does not yet instantiate or attach input adapters. Future work will select and mount the appropriate adapter per device/mode and route interaction handling through adapters instead of direct DOM event listeners.
+Future work will select and mount the appropriate adapter per device/mode and route interaction handling through adapters instead of direct DOM event listeners.
 
 ### Minimal Shell
 
 The `minimal` shell remains experimental/testing-focused and shows how a Shell can provide a completely different UI while sharing the same core. It demonstrates the command API in action with a minimal button panel.
+
+## Editor Shell v2: Lightweight UI Wiring
+
+The Editor Shell has been expanded to handle lightweight UI event wiring in layouts instead of in scene.js:
+
+**Layout responsibilities**:
+- Wire desktop and mobile button click handlers to editor actions
+- Close mobile action sheets before executing actions (mobile layout)
+- Toggle scene inspector on click
+
+**Remaining in scene.js**:
+- Transform controls and manipulation
+- Selection and multi-selection
+- XR controller grab and input
+- Drag & drop file import
+- Scene Inspector internal editing (JSON/form modes)
+- AI Link pairing dialog and state management
+- Presence sync and history manager implementation
+
+**Input Adapters**: Remain as placeholders. Not yet wired to runtime input.
+
+This approach keeps heavy business logic in scene.js while moving lightweight UI event dispatch to the appropriate layout, improving maintainability as the shell architecture grows.
