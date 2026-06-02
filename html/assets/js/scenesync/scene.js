@@ -9631,18 +9631,6 @@ mobileDeleteSkyboxBtn?.addEventListener('click', () => {
     closeSheet('mobile-env-sheet');
   }
 });
-mobileLinkOpenBtn?.addEventListener('click', () => {
-  closeMobileActionSheet();
-  linkBtn?.click();
-});
-mobileHelpBtn?.addEventListener('click', () => {
-  closeMobileActionSheet();
-  openHelpDialog();
-});
-mobileDevOpenBtn?.addEventListener('click', () => {
-  closeMobileActionSheet();
-  sceneInspectorToggleBtn?.click();
-});
 
 document.querySelectorAll('[data-mobile-sheet-close]').forEach((el) => {
   el.addEventListener('click', () => {
@@ -11727,14 +11715,6 @@ function updateMobileDevVisibility() {
   mobileDevOpenBtn.hidden = !isDevUiEnabled();
 }
 
-linkBtn?.addEventListener('click', () => {
-  if (presenceState.linkManager.isLinked()) {
-    showPairingDialogLinked(presenceState.linkManager.expiresAt);
-  } else {
-    startPairing();
-  }
-});
-
 btnCancelPairing?.addEventListener('click', cancelPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
 btnCopyPairingCode?.addEventListener('click', copyPairingCode);
@@ -11760,12 +11740,6 @@ document.addEventListener('click', (event) => {
   if (statusEl?.contains(target)) return;
 
   setMobilePeersOpen(false);
-});
-sceneInspectorToggleBtn?.addEventListener('click', () => {
-  setSceneInspectorOpen(!sceneInspectorState.isOpen);
-});
-sceneInspectorCloseBtn?.addEventListener('click', () => {
-  setSceneInspectorOpen(false);
 });
 sceneInspectorRefreshBtn?.addEventListener('click', refreshSceneInspector);
 sceneInspectorCopyBtn?.addEventListener('click', () => {
@@ -11996,7 +11970,6 @@ reportPreviousCrashProbe();
 logDiagnosticFlags();
 
 nicknameChip?.addEventListener('click', editNickname);
-document.getElementById('help-btn')?.addEventListener('click', openHelpDialog);
 mountSceneSyncShellFromDom({
   commands: {
     openAddMenu: () => dom.addBtn?.click(),
@@ -12009,9 +11982,17 @@ mountSceneSyncShellFromDom({
     deleteSelected: deleteSelectedObjects,
     exportScene: triggerExport,
     openHelp: openHelpDialog,
-    startAiLink: startPairing,
+    startAiLink: () => {
+      if (presenceState.linkManager.isLinked()) {
+        showPairingDialogLinked(presenceState.linkManager.expiresAt);
+      } else {
+        startPairing();
+      }
+    },
     openSceneInspector: () => setSceneInspectorOpen(true),
     closeSceneInspector: () => setSceneInspectorOpen(false),
+    toggleSceneInspector: () => setSceneInspectorOpen(!sceneInspectorState.isOpen),
+    closeMobileActionSheet,
   },
   getSelection: getSceneSyncShellSelection,
   onStateChange: onSceneSyncShellStateChange,
@@ -12076,15 +12057,6 @@ async function triggerExport() {
     showToast('Export failed');
   }
 }
-
-const exportBtn = document.getElementById('export-btn');
-exportBtn?.addEventListener('click', triggerExport);
-
-const mobileExportBtn = document.getElementById('mobile-export-btn');
-mobileExportBtn?.addEventListener('click', () => {
-  closeMobileActionSheet();
-  triggerExport();
-});
 
 environmentManager.loadEnvironment('outdoor_day', {
   source: 'init',
