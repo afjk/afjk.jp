@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:audio-source-controller": "node --test html/assets/js/scenesync/audio/audio-source-controller.test.js",
     "test:glb-normalizer": "node --test html/assets/js/scenesync/loaders/glb-normalizer.test.js"
   },
   "devDependencies": {

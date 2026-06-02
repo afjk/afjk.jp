@@ -289,12 +289,12 @@ export function createAudioSourceController(deps = {}) {
   // ── tick ──────────────────────────────────────────────
 
   function getTimelineTargetTime(objectId, entry, nowMs, clockState) {
-    const audio = entry.audio;
-    const duration = Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : null;
     const runtimeTime = getObjectRuntimeTime(objectId, nowMs, clockState);
-    if (!duration && clockState?.mode === 'host-follow' && runtimeTime > 3600) {
+    if (clockState?.mode === 'host-follow' && runtimeTime > 3600) {
       return null;
     }
+    const audio = entry.audio;
+    const duration = Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : null;
     let target = (entry.config.offset || 0) + runtimeTime;
     if (duration) {
       target = entry.config.loop ? ((target % duration) + duration) % duration : Math.min(target, duration);
