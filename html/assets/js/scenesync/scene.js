@@ -4620,9 +4620,11 @@ function getSceneClockDelta(now = performance.now()) {
   }
 
   if (sceneClockState.mode === 'local') {
-    const elapsed = (now - sceneClockState.lastUpdateNow) / 1000;
-    const delta = Math.max(0, elapsed * sceneClockState.rate);
-    sceneClockState.lastUpdateNow = now;  // Update for next frame
+    const elapsed = Math.max(0, (now - sceneClockState.lastUpdateNow) / 1000);
+    const delta = elapsed * sceneClockState.rate;
+    // Accumulate localTime so getSceneClockTime() sees continuous progression
+    sceneClockState.localTime = Math.max(0, sceneClockState.localTime + delta);
+    sceneClockState.lastUpdateNow = now;
     return delta;
   }
 
@@ -4716,6 +4718,50 @@ function resetSceneClock(now = performance.now()) {
 
 function followHostClock(now = performance.now()) {
   setSceneClockMode('host-follow', now);
+}
+
+function setSceneClockRate(rate, now = performance.now()) {
+  const nextRate = Number(rate);
+  if (!Number.isFinite(nextRate) || nextRate < 0) return;
+  // rate 変更時に time jump を避けるため現在時刻を localTime に焼く
+  if (sceneClockState.mode === 'local') {
+    sceneClockState.localTime = getSceneClockTime(now);
+    sceneClockState.lastUpdateNow = now;
+  }
+  sceneClockState.rate = nextRate;
+}
+
+function playSceneClock(now = performance.now()) {
+  // seekSceneClock(0) ensures we are in local mode starting from a sensible
+  // position rather than baking the host-follow wall-clock epoch into localTime.
+  if (sceneClockState.mode !== 'local') {
+    seekSceneClock(0, now);
+  }
+  if (sceneClockState.paused) {
+    resumeSceneClock(now);
+  }
+}
+
+function stopSceneClock(now = performance.now()) {
+  seekSceneClock(0, now); // seek clears pause; then we re-pause at t=0
+  pauseSceneClock(now);
+}
+
+// Side-effect-free getter for shell UI (does not update delta/lastUpdateNow).
+// In host-follow mode, raw time is wall-clock epoch (>1 billion seconds).
+// Player Shell transport always starts from 0, so display 0 until local mode.
+function getSceneClockStateForShell() {
+  const rawTime = getSceneClockTime();
+  const displayTime = sceneClockState.mode === 'host-follow' ? 0 : rawTime;
+  return {
+    time: displayTime,
+    t: displayTime,
+    isPaused: sceneClockState.paused,
+    playing: !sceneClockState.paused && sceneClockState.mode === 'local',
+    mode: sceneClockState.mode,
+    rate: sceneClockState.rate,
+    duration: 60,
+  };
 }
 
 // ── Loom 統合初期化 ──────────────────────────────────
@@ -12001,8 +12047,16 @@ mountSceneSyncShellFromDom({
     closeSceneInspector: () => setSceneInspectorOpen(false),
     toggleSceneInspector: () => setSceneInspectorOpen(!sceneInspectorState.isOpen),
     closeMobileActionSheet,
+    // Scene Clock transport (Player Shell)
+    playSceneClock,
+    pauseSceneClock,
+    stopSceneClock,
+    seekSceneClock,
+    setSceneClockRate,
+    resetSceneClock,
   },
   getSelection: getSceneSyncShellSelection,
+  getSceneClockState: getSceneClockStateForShell,
   onStateChange: onSceneSyncShellStateChange,
 });
 updateNicknameLabel();

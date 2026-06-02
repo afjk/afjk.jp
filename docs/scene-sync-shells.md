@@ -180,3 +180,53 @@ The Add button trigger is now exposed as `core.commands.openAddMenu()`:
 - Editor Shell / Minimal Shell can call `core.commands.openAddMenu()` safely without recursion
 - `#add-btn` click listener in scene.js delegates to `openAddMenu()` (mobile path only; DragDropManager handles the desktop click path)
 - Actual file import and mobile add sheet internals remain in scene.js
+
+## Player Shell
+
+Player Shell is an experimental shell for Scene Clock transport controls.
+
+- URL: `/scenesync/?shell=player`
+- Purpose: operate Scene Clock with Play / Pause / Stop / Seek / Rate
+- It does not directly edit scene objects
+- It does not directly control AudioSource yet
+- GLB animations and Loomlet behaviors can follow Scene Clock
+- AudioSource full transport sync is future work
+
+### Directory structure
+
+```text
+html/assets/js/scenesync/shells/player/
+├─ player-shell.js    (main shell entry, mounts transport UI)
+├─ player-actions.js  (thin wrapper over core.commands)
+└─ player-shell.css   (transport panel styles, hides editor chrome)
+```
+
+### Scene Clock commands
+
+Player Shell calls these commands via `core.commands`:
+
+| Command | Behaviour |
+|---|---|
+| `playSceneClock()` | Resume if paused; switch to local mode if host-follow |
+| `pauseSceneClock()` | Freeze time |
+| `stopSceneClock()` | Seek to 0 then pause |
+| `seekSceneClock(t)` | Jump to `t` seconds in local mode |
+| `setSceneClockRate(r)` | Set playback rate (0.25 / 0.5 / 1 / 2) |
+| `resetSceneClock()` | Seek to 0 and continue playing |
+
+State is read via `core.getSceneClockState()`:
+
+```js
+{
+  time: number,    // current time in seconds
+  isPaused: boolean,
+  playing: boolean,
+  mode: 'local' | 'host-follow',
+  rate: number,
+  duration: number,
+}
+```
+
+### UI update loop
+
+Player Shell runs a `requestAnimationFrame` loop for smooth time display. The loop is started on `mount()` and cancelled on `unmount()`.

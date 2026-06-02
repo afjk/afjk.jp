@@ -231,6 +231,17 @@ To enable debug panel in developer console:
 document.getElementById('scene-clock-panel').removeAttribute('hidden')
 ```
 
+## Player Shell
+
+Player Shell is a UI surface for local Scene Clock transport control.
+
+- URL: `/scenesync/?shell=player`
+- Controls: Play / Pause / Stop / Seek / Rate
+- Calls `core.commands.playSceneClock()` / `pauseSceneClock()` / `stopSceneClock()` / `seekSceneClock(t)` / `setSceneClockRate(r)`
+- Reads state via `core.getSceneClockState()` (side-effect-free, safe to call every frame)
+- GLB animations and Loomlet behaviors follow Scene Clock
+- AudioSource full transport sync is future work
+
 ## Related Docs
 
 - [Scene Sync Runtime Time Model](./scene-sync-runtime-time-model.md) - per-object time and selection behavior

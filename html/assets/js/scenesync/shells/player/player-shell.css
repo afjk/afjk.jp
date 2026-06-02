@@ -1,0 +1,264 @@
+/* ── Hide editor chrome in Player Shell ──────────────── */
+.scene-sync-shell-player #settings-panel,
+.scene-sync-shell-player #peers-panel,
+.scene-sync-shell-player #scene-inspector-panel,
+.scene-sync-shell-player #scene-clock-panel,
+.scene-sync-shell-player #history-toolbar,
+.scene-sync-shell-player #mobile-toolbar,
+.scene-sync-shell-player #add-btn,
+.scene-sync-shell-player #mode {
+  display: none !important;
+}
+
+/* Keep: canvas, #toast, #xr-button-container */
+
+/* ── Player panel ──────────────────────────────────── */
+.scene-sync-player-shell {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 220;
+  width: clamp(320px, 70vw, 560px);
+  padding: 16px 20px 18px;
+  border-radius: 18px;
+  background: rgba(8, 8, 20, 0.90);
+  border: 1px solid rgba(99, 102, 241, 0.28);
+  color: #e2e8f0;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', ui-monospace, monospace;
+  font-size: 13px;
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(99, 102, 241, 0.06) inset,
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Header ─────────────────────────────────────────── */
+.player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.player-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: rgba(129, 140, 248, 0.85);
+}
+
+.player-badges {
+  display: flex;
+  gap: 5px;
+}
+
+.player-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 100px;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
+.player-badge-mode {
+  background: rgba(99, 102, 241, 0.15);
+  color: rgba(165, 180, 252, 0.9);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+}
+
+.player-badge-mode[data-mode="host-follow"] {
+  background: rgba(16, 185, 129, 0.15);
+  color: rgba(110, 231, 183, 0.9);
+  border-color: rgba(16, 185, 129, 0.22);
+}
+
+.player-badge-status {
+  background: rgba(52, 211, 153, 0.13);
+  color: rgba(110, 231, 183, 0.88);
+  border: 1px solid rgba(52, 211, 153, 0.18);
+}
+
+.player-badge-status[data-paused="1"] {
+  background: rgba(251, 191, 36, 0.11);
+  color: rgba(253, 224, 71, 0.82);
+  border-color: rgba(251, 191, 36, 0.18);
+}
+
+/* ── Time display ────────────────────────────────────── */
+.player-time-display {
+  text-align: center;
+  line-height: 1;
+  padding: 4px 0 2px;
+}
+
+.player-current-time {
+  font-size: 42px;
+  font-weight: 200;
+  letter-spacing: 0.03em;
+  color: #f1f5f9;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Seek bar ────────────────────────────────────────── */
+.player-seek-wrap {
+  padding: 0 4px;
+}
+
+.player-seek {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+  cursor: pointer;
+  transition: height 0.15s ease;
+}
+
+.player-seek:hover,
+.player-seek:focus-visible {
+  height: 6px;
+}
+
+.player-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #6366f1;
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.28);
+  transition: box-shadow 0.15s ease, transform 0.12s ease;
+}
+
+.player-seek:hover::-webkit-slider-thumb,
+.player-seek:active::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.38);
+  transform: scale(1.15);
+}
+
+.player-seek::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #6366f1;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.28);
+}
+
+/* ── Transport controls ──────────────────────────────── */
+.player-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.player-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.14s ease, transform 0.1s ease, box-shadow 0.14s ease;
+  outline: none;
+}
+
+.player-btn:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.7);
+  outline-offset: 2px;
+}
+
+.player-btn:active {
+  transform: scale(0.91);
+}
+
+.player-btn-stop {
+  width: 40px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(148, 163, 184, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.player-btn-stop:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #e2e8f0;
+}
+
+.player-btn-play-pause {
+  width: 54px;
+  height: 54px;
+  background: linear-gradient(145deg, #6366f1, #4f46e5);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.42);
+}
+
+.player-btn-play-pause:hover {
+  background: linear-gradient(145deg, #818cf8, #6366f1);
+  box-shadow: 0 6px 22px rgba(99, 102, 241, 0.55);
+}
+
+/* Toggle play/pause SVG icons */
+.player-btn-play-pause .icon-pause { display: none; }
+
+.player-btn-play-pause[data-player-playing="1"] .icon-play  { display: none; }
+.player-btn-play-pause[data-player-playing="1"] .icon-pause { display: block; }
+
+/* ── Rate buttons ────────────────────────────────────── */
+.player-rate-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.player-rate-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.35);
+  margin-right: 2px;
+}
+
+.player-rate-btn {
+  padding: 4px 11px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  outline: none;
+  line-height: 1.5;
+}
+
+.player-rate-btn:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: rgba(255, 255, 255, 0.82);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.player-rate-btn:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.7);
+  outline-offset: 2px;
+}
+
+.player-rate-btn[data-active="true"] {
+  background: rgba(99, 102, 241, 0.22);
+  color: rgba(165, 180, 252, 0.95);
+  border-color: rgba(99, 102, 241, 0.40);
+}
