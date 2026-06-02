@@ -1,7 +1,7 @@
 import { createEditorActions } from './editor-actions.js';
 import { createDesktopEditorLayout } from './layouts/desktop-editor-layout.js';
 import { createMobileEditorLayout } from './layouts/mobile-editor-layout.js';
-import { createXrEditorLayout } from './layouts/xr-editor-layout.js';
+import { createXrEditorLayout } from './layouts/xr-editor-layout.js'; // forward placeholder for WebXR/MR editing
 
 function isMobileSurface() {
   return document.body.classList.contains('scene-sync-device-mobile');

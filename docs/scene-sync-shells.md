@@ -81,7 +81,6 @@ The Editor Shell is expanded with Layout and Input Adapter scaffolding:
 html/assets/js/scenesync/shells/editor/
 ├─ editor-shell.js              (main shell entry, mounts layouts)
 ├─ editor-actions.js            (wrapper for core.commands)
-├─ editor-shell.css
 ├─ layouts/
 │  ├─ desktop-editor-layout.js  (desktop UI layout)
 │  ├─ mobile-editor-layout.js   (mobile UI layout)
@@ -121,7 +120,7 @@ Input adapters are placeholders for future input event routing:
 - **Touch Input Adapter** (`touch-input-adapter.js`): touch gesture handling
 - **XR Input Adapter** (`xr-input-adapter.js`): WebXR controller/hand tracking
 
-These are currently mounted but inactive. Future work will route interaction handling through adapters instead of direct DOM event listeners.
+These are currently placeholders and not wired yet. The Editor Shell mounts a layout but does not yet instantiate or attach input adapters. Future work will select and mount the appropriate adapter per device/mode and route interaction handling through adapters instead of direct DOM event listeners.
 
 ### Minimal Shell
 
