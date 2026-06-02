@@ -8127,10 +8127,27 @@ function applyObjectColor(obj, color) {
 function applyAssetDelta(obj, asset) {
   if (!obj || !asset || typeof asset !== 'object') return;
 
-  obj.userData.asset = {
-    ...(obj.userData.asset || {}),
+  const currentAsset = obj.userData.asset || {};
+  const nextAsset = {
+    ...currentAsset,
     ...structuredClone(asset),
   };
+  if (asset.layout && typeof asset.layout === 'object') {
+    nextAsset.layout = {
+      ...(currentAsset.layout || {}),
+      ...structuredClone(asset.layout),
+    };
+  }
+
+  obj.userData.asset = nextAsset;
+
+  const textRoot = findTextPanelRoot(obj) || obj;
+  if (textRoot?.userData?.asset?.type === 'text' || nextAsset.type === 'text') {
+    textRoot.userData.asset = nextAsset;
+    rerenderTextPanelObject(textRoot, nextAsset);
+    notifySceneStateChanged('asset-delta-applied');
+    return;
+  }
 
   if (asset.color) {
     applyObjectColor(obj, asset.color);
@@ -10138,7 +10155,7 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       const editedAssetIsText = editedAsset?.type === 'text';
 
       if (baseAssetIsText && editedAssetIsText) {
-        const assetPatch = cloneInspectorValue(baseAsset);
+        const assetPatch = {};
         const changedAssetFields = [];
 
         const editableTextAssetKeys = new Set([
@@ -10167,9 +10184,7 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
 
         // Handle layout object
         if (!valuesEqual(baseAsset?.layout, editedAsset?.layout)) {
-          const layoutPatch = {
-            ...(baseAsset?.layout || {}),
-          };
+          const layoutPatch = {};
           let layoutChanged = false;
 
           for (const key of EDITABLE_TEXT_LAYOUT_FIELDS) {
@@ -11234,13 +11249,97 @@ function validateSceneInspectorObjectDraft() {
   return result;
 }
 
-function applySceneInspectorPreviewOperation(operation) {
+function hasSceneDeltaPayload(operation) {
+  return [
+    'name',
+    'position',
+    'rotation',
+    'scale',
+    'visible',
+    'animation',
+    'audioSources',
+  ].some((key) => Object.prototype.hasOwnProperty.call(operation, key));
+}
+
+function applySceneInspectorTextAssetPreviewDelta(operation, fieldMask) {
+  const obj = managedObjects.get(operation.objectId);
+  const textRoot = findTextPanelRoot(obj) || obj;
+  if (!textRoot || textRoot.userData?.asset?.type !== 'text') {
+    return false;
+  }
+
+  if (hasSceneDeltaPayload(operation)) {
+    const nonAssetOperation = {
+      kind: 'scene-delta',
+      objectId: operation.objectId,
+    };
+    for (const key of ['name', 'position', 'rotation', 'scale', 'visible', 'animation', 'audioSources']) {
+      if (Object.prototype.hasOwnProperty.call(operation, key)) {
+        nonAssetOperation[key] = cloneInspectorValue(operation[key]);
+      }
+    }
+    applyOperationToScene(nonAssetOperation);
+  }
+
+  const assetPatch = cloneInspectorValue(operation.asset);
+  const nextAsset = cloneInspectorValue(textRoot.userData.asset || {});
+  const fields = Array.isArray(fieldMask?.[operation.objectId])
+    ? fieldMask[operation.objectId]
+    : [];
+  const assetFields = fields.filter((field) => field.startsWith('asset.'));
+  if (assetFields.length > 0) {
+    for (const field of assetFields) {
+      const assetPath = field.split('.').slice(1);
+      setOrDeleteInspectorValueAtPath(
+        nextAsset,
+        assetPath,
+        readInspectorValueAtPath(assetPatch, assetPath)
+      );
+    }
+  } else {
+    Object.assign(nextAsset, assetPatch);
+    if (assetPatch.layout) {
+      nextAsset.layout = {
+        ...(textRoot.userData.asset?.layout || {}),
+        ...assetPatch.layout,
+      };
+    }
+  }
+  textRoot.userData.asset = nextAsset;
+  rerenderTextPanelObject(textRoot, nextAsset);
+  return true;
+}
+
+function applySceneInspectorPreviewOperationToScene(operation, fieldMask) {
+  if (!operation) return;
+
+  if (operation.kind === 'scene-batch') {
+    const actions = operation.ops ?? operation.actions;
+    if (!Array.isArray(actions)) return;
+    for (const action of actions) {
+      applySceneInspectorPreviewOperationToScene(action, fieldMask);
+    }
+    return;
+  }
+
+  if (
+    operation.kind === 'scene-delta' &&
+    operation.asset?.type === 'text' &&
+    applySceneInspectorTextAssetPreviewDelta(operation, fieldMask)
+  ) {
+    return;
+  }
+
+  applyOperationToScene(operation);
+}
+
+function applySceneInspectorPreviewOperation(operation, fieldMask = null) {
   if (!operation) return;
 
   const wasApplyingLivePreview = sceneInspectorState.isApplyingLivePreview;
   sceneInspectorState.isApplyingLivePreview = true;
   try {
-    applyOperationToScene(operation);
+    applySceneInspectorPreviewOperationToScene(operation, fieldMask);
     updateSelectionState({
       reason: 'scene-inspector-live-preview',
       broadcastLock: false,
@@ -11266,7 +11365,10 @@ function revertSceneInspectorPreview() {
   );
   const result = buildSceneInspectorEditableDiff(currentSnapshot, targetSnapshot);
   if (result.errors.length === 0 && result.operation) {
-    applySceneInspectorPreviewOperation(result.operation);
+    applySceneInspectorPreviewOperation(
+      result.operation,
+      buildSceneInspectorPreviewFieldMask(result.summary)
+    );
   } else if (result.errors.length > 0) {
     console.warn('[scene-inspector] preview revert failed:', result.errors);
   }
@@ -11302,7 +11404,10 @@ function revertSceneInspectorObjectPreview() {
     targetObject
   );
   if (result.errors.length === 0 && result.operation) {
-    applySceneInspectorPreviewOperation(result.operation);
+    applySceneInspectorPreviewOperation(
+      result.operation,
+      buildSceneInspectorPreviewFieldMask(result.summary)
+    );
   } else if (result.errors.length > 0) {
     console.warn('[scene-inspector] object preview revert failed:', result.errors);
   }
@@ -11313,18 +11418,20 @@ function revertSceneInspectorObjectPreview() {
 function applySceneInspectorDraftLivePreview(result) {
   revertSceneInspectorPreview();
   if (!result?.operation) return;
-  applySceneInspectorPreviewOperation(result.operation);
+  const fieldMask = buildSceneInspectorPreviewFieldMask(result.summary);
+  applySceneInspectorPreviewOperation(result.operation, fieldMask);
   sceneInspectorState.preview.applied = true;
-  sceneInspectorState.preview.fieldMask = buildSceneInspectorPreviewFieldMask(result.summary);
+  sceneInspectorState.preview.fieldMask = fieldMask;
   sceneInspectorState.preview.operation = cloneInspectorValue(result.operation);
 }
 
 function applySceneInspectorObjectDraftLivePreview(result) {
   revertSceneInspectorObjectPreview();
   if (!result?.operation) return;
-  applySceneInspectorPreviewOperation(result.operation);
+  const fieldMask = buildSceneInspectorPreviewFieldMask(result.summary);
+  applySceneInspectorPreviewOperation(result.operation, fieldMask);
   sceneInspectorState.objectEditor.preview.applied = true;
-  sceneInspectorState.objectEditor.preview.fieldMask = buildSceneInspectorPreviewFieldMask(result.summary);
+  sceneInspectorState.objectEditor.preview.fieldMask = fieldMask;
   sceneInspectorState.objectEditor.preview.operation = cloneInspectorValue(result.operation);
 }
 
