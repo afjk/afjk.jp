@@ -3,6 +3,7 @@ const DEFAULT_SHELL_ID = 'editor';
 const SHELL_LOADERS = {
   editor: () => import('./editor/editor-shell.js'),
   minimal: () => import('./minimal/minimal-shell.js'),
+  player: () => import('./player/player-shell.js'),
 };
 
 function normalizeShellId(value) {

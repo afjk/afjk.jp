@@ -4718,6 +4718,44 @@ function followHostClock(now = performance.now()) {
   setSceneClockMode('host-follow', now);
 }
 
+function setSceneClockRate(rate) {
+  const now = performance.now();
+  const nextRate = typeof rate === 'number' ? rate : parseFloat(rate) || 1;
+  if (nextRate < 0) return;
+  // rate 変更時に time jump を避けるため現在時刻を localTime に焼く
+  if (sceneClockState.mode === 'local') {
+    sceneClockState.localTime = getSceneClockTime(now);
+    sceneClockState.lastUpdateNow = now;
+  }
+  sceneClockState.rate = nextRate;
+}
+
+function playSceneClock(now = performance.now()) {
+  if (sceneClockState.paused) {
+    resumeSceneClock(now); // resumeSceneClock already switches to local mode
+  } else if (sceneClockState.mode !== 'local') {
+    setSceneClockMode('local', now);
+  }
+}
+
+function stopSceneClock(now = performance.now()) {
+  seekSceneClock(0, now); // seek clears pause; then we re-pause at t=0
+  pauseSceneClock(now);
+}
+
+// Side-effect-free getter for shell UI (does not update delta/lastUpdateNow)
+function getSceneClockStateForShell() {
+  return {
+    time: getSceneClockTime(),
+    t: getSceneClockTime(),
+    isPaused: sceneClockState.paused,
+    playing: !sceneClockState.paused,
+    mode: sceneClockState.mode,
+    rate: sceneClockState.rate,
+    duration: 60,
+  };
+}
+
 // ── Loom 統合初期化 ──────────────────────────────────
 function isObjectBeingEditedNow(objectId) {
   if (!objectId) return false;
@@ -12001,8 +12039,16 @@ mountSceneSyncShellFromDom({
     closeSceneInspector: () => setSceneInspectorOpen(false),
     toggleSceneInspector: () => setSceneInspectorOpen(!sceneInspectorState.isOpen),
     closeMobileActionSheet,
+    // Scene Clock transport (Player Shell)
+    playSceneClock,
+    pauseSceneClock,
+    stopSceneClock,
+    seekSceneClock,
+    setSceneClockRate,
+    resetSceneClock,
   },
   getSelection: getSceneSyncShellSelection,
+  getSceneClockState: getSceneClockStateForShell,
   onStateChange: onSceneSyncShellStateChange,
 });
 updateNicknameLabel();
