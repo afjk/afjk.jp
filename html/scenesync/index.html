@@ -421,6 +421,130 @@
     .scene-inspector-editor:focus {
       border-color: rgba(68,136,255,0.7);
     }
+    .scene-inspector-editor-mode {
+      display: inline-flex;
+      gap: 2px;
+      padding: 2px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .scene-inspector-editor-mode .chip {
+      padding: 5px 9px;
+      background: transparent;
+    }
+    .scene-inspector-editor-mode .chip.active {
+      background: rgba(68,136,255,0.62);
+    }
+    .scene-inspector-form {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 220px;
+      max-height: min(42dvh, 420px);
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.055);
+      border: 1px solid rgba(255,255,255,0.1);
+      overflow: auto;
+    }
+    .scene-inspector-form-group {
+      min-width: 0;
+      margin: 0;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(0,0,0,0.18);
+    }
+    .scene-inspector-form-group legend {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      max-width: 100%;
+      padding: 0 5px;
+      color: rgba(255,255,255,0.9);
+      font-weight: 700;
+    }
+    .scene-inspector-form-group legend small {
+      min-width: 0;
+      overflow: hidden;
+      color: rgba(255,255,255,0.55);
+      font-size: 10px;
+      font-weight: 400;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .scene-inspector-form-children {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .scene-inspector-form-row {
+      display: grid;
+      grid-template-columns: minmax(82px, 0.38fr) minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .scene-inspector-form-row > span {
+      min-width: 0;
+      overflow: hidden;
+      color: rgba(255,255,255,0.68);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .scene-inspector-form-row input[type="text"],
+    .scene-inspector-form-row input[type="number"] {
+      width: 100%;
+      min-width: 0;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(0,0,0,0.38);
+      color: #fff;
+      font: inherit;
+      outline: none;
+    }
+    .scene-inspector-form-row input[type="text"]:focus,
+    .scene-inspector-form-row input[type="number"]:focus {
+      border-color: rgba(68,136,255,0.58);
+    }
+    .scene-inspector-form-row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #48f;
+    }
+    .scene-inspector-form-row input[type="range"] {
+      width: 100%;
+      min-width: 0;
+      accent-color: #48f;
+    }
+    .scene-inspector-form-row input[type="color"] {
+      width: 34px;
+      height: 30px;
+      padding: 0;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(0,0,0,0.38);
+    }
+    .scene-inspector-form-number,
+    .scene-inspector-form-text {
+      display: grid;
+      grid-template-columns: minmax(72px, 1fr) minmax(72px, 92px);
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .scene-inspector-form-text {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .scene-inspector-form-text.color {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .scene-inspector-form-empty {
+      margin: 0;
+      color: rgba(255,255,255,0.55);
+    }
     .scene-inspector-section {
       display: flex;
       flex-direction: column;
@@ -560,6 +684,13 @@
         bottom: max(12px, env(safe-area-inset-bottom));
         width: auto;
         max-height: none;
+      }
+      .scene-inspector-form-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+      .scene-inspector-form-number {
+        grid-template-columns: 1fr;
       }
     }
 
@@ -1268,7 +1399,7 @@
       <div class="scene-inspector-actions">
         <button id="scene-inspector-refresh" class="chip" type="button">Refresh</button>
         <button id="scene-inspector-copy" class="chip" type="button">Copy JSON</button>
-        <button id="scene-inspector-edit" class="chip primary" type="button">Edit JSON</button>
+        <button id="scene-inspector-edit" class="chip primary" type="button">Edit Scene</button>
         <button id="scene-inspector-format" class="chip" type="button" hidden>Format JSON</button>
         <button id="scene-inspector-reset" class="chip" type="button" hidden>Reset to Current</button>
         <button id="scene-inspector-validate" class="chip" type="button" hidden>Validate</button>
@@ -1282,6 +1413,11 @@
       <div id="scene-inspector-edit-meta" class="scene-inspector-edit-meta" hidden></div>
       <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>
       <div id="scene-inspector-diff" class="scene-inspector-diff" hidden></div>
+      <div id="scene-inspector-editor-mode" class="scene-inspector-editor-mode" role="tablist" aria-label="Scene editor mode" hidden>
+        <button id="scene-inspector-mode-inspector" class="chip active" type="button" role="tab" aria-selected="true" data-scene-inspector-editor-mode="inspector">Inspector</button>
+        <button id="scene-inspector-mode-json" class="chip" type="button" role="tab" aria-selected="false" data-scene-inspector-editor-mode="json">JSON</button>
+      </div>
+      <div id="scene-inspector-form" class="scene-inspector-form" hidden></div>
       <textarea id="scene-inspector-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
       <pre id="scene-inspector-output" class="scene-inspector-scene-json">{
   "status": "waiting-for-scene"
@@ -1316,7 +1452,7 @@
           </label>
         </div>
         <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>
-          <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object JSON</button>
+          <button id="scene-inspector-object-edit" class="chip primary" type="button">Edit Object</button>
           <button id="scene-inspector-object-format" class="chip" type="button" hidden>Format JSON</button>
           <button id="scene-inspector-object-reset" class="chip" type="button" hidden>Reset to Current</button>
           <button id="scene-inspector-object-validate" class="chip" type="button" hidden>Validate / Preview</button>
@@ -1328,6 +1464,11 @@
         </p>
         <div id="scene-inspector-object-validation" class="scene-inspector-validation" hidden></div>
         <div id="scene-inspector-object-diff" class="scene-inspector-diff" hidden></div>
+        <div id="scene-inspector-object-editor-mode" class="scene-inspector-editor-mode" role="tablist" aria-label="Selected object editor mode" hidden>
+          <button id="scene-inspector-object-mode-inspector" class="chip active" type="button" role="tab" aria-selected="true" data-scene-inspector-object-editor-mode="inspector">Inspector</button>
+          <button id="scene-inspector-object-mode-json" class="chip" type="button" role="tab" aria-selected="false" data-scene-inspector-object-editor-mode="json">JSON</button>
+        </div>
+        <div id="scene-inspector-object-form" class="scene-inspector-form" hidden></div>
         <textarea id="scene-inspector-object-editor" class="scene-inspector-editor" spellcheck="false" hidden></textarea>
         <pre id="scene-inspector-object-output" class="scene-inspector-selected-json" hidden>{
   "status": "no-selection"
