@@ -1,8 +1,10 @@
 /**
- * URL から BGM をロードし、scene-bgm を broadcast してローカルに適用。
+ * URL から音声をロードする。
+ * - オブジェクト上に D&D/ペーストされた場合: そのオブジェクトに AudioSource component を追加/更新する。
+ * - 空間/床/背景的な場所の場合: 従来通り scene-bgm として broadcast / 適用する。
  * @param {string} url - 分類済みのオーディオ URL（確定済み）
- * @param {object} ctx - { applySceneBgm, broadcastSceneBgm, showToast }
- * @returns {Promise<{ payload }>}
+ * @param {object} ctx - { addOrUpdateAudioSource, resolveObjectAudioTarget, applySceneBgm, broadcastSceneBgm, showToast }
+ * @returns {Promise<{ objectId?, payload }>}
  */
 export async function importAudioUrl(url, ctx) {
   function requireFn(name) {
@@ -18,9 +20,11 @@ export async function importAudioUrl(url, ctx) {
       : null;
 
     if (objectId) {
-      const setObjectAudioComponent = requireFn('setObjectAudioComponent');
+      const addOrUpdateAudioSource = requireFn('addOrUpdateAudioSource');
       const showToast = requireFn('showToast');
-      const payload = setObjectAudioComponent(objectId, {
+      // D&D/ペースト初期値: default という名前で playOnAwake/loop を有効化。
+      const payload = addOrUpdateAudioSource(objectId, {
+        name: 'default',
         url,
         playOnAwake: true,
         loop: true,

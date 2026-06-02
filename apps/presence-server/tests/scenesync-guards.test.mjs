@@ -196,6 +196,60 @@ describe('Scene Sync guard helpers', () => {
     });
     assert.equal(result.ok, false);
   });
+
+  it('accepts scene-delta with an audioSources map', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'speaker-1',
+      audioSources: {
+        default: {
+          type: 'audioSource',
+          name: 'default',
+          url: 'https://example.com/sound.mp3',
+          loop: true,
+          playOnAwake: true,
+          volume: 0.8,
+        },
+      },
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it('accepts audioSources entry set to null (removal patch)', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'speaker-1',
+      audioSources: { default: null },
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it('rejects audioSources that is not an object map', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'speaker-1',
+      audioSources: ['https://example.com/sound.mp3'],
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects audioSources entry missing a url', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'speaker-1',
+      audioSources: { default: { loop: true } },
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects audioSources entry with non-boolean loop', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'speaker-1',
+      audioSources: { default: { url: 'https://example.com/sound.mp3', loop: 'yes' } },
+    });
+    assert.equal(result.ok, false);
+  });
 });
 
 describe('Scene Sync server guards', () => {
