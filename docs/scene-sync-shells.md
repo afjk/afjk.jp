@@ -230,3 +230,80 @@ State is read via `core.getSceneClockState()`:
 ### UI update loop
 
 Player Shell runs a `requestAnimationFrame` loop for smooth time display. The loop is started on `mount()` and cancelled on `unmount()`.
+
+## Editor Shell v4: Edit command + state API and chrome wiring migration
+
+The Editor Shell shell-ization is completed by exposing the remaining edit operations as commands and by moving the editor chrome (mode toggle + transform toolbar) click wiring out of `scene.js` into the layouts.
+
+### New edit commands (`core.commands`)
+
+| Command | Behaviour |
+|---|---|
+| `setTransformMode(mode)` | Switch gizmo mode: `'translate' \| 'rotate' \| 'scale'` |
+| `duplicateSelected()` | Duplicate the selected object |
+| `deselect()` | Clear the current selection |
+| `setInputRoutingMode(mode)` | Set `'edit' \| 'interact'` |
+| `toggleInputRoutingMode()` | Toggle Edit/Interact (shows a toast) |
+
+These join the existing commands (`openAddMenu`, `undo`, `redo`, `deleteSelected`, `exportScene`, `openHelp`, `startAiLink`, `open/close/toggleSceneInspector`, `closeMobileActionSheet`, scene-clock transport).
+
+### Edit state snapshot (`core.getEditorState()`)
+
+Any shell can read a unified edit-state snapshot and re-render on `core.onStateChange`:
+
+```js
+{
+  transformMode: 'translate' | 'rotate' | 'scale',
+  inputRoutingMode: 'edit' | 'interact',
+  selectedCount: number,
+  selectedObjectIds: string[],
+  selectionLabel: string,
+  objectCount: number,   // user-visible objects (excludes sample-cube etc.)
+  canUndo: boolean,
+  canRedo: boolean,
+}
+```
+
+`scene.js` fires `notifySceneSyncShellStateChanged(reason)` on transform-mode, input-routing-mode, history, selection and connection changes so subscribers stay in sync.
+
+### Chrome wiring migration
+
+- `desktop-editor-layout.js` now wires `#mode` → `actions.toggleInputRoutingMode()` (the button is desktop-only; hidden on mobile).
+- `mobile-editor-layout.js` now wires the transform toolbar (`#btn-move/rotate/scale/copy/delete/deselect`) → editor actions.
+- The corresponding `addEventListener` calls were removed from `scene.js` to avoid double-firing.
+
+**Remaining in core (`scene.js`)**: transform gizmo, raycast selection, the toolbar's *visual* state writes (`showToolbar`/`hideToolbar`/`updateToolbarActive`/`updateInputRoutingModeUI`, enable/disable on selection), drag & drop, Inspector internal editing, AI Link pairing, presence/history implementation. The W/E/R keyboard shortcuts also remain in `scene.js` (input-adapter migration is future work).
+
+> Dev note: editor shell modules are loaded via dynamic `import()`. After editing them, a normal reload may serve a cached module; use a hard reload (Cmd/Ctrl+Shift+R) during development.
+
+## Studio Shell
+
+Studio Shell is a light-user-oriented Edit shell: intuitive enough to use without a manual, and inviting to touch. It is a self-contained shell (like minimal/player) that builds its own DOM/CSS, hides the built-in editor chrome, and drives everything through the command + state API — it does not touch scene internals.
+
+- URL: `/scenesync/?shell=studio`
+- Target: casual / light users
+- Built entirely on Editor Shell v4's `core.commands` + `core.getEditorState()`
+
+### Directory structure
+
+```text
+html/assets/js/scenesync/shells/studio/
+├─ studio-shell.js    (DOM construction + state subscription)
+├─ studio-actions.js  (thin wrapper over core.commands)
+└─ studio-shell.css   (panel styles, hides editor chrome)
+```
+
+### Design direction
+
+Soft-modern (Apple/Notion-like): dark neutral glass surfaces, a single calm-blue accent, thin line (SVG) icons, restrained motion, single-layer shadows. English labels (kept short) — chosen over hiragana to avoid a childish tone.
+
+### UI
+
+- **Mode pill (top center)**: `✎ Edit | ▷ Play` — always shows the current Edit/Interact mode (`setInputRoutingMode`). Active segment uses a soft accent fill + thin border (not a solid block).
+- **Selection card (appears when something is selected)**: object name, a 3-way tool toggle `Move / Rotate / Scale` with line icons (highlights `transformMode`), `Duplicate` (single-selection only), `Delete` (soft red), `✕` deselect, and `Details ›` → Scene Inspector.
+- **Bottom dock (always visible)**: rounded-square `undo / redo` (disabled per `canUndo/canRedo`), a central calm-blue circular `+` (Add, primary CTA), and a `⋯` menu popover (Properties / Export / AI Link / Help).
+- **Empty-state hint**: when `objectCount === 0`, a subtle neutral chip above the `+` ("Tap + to add") fades in to invite the first action (no bounce/pulse).
+
+Icons are inline line SVGs defined in an `ICON` map in `studio-shell.js`. State is read via `core.getEditorState()` and the panel re-renders on `core.onStateChange`. All actions go through `core.commands` (no direct scene mutation).
+
+> Status: experimental design prototype. Visual direction and labels may change based on feedback.
