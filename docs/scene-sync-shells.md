@@ -307,3 +307,91 @@ Soft-modern (Apple/Notion-like): dark neutral glass surfaces, a single calm-blue
 Icons are inline line SVGs defined in an `ICON` map in `studio-shell.js`. State is read via `core.getEditorState()` and the panel re-renders on `core.onStateChange`. All actions go through `core.commands` (no direct scene mutation).
 
 > Status: experimental design prototype. Visual direction and labels may change based on feedback.
+
+## Core API contract (v1)
+
+Scene Sync Core (`scene.js`) exposes a stable surface to shells via `mountSceneSyncShellFromDom({...})`. Shells must use only this surface and must not touch scene internals.
+
+### `core.commands`
+
+| Command | Behaviour |
+|---|---|
+| `openAddMenu()` | Open the add-object flow (desktop file picker / mobile sheet) |
+| `undo()` / `redo()` | History navigation |
+| `deleteSelected()` | Delete the current selection |
+| `duplicateSelected()` | Duplicate the selected object |
+| `deselect()` | Clear the selection |
+| `setTransformMode(mode)` | `'translate' \| 'rotate' \| 'scale'` |
+| `setInputRoutingMode(mode)` / `toggleInputRoutingMode()` | `'edit' \| 'interact'` |
+| `setEnvironment(envId)` | Change & broadcast HDRI environment |
+| `resetView()` | Reset orbit camera to default |
+| `exportScene()` / `openHelp()` / `startAiLink()` | Misc editor actions |
+| `openSceneInspector()` / `closeSceneInspector()` / `toggleSceneInspector()` | Inspector visibility |
+| `closeMobileActionSheet()` | Close mobile add sheet |
+| `playSceneClock()` / `pauseSceneClock()` / `stopSceneClock()` / `seekSceneClock(t)` / `setSceneClockRate(r)` / `resetSceneClock()` | Scene Clock transport |
+
+### State (read + subscribe)
+
+- `core.getEditorState()` → `{ transformMode, inputRoutingMode, selectedCount, selectedObjectIds, selectionLabel, objectCount, environmentId, toolbarVisible, canUndo, canRedo }`
+- `core.getSelection()` → selection payload (`objectIds`, serialized objects)
+- `core.getConnectionState()` → `{ connected, room, peerCount, label }`
+- `core.getSceneClockState()` → Scene Clock snapshot (see Player Shell)
+- `core.onStateChange(listener)` → subscribe; returns unsubscribe. Core fires on selection / transform-mode / input-routing / history / connection / toolbar-visibility / environment changes.
+
+### `core.input` (consumed by Input Adapters)
+
+| Member | Purpose |
+|---|---|
+| `getCanvas()` | The WebGL canvas element to attach listeners to |
+| `isDragging()` / `isPasteMode()` | Gating flags |
+| `selectAt(x, y, event)` | Raycast-select at client coords (respects edit/interact) |
+| `pointerMove(x, y)` / `clearHover()` | Hover (Loomlet host) updates |
+| `pasteMoveFromPointer(e)` / `commitPasteClick()` | Paste-preview placement |
+| `handleEmptyTapDeselect(x, y)` | Touch single-tap empty → deselect |
+| `shouldIgnoreShortcut(e)` | True when focus is in an input/editable |
+| `copySelection()` / `pasteToggle()` / `handleEscape()` | Keyboard intents (return whether to `preventDefault`) |
+
+## Input Adapter architecture
+
+Raw DOM input wiring lives in adapters, not in `scene.js`. Adapters translate events into `core.input` / `core.commands` calls and never touch scene internals.
+
+```text
+html/assets/js/scenesync/shells/editor/inputs/
+├─ mouse-input-adapter.js  (canvas pointer events + keyboard shortcuts)
+├─ touch-input-adapter.js  (tap / double-tap gestures)
+└─ xr-input-adapter.js     (placeholder; XR grab handled in core for now)
+```
+
+- Contract: `createXInputAdapter()` → `{ id, name, mount({core}), unmount() }`. `mount` attaches listeners (to `core.input.getCanvas()` / `window`) and records disposers; `unmount` removes them.
+- **Mounting**: `shell-bootstrap.js` mounts the default mouse + touch adapters for every shell after the shell mounts, mirroring the previous global input behaviour. Both run simultaneously (pointer handlers ignore `pointerType === 'touch'`).
+- **Camera & XR stay in core**: OrbitControls and the WebXR controller grab remain owned by `scene.js` (shared by all shells); they are not part of the adapter layer yet.
+
+## Editor chrome fully shell-owned (v4 follow-up)
+
+`scene.js` no longer writes editor DOM. `shells/editor/editor-chrome.js` renders `#mode`, `#mobile-toolbar` and `#history-toolbar` (label / visibility / active / disabled) from `getEditorState()` and wires undo/redo clicks. Both desktop and mobile editor layouts mount it. Core keeps only the *state* (`editorToolbarVisible` + notifications), not the DOM.
+
+## Viewer Shell
+
+Viewer Shell is a viewing-focused, self-contained shell.
+
+- URL: `/scenesync/?shell=viewer`
+- Hides all editor chrome; defaults to Play (`interact`) input routing on mount.
+- UI: a connection badge (top-left), and a bottom dock with **Reset View** (`resetView`) and an **environment cycle** button (`setEnvironment`, label from `environmentId`).
+- Built entirely on the Core API; canvas selection / camera work via the shared input adapters.
+
+```text
+html/assets/js/scenesync/shells/viewer/
+├─ viewer-shell.js
+└─ viewer-shell.css
+```
+
+## Shell completion status
+
+The shell architecture is now feature-complete for swappable UI + input:
+
+- Core exposes a documented command / state / input contract.
+- Editor chrome (visual state) is fully owned by the editor shell.
+- Canvas + keyboard input is provided by swappable adapters mounted per session.
+- Shipping shells: `editor` (default), `studio` (light-user edit), `viewer` (viewing), plus experimental `minimal` and `player`.
+
+Remaining future work (not blocking): per-shell adapter selection (instead of always mounting both), moving OrbitControls/XR into the adapter layer, and additional purpose shells (Game / VJ / Controller).
