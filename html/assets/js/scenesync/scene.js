@@ -6608,6 +6608,7 @@ function getEditorState() {
     selectedObjectIds: selectedIds,
     selectionLabel,
     objectCount,
+    environmentId: environmentManager?.getCurrentEnvId?.() || null,
     canUndo: presenceState.historyManager?.canUndo?.() === true,
     canRedo: presenceState.historyManager?.canRedo?.() === true,
   };
@@ -12584,6 +12585,17 @@ mountSceneSyncShellFromDom({
     deselect: () => clearSelection({ reason: 'selection-cleared-shell' }),
     setInputRoutingMode,
     toggleInputRoutingMode,
+    // Environment / view
+    setEnvironment: (envId) => {
+      if (typeof envId !== 'string' || !envId) return;
+      environmentManager.loadEnvironment(envId, { source: 'shell', broadcastChange: true });
+      notifySceneSyncShellStateChanged('environment-changed');
+    },
+    resetView: () => {
+      orbit.target.set(0, 1, 0);
+      camera.position.set(3, 2, 5);
+      orbit.update();
+    },
     // Scene Clock transport (Player Shell)
     playSceneClock,
     pauseSceneClock,
