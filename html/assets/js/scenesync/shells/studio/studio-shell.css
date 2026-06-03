@@ -114,7 +114,6 @@
   gap: 11px;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
 }
 .studio-card[data-show="true"] {
   opacity: 1;
@@ -269,7 +268,6 @@
   box-shadow: var(--s-shadow);
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.2s ease, visibility 0.2s;
 }
 .studio-hint[data-show="true"] { opacity: 1; visibility: visible; }
 .studio-hint::after {
@@ -306,10 +304,8 @@
   box-shadow: var(--s-shadow);
   opacity: 0;
   visibility: hidden;
-  transform: translateY(6px);
-  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
 }
-.studio-menu[data-open="true"] { opacity: 1; visibility: visible; transform: translateY(0); }
+.studio-menu[data-open="true"] { opacity: 1; visibility: visible; }
 .studio-menu-item {
   display: flex;
   align-items: center;

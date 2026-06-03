@@ -44,6 +44,8 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
   let actions = null;
   let removeStateListener = null;
   let menuOpen = false;
+  let onDocPointerDown = null;
+  let onDocKeyDown = null;
 
   function getState(core) {
     return core?.getEditorState?.() ?? {};
@@ -91,6 +93,30 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     const menuBtn = root?.querySelector('[data-studio-menu-btn]');
     if (menu) menu.dataset.open = String(menuOpen);
     if (menuBtn) menuBtn.dataset.active = String(menuOpen);
+
+    // root は pointer-events:none のため canvas クリックが届かない。
+    // メニュー open 中だけ document に外側クリック / Escape を張る。
+    if (menuOpen) {
+      if (!onDocPointerDown) {
+        onDocPointerDown = (e) => {
+          if (e.target.closest('[data-studio-menu]') || e.target.closest('[data-studio-menu-btn]')) return;
+          setMenuOpen(false);
+        };
+        onDocKeyDown = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
+        // 開いたクリックのイベント列を拾って即閉じしないよう、登録は次ティックへ遅延。
+        // capture phase で canvas が止めても確実に届くようにする。
+        setTimeout(() => {
+          if (!onDocPointerDown) return;
+          document.addEventListener('pointerdown', onDocPointerDown, true);
+          document.addEventListener('keydown', onDocKeyDown, true);
+        }, 0);
+      }
+    } else if (onDocPointerDown) {
+      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      document.removeEventListener('keydown', onDocKeyDown, true);
+      onDocPointerDown = null;
+      onDocKeyDown = null;
+    }
   }
 
   function bind(core) {
@@ -111,12 +137,6 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     on('[data-studio-export]', () => { actions.exportScene(); setMenuOpen(false); });
     on('[data-studio-help]', () => { actions.openHelp(); setMenuOpen(false); });
     on('[data-studio-ai]', () => { actions.startAiLink(); setMenuOpen(false); });
-
-    root.addEventListener('pointerdown', (e) => {
-      if (!menuOpen) return;
-      if (e.target.closest('[data-studio-menu]') || e.target.closest('[data-studio-menu-btn]')) return;
-      setMenuOpen(false);
-    });
   }
 
   return {
@@ -202,12 +222,12 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     },
 
     unmount() {
+      setMenuOpen(false); // document リスナを確実に解除
       removeStateListener?.();
       removeStateListener = null;
       root?.remove();
       root = null;
       actions = null;
-      menuOpen = false;
       document.body.classList.remove(BODY_CLASS);
       delete document.body.dataset.sceneSyncShell;
     },
