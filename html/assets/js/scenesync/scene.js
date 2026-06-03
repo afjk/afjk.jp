@@ -2115,6 +2115,7 @@ function setupObjectGlbAnimation(objectId, model) {
     clip: 0,
     mode: 'loop',
     speed: 1,
+    offset: 0,
     ...(model.userData?.scenesync?.animationState || {}),
     ...(model.userData?.animationState || {}),
   };
@@ -2200,6 +2201,7 @@ function getObjectAnimationState(obj) {
     clipName: typeof raw.clipName === 'string' ? raw.clipName : null,
     mode: raw.mode === 'once' ? 'once' : 'loop',
     speed: Number.isFinite(raw.speed) ? raw.speed : 1,
+    offset: Number.isFinite(raw.offset) ? raw.offset : 0,
   };
 }
 
@@ -2394,6 +2396,7 @@ function normalizeObjectAnimationState(current, delta, clipCount = 0) {
     clip: Number.isInteger(current?.clip) ? current.clip : 0,
     mode: current?.mode === 'once' ? 'once' : 'loop',
     speed: Number.isFinite(current?.speed) ? current.speed : 1,
+    offset: Number.isFinite(current?.offset) ? current.offset : 0,
   };
 
   if (typeof delta.enabled === 'boolean') {
@@ -2416,6 +2419,13 @@ function normalizeObjectAnimationState(current, delta, clipCount = 0) {
     const speed = Number(delta.speed);
     if (Number.isFinite(speed) && speed >= 0) {
       next.speed = speed;
+    }
+  }
+
+  if (delta.offset !== undefined) {
+    const offset = Number(delta.offset);
+    if (Number.isFinite(offset)) {
+      next.offset = offset;
     }
   }
 
@@ -2484,6 +2494,15 @@ function registerLoadedGlbAnimation(objectId, model, reason = 'unknown') {
   }
 }
 
+// 再生時刻 t をクリップ内の時刻へ変換する。
+// loop は duration で巻き戻し（負の t も正しく扱う）、非 loop は [0, duration] にクランプする。
+function clipTimeForMode(t, duration, mode) {
+  const safeDuration = duration > 0 ? duration : 1;
+  return mode === 'loop'
+    ? ((t % safeDuration) + safeDuration) % safeDuration
+    : Math.min(Math.max(0, t), safeDuration);
+}
+
 function updateObjectGlbAnimations(now = performance.now(), clockState = null) {
   for (const [objectId, entry] of glbAnimationMixers) {
     const obj = managedObjects.get(objectId);
@@ -2505,15 +2524,13 @@ function updateObjectGlbAnimations(now = performance.now(), clockState = null) {
 
     const baseTime = getObjectRuntimeTime(objectId, now, clockState);
     const animationSpeed = Number.isFinite(state.speed) ? state.speed : 1;
-    const t = baseTime * animationSpeed;
+    const animationOffset = Number.isFinite(state.offset) ? state.offset : 0;
+    const t = baseTime * animationSpeed + animationOffset;
     const duration = clip.duration || 1;
-    const clipTime = state.mode === 'loop'
-      ? t % duration
-      : Math.min(t, duration);
 
     entry.action.enabled = true;
     entry.action.paused = false;
-    entry.action.time = clipTime;
+    entry.action.time = clipTimeForMode(t, duration, state.mode);
 
     for (const companion of entry.companionActions || []) {
       const companionClip = entry.clips[companion.clipIndex];
@@ -2521,9 +2538,7 @@ function updateObjectGlbAnimations(now = performance.now(), clockState = null) {
       const companionDuration = companionClip.duration || duration || 1;
       companion.action.enabled = true;
       companion.action.paused = false;
-      companion.action.time = state.mode === 'loop'
-        ? t % companionDuration
-        : Math.min(t, companionDuration);
+      companion.action.time = clipTimeForMode(t, companionDuration, state.mode);
     }
 
     entry.mixer.update(0);
@@ -4419,6 +4434,7 @@ const sceneInspectorAnimationMetaEl = document.getElementById('scene-inspector-a
 const sceneInspectorAnimationEnabledEl = document.getElementById('scene-inspector-animation-enabled');
 const sceneInspectorAnimationClipEl = document.getElementById('scene-inspector-animation-clip');
 const sceneInspectorAnimationSpeedEl = document.getElementById('scene-inspector-animation-speed');
+const sceneInspectorAnimationOffsetEl = document.getElementById('scene-inspector-animation-offset');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -10977,6 +10993,10 @@ function renderSceneInspectorAnimationControls(selectedObject) {
     sceneInspectorAnimationSpeedEl.value = String(Number.isFinite(animation.speed) ? animation.speed : 1);
   }
 
+  if (sceneInspectorAnimationOffsetEl) {
+    sceneInspectorAnimationOffsetEl.value = String(Number.isFinite(animation.offset) ? animation.offset : 0);
+  }
+
   if (sceneInspectorAnimationClipEl) {
     const currentValue = String(animation.clip || 0);
     sceneInspectorAnimationClipEl.innerHTML = '';
@@ -12376,6 +12396,12 @@ sceneInspectorAnimationClipEl?.addEventListener('change', () => {
 sceneInspectorAnimationSpeedEl?.addEventListener('change', () => {
   broadcastSelectedObjectAnimationDelta({
     speed: Number(sceneInspectorAnimationSpeedEl.value),
+  });
+});
+
+sceneInspectorAnimationOffsetEl?.addEventListener('change', () => {
+  broadcastSelectedObjectAnimationDelta({
+    offset: Number(sceneInspectorAnimationOffsetEl.value),
   });
 });
 

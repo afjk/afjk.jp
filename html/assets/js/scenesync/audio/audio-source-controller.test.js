@@ -30,10 +30,12 @@ class FakeAudio {
   load() {}
 }
 
-function createHarness({ audio = new FakeAudio(), offset = 0, loop = true } = {}) {
+function createHarness({ audio = new FakeAudio(), offset = 0, loop = true, getAnimationSample = null, isObjectBeingEdited = () => false } = {}) {
   const controller = createAudioSourceController({
     createAudio: () => audio,
     getObjectRuntimeTime: (_objectId, _nowMs, clockState) => clockState?.t ?? 0,
+    getAnimationSample,
+    isObjectBeingEdited,
   });
 
   controller.setObjectAudioSources('object-1', {
@@ -92,4 +94,35 @@ test('updates paused audio immediately when the player timeline seeks', () => {
   controller.tick(100, { mode: 'local', t: 8, isPaused: true, rate: 1 });
   assert.equal(audio.paused, true);
   assert.equal(audio.currentTime, 8);
+});
+
+test('resyncs audio to animation position after deselect in host-follow mode', () => {
+  // Simulate: object was selected (isObjectBeingEdited=true) which forced audio.currentTime=0,
+  // then deselected. In host-follow mode getTimelineTargetTime returns null (epoch >> 3600),
+  // so audio must fall back to the GLB animation's current time.
+  let editing = true;
+  const animTime = { value: 7.3 };
+  const audio = new FakeAudio({ duration: 10, currentTime: 0 });
+
+  const { controller } = createHarness({
+    audio,
+    loop: true,
+    isObjectBeingEdited: () => editing,
+    getAnimationSample: (_objectId) => ({ time: animTime.value, duration: 10 }),
+  });
+
+  const hostFollowClock = { mode: 'host-follow', t: 1_780_000_000, isPaused: false, rate: 1 };
+
+  // Tick while selected — audio should stay at 0
+  controller.tick(0, hostFollowClock);
+  assert.equal(audio.currentTime, 0);
+
+  // Deselect
+  editing = false;
+  animTime.value = 7.3;
+
+  // First tick after deselect — audio should seek to animation position
+  controller.tick(16, hostFollowClock);
+  assert.ok(Math.abs(audio.currentTime - 7.3) < 0.001, `expected ~7.3, got ${audio.currentTime}`);
+  assert.equal(audio.paused, false);
 });

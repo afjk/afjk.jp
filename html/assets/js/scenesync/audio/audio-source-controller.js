@@ -41,6 +41,19 @@ function safeSeek(audio, time) {
   try { audio.currentTime = time; } catch { /* noop */ }
 }
 
+// アニメーション再生位置(sampleTime)を audio の再生時刻へ変換する。
+// offset を加算し、duration が判明していれば loop なら巻き戻し、非 loop ならクランプする。
+function animationTargetTime(audio, sampleTime, offset, loop) {
+  const duration = Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : null;
+  let target = sampleTime + offset;
+  if (duration) {
+    target = loop ? ((target % duration) + duration) % duration : Math.min(Math.max(0, target), duration);
+  } else if (target < 0) {
+    target = 0;
+  }
+  return target;
+}
+
 export function createAudioSourceController(deps = {}) {
   const {
     createAudio = defaultCreateAudio,
@@ -358,13 +371,7 @@ export function createAudioSourceController(deps = {}) {
         syncedToAnimation = true;
         const driftThreshold = Number.isFinite(sync.driftThreshold) ? sync.driftThreshold : 0.05;
         const offset = (sync.offset || 0) + (config.offset || 0);
-        const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
-        let target = sample.time + offset;
-        if (duration) {
-          target = config.loop ? ((target % duration) + duration) % duration : Math.min(Math.max(0, target), duration);
-        } else if (target < 0) {
-          target = 0;
-        }
+        const target = animationTargetTime(audio, sample.time, offset, config.loop);
         const looped = entry.lastSampleTime != null && sample.time < entry.lastSampleTime;
         entry.lastSampleTime = sample.time;
         const drift = Math.abs((audio.currentTime || 0) - target);
@@ -386,6 +393,19 @@ export function createAudioSourceController(deps = {}) {
       const driftThreshold = 0.15;
       const target = getTimelineTargetTime(objectId, entry, nowMs, clockState);
       if (!Number.isFinite(target)) {
+        // host-follow mode: fall back to animation position if available so that
+        // audio resumes in sync with animation after deselect (isObjectBeingEdited
+        // forces audio.currentTime=0 while selected, leaving it at 0 on release).
+        if (typeof getAnimationSample === 'function') {
+          const sample = getAnimationSample(objectId, null);
+          if (sample && Number.isFinite(sample.time)) {
+            const animTarget = animationTargetTime(audio, sample.time, config.offset || 0, config.loop);
+            const drift = Math.abs((audio.currentTime || 0) - animTarget);
+            if (drift > driftThreshold) {
+              safeSeek(audio, animTarget);
+            }
+          }
+        }
         tryPlay(entry, objectId, name);
         return;
       }
