@@ -1,4 +1,6 @@
 import { loadSceneSyncShell } from './shell-registry.js';
+import { createMouseInputAdapter } from './editor/inputs/mouse-input-adapter.js';
+import { createTouchInputAdapter } from './editor/inputs/touch-input-adapter.js';
 
 function clickElement(id) {
   document.getElementById(id)?.click();
@@ -104,10 +106,24 @@ export async function mountSceneSyncShell(extraCore = {}) {
   const core = createDomBackedCore(extraCore);
   await shell.mount({ core, root: document.body });
 
+  // 既定の入力アダプタ（canvas pointer/keyboard + touch）を常時 mount する。
+  // 3D シーンを表示する全 shell が選択・操作・カメラ入力を得られるよう、
+  // 旧来 scene.js が持っていたグローバル入力配線をここに集約する。
+  const inputAdapters = [];
+  if (core?.input?.getCanvas?.()) {
+    for (const create of [createMouseInputAdapter, createTouchInputAdapter]) {
+      const adapter = create();
+      try { adapter.mount({ core }); inputAdapters.push(adapter); }
+      catch (error) { console.warn('[SceneSyncShell] input adapter mount failed:', error); }
+    }
+  }
+
   return {
     shell,
     core,
+    inputAdapters,
     dispose() {
+      for (const adapter of inputAdapters.splice(0)) adapter.unmount?.();
       shell.unmount?.();
       core.dispose?.();
     },

@@ -2727,7 +2727,6 @@ function removeTemporaryImagePreview(objectId) {
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let pointerSelectionStart = null;
 let lastPointerEventForPastePreview = null;
 
 // ── Loomlet host inputs and events ────────────────────────
@@ -3178,141 +3177,98 @@ function selectObjectAt(clientX, clientY, event = null) {
   }
 }
 
-renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (pastePreviewMode) {
-    pointerSelectionStart = null;
-    return;
+// ── Shell input intent API ──────────────────────────────
+// 生の DOM イベント配線は Input Adapter（shells/editor/inputs/*）が担い、
+// 選択 / ホバー / paste / clipboard / shortcut の意図解釈はここ（core）へ集約する。
+
+function inputPointerMove(clientX, clientY) {
+  if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+    lastPointerEventForPastePreview = { clientX, clientY };
+    updateHoverStateFromPointer(clientX, clientY);
   }
-  if (e.pointerType === 'touch') return;
-  pointerSelectionStart = {
-    x: e.clientX,
-    y: e.clientY,
-    button: e.button,
-  };
-});
+}
 
-renderer.domElement.addEventListener('pointermove', (e) => {
-  if (Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
-    lastPointerEventForPastePreview = {
-      clientX: e.clientX,
-      clientY: e.clientY,
-    };
-    // Update hover state for Loomlet host input
-    updateHoverStateFromPointer(e.clientX, e.clientY);
-  }
-  if (!pastePreviewMode) return;
-  updatePastePreviewFromPointer(e);
-});
-
-renderer.domElement.addEventListener('pointerup', (e) => {
-  if (pastePreviewMode) {
-    pointerSelectionStart = null;
-    return;
-  }
-  if (e.pointerType === 'touch') return;
-  if (isDragging || !pointerSelectionStart) return;
-  if (pointerSelectionStart.button !== 0 || e.button !== 0) return;
-
-  const dx = e.clientX - pointerSelectionStart.x;
-  const dy = e.clientY - pointerSelectionStart.y;
-  pointerSelectionStart = null;
-
-  if ((dx * dx + dy * dy) > 25) return;
-  selectObjectAt(e.clientX, e.clientY, e);
-});
-
-renderer.domElement.addEventListener('pointercancel', () => {
-  pointerSelectionStart = null;
-});
-
-renderer.domElement.addEventListener('pointerleave', () => {
-  // Clear hover state when pointer leaves the canvas
+function inputClearHover() {
   if (currentHoveredObjectId) {
     enqueueLoomletHostEvent(currentHoveredObjectId, 'object.hover.leave');
     currentHoveredObjectId = null;
   }
-});
-
-renderer.domElement.addEventListener('click', (event) => {
-  if (!pastePreviewMode) return;
-  event.preventDefault();
-  event.stopPropagation();
-  commitPastePreviewPlacement({ selectPlaced: false });
-});
-
-// ── タッチ操作（iOS Safari 対応） ───────────────────────
-
-let lastTapTime = 0;
-let lastTapX = 0;
-let lastTapY = 0;
-const DOUBLE_TAP_DELAY = 300;
-const DOUBLE_TAP_DISTANCE = 30;
-let touchMoved = false;
-let singleTapTimer = null;
-
-renderer.domElement.addEventListener('touchstart', (e) => {
-  touchMoved = false;
-
-  const touch = e.touches[0];
-  if (!touch) return;
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((touch.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((touch.clientY - rect.top) / rect.height) * 2 + 1;
-
-  lastTapX = touch.clientX;
-  lastTapY = touch.clientY;
-}, { passive: false });
-
-renderer.domElement.addEventListener('touchmove', (e) => {
-  touchMoved = true;
-}, { passive: false });
-
-function handleDoubleTap(clientX, clientY) {
-  selectObjectAt(clientX, clientY);
 }
 
-renderer.domElement.addEventListener('touchend', (e) => {
-  if (e.touches.length > 0) return;
-  const touch = e.changedTouches[0];
-  if (!touch) return;
+// click（paste 配置確定）。戻り値=ハンドルしたか
+function inputCommitPasteClick() {
+  if (!pastePreviewMode) return false;
+  commitPastePreviewPlacement({ selectPlaced: false });
+  return true;
+}
 
-  const now = Date.now();
-  const dx = touch.clientX - lastTapX;
-  const dy = touch.clientY - lastTapY;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-
-  clearTimeout(singleTapTimer);
-
-  if (now - lastTapTime < DOUBLE_TAP_DELAY && dist < DOUBLE_TAP_DISTANCE) {
-    // ダブルタップ
-    e.preventDefault();
-    handleDoubleTap(touch.clientX, touch.clientY);
-    lastTapTime = 0;
-  } else {
-    lastTapTime = now;
-    lastTapX = touch.clientX;
-    lastTapY = touch.clientY;
-
-    // シングルタップ
-    const tapX = touch.clientX;
-    const tapY = touch.clientY;
-    singleTapTimer = setTimeout(() => {
-      if (!touchMoved && (transformCtrl.object || selectedObjectIds.size > 0)) {
-        const rect = renderer.domElement.getBoundingClientRect();
-        pointer.x = ((tapX - rect.left) / rect.width) * 2 - 1;
-        pointer.y = -((tapY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera);
-        const targets = Array.from(managedObjects.values())
-          .filter(obj => !isSkySphereThreeObject(obj));
-        const hits = raycaster.intersectObjects(targets, true);
-        if (hits.length === 0) {
-          clearSelection({ reason: 'selection-cleared-touch' });
-        }
-      }
-    }, DOUBLE_TAP_DELAY + 50);
+// touch シングルタップ：空き領域なら選択解除（transform 中/選択中のみ）
+function inputHandleEmptyTapDeselect(clientX, clientY) {
+  if (!(transformCtrl.object || selectedObjectIds.size > 0)) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const targets = Array.from(managedObjects.values())
+    .filter(obj => !isSkySphereThreeObject(obj));
+  const hits = raycaster.intersectObjects(targets, true);
+  if (hits.length === 0) {
+    clearSelection({ reason: 'selection-cleared-touch' });
   }
-}, { passive: false });
+}
+
+// keyboard: copy（戻り値=preventDefault すべきか）
+function inputCopySelection() {
+  if (selectedObjectIds.size !== 1) return false;
+  if (!transformCtrl?.object) return false;
+  return copySelectedObjectToSceneClipboard() === true;
+}
+
+// keyboard: paste トグル（戻り値=ハンドルしたか）
+function inputPasteToggle() {
+  if (!sceneObjectClipboard) return false;
+  if (!pastePreviewMode) {
+    startPastePreviewMode();
+  } else {
+    commitPastePreviewPlacement({ selectPlaced: false });
+  }
+  return true;
+}
+
+// keyboard: Escape（戻り値=preventDefault すべきか）
+function inputHandleEscape() {
+  if (pastePreviewMode) {
+    cleanupPastePreview();
+    showToast?.('配置モードを終了しました');
+    return true;
+  }
+  if (transformCtrl.object) {
+    const objectId = transformCtrl.object.userData?.objectId;
+    if (objectId) {
+      broadcast({ kind: 'scene-unlock', objectId });
+    }
+  }
+  cleanupMultiTransformPivot();
+  transformCtrl.detach();
+  hideToolbar();
+  return false;
+}
+
+const sceneInputIntent = {
+  getCanvas: () => renderer.domElement,
+  isDragging: () => isDragging,
+  isPasteMode: () => pastePreviewMode,
+  selectAt: (clientX, clientY, event = null) => selectObjectAt(clientX, clientY, event),
+  pointerMove: inputPointerMove,
+  clearHover: inputClearHover,
+  pasteMoveFromPointer: (event) => updatePastePreviewFromPointer(event),
+  commitPasteClick: inputCommitPasteClick,
+  handleEmptyTapDeselect: inputHandleEmptyTapDeselect,
+  shouldIgnoreShortcut: (event) => shouldIgnoreSceneShortcut(event),
+  copySelection: inputCopySelection,
+  pasteToggle: inputPasteToggle,
+  handleEscape: inputHandleEscape,
+};
 
 // ── Text Panel Scroll (wheel) ──────────────────────────────
 
@@ -4105,91 +4061,9 @@ function updateHistoryButtonState() {
 
 // ── キーボードショートカット ──────────────────────────────
 
-window.addEventListener('keydown', (e) => {
-  if (shouldIgnoreSceneShortcut(e)) return;
-
-  // ドラッグ中は Undo/Redo を無効化
-  if (isDragging) {
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'y')) {
-      e.preventDefault();
-      return;
-    }
-  }
-
-  const isMod = e.ctrlKey || e.metaKey;
-  const key = e.key.toLowerCase();
-
-  if (isMod && !e.altKey && key === 'c') {
-    if (selectedObjectIds.size !== 1) return;
-    if (!transformCtrl?.object) return;
-
-    if (copySelectedObjectToSceneClipboard()) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    return;
-  }
-
-  if (isMod && !e.altKey && key === 'v') {
-    if (!sceneObjectClipboard) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (!pastePreviewMode) {
-      startPastePreviewMode();
-    } else {
-      commitPastePreviewPlacement({ selectPlaced: false });
-    }
-    return;
-  }
-
-  // Undo: Ctrl+Z (Cmd+Z on Mac)
-  if (isMod && key === 'z' && !e.shiftKey) {
-    e.preventDefault();
-    performUndo();
-    return;
-  }
-
-  // Redo: Ctrl+Y or Ctrl+Shift+Z (Cmd+Shift+Z on Mac)
-  if (isMod && (key === 'y' || (key === 'z' && e.shiftKey))) {
-    e.preventDefault();
-    performRedo();
-    return;
-  }
-
-  switch (key) {
-    case 'w': setTransformMode('translate'); break;
-    case 'e': setTransformMode('rotate'); break;
-    case 'r': setTransformMode('scale'); break;
-    case 'escape':
-      if (pastePreviewMode) {
-        e.preventDefault();
-        cleanupPastePreview();
-        showToast?.('配置モードを終了しました');
-        break;
-      }
-      if (transformCtrl.object) {
-        const objectId = transformCtrl.object.userData?.objectId;
-        if (objectId) {
-          broadcast({
-            kind: 'scene-unlock',
-            objectId,
-          });
-        }
-      }
-      cleanupMultiTransformPivot();
-      transformCtrl.detach();
-      hideToolbar();
-      break;
-    case 'delete':
-    case 'backspace': {
-      e.preventDefault();
-      deleteSelectedObjects();
-      break;
-    }
-  }
-});
+// キーボードショートカットの DOM 配線は mouse-input-adapter へ移管。
+// 意図は core.input（shouldIgnoreShortcut/copySelection/pasteToggle/handleEscape）
+// と core.commands（undo/redo/setTransformMode/deleteSelected）が担う。
 
 // ── リサイズ ─────────────────────────────────────────────
 
@@ -12560,6 +12434,7 @@ mountSceneSyncShellFromDom({
   getEditorState,
   getSceneClockState: getSceneClockStateForShell,
   onStateChange: onSceneSyncShellStateChange,
+  input: sceneInputIntent,
 });
 updateNicknameLabel();
 renderRoomSection();
