@@ -225,18 +225,9 @@ dom.clearBgmButton?.addEventListener('click', () => {
   notifySceneStateChanged('bgm-cleared');
 });
 
-// Input routing mode toggle
+// Input routing mode toggle。#mode の DOM 反映は editor shell（editor-chrome.js）が担う。
 function updateInputRoutingModeUI() {
-  const modeBtn = document.getElementById('mode');
-  if (!modeBtn) return;
-
-  const isInteract = inputRoutingMode === 'interact';
-  modeBtn.textContent = `Mode: ${isInteract ? 'Interact' : 'Edit'}`;
-  if (isInteract) {
-    modeBtn.classList.add('interact');
-  } else {
-    modeBtn.classList.remove('interact');
-  }
+  notifySceneSyncShellStateChanged('input-routing-mode-changed');
 }
 
 // #mode クリック配線は Editor Shell の desktop layout へ移管（actions.toggleInputRoutingMode）。
@@ -1351,6 +1342,10 @@ const removedObjectIds = new Set();
 // Shell 状態変更リスナー集合。早期初期化（updateHistoryButtonState 等が
 // 初期化フェーズで notifySceneSyncShellStateChanged を呼ぶため TDZ を避ける）。
 const sceneSyncShellStateListeners = new Set();
+
+// Editor chrome（mobile transform ツールバー）の表示意図。core は状態のみ保持し、
+// 実際の DOM 反映は editor shell の layout（editor-chrome.js）が getEditorState を見て行う。
+let editorToolbarVisible = false;
 
 // Local image replacement preview management
 // objectId → { token, objectUrl, overlayObject, cleanup }
@@ -2993,14 +2988,9 @@ function broadcastUnlockForObjectId(objectId) {
   });
 }
 
+// transform ツールバーの活性/非活性の DOM 反映は editor shell（editor-chrome.js）が担う。
 function updateSelectionToolbar() {
-  const count = selectedObjectIds.size;
-
-  if (btnMove) btnMove.disabled = count === 0;
-  if (btnRotate) btnRotate.disabled = count === 0;
-  if (btnScale) btnScale.disabled = count === 0;
-  if (btnCopy) btnCopy.disabled = count !== 1;
-  if (btnDelete) btnDelete.disabled = count === 0;
+  notifySceneSyncShellStateChanged('selection-toolbar-changed');
 }
 
 function updateSelectionState(options = {}) {
@@ -3051,7 +3041,7 @@ function updateSelectionState(options = {}) {
       broadcast({ kind: 'scene-lock', objectId: nextSingleObjectId });
     }
     showToolbar();
-    updateToolbarActive(transformCtrl.mode);
+    updateToolbarActive();
   } else {
     if (['translate', 'rotate', 'scale'].includes(transformCtrl.mode)) {
       startMultiTransformMode(transformCtrl.mode);
@@ -4074,83 +4064,44 @@ function deleteSelectedObjects() {
   showToast?.(`${deletedCount}件のオブジェクトを削除しました`);
 }
 
-// ── モバイルツールバー ──────────────────────────────────
-
-const toolbar = document.getElementById('mobile-toolbar');
-const btnUndo = document.getElementById('btn-undo');
-const btnRedo = document.getElementById('btn-redo');
-const btnMove = document.getElementById('btn-move');
-const btnRotate = document.getElementById('btn-rotate');
-const btnScale = document.getElementById('btn-scale');
-const btnCopy = document.getElementById('btn-copy');
-const btnDelete = document.getElementById('btn-delete');
-const btnDeselect = document.getElementById('btn-deselect');
+// ── モバイルツールバー（DOM 反映は editor shell 側） ──────────────
+// editor chrome（#mode / #mobile-toolbar / #history-toolbar）の DOM は
+// すべて editor shell の editor-chrome.js が getEditorState を見て描画する。
+// core は表示意図（editorToolbarVisible）と状態通知のみを保持する。
 
 function showToolbar() {
-  if (!toolbar) return;
-
-  if (!isSceneSyncMobileDevice()) {
-    toolbar.style.display = 'none';
-    return;
-  }
-
-  toolbar.style.display = 'flex';
+  editorToolbarVisible = isSceneSyncMobileDevice();
+  notifySceneSyncShellStateChanged('toolbar-visibility-changed');
 }
 
 function hideToolbar() {
-  if (toolbar) toolbar.style.display = 'none';
+  editorToolbarVisible = false;
+  notifySceneSyncShellStateChanged('toolbar-visibility-changed');
 }
 
-function updateToolbarActive(mode) {
-  [btnMove, btnRotate, btnScale].forEach(b => b?.classList.remove('active'));
-  if (mode === 'translate') btnMove?.classList.add('active');
-  if (mode === 'rotate') btnRotate?.classList.add('active');
-  if (mode === 'scale') btnScale?.classList.add('active');
+function updateToolbarActive() {
+  notifySceneSyncShellStateChanged('transform-mode-changed');
 }
 
 function setTransformMode(mode) {
   if (selectedObjectIds.size > 1 && ['translate', 'rotate', 'scale'].includes(mode)) {
     startMultiTransformMode(mode);
-    updateToolbarActive(mode);
-    notifySceneSyncShellStateChanged('transform-mode-changed');
+    updateToolbarActive();
     return;
   }
 
   cleanupMultiTransformPivot();
   transformCtrl.setMode(mode);
-  updateToolbarActive(mode);
-  notifySceneSyncShellStateChanged('transform-mode-changed');
+  updateToolbarActive();
 }
-
-// transform ツールバー（move/rotate/scale/copy/delete/deselect）のクリック配線は
-// Editor Shell の mobile layout へ移管。表示/活性の DOM 更新は引き続き core が担う
-// （showToolbar/hideToolbar/updateToolbarActive/updateSelectionToolbar）。
 
 updateSelectionToolbar();
 
-// ── Undo/Redo ボタン ──────────────────────────────────────
+// ── Undo/Redo 状態（ボタンの DOM 反映・クリック配線は editor shell 側） ──
 
 function updateHistoryButtonState() {
-  const canUndo = presenceState.historyManager.canUndo();
-  const canRedo = presenceState.historyManager.canRedo();
-
-  if (btnUndo) btnUndo.disabled = !canUndo;
-  if (btnRedo) btnRedo.disabled = !canRedo;
-
   notifySceneSyncShellStateChanged('history-changed');
 }
-
-btnUndo?.addEventListener('click', () => {
-  if (presenceState.historyManager.canUndo()) {
-    performUndo();
-  }
-});
-
-btnRedo?.addEventListener('click', () => {
-  if (presenceState.historyManager.canRedo()) {
-    performRedo();
-  }
-});
 
 // ── キーボードショートカット ──────────────────────────────
 
@@ -6609,6 +6560,7 @@ function getEditorState() {
     selectionLabel,
     objectCount,
     environmentId: environmentManager?.getCurrentEnvId?.() || null,
+    toolbarVisible: editorToolbarVisible,
     canUndo: presenceState.historyManager?.canUndo?.() === true,
     canRedo: presenceState.historyManager?.canRedo?.() === true,
   };
