@@ -239,11 +239,7 @@ function updateInputRoutingModeUI() {
   }
 }
 
-document.getElementById('mode')?.addEventListener('click', () => {
-  const nextMode = inputRoutingMode === 'edit' ? 'interact' : 'edit';
-  setInputRoutingMode(nextMode);
-  showToast(`Mode: ${nextMode.toUpperCase()}`);
-});
+// #mode クリック配線は Editor Shell の desktop layout へ移管（actions.toggleInputRoutingMode）。
 
 setupXrButtons({
   renderer,
@@ -1351,6 +1347,10 @@ managedObjects.set('sample-cube', sampleCube);
 const selectedObjectIds = new Set();
 const selectionHelpers = new Map();
 const removedObjectIds = new Set();
+
+// Shell 状態変更リスナー集合。早期初期化（updateHistoryButtonState 等が
+// 初期化フェーズで notifySceneSyncShellStateChanged を呼ぶため TDZ を避ける）。
+const sceneSyncShellStateListeners = new Set();
 
 // Local image replacement preview management
 // objectId → { token, objectUrl, overlayObject, cleanup }
@@ -2784,6 +2784,13 @@ function setInputRoutingMode(mode) {
     clearInteractionRoutingState();
   }
   updateInputRoutingModeUI();
+  notifySceneSyncShellStateChanged('input-routing-mode-changed');
+}
+
+function toggleInputRoutingMode() {
+  const nextMode = inputRoutingMode === 'edit' ? 'interact' : 'edit';
+  setInputRoutingMode(nextMode);
+  showToast(`Mode: ${nextMode.toUpperCase()}`);
 }
 
 function enqueueLoomletHostEvent(objectId, eventName) {
@@ -4105,37 +4112,19 @@ function setTransformMode(mode) {
   if (selectedObjectIds.size > 1 && ['translate', 'rotate', 'scale'].includes(mode)) {
     startMultiTransformMode(mode);
     updateToolbarActive(mode);
+    notifySceneSyncShellStateChanged('transform-mode-changed');
     return;
   }
 
   cleanupMultiTransformPivot();
   transformCtrl.setMode(mode);
   updateToolbarActive(mode);
+  notifySceneSyncShellStateChanged('transform-mode-changed');
 }
 
-btnMove?.addEventListener('click', () => {
-  setTransformMode('translate');
-});
-
-btnRotate?.addEventListener('click', () => {
-  setTransformMode('rotate');
-});
-
-btnScale?.addEventListener('click', () => {
-  setTransformMode('scale');
-});
-
-btnCopy?.addEventListener('click', () => {
-  duplicateSelectedObject();
-});
-
-btnDeselect?.addEventListener('click', () => {
-  clearSelection({ reason: 'selection-cleared-button' });
-});
-
-btnDelete?.addEventListener('click', () => {
-  deleteSelectedObjects();
-});
+// transform ツールバー（move/rotate/scale/copy/delete/deselect）のクリック配線は
+// Editor Shell の mobile layout へ移管。表示/活性の DOM 更新は引き続き core が担う
+// （showToolbar/hideToolbar/updateToolbarActive/updateSelectionToolbar）。
 
 updateSelectionToolbar();
 
@@ -4147,6 +4136,8 @@ function updateHistoryButtonState() {
 
   if (btnUndo) btnUndo.disabled = !canUndo;
   if (btnRedo) btnRedo.disabled = !canRedo;
+
+  notifySceneSyncShellStateChanged('history-changed');
 }
 
 btnUndo?.addEventListener('click', () => {
@@ -6585,13 +6576,40 @@ function getCurrentSelectionPayload() {
   };
 }
 
-const sceneSyncShellStateListeners = new Set();
-
 function getSceneSyncShellSelection() {
   const selection = getCurrentSelectionPayload();
   return {
     ...selection,
     objectIds: selection.selectedObjectIds,
+  };
+}
+
+// Shell が編集 UI を組み立てるための統合状態スナップショット。
+// command API のみで完結した shell（studio 等）が購読して描画に使う。
+function getEditorState() {
+  const selectedIds = Array.from(selectedObjectIds || []);
+  let selectionLabel = '';
+  if (selectedIds.length === 1) {
+    const obj = managedObjects.get(selectedIds[0]);
+    selectionLabel = obj?.userData?.name || obj?.name || selectedIds[0];
+  } else if (selectedIds.length > 1) {
+    selectionLabel = `${selectedIds.length} objects`;
+  }
+
+  let objectCount = 0;
+  for (const [objectId, obj] of managedObjects) {
+    if (!isSnapshotExcludedObject(objectId, obj)) objectCount++;
+  }
+
+  return {
+    transformMode: transformCtrl?.mode || 'translate',
+    inputRoutingMode,
+    selectedCount: selectedIds.length,
+    selectedObjectIds: selectedIds,
+    selectionLabel,
+    objectCount,
+    canUndo: presenceState.historyManager?.canUndo?.() === true,
+    canRedo: presenceState.historyManager?.canRedo?.() === true,
   };
 }
 
@@ -12560,6 +12578,12 @@ mountSceneSyncShellFromDom({
     closeSceneInspector: () => setSceneInspectorOpen(false),
     toggleSceneInspector: () => setSceneInspectorOpen(!sceneInspectorState.isOpen),
     closeMobileActionSheet,
+    // Edit operations (Editor / Studio shells)
+    setTransformMode,
+    duplicateSelected: duplicateSelectedObject,
+    deselect: () => clearSelection({ reason: 'selection-cleared-shell' }),
+    setInputRoutingMode,
+    toggleInputRoutingMode,
     // Scene Clock transport (Player Shell)
     playSceneClock,
     pauseSceneClock,
@@ -12569,6 +12593,7 @@ mountSceneSyncShellFromDom({
     resetSceneClock,
   },
   getSelection: getSceneSyncShellSelection,
+  getEditorState,
   getSceneClockState: getSceneClockStateForShell,
   onStateChange: onSceneSyncShellStateChange,
 });

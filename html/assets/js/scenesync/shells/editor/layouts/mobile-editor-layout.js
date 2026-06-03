@@ -19,6 +19,14 @@ export function createMobileEditorLayout() {
       const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
       const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 
+      // transform ツールバー（mobile-toolbar）。表示/活性の DOM 更新は core 側が担う。
+      const btnMove = document.getElementById('btn-move');
+      const btnRotate = document.getElementById('btn-rotate');
+      const btnScale = document.getElementById('btn-scale');
+      const btnCopy = document.getElementById('btn-copy');
+      const btnDelete = document.getElementById('btn-delete');
+      const btnDeselect = document.getElementById('btn-deselect');
+
       disposers.push(
         addListener(mobileExportBtn, 'click', () => {
           core?.commands?.closeMobileActionSheet?.();
@@ -35,7 +43,13 @@ export function createMobileEditorLayout() {
         addListener(mobileDevOpenBtn, 'click', () => {
           core?.commands?.closeMobileActionSheet?.();
           core?.commands?.toggleSceneInspector?.();
-        })
+        }),
+        addListener(btnMove, 'click', () => actions?.setTransformMode?.('translate')),
+        addListener(btnRotate, 'click', () => actions?.setTransformMode?.('rotate')),
+        addListener(btnScale, 'click', () => actions?.setTransformMode?.('scale')),
+        addListener(btnCopy, 'click', () => actions?.duplicateSelected?.()),
+        addListener(btnDelete, 'click', () => actions?.deleteSelected?.()),
+        addListener(btnDeselect, 'click', () => actions?.deselect?.())
       );
     },
 
