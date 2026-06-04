@@ -164,6 +164,10 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
       return;
     }
 
+    const previousShell = currentShell;
+    const previousShellId = currentShellId;
+    const previousInputAdapters = currentInputAdapters;
+
     try {
       const nextShell = await loadSceneSyncShell(normalizedId);
 
@@ -172,25 +176,33 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
         return;
       }
 
-      unmountInputAdapters(currentInputAdapters);
-      currentInputAdapters = [];
+      unmountInputAdapters(previousInputAdapters);
+      previousShell?.unmount?.();
 
-      currentShell?.unmount?.();
+      currentShell = null;
+      currentShellId = null;
+      currentInputAdapters = [];
 
       await nextShell.mount({ core, root: document.body });
 
+      if (token !== switchSerial) {
+        nextShell.unmount?.();
+        return;
+      }
+
       currentInputAdapters = mountInputAdaptersForShell(nextShell, core);
       currentShell = nextShell;
-      currentShellId = normalizedId;
+      currentShellId = nextShell.id || normalizedId;
 
       if (options?.updateUrl) {
         const url = new URL(location.href);
-        url.searchParams.set('shell', normalizedId);
+        const mountedShellId = nextShell.id || normalizedId;
+        url.searchParams.set('shell', mountedShellId);
         history.replaceState(null, '', url);
       }
 
       if (core?.debug) {
-        console.debug('[SceneSyncShell] switched to shell:', normalizedId);
+        console.debug('[SceneSyncShell] switched to shell:', currentShellId);
       }
     } catch (error) {
       console.error('[SceneSyncShell] failed to switch shell:', error);
@@ -201,7 +213,7 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
           await fallbackShell.mount({ core, root: document.body });
           currentInputAdapters = mountInputAdaptersForShell(fallbackShell, core);
           currentShell = fallbackShell;
-          currentShellId = 'editor';
+          currentShellId = fallbackShell.id || 'editor';
           console.warn('[SceneSyncShell] fell back to editor shell');
         } catch (fallbackError) {
           console.error('[SceneSyncShell] fallback to editor shell failed:', fallbackError);
