@@ -1,15 +1,40 @@
-import { mountSceneSyncShell } from '../shells/shell-bootstrap.js';
+import { createSceneSyncShellRuntimeManager } from '../shells/shell-bootstrap.js';
 
-let sceneSyncShellMountPromise = null;
+let sceneSyncShellRuntimePromise = null;
+let sceneSyncShellRuntime = null;
 
 export function mountSceneSyncShellFromDom(core = {}) {
-  if (!sceneSyncShellMountPromise) {
-    sceneSyncShellMountPromise = mountSceneSyncShell(core).catch((error) => {
-      console.warn('[SceneSyncShell] failed to mount shell:', error);
-      return null;
-    });
+  if (!sceneSyncShellRuntimePromise) {
+    sceneSyncShellRuntimePromise = createSceneSyncShellRuntimeManager(core)
+      .then((runtime) => {
+        sceneSyncShellRuntime = runtime;
+
+        if (typeof window !== 'undefined') {
+          window.sceneSyncShell = {
+            async switchTo(shellId, options) {
+              return runtime.switchShell(shellId, options);
+            },
+            current() {
+              return runtime.getCurrentShellId();
+            },
+            list() {
+              return runtime.listShellIds();
+            },
+          };
+        }
+
+        return runtime;
+      })
+      .catch((error) => {
+        console.warn('[SceneSyncShell] failed to mount shell runtime:', error);
+        return null;
+      });
   }
-  return sceneSyncShellMountPromise;
+  return sceneSyncShellRuntimePromise;
+}
+
+export function getSceneSyncShellRuntime() {
+  return sceneSyncShellRuntime;
 }
 
 export function getSceneSyncDom() {

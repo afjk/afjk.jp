@@ -1,4 +1,4 @@
-import { loadSceneSyncShell } from './shell-registry.js';
+import { loadSceneSyncShell, listSceneSyncShellIds } from './shell-registry.js';
 import { createPointerInputAdapter } from './editor/inputs/pointer-input-adapter.js';
 import { createTouchInputAdapter } from './editor/inputs/touch-input-adapter.js';
 import { createEditorKeyboardAdapter } from './editor/inputs/editor-keyboard-adapter.js';
@@ -102,36 +102,180 @@ function createDomBackedCore(extraCore = {}) {
   };
 }
 
+const INPUT_ADAPTER_FACTORIES = {
+  pointer: createPointerInputAdapter,
+  touch: createTouchInputAdapter,
+  keyboard: createEditorKeyboardAdapter,
+};
+
+function mountInputAdaptersForShell(shell, core) {
+  const inputAdapters = [];
+  if (!core?.input?.getCanvas?.()) return inputAdapters;
+
+  const shellInputs = Array.isArray(shell?.inputs) ? shell.inputs : [];
+
+  for (const inputId of shellInputs) {
+    const factory = INPUT_ADAPTER_FACTORIES[inputId];
+    if (!factory) {
+      console.warn(`[SceneSyncShell] unknown input adapter: ${inputId}`);
+      continue;
+    }
+
+    const adapter = factory();
+    try {
+      adapter.mount({ core });
+      inputAdapters.push(adapter);
+    } catch (error) {
+      console.warn(`[SceneSyncShell] input adapter '${inputId}' mount failed:`, error);
+    }
+  }
+
+  return inputAdapters;
+}
+
+function unmountInputAdapters(inputAdapters) {
+  for (const adapter of inputAdapters.splice(0)) {
+    try {
+      adapter.unmount?.();
+    } catch (error) {
+      console.warn('[SceneSyncShell] input adapter unmount failed:', error);
+    }
+  }
+}
+
+export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
+  const core = createDomBackedCore(extraCore);
+  let currentShell = null;
+  let currentShellId = null;
+  let currentInputAdapters = [];
+  let switchSerial = 0;
+  let disposed = false;
+
+  async function switchShell(nextShellId, options = {}) {
+    if (disposed) {
+      console.warn('[SceneSyncShell] runtime already disposed');
+      return;
+    }
+
+    const token = ++switchSerial;
+    const normalizedId = String(nextShellId || '').trim().toLowerCase() || 'editor';
+
+    if (normalizedId === currentShellId) {
+      return;
+    }
+
+    const previousShell = currentShell;
+    const previousShellId = currentShellId;
+    const previousInputAdapters = currentInputAdapters;
+
+    try {
+      const nextShell = await loadSceneSyncShell(normalizedId);
+
+      if (token !== switchSerial) {
+        nextShell.unmount?.();
+        return;
+      }
+
+      unmountInputAdapters(previousInputAdapters);
+      previousShell?.unmount?.();
+
+      currentShell = null;
+      currentShellId = null;
+      currentInputAdapters = [];
+
+      await nextShell.mount({ core, root: document.body });
+
+      if (token !== switchSerial) {
+        nextShell.unmount?.();
+        return;
+      }
+
+      currentInputAdapters = mountInputAdaptersForShell(nextShell, core);
+      currentShell = nextShell;
+      currentShellId = nextShell.id || normalizedId;
+
+      if (options?.updateUrl) {
+        const url = new URL(location.href);
+        const mountedShellId = nextShell.id || normalizedId;
+        url.searchParams.set('shell', mountedShellId);
+        history.replaceState(null, '', url);
+      }
+
+      if (core?.debug) {
+        console.debug('[SceneSyncShell] switched to shell:', currentShellId);
+      }
+    } catch (error) {
+      console.error('[SceneSyncShell] failed to switch shell:', error);
+
+      if (token === switchSerial && currentShell === null) {
+        try {
+          const fallbackShell = await loadSceneSyncShell('editor');
+          await fallbackShell.mount({ core, root: document.body });
+          currentInputAdapters = mountInputAdaptersForShell(fallbackShell, core);
+          currentShell = fallbackShell;
+          currentShellId = fallbackShell.id || 'editor';
+          console.warn('[SceneSyncShell] fell back to editor shell');
+        } catch (fallbackError) {
+          console.error('[SceneSyncShell] fallback to editor shell failed:', fallbackError);
+        }
+      }
+    }
+  }
+
+  const initialShell = await loadSceneSyncShell();
+  await initialShell.mount({ core, root: document.body });
+  currentShell = initialShell;
+  currentShellId = initialShell?.id || 'editor';
+  currentInputAdapters = mountInputAdaptersForShell(initialShell, core);
+
+  return {
+    get core() {
+      return core;
+    },
+
+    getCurrentShellId() {
+      return currentShellId;
+    },
+
+    getCurrentShell() {
+      return currentShell;
+    },
+
+    switchShell,
+
+    listShellIds() {
+      return listSceneSyncShellIds();
+    },
+
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+
+      unmountInputAdapters(currentInputAdapters);
+      currentInputAdapters = [];
+
+      currentShell?.unmount?.();
+      currentShell = null;
+      currentShellId = null;
+
+      core?.dispose?.();
+    },
+  };
+}
+
 export async function mountSceneSyncShell(extraCore = {}) {
   const shell = await loadSceneSyncShell();
   const core = createDomBackedCore(extraCore);
   await shell.mount({ core, root: document.body });
 
-  // 入力アダプタを mount する。
-  // - pointer / touch: 3D シーンを表示する全 shell に常時（選択・hover・カメラ操作）。
-  // - editor-keyboard: 編集系ショートカット（C/V・Undo/Redo・W/E/R・Delete 等）。
-  //   shell.inputs に 'keyboard' を含む編集 shell（editor/studio）のみ mount し、
-  //   鑑賞用 shell（viewer/player/minimal）では編集ショートカットを無効化する。
-  const inputAdapters = [];
-  if (core?.input?.getCanvas?.()) {
-    const factories = [createPointerInputAdapter, createTouchInputAdapter];
-    const shellInputs = Array.isArray(shell?.inputs) ? shell.inputs : [];
-    if (shellInputs.includes('keyboard')) {
-      factories.push(createEditorKeyboardAdapter);
-    }
-    for (const create of factories) {
-      const adapter = create();
-      try { adapter.mount({ core }); inputAdapters.push(adapter); }
-      catch (error) { console.warn('[SceneSyncShell] input adapter mount failed:', error); }
-    }
-  }
+  const inputAdapters = mountInputAdaptersForShell(shell, core);
 
   return {
     shell,
     core,
     inputAdapters,
     dispose() {
-      for (const adapter of inputAdapters.splice(0)) adapter.unmount?.();
+      unmountInputAdapters(inputAdapters);
       shell.unmount?.();
       core.dispose?.();
     },
