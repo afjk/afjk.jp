@@ -1,4 +1,7 @@
 import { loadSceneSyncShell } from './shell-registry.js';
+import { createPointerInputAdapter } from './editor/inputs/pointer-input-adapter.js';
+import { createTouchInputAdapter } from './editor/inputs/touch-input-adapter.js';
+import { createEditorKeyboardAdapter } from './editor/inputs/editor-keyboard-adapter.js';
 
 function clickElement(id) {
   document.getElementById(id)?.click();
@@ -104,10 +107,31 @@ export async function mountSceneSyncShell(extraCore = {}) {
   const core = createDomBackedCore(extraCore);
   await shell.mount({ core, root: document.body });
 
+  // 入力アダプタを mount する。
+  // - pointer / touch: 3D シーンを表示する全 shell に常時（選択・hover・カメラ操作）。
+  // - editor-keyboard: 編集系ショートカット（C/V・Undo/Redo・W/E/R・Delete 等）。
+  //   shell.inputs に 'keyboard' を含む編集 shell（editor/studio）のみ mount し、
+  //   鑑賞用 shell（viewer/player/minimal）では編集ショートカットを無効化する。
+  const inputAdapters = [];
+  if (core?.input?.getCanvas?.()) {
+    const factories = [createPointerInputAdapter, createTouchInputAdapter];
+    const shellInputs = Array.isArray(shell?.inputs) ? shell.inputs : [];
+    if (shellInputs.includes('keyboard')) {
+      factories.push(createEditorKeyboardAdapter);
+    }
+    for (const create of factories) {
+      const adapter = create();
+      try { adapter.mount({ core }); inputAdapters.push(adapter); }
+      catch (error) { console.warn('[SceneSyncShell] input adapter mount failed:', error); }
+    }
+  }
+
   return {
     shell,
     core,
+    inputAdapters,
     dispose() {
+      for (const adapter of inputAdapters.splice(0)) adapter.unmount?.();
       shell.unmount?.();
       core.dispose?.();
     },

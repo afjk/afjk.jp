@@ -16,7 +16,7 @@ export function createSceneSyncShell({ id = 'editor', requestedId = 'editor', av
     name: 'Editor Shell',
     kind: 'editor',
     layouts: ['desktop', 'mobile', 'xr'],
-    inputs: ['mouse', 'touch', 'xr'],
+    inputs: ['pointer', 'touch', 'keyboard', 'xr'],
 
     mount({ core, root } = {}) {
       const actions = createEditorActions(core);

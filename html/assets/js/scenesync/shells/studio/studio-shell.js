@@ -145,7 +145,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     name: 'Studio Shell',
     kind: 'editor',
     layouts: ['desktop', 'mobile'],
-    inputs: ['mouse', 'touch'],
+    inputs: ['pointer', 'touch', 'keyboard'],
 
     async mount({ core } = {}) {
       await ensureStylesheet();

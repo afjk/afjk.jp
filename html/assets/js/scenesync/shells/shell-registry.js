@@ -5,6 +5,7 @@ const SHELL_LOADERS = {
   minimal: () => import('./minimal/minimal-shell.js'),
   player: () => import('./player/player-shell.js'),
   studio: () => import('./studio/studio-shell.js'),
+  viewer: () => import('./viewer/viewer-shell.js'),
 };
 
 function normalizeShellId(value) {

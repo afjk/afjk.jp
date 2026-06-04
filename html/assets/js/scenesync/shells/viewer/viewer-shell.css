@@ -1,0 +1,95 @@
+/* ── Hide editor chrome in Viewer Shell ──────────────── */
+.scene-sync-shell-viewer #settings-panel,
+.scene-sync-shell-viewer #peers-panel,
+.scene-sync-shell-viewer #scene-clock-panel,
+.scene-sync-shell-viewer #scene-inspector-panel,
+.scene-sync-shell-viewer #history-toolbar,
+.scene-sync-shell-viewer #mobile-toolbar,
+.scene-sync-shell-viewer #add-btn,
+.scene-sync-shell-viewer #mode,
+.scene-sync-shell-viewer #status {
+  display: none !important;
+}
+/* Keep: canvas, #toast, dialogs（global modal）, #xr-button-container */
+
+.viewer-shell {
+  --v-surface: rgba(24, 26, 32, 0.74);
+  --v-border: rgba(255, 255, 255, 0.10);
+  --v-text: #e8eaee;
+  --v-muted: rgba(232, 234, 238, 0.55);
+  --v-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --v-blur: blur(18px) saturate(1.15);
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  pointer-events: none;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--v-text);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.viewer-shell > * { pointer-events: auto; }
+
+/* connection badge（左上） */
+.viewer-badge {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  backdrop-filter: var(--v-blur);
+  -webkit-backdrop-filter: var(--v-blur);
+  box-shadow: var(--v-shadow);
+}
+.viewer-badge-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--v-muted);
+}
+.viewer-badge-conn {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* dock（下部中央） */
+.viewer-dock {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+}
+.viewer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--v-border);
+  background: var(--v-surface);
+  color: var(--v-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: var(--v-blur);
+  -webkit-backdrop-filter: var(--v-blur);
+  box-shadow: var(--v-shadow);
+  transition: background 0.15s ease, transform 0.1s ease;
+  font-family: inherit;
+}
+.viewer-btn svg { color: var(--v-muted); }
+.viewer-btn:hover { background: rgba(36, 39, 48, 0.88); }
+.viewer-btn:active { transform: scale(0.96); }
+.viewer-btn:focus-visible { outline: 2px solid rgba(107, 143, 199, 0.6); outline-offset: 2px; }
+
+@media (max-width: 560px) {
+  .viewer-dock { bottom: 18px; gap: 8px; }
+  .viewer-btn { padding: 9px 13px; font-size: 12px; }
+}

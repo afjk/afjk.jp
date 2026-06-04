@@ -1,3 +1,5 @@
+import { createEditorChrome } from '../editor-chrome.js';
+
 function addListener(target, type, handler, options) {
   if (!target) return () => {};
   target.addEventListener(type, handler, options);
@@ -6,6 +8,7 @@ function addListener(target, type, handler, options) {
 
 export function createDesktopEditorLayout() {
   const disposers = [];
+  let chrome = null;
 
   return {
     id: 'desktop-editor',
@@ -13,6 +16,9 @@ export function createDesktopEditorLayout() {
 
     mount({ core, actions, root } = {}) {
       document.body.classList.add('scene-sync-layout-desktop-editor');
+
+      chrome = createEditorChrome(core);
+      chrome.mount();
 
       const exportBtn = document.getElementById('export-btn');
       const helpBtn = document.getElementById('help-btn');
@@ -32,6 +38,8 @@ export function createDesktopEditorLayout() {
     },
 
     unmount() {
+      chrome?.unmount();
+      chrome = null;
       for (const dispose of disposers.splice(0)) dispose();
       document.body.classList.remove('scene-sync-layout-desktop-editor');
     },
