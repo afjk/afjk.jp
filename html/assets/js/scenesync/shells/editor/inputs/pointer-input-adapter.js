@@ -1,7 +1,8 @@
-// Mouse / pointer + keyboard 入力アダプタ。
-// canvas の pointer 系イベントとキーボードショートカットを配線し、
-// 解釈は core.input / core.commands に委譲する（scene 内部に触れない）。
-export function createMouseInputAdapter() {
+// Pointer 入力アダプタ。canvas の pointer 系イベント（選択・hover・paste 配置・
+// カメラ操作の前段）を配線する。編集専用のショートカットは含まないため、
+// 鑑賞用 shell（viewer/player/minimal）でも安全に常時 mount できる。
+// 解釈は core.input に委譲する（scene 内部に触れない）。
+export function createPointerInputAdapter() {
   const disposers = [];
   let pointerSelectionStart = null;
 
@@ -12,8 +13,8 @@ export function createMouseInputAdapter() {
   }
 
   return {
-    id: 'mouse',
-    name: 'Mouse Input Adapter',
+    id: 'pointer',
+    name: 'Pointer Input Adapter',
 
     mount({ core } = {}) {
       const input = core?.input;
@@ -55,45 +56,6 @@ export function createMouseInputAdapter() {
         event.stopPropagation();
         input.commitPasteClick();
       });
-
-      add(window, 'keydown', (e) => {
-        if (input.shouldIgnoreShortcut(e)) return;
-
-        // ドラッグ中は Undo/Redo を無効化
-        if (input.isDragging()) {
-          if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'y')) {
-            e.preventDefault();
-            return;
-          }
-        }
-
-        const isMod = e.ctrlKey || e.metaKey;
-        const key = e.key.toLowerCase();
-
-        if (isMod && !e.altKey && key === 'c') {
-          if (input.copySelection()) { e.preventDefault(); e.stopPropagation(); }
-          return;
-        }
-        if (isMod && !e.altKey && key === 'v') {
-          if (input.pasteToggle()) { e.preventDefault(); e.stopPropagation(); }
-          return;
-        }
-        if (isMod && key === 'z' && !e.shiftKey) {
-          e.preventDefault(); core.commands?.undo?.(); return;
-        }
-        if (isMod && (key === 'y' || (key === 'z' && e.shiftKey))) {
-          e.preventDefault(); core.commands?.redo?.(); return;
-        }
-
-        switch (key) {
-          case 'w': core.commands?.setTransformMode?.('translate'); break;
-          case 'e': core.commands?.setTransformMode?.('rotate'); break;
-          case 'r': core.commands?.setTransformMode?.('scale'); break;
-          case 'escape': { if (input.handleEscape()) e.preventDefault(); break; }
-          case 'delete':
-          case 'backspace': { e.preventDefault(); core.commands?.deleteSelected?.(); break; }
-        }
-      });
     },
 
     unmount() {
@@ -103,4 +65,4 @@ export function createMouseInputAdapter() {
   };
 }
 
-export default createMouseInputAdapter;
+export default createPointerInputAdapter;

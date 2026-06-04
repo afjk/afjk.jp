@@ -357,13 +357,15 @@ Raw DOM input wiring lives in adapters, not in `scene.js`. Adapters translate ev
 
 ```text
 html/assets/js/scenesync/shells/editor/inputs/
-├─ mouse-input-adapter.js  (canvas pointer events + keyboard shortcuts)
-├─ touch-input-adapter.js  (tap / double-tap gestures)
-└─ xr-input-adapter.js     (placeholder; XR grab handled in core for now)
+├─ pointer-input-adapter.js    (canvas pointer: select / hover / paste placement)
+├─ touch-input-adapter.js      (tap / double-tap gestures)
+├─ editor-keyboard-adapter.js  (edit shortcuts: C/V, Undo/Redo, W/E/R, Escape, Delete)
+└─ xr-input-adapter.js         (placeholder; XR grab handled in core for now)
 ```
 
 - Contract: `createXInputAdapter()` → `{ id, name, mount({core}), unmount() }`. `mount` attaches listeners (to `core.input.getCanvas()` / `window`) and records disposers; `unmount` removes them.
-- **Mounting**: `shell-bootstrap.js` mounts the default mouse + touch adapters for every shell after the shell mounts, mirroring the previous global input behaviour. Both run simultaneously (pointer handlers ignore `pointerType === 'touch'`).
+- **Pointer vs. keyboard are separate adapters by design.** Pointer/touch only do selection, hover and camera-precursor input — safe for any shell. The editor keyboard adapter carries the *edit* shortcuts and must only be mounted by edit-capable shells.
+- **Mounting**: `shell-bootstrap.js` mounts `pointer` + `touch` for every shell that shows the scene. It mounts `editor-keyboard` **only when `shell.inputs` includes `'keyboard'`** (editor / studio). Viewer / player / minimal therefore get selection + camera but **no** edit shortcuts — keyboard delete / undo / paste / transform cannot fire there even if a selection lingers.
 - **Camera & XR stay in core**: OrbitControls and the WebXR controller grab remain owned by `scene.js` (shared by all shells); they are not part of the adapter layer yet.
 
 ## Editor chrome fully shell-owned (v4 follow-up)

@@ -25,7 +25,7 @@ export function createMobileEditorLayout() {
       const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
       const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 
-      // transform ツールバー（mobile-toolbar）。表示/活性の DOM 更新は core 側が担う。
+      // transform ツールバー（mobile-toolbar）。表示/活性の DOM 更新は editor-chrome.js が担う。
       const btnMove = document.getElementById('btn-move');
       const btnRotate = document.getElementById('btn-rotate');
       const btnScale = document.getElementById('btn-scale');

@@ -57,7 +57,7 @@ export function createSceneSyncShell({ id = 'minimal', requestedId = 'minimal', 
     name: 'Minimal Shell',
     kind: 'editor',
     layouts: ['desktop', 'mobile'],
-    inputs: ['mouse', 'touch'],
+    inputs: ['pointer', 'touch'],
 
     async mount({ core } = {}) {
       await ensureStylesheet();

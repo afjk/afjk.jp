@@ -63,7 +63,7 @@ export function createSceneSyncShell({ id = 'viewer', requestedId = 'viewer', av
     name: 'Viewer Shell',
     kind: 'viewer',
     layouts: ['desktop', 'mobile'],
-    inputs: ['mouse', 'touch'],
+    inputs: ['pointer', 'touch'],
 
     async mount({ core } = {}) {
       await ensureStylesheet();
