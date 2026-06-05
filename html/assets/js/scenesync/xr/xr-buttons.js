@@ -17,7 +17,9 @@ export function setupXrButtons(ctx) {
   navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
     if (!ok) return;
 
-    const btn = VRButton.createButton(renderer);
+    const btn = VRButton.createButton(renderer, {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+    });
     relabelXrButton(btn, 'VRで入る', 'VRを終了');
     btn.style.position = 'static';
     btn.style.transform = 'none';
@@ -33,7 +35,7 @@ export function setupXrButtons(ctx) {
 
     const btn = ARButton.createButton(renderer, {
       requiredFeatures: ['hit-test'],
-      optionalFeatures: ['local-floor', 'dom-overlay'],
+      optionalFeatures: ['local-floor', 'dom-overlay', 'hand-tracking'],
       domOverlay: { root: document.body },
     });
     relabelXrButton(btn, 'MRで入る', 'MRを終了');

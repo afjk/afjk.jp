@@ -33,6 +33,7 @@ import { broadcastObjectDelta } from './objects/object-delta.js';
 import { createXrState } from './xr/xr-state.js';
 import { setupXrButtons } from './xr/xr-buttons.js';
 import { createXrFloorManager } from './xr/xr-floor.js';
+import { createXrHandJointSpheres } from './xr/xr-hand-joint-spheres.js';
 import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
 import { createHistoryManager, HistoryManager } from './history/history-manager.js';
 import { createUserManager } from './user/user-manager.js';
@@ -269,6 +270,12 @@ const xrFloor = createXrFloorManager({
   initialHeadHeight: XR_INITIAL_HEAD_HEIGHT,
 });
 
+const xrHandJointSpheres = createXrHandJointSpheres({
+  scene,
+  renderer,
+  xrState,
+});
+
 // ── アバター位置同期定数 ──
 const AVATAR_SEND_INTERVAL_MS = 100;
 const AVATAR_TIMEOUT_MS = 3000;
@@ -342,10 +349,10 @@ async function requestXrSession(mode) {
   const sessionInit = mode === 'immersive-ar'
     ? {
         requiredFeatures: ['hit-test'],
-        optionalFeatures: ['local-floor', 'dom-overlay'],
+        optionalFeatures: ['local-floor', 'dom-overlay', 'hand-tracking'],
         domOverlay: { root: document.body },
       }
-    : { optionalFeatures: ['local-floor', 'bounded-floor'] };
+    : { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
 
   const session = await navigator.xr.requestSession(mode, sessionInit);
   await renderer.xr.setSession(session);
@@ -843,12 +850,14 @@ renderer.xr.addEventListener('sessionstart', async () => {
   }
 
   await xrFloor.handleSessionStart(session, xrState.mode);
+  xrHandJointSpheres.setEnabled(true);
 
   console.log('[XR] session started:', {
     mode: xrState.mode,
     calibrating: xrState.floor.calibrating,
     hitTestSource: !!xrState.floor.hitTestSource,
   });
+  console.debug('[XR] hand joint spheres ready');
 });
 
 renderer.xr.addEventListener('sessionend', () => {
@@ -856,6 +865,7 @@ renderer.xr.addEventListener('sessionend', () => {
   const xrToggleBtn = dom.xrToggleBtn;
   if (xrToggleBtn) xrToggleBtn.style.display = 'none';
 
+  xrHandJointSpheres.setEnabled(false);
   xrState.active = false;
 
   // 掴み中だった場合は全てのコントローラー・両手状態をリリース
@@ -4184,6 +4194,7 @@ renderer.setAnimationLoop((time, frame) => {
   if (xrState.active) {
     updateXrGrab();
     updateXrHitTest(frame);
+    xrHandJointSpheres.update(frame);
   }
 
   sendAvatarPose(time);
