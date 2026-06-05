@@ -33,7 +33,7 @@ const XR_HAND_JOINT_NAMES = [
   'pinky-finger-tip',
 ];
 
-export function createXrHandJointSpheres({ scene, renderer, xrState } = {}) {
+export function createXrHandJointSpheres({ scene, renderer } = {}) {
   let enabled = true;
 
   const root = new THREE.Group();
@@ -50,6 +50,7 @@ export function createXrHandJointSpheres({ scene, renderer, xrState } = {}) {
     transparent: true,
     opacity: 0.65,
     depthWrite: false,
+    depthTest: false,
   });
 
   const hands = new Map();
@@ -72,6 +73,8 @@ export function createXrHandJointSpheres({ scene, renderer, xrState } = {}) {
       sphere.userData._temporary = true;
       sphere.userData.nonSerializable = true;
       sphere.raycast = () => {};
+      sphere.renderOrder = 9999;
+      sphere.visible = false;
       group.add(sphere);
       jointMap.set(jointName, sphere);
     }
@@ -86,6 +89,12 @@ export function createXrHandJointSpheres({ scene, renderer, xrState } = {}) {
 
   function hideAll() {
     root.visible = false;
+    for (const handState of hands.values()) {
+      handState.group.visible = false;
+      for (const sphere of handState.joints.values()) {
+        sphere.visible = false;
+      }
+    }
   }
 
   function update(frame) {
@@ -118,7 +127,11 @@ export function createXrHandJointSpheres({ scene, renderer, xrState } = {}) {
         const jointSpace = inputSource.hand.get(jointName);
         const sphere = handState.joints.get(jointName);
 
-        if (!jointSpace || !sphere) continue;
+        if (!sphere) continue;
+        if (!jointSpace) {
+          sphere.visible = false;
+          continue;
+        }
 
         const pose = frame.getJointPose?.(jointSpace, referenceSpace);
         if (!pose) {

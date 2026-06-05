@@ -273,7 +273,6 @@ const xrFloor = createXrFloorManager({
 const xrHandJointSpheres = createXrHandJointSpheres({
   scene,
   renderer,
-  xrState,
 });
 
 // ── アバター位置同期定数 ──
