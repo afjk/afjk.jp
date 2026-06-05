@@ -66,6 +66,43 @@ export function createXrFloorManager(ctx) {
   xrState.floor.reticle = createReticle();
   scene.add(xrState.floor.reticle);
 
+  let savedGridVisibility = null;
+
+  function getGridHelpers() {
+    const grids = [];
+    scene.traverse((obj) => {
+      if (obj.userData?.role === 'grid-helper') {
+        grids.push(obj);
+      }
+    });
+    return grids;
+  }
+
+  function setGridVisible(visible) {
+    for (const grid of getGridHelpers()) {
+      grid.visible = visible;
+    }
+  }
+
+  function saveGridVisibilityOnce() {
+    if (savedGridVisibility !== null) return;
+    const grids = getGridHelpers();
+    savedGridVisibility = grids.map((grid) => ({
+      grid,
+      visible: grid.visible,
+    }));
+  }
+
+  function restoreGridVisibility() {
+    if (!savedGridVisibility) return;
+    for (const entry of savedGridVisibility) {
+      if (entry.grid) {
+        entry.grid.visible = entry.visible;
+      }
+    }
+    savedGridVisibility = null;
+  }
+
   function applyFloorOffset(floorY) {
     const baseSpace = xrState.floor.referenceSpace;
     if (!baseSpace) return;
@@ -109,6 +146,7 @@ export function createXrFloorManager(ctx) {
     xrState.floor.calibrating = false;
     xrState.floor.floorConfirmed = true;
     xrState.floor.reticle.visible = false;
+    setGridVisible(false);
     showToast('床位置を設定しました');
 
     updateCalibrationButton();
@@ -122,6 +160,7 @@ export function createXrFloorManager(ctx) {
     }
     xrState.floor.calibrating = true;
     xrState.floor.floorConfirmed = false;
+    setGridVisible(true);
     showToast('床を見てトリガーを引いてください');
     updateCalibrationButton();
   }
@@ -137,7 +176,10 @@ export function createXrFloorManager(ctx) {
     xrState.floor.referenceSpace = renderer.xr.getReferenceSpace();
     applyFloorOffset(initialHeadHeight);
 
+    saveGridVisibilityOnce();
+
     if (mode === 'immersive-ar') {
+      setGridVisible(true);
       xrState.floor.calibrating = true;
       xrState.floor.floorConfirmed = false;
       showToast('床を見てトリガーを引いてください');
@@ -176,6 +218,8 @@ export function createXrFloorManager(ctx) {
     xrState.floor.lastHitPose = null;
     xrState.floor.stableHitCount = 0;
     xrState.floor.floorConfirmed = false;
+
+    restoreGridVisibility();
   }
 
   function dispose() {
