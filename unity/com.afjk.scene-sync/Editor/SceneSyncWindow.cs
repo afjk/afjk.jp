@@ -538,7 +538,7 @@ namespace Afjk.SceneSync.Editor
 
             if (_publishInProgress)
             {
-                EditorGUILayout.LabelField("Publishing...", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Publishing in background...", EditorStyles.miniLabel);
                 if (!string.IsNullOrWhiteSpace(_publishStatus))
                 {
                     EditorGUILayout.LabelField(_publishStatus, EditorStyles.wordWrappedMiniLabel);
@@ -1774,7 +1774,6 @@ namespace Afjk.SceneSync.Editor
             _publishStatus = "Queued";
             _publishProgressValue = 0f;
             BeginPublishProgress(title);
-            ConfigurePublishExportProgressCallbacks();
             Repaint();
 
             EditorApplication.delayCall += async () =>
@@ -1795,7 +1794,6 @@ namespace Afjk.SceneSync.Editor
                 finally
                 {
                     FinishPublishProgress(completed);
-                    ClearPublishExportProgressCallbacks();
                     _publishStatus = completed ? "Publish complete" : "Publish stopped";
                     _publishInProgress = false;
                     _publishCancelRequested = false;
@@ -1819,36 +1817,6 @@ namespace Afjk.SceneSync.Editor
 #endif
         }
 
-        private void ConfigurePublishExportProgressCallbacks()
-        {
-            GlbExporter.EditorExportCancellationRequested = () => _publishCancelRequested;
-            GlbExporter.EditorExportProgressHandler = ReportSynchronousExportProgress;
-        }
-
-        private void ClearPublishExportProgressCallbacks()
-        {
-            GlbExporter.EditorExportCancellationRequested = null;
-            GlbExporter.EditorExportProgressHandler = null;
-            EditorUtility.ClearProgressBar();
-        }
-
-        private void ReportSynchronousExportProgress(string message, float progress)
-        {
-            ReportPublishProgress(message, progress);
-            if (EditorUtility.DisplayCancelableProgressBar(
-                    "Scene Sync: Publish GLB",
-                    string.IsNullOrWhiteSpace(message) ? "Exporting GLB" : message,
-                    Mathf.Clamp01(progress)))
-            {
-                _publishCancelRequested = true;
-                ReportPublishProgress(
-                    "Cancel requested. Stopping UnityGLTF export.",
-                    -1f
-                );
-                throw new OperationCanceledException("Scene Sync UnityGLTF export canceled.");
-            }
-        }
-
         private void ReportPublishProgress(string message, float progress)
         {
             _publishStatus = message ?? "";
@@ -1867,7 +1835,6 @@ namespace Afjk.SceneSync.Editor
 
         private void FinishPublishProgress(bool completed)
         {
-            EditorUtility.ClearProgressBar();
 #if UNITY_2020_1_OR_NEWER
             if (_publishProgressId >= 0)
             {
@@ -2120,15 +2087,6 @@ namespace Afjk.SceneSync.Editor
             var glb = await PresenceClient.ExportGameObjectAsGlb(go);
             if (glb == null)
             {
-                if (_publishCancelRequested)
-                {
-                    ReportPublishProgress(
-                        FormatPublishObjectStatus("Publish canceled during GLB export", index, total, go),
-                        GetPublishProgress(index, total, 0.55f)
-                    );
-                    return;
-                }
-
                 Debug.LogWarning("[SceneSync] Cannot publish object without mesh: " + go.name);
                 return;
             }

@@ -5,8 +5,7 @@
     "glTFast",
     "glTFast.Export",
     "com.afjk.scene-sync.Runtime",
-    "UnityGLTFScripts",
-    "GLTFSerialization"
+    "UnityGLTFScripts"
   ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
