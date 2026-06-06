@@ -91,7 +91,7 @@ namespace Afjk.SceneSync.Editor
             {
                 _maxGlbUploadMiB = DefaultMaxGlbUploadMiB;
             }
-            _applyTransparentNameHintsForExport = EditorPrefs.GetBool(ApplyTransparentNameHintsForExportPrefKey, false);
+            _applyTransparentNameHintsForExport = EditorPrefs.GetBool(ApplyTransparentNameHintsForExportPrefKey, true);
             GlbExporter.ApplyTransparentNameHintsForExport = _applyTransparentNameHintsForExport;
 
             SceneSyncUnityGltfInstaller.RefreshUnityGltfPackageStatus();
