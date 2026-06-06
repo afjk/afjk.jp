@@ -8290,6 +8290,9 @@ function getObjectById(objectId) {
 async function loadGlbBlobForObject(objectId, blob, options = {}) {
   const obj = managedObjects.get(objectId);
   const info = options.info || null;
+  const preservedAudioSources = Object.prototype.hasOwnProperty.call(info || {}, 'audioSources')
+    ? info.audioSources
+    : obj?.userData?.audioSources;
   if (!obj && !info) {
     console.warn('[SceneSync] Object not found for loading recovered GLB:', objectId);
     return;
@@ -8412,6 +8415,9 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
     }
     scene.add(wrapper);
     registerLoadedGlbAnimation(objectId, wrapper, 'glb-blob-loaded');
+    if (preservedAudioSources !== undefined) {
+      setObjectAudioSourcesFull(objectId, preservedAudioSources);
+    }
     notifySceneStateChanged('glb-blob-loaded');
     markCrashProbe('glb-scene-attach-success', { objectId });
     clearCrashProbe('glb-object-ready');
