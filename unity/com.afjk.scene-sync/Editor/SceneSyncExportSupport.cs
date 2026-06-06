@@ -20,13 +20,13 @@ namespace Afjk.SceneSync.Editor
             "nodeE",
             "nodeO",
         };
-        private static readonly int[] LipSyncBlendShapeIndices =
+        private static readonly string[][] LipSyncBlendShapeNameCandidates =
         {
-            6,
-            7,
-            8,
-            9,
-            10,
+            new[] { "MTH_A", "MOUTH_A", "MOUTH_AA", "VISEME_A", "VISEME_AA", "V_AA", "AA", "A" },
+            new[] { "MTH_I", "MOUTH_I", "MOUTH_IH", "VISEME_I", "VISEME_IH", "V_IH", "IH", "I" },
+            new[] { "MTH_U", "MOUTH_U", "MOUTH_OU", "VISEME_U", "VISEME_OU", "V_OU", "OU", "U" },
+            new[] { "MTH_E", "MOUTH_E", "MOUTH_EE", "VISEME_E", "VISEME_EE", "V_E", "EE", "E" },
+            new[] { "MTH_O", "MOUTH_O", "MOUTH_OH", "VISEME_O", "VISEME_OH", "V_OH", "OH", "O" },
         };
         private static readonly string[] TransparentNameHints =
         {
@@ -145,8 +145,6 @@ namespace Afjk.SceneSync.Editor
                 var controllerClips = new List<AnimationClip>();
                 var seenControllerClips = new HashSet<AnimationClip>();
                 var replacements = new Dictionary<AnimationClip, AnimationClip>();
-                var overlayClips = new List<AnimationClip>();
-                var overlayNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var clip in controller.animationClips)
                 {
@@ -165,12 +163,9 @@ namespace Afjk.SceneSync.Editor
                     scope.AddTemporaryObject(bakedClip);
                     bakedClipCount++;
                     appliedEventCount += appliedToClip;
-
-                    if (HasMorphWeightCurves(bakedClip) && overlayNames.Add(bakedClip.name))
-                        overlayClips.Add(bakedClip);
                 }
 
-                var primaryClip = SelectPrimaryAnimationClip(controllerClips, overlayClips, requestedPrimaryClipName);
+                var primaryClip = SelectPrimaryAnimationClip(controllerClips, requestedPrimaryClipName);
                 if (primaryClip != null)
                 {
                     var compositeClip = replacements.TryGetValue(primaryClip, out var existingReplacement)
@@ -178,7 +173,7 @@ namespace Afjk.SceneSync.Editor
                         : CreateTemporaryClipCopy(primaryClip, scope);
 
                     var copiedCurveCount = 0;
-                    foreach (var overlayClip in overlayClips)
+                    foreach (var overlayClip in CollectOverlayClips(controllerClips, replacements, primaryClip))
                     {
                         if (overlayClip == compositeClip) continue;
                         if (!HasCompatibleDuration(primaryClip, overlayClip)) continue;
@@ -290,7 +285,6 @@ namespace Afjk.SceneSync.Editor
 
         private static AnimationClip SelectPrimaryAnimationClip(
             List<AnimationClip> controllerClips,
-            List<AnimationClip> overlayClips,
             string requestedClipName)
         {
             if (controllerClips == null || controllerClips.Count == 0)
@@ -302,59 +296,83 @@ namespace Afjk.SceneSync.Editor
                 {
                     if (!string.Equals(clip != null ? clip.name : "", requestedClipName, StringComparison.OrdinalIgnoreCase))
                         continue;
-                    if (IsPrimaryAnimationCandidate(clip, overlayClips))
+                    if (IsPrimaryAnimationCandidate(clip))
                         return clip;
                 }
             }
 
             foreach (var clip in controllerClips)
             {
-                if (IsPrimaryAnimationCandidate(clip, overlayClips))
+                if (IsPrimaryAnimationCandidate(clip))
+                    return clip;
+            }
+
+            foreach (var clip in controllerClips)
+            {
+                if (clip != null && clip.length > 0f)
                     return clip;
             }
 
             return null;
         }
 
-        private static bool IsPrimaryAnimationCandidate(AnimationClip clip, List<AnimationClip> overlayClips)
+        private static bool IsPrimaryAnimationCandidate(AnimationClip clip)
         {
             if (clip == null || clip.length <= 0f) return false;
-
-            if (overlayClips != null)
-            {
-                foreach (var overlayClip in overlayClips)
-                {
-                    if (overlayClip == null) continue;
-                    if (string.Equals(clip.name, overlayClip.name, StringComparison.OrdinalIgnoreCase))
-                        return false;
-                }
-
-                if (overlayClips.Count > 0)
-                {
-                    var hasCompatibleOverlay = false;
-                    foreach (var overlayClip in overlayClips)
-                    {
-                        if (!HasCompatibleDuration(clip, overlayClip)) continue;
-                        hasCompatibleOverlay = true;
-                        break;
-                    }
-                    if (!hasCompatibleOverlay)
-                        return false;
-                }
-            }
-
-            return true;
+            return HasPrimaryAnimationCurves(clip) || !HasSceneSyncOverlayCurves(clip);
         }
 
-        private static bool HasMorphWeightCurves(AnimationClip clip)
+        private static bool HasPrimaryAnimationCurves(AnimationClip clip)
+        {
+            if (clip == null) return false;
+
+            foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+            {
+                if (!IsSceneSyncOverlayCurveBinding(binding))
+                    return true;
+            }
+
+            foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
+            {
+                if (!IsSceneSyncOverlayCurveBinding(binding))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool HasSceneSyncOverlayCurves(AnimationClip clip)
         {
             if (clip == null) return false;
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
-                if (IsMorphCurveBinding(binding))
+                if (IsSceneSyncOverlayCurveBinding(binding))
                     return true;
             }
             return false;
+        }
+
+        private static IEnumerable<AnimationClip> CollectOverlayClips(
+            List<AnimationClip> controllerClips,
+            Dictionary<AnimationClip, AnimationClip> replacements,
+            AnimationClip primaryClip)
+        {
+            var seen = new HashSet<AnimationClip>();
+            foreach (var originalClip in controllerClips)
+            {
+                if (originalClip == null || originalClip == primaryClip)
+                    continue;
+
+                var candidate = replacements != null && replacements.TryGetValue(originalClip, out var replacement)
+                    ? replacement
+                    : originalClip;
+                if (candidate == null || !seen.Add(candidate))
+                    continue;
+                if (!HasSceneSyncOverlayCurves(candidate))
+                    continue;
+
+                yield return candidate;
+            }
         }
 
         private static bool IsMorphCurveBinding(EditorCurveBinding binding)
@@ -703,7 +721,13 @@ namespace Afjk.SceneSync.Editor
                 if (targetRenderer == null)
                     continue;
 
-                var sourceClip = GetPrimaryAnimationClip(component.GetComponent<Animator>());
+                if (!IsLipSyncControllerLinkedToRoot(root, component, targetName, targetRenderer))
+                    continue;
+
+                var sourceClip = GetPrimaryAnimationClip(
+                    component.GetComponent<Animator>(),
+                    primaryClip.name,
+                    primaryClip.length);
                 if (sourceClip == null || sourceClip.length <= 0f)
                     continue;
 
@@ -720,6 +744,43 @@ namespace Afjk.SceneSync.Editor
             }
 
             return copied;
+        }
+
+        private static bool IsLipSyncControllerLinkedToRoot(
+            GameObject root,
+            Component component,
+            string targetName,
+            SkinnedMeshRenderer targetRenderer)
+        {
+            if (root == null || component == null || targetRenderer == null)
+                return false;
+
+            var rootTransform = root.transform;
+            if (component.transform == rootTransform || component.transform.IsChildOf(rootTransform))
+                return true;
+
+            return IsUniqueLoadedSceneRendererTarget(targetRenderer, targetName);
+        }
+
+        private static bool IsUniqueLoadedSceneRendererTarget(SkinnedMeshRenderer targetRenderer, string targetName)
+        {
+            if (targetRenderer == null || string.IsNullOrWhiteSpace(targetName))
+                return false;
+
+            var matches = 0;
+            foreach (var renderer in Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>())
+            {
+                if (renderer == null || renderer.gameObject == null) continue;
+                var scene = renderer.gameObject.scene;
+                if (!scene.IsValid() || !scene.isLoaded) continue;
+                if (!string.Equals(renderer.name, targetName, StringComparison.Ordinal)) continue;
+
+                matches++;
+                if (renderer != targetRenderer || matches > 1)
+                    return false;
+            }
+
+            return matches == 1;
         }
 
         private static IEnumerable<Component> FindSceneComponentsByTypeName(string typeName)
@@ -785,16 +846,71 @@ namespace Afjk.SceneSync.Editor
             return null;
         }
 
-        private static AnimationClip GetPrimaryAnimationClip(Animator animator)
+        private static AnimationClip GetPrimaryAnimationClip(
+            Animator animator,
+            string preferredClipName,
+            float targetLength)
         {
             var controller = animator != null ? animator.runtimeAnimatorController : null;
             if (controller == null || controller.animationClips == null)
                 return null;
 
-            AnimationClip selectedClip = null;
+            var clips = new List<AnimationClip>();
+            var seen = new HashSet<AnimationClip>();
             foreach (var clip in controller.animationClips)
             {
-                if (clip == null) continue;
+                if (clip == null || clip.length <= 0f || !seen.Add(clip)) continue;
+                clips.Add(clip);
+            }
+
+            if (clips.Count == 0)
+                return null;
+
+            if (animator.layerCount > 0)
+            {
+                var clipInfos = animator.GetCurrentAnimatorClipInfo(0);
+                AnimationClip currentClip = null;
+                var currentWeight = float.MinValue;
+                foreach (var clipInfo in clipInfos)
+                {
+                    if (clipInfo.clip == null || !seen.Contains(clipInfo.clip)) continue;
+                    if (currentClip != null && clipInfo.weight <= currentWeight) continue;
+
+                    currentClip = clipInfo.clip;
+                    currentWeight = clipInfo.weight;
+                }
+
+                if (currentClip != null)
+                    return currentClip;
+            }
+
+            if (!string.IsNullOrWhiteSpace(preferredClipName))
+            {
+                foreach (var clip in clips)
+                {
+                    if (string.Equals(clip.name, preferredClipName, StringComparison.OrdinalIgnoreCase))
+                        return clip;
+                }
+            }
+
+            var closestCompatibleClip = default(AnimationClip);
+            var closestLengthDelta = float.MaxValue;
+            foreach (var clip in clips)
+            {
+                var delta = Mathf.Abs(clip.length - targetLength);
+                if (delta > 0.05f || delta >= closestLengthDelta)
+                    continue;
+
+                closestCompatibleClip = clip;
+                closestLengthDelta = delta;
+            }
+
+            if (closestCompatibleClip != null)
+                return closestCompatibleClip;
+
+            AnimationClip selectedClip = null;
+            foreach (var clip in clips)
+            {
                 if (selectedClip == null || clip.length > selectedClip.length)
                     selectedClip = clip;
             }
@@ -817,6 +933,14 @@ namespace Afjk.SceneSync.Editor
                 targetRoot == null || targetClip == null || mesh == null)
                 return 0;
 
+            if (!TryResolveLipSyncBlendShapeNames(mesh, out var blendShapeNames))
+            {
+                Debug.LogWarning(
+                    $"Scene Sync export support: skipped LipSyncController for '{targetRenderer.name}' " +
+                    "because A/I/U/E/O blend shape names could not be resolved.");
+                return 0;
+            }
+
             var nodeCurves = new AnimationCurve[nodes.Length];
             for (var i = 0; i < nodes.Length; i++)
             {
@@ -836,7 +960,7 @@ namespace Afjk.SceneSync.Editor
             var rendererPath = AnimationUtility.CalculateTransformPath(targetRenderer.transform, targetRoot);
             var sampleRate = Mathf.Max(1f, LipSyncSampleRate);
             var sampleCount = Mathf.Max(2, Mathf.CeilToInt(duration * sampleRate) + 1);
-            var keyLists = new List<Keyframe>[LipSyncBlendShapeIndices.Length];
+            var keyLists = new List<Keyframe>[blendShapeNames.Length];
 
             for (var i = 0; i < keyLists.Length; i++)
             {
@@ -860,13 +984,9 @@ namespace Afjk.SceneSync.Editor
             }
 
             var copied = 0;
-            for (var i = 0; i < LipSyncBlendShapeIndices.Length; i++)
+            for (var i = 0; i < blendShapeNames.Length; i++)
             {
-                var blendShapeIndex = LipSyncBlendShapeIndices[i];
-                if (blendShapeIndex < 0 || blendShapeIndex >= mesh.blendShapeCount)
-                    continue;
-
-                var blendShapeName = mesh.GetBlendShapeName(blendShapeIndex);
+                var blendShapeName = blendShapeNames[i];
                 if (string.IsNullOrWhiteSpace(blendShapeName))
                     continue;
 
@@ -880,6 +1000,88 @@ namespace Afjk.SceneSync.Editor
             }
 
             return copied;
+        }
+
+        private static bool TryResolveLipSyncBlendShapeNames(Mesh mesh, out string[] blendShapeNames)
+        {
+            blendShapeNames = null;
+            if (mesh == null || LipSyncBlendShapeNameCandidates == null)
+                return false;
+
+            var resolved = new string[LipSyncBlendShapeNameCandidates.Length];
+            for (var i = 0; i < LipSyncBlendShapeNameCandidates.Length; i++)
+            {
+                if (!TryFindBlendShapeName(mesh, LipSyncBlendShapeNameCandidates[i], out resolved[i]))
+                    return false;
+            }
+
+            blendShapeNames = resolved;
+            return true;
+        }
+
+        private static bool TryFindBlendShapeName(
+            Mesh mesh,
+            string[] candidates,
+            out string blendShapeName)
+        {
+            blendShapeName = null;
+            if (mesh == null || candidates == null || candidates.Length == 0)
+                return false;
+
+            for (var i = 0; i < mesh.blendShapeCount; i++)
+            {
+                var name = mesh.GetBlendShapeName(i);
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                foreach (var candidate in candidates)
+                {
+                    if (MatchesBlendShapeName(name, candidate))
+                    {
+                        blendShapeName = name;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool MatchesBlendShapeName(string blendShapeName, string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(blendShapeName) || string.IsNullOrWhiteSpace(candidate))
+                return false;
+
+            var candidateKey = NormalizeBlendShapeName(candidate);
+            if (string.IsNullOrEmpty(candidateKey))
+                return false;
+
+            var fullKey = NormalizeBlendShapeName(blendShapeName);
+            if (fullKey == candidateKey)
+                return true;
+
+            var leafName = blendShapeName;
+            var lastDot = leafName.LastIndexOf('.');
+            if (lastDot >= 0 && lastDot < leafName.Length - 1)
+                leafName = leafName.Substring(lastDot + 1);
+
+            return NormalizeBlendShapeName(leafName) == candidateKey;
+        }
+
+        private static string NormalizeBlendShapeName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "";
+
+            var chars = new char[value.Length];
+            var count = 0;
+            foreach (var ch in value)
+            {
+                if (!char.IsLetterOrDigit(ch)) continue;
+                chars[count++] = char.ToUpperInvariant(ch);
+            }
+
+            return new string(chars, 0, count);
         }
 
         private static string GetRelativeTransformPath(Transform root, Transform target)
