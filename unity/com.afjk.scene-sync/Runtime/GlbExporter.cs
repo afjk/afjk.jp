@@ -34,6 +34,8 @@ namespace Afjk.SceneSync
 #if UNITY_EDITOR
         public static Func<GameObject, byte[]> UnityGltfExportHandler { get; set; }
         public static Func<GameObject, IDisposable> EditorExportPreparationHandler { get; set; }
+        public static Func<bool> EditorExportCancellationRequested { get; set; }
+        public static Action<string, float> EditorExportProgressHandler { get; set; }
         public static string LastExportPreferredAnimationClipName { get; set; }
 
         public static bool IsUnityGltfExportAvailable => UnityGltfExportHandler != null;
@@ -41,6 +43,24 @@ namespace Afjk.SceneSync
         public static bool ShouldRecommendUnityGltf(GameObject root)
         {
             return HasExportableAnimation(root) && UnityGltfExportHandler == null;
+        }
+
+        public static bool IsEditorExportCancellationRequested()
+        {
+            try
+            {
+                return EditorExportCancellationRequested?.Invoke() ?? false;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[SceneSync] Export cancellation check failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        public static void ReportEditorExportProgress(string message, float progress)
+        {
+            EditorExportProgressHandler?.Invoke(message, progress);
         }
 #endif
 
@@ -250,6 +270,12 @@ namespace Afjk.SceneSync
                 }
                 Debug.Log("[SceneSync] Export backend: UnityGLTF with animations.");
                 return bytes;
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.LogWarning("[SceneSync] UnityGLTF export canceled.");
+                LastExportPreferredAnimationClipName = null;
+                return null;
             }
             catch (Exception ex)
             {
