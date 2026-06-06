@@ -11756,6 +11756,7 @@ function createCurrentSceneSnapshot() {
     const asset = safeCloneJson(object.userData?.asset || null);
     const metadata = safeCloneJson(object.userData?.metadata || null);
     const animation = serializeObjectAnimationState(object);
+    const audioSources = getObjectAudioSourcesForSerialize(object);
 
     const entry = {
       objectId,
@@ -11771,6 +11772,9 @@ function createCurrentSceneSnapshot() {
 
     if (animation) {
       entry.animation = animation;
+    }
+    if (audioSources) {
+      entry.audioSources = audioSources;
     }
 
     objects.push(entry);
@@ -11945,6 +11949,7 @@ function restoreSnapshotObject(entry, options = {}) {
 
   const asset = safeCloneJson(entry.asset || null);
   const metadata = safeCloneJson(entry.metadata || null) || {};
+  const audioSources = safeCloneJson(entry.audioSources || null);
   const meshPath = entry.meshPath || asset?.meshPath || null;
   const objectId = entry.objectId && !managedObjects.has(entry.objectId)
     ? entry.objectId
@@ -11970,6 +11975,9 @@ function restoreSnapshotObject(entry, options = {}) {
 
   if (entry.animation && typeof entry.animation === 'object') {
     payload.animation = safeCloneJson(entry.animation);
+  }
+  if (audioSources) {
+    payload.audioSources = audioSources;
   }
 
   addOrUpdateObject(objectId, payload, {
