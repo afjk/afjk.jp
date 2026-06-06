@@ -82,6 +82,10 @@ namespace Afjk.SceneSync.Editor
         private bool _isSceneSwitching = false;
         private bool _isManualDisconnect = false;
         private bool _publishInProgress = false;
+        private bool _publishCancelRequested = false;
+        private string _publishStatus = "";
+        private float _publishProgressValue = 0f;
+        private int _publishProgressId = -1;
         private string _envId = null;
 
         private void OnEnable()
@@ -534,7 +538,16 @@ namespace Afjk.SceneSync.Editor
 
             if (_publishInProgress)
             {
-                EditorGUILayout.LabelField("Publishing...", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Publishing in background...", EditorStyles.miniLabel);
+                if (!string.IsNullOrWhiteSpace(_publishStatus))
+                {
+                    EditorGUILayout.LabelField(_publishStatus, EditorStyles.wordWrappedMiniLabel);
+                }
+                if (GUILayout.Button("Cancel Publish"))
+                {
+                    _publishCancelRequested = true;
+                    ReportPublishProgress("Cancel requested. Waiting for the current step to finish.", -1f);
+                }
             }
 
             if (GUILayout.Button("Fix Remote Object Selection"))
@@ -1740,15 +1753,15 @@ namespace Afjk.SceneSync.Editor
 
         private void QueuePublishSelectedObjects()
         {
-            QueuePublishOperation(PublishSelectedObjectsAsync);
+            QueuePublishOperation("Scene Sync: Publish Selected", PublishSelectedObjectsAsync);
         }
 
         private void QueuePublishManagedObjects()
         {
-            QueuePublishOperation(PublishManagedObjectsAsync);
+            QueuePublishOperation("Scene Sync: Publish Managed Objects", PublishManagedObjectsAsync);
         }
 
-        private void QueuePublishOperation(Func<System.Threading.Tasks.Task> operation)
+        private void QueuePublishOperation(string title, Func<System.Threading.Tasks.Task> operation)
         {
             if (_publishInProgress)
             {
@@ -1757,14 +1770,22 @@ namespace Afjk.SceneSync.Editor
             }
 
             _publishInProgress = true;
+            _publishCancelRequested = false;
+            _publishStatus = "Queued";
+            _publishProgressValue = 0f;
+            BeginPublishProgress(title);
             Repaint();
 
             EditorApplication.delayCall += async () =>
             {
+                var completed = false;
                 try
                 {
+                    ReportPublishProgress("Starting", 0f);
+                    await System.Threading.Tasks.Task.Yield();
                     if (operation != null)
                         await operation();
+                    completed = !_publishCancelRequested;
                 }
                 catch (Exception ex)
                 {
@@ -1772,10 +1793,72 @@ namespace Afjk.SceneSync.Editor
                 }
                 finally
                 {
+                    FinishPublishProgress(completed);
+                    _publishStatus = completed ? "Publish complete" : "Publish stopped";
                     _publishInProgress = false;
+                    _publishCancelRequested = false;
                     Repaint();
                 }
             };
+        }
+
+        private void BeginPublishProgress(string title)
+        {
+#if UNITY_2020_1_OR_NEWER
+            _publishProgressId = Progress.Start(title, "Queued", Progress.Options.Sticky);
+            Progress.RegisterCancelCallback(_publishProgressId, () =>
+            {
+                _publishCancelRequested = true;
+                ReportPublishProgress("Cancel requested. Waiting for the current step to finish.", -1f);
+                return true;
+            });
+#else
+            _publishProgressId = -1;
+#endif
+        }
+
+        private void ReportPublishProgress(string message, float progress)
+        {
+            _publishStatus = message ?? "";
+            if (progress >= 0f)
+            {
+                _publishProgressValue = Mathf.Clamp01(progress);
+            }
+#if UNITY_2020_1_OR_NEWER
+            if (_publishProgressId >= 0)
+            {
+                Progress.Report(_publishProgressId, _publishProgressValue, _publishStatus);
+            }
+#endif
+            Repaint();
+        }
+
+        private void FinishPublishProgress(bool completed)
+        {
+#if UNITY_2020_1_OR_NEWER
+            if (_publishProgressId >= 0)
+            {
+                var status = completed
+                    ? Progress.Status.Succeeded
+                    : Progress.Status.Failed;
+                Progress.Finish(_publishProgressId, status);
+                _publishProgressId = -1;
+            }
+#else
+            _publishProgressId = -1;
+#endif
+        }
+
+        private static float GetPublishProgress(int index, int total, float stepProgress)
+        {
+            if (total <= 0) return 0f;
+            return Mathf.Clamp01((index + Mathf.Clamp01(stepProgress)) / total);
+        }
+
+        private static string FormatPublishObjectStatus(string step, int index, int total, GameObject go)
+        {
+            var objectName = go != null ? go.name : "(missing)";
+            return $"{step} {index + 1}/{Mathf.Max(total, 1)}: {objectName}";
         }
 
         private async System.Threading.Tasks.Task PublishSelectedObjectsAsync()
@@ -1795,6 +1878,7 @@ namespace Afjk.SceneSync.Editor
 
             var seen = new HashSet<GameObject>();
             var skipRemainingForAnimation = false;
+            var targets = new List<(GameObject root, SceneSyncIdentity identity)>();
 
             foreach (var selected in Selection.gameObjects)
             {
@@ -1808,9 +1892,39 @@ namespace Afjk.SceneSync.Editor
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, root);
                 if (identity == null) continue;
 
-                Debug.Log("[SceneSync] Publishing selected object: " + root.name + " (objectId=" + identity.ObjectId + ")");
-                await PublishUnityObject(root, identity);
+                targets.Add((root, identity));
             }
+
+            await PublishUnityObjects(targets, "selected object");
+        }
+
+        private async System.Threading.Tasks.Task PublishUnityObjects(List<(GameObject root, SceneSyncIdentity identity)> targets, string label)
+        {
+            if (targets == null || targets.Count == 0)
+            {
+                ReportPublishProgress("No publishable " + label + " found.", 1f);
+                return;
+            }
+
+            for (var i = 0; i < targets.Count; i++)
+            {
+                if (_publishCancelRequested)
+                {
+                    Debug.Log("[SceneSync] Publish canceled before object " + (i + 1) + " / " + targets.Count + ".");
+                    ReportPublishProgress("Publish canceled", GetPublishProgress(i, targets.Count, 0f));
+                    return;
+                }
+
+                var (root, identity) = targets[i];
+                if (root == null || identity == null) continue;
+
+                Debug.Log("[SceneSync] Publishing " + label + ": " + root.name + " (objectId=" + identity.ObjectId + ")");
+                await PublishUnityObject(root, identity, i, targets.Count);
+
+                await System.Threading.Tasks.Task.Yield();
+            }
+
+            ReportPublishProgress("Publish complete", 1f);
         }
 
         private async System.Threading.Tasks.Task PublishManagedObjectsAsync()
@@ -1830,6 +1944,7 @@ namespace Afjk.SceneSync.Editor
 
             var seen = new HashSet<GameObject>();
             var skipRemainingForAnimation = false;
+            var targets = new List<(GameObject root, SceneSyncIdentity identity)>();
 
             foreach (var go in manager.GetManagedUnityObjects())
             {
@@ -1842,9 +1957,10 @@ namespace Afjk.SceneSync.Editor
                 var identity = EnsureUniqueManagedUnityIdentityForPublish(manager, go);
                 if (identity == null) continue;
 
-                Debug.Log("[SceneSync] Publishing managed object: " + go.name + " (objectId=" + identity.ObjectId + ")");
-                await PublishUnityObject(go, identity);
+                targets.Add((go, identity));
             }
+
+            await PublishUnityObjects(targets, "managed object");
         }
 
         private bool ShouldSkipPublishObject(GameObject go)
@@ -1946,11 +2062,16 @@ namespace Afjk.SceneSync.Editor
             return identity;
         }
 
-        private async System.Threading.Tasks.Task PublishUnityObject(GameObject go, SceneSyncIdentity identity)
+        private async System.Threading.Tasks.Task PublishUnityObject(
+            GameObject go,
+            SceneSyncIdentity identity,
+            int index,
+            int total)
         {
             if (go == null || identity == null) return;
             if (string.IsNullOrWhiteSpace(identity.ObjectId)) return;
             if (!_connected || _client == null) return;
+            if (_publishCancelRequested) return;
 
             if (go.GetComponentInChildren<MeshFilter>() == null
                 && go.GetComponentInChildren<SkinnedMeshRenderer>() == null)
@@ -1959,6 +2080,10 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
+            ReportPublishProgress(
+                FormatPublishObjectStatus("Exporting GLB", index, total, go),
+                GetPublishProgress(index, total, 0.1f)
+            );
             var glb = await PresenceClient.ExportGameObjectAsGlb(go);
             if (glb == null)
             {
@@ -1988,10 +2113,23 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
+            if (_publishCancelRequested)
+            {
+                ReportPublishProgress(
+                    FormatPublishObjectStatus("Publish canceled before upload", index, total, go),
+                    GetPublishProgress(index, total, 0.55f)
+                );
+                return;
+            }
+
             var objectId = identity.ObjectId;
             var path = PresenceClient.GenerateRandomPath();
             var assetId = PresenceClientRuntime.ComputeAssetId(glb);
 
+            ReportPublishProgress(
+                FormatPublishObjectStatus("Uploading GLB", index, total, go),
+                GetPublishProgress(index, total, 0.65f)
+            );
             var uploaded = await PresenceClient.UploadGlb(glb, GetBlobUrl(), path);
             if (!uploaded)
             {
@@ -2002,6 +2140,15 @@ namespace Afjk.SceneSync.Editor
                 Debug.LogError(
                     $"[SceneSync] Publish aborted because GLB upload failed: " +
                     $"{go.name}, objectId={objectId}, path={path}, size={glb.Length} bytes ({glbSizeMiB:F2} MiB)"
+                );
+                return;
+            }
+
+            if (_publishCancelRequested)
+            {
+                ReportPublishProgress(
+                    FormatPublishObjectStatus("Publish canceled before broadcast", index, total, go),
+                    GetPublishProgress(index, total, 0.82f)
                 );
                 return;
             }
@@ -2041,6 +2188,10 @@ namespace Afjk.SceneSync.Editor
                 return;
             }
 
+            ReportPublishProgress(
+                FormatPublishObjectStatus("Broadcasting scene update", index, total, go),
+                GetPublishProgress(index, total, 0.88f)
+            );
             var broadcasted = await _client.Broadcast(payload);
             if (!broadcasted)
             {
@@ -2068,6 +2219,10 @@ namespace Afjk.SceneSync.Editor
             _lastSnapshots[objectId] = new TransformSnapshot(go.transform);
 
             Debug.Log("[SceneSync] Published Unity object: " + go.name);
+            ReportPublishProgress(
+                FormatPublishObjectStatus("Published", index, total, go),
+                GetPublishProgress(index, total, 1f)
+            );
         }
 
         private void DetectPublishedUnityObjectTransformChanges()
