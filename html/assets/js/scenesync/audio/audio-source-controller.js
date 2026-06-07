@@ -331,7 +331,7 @@ export function createAudioSourceController(deps = {}) {
     if (!config?.url) return;
 
     // while edited, freeze playback to start (matches inspector editing UX)
-    if (isObjectBeingEdited(objectId)) {
+    if (isObjectBeingEdited(objectId, clockState)) {
       if (entry.audio) {
         safePause(entry.audio);
         safeSeek(entry.audio, config.offset || 0);
