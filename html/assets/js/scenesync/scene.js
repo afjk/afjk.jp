@@ -56,6 +56,7 @@ import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
 import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './utils/crash-probe-helper.js';
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
 import { shouldFreezeObjectForEditorRuntime } from './runtime/editing-state.js';
+import { calculateScenePlaybackDuration } from './runtime/playback-duration.js';
 import { buildExportPackage } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
@@ -2243,6 +2244,7 @@ function setupObjectGlbAnimation(objectId, model) {
     clips,
     action,
     clipIndex,
+    companionClipIndices,
     companionActions,
   });
 }
@@ -2429,6 +2431,7 @@ function updateObjectGlbAnimationClip(objectId, nextClipIndex) {
 
   entry.action = action;
   entry.clipIndex = clipIndex;
+  entry.companionClipIndices = companionClipIndices;
   entry.companionActions = companionActions;
 
   const obj = managedObjects.get(objectId);
@@ -2614,6 +2617,39 @@ function updateObjectGlbAnimations(now = performance.now(), clockState = null) {
 
     entry.mixer.update(0);
   }
+}
+
+function getSceneAnimationPlaybackEntries() {
+  const entries = [];
+
+  for (const [objectId, entry] of glbAnimationMixers) {
+    const obj = managedObjects.get(objectId);
+    if (!obj || !Array.isArray(entry?.clips) || entry.clips.length === 0) continue;
+
+    const state = getObjectAnimationState(obj);
+    if (!state?.enabled) continue;
+
+    const clipIndex = clampAnimationClipIndex(state.clip, entry.clips.length);
+    entries.push({
+      enabled: state.enabled,
+      clips: entry.clips,
+      clipIndex,
+      companionClipIndices: Array.isArray(entry.companionClipIndices)
+        ? entry.companionClipIndices
+        : (entry.companionActions || []).map((companion) => companion?.clipIndex),
+      speed: state.speed,
+      offset: state.offset,
+      mode: state.mode,
+    });
+  }
+
+  return entries;
+}
+
+function getScenePlaybackDuration() {
+  return calculateScenePlaybackDuration({
+    animationEntries: getSceneAnimationPlaybackEntries(),
+  });
 }
 
 function showTemporaryImagePreview(objectId, file, position, options = {}) {
@@ -4695,6 +4731,7 @@ function stopSceneClock(now = performance.now()) {
 function getSceneClockStateForShell() {
   const rawTime = getSceneClockTime();
   const displayTime = sceneClockState.mode === 'host-follow' ? 0 : rawTime;
+  const duration = getScenePlaybackDuration();
   return {
     time: displayTime,
     t: displayTime,
@@ -4702,7 +4739,7 @@ function getSceneClockStateForShell() {
     playing: !sceneClockState.paused && sceneClockState.mode === 'local',
     mode: sceneClockState.mode,
     rate: sceneClockState.rate,
-    duration: 60,
+    duration,
     transportActive: sceneClockState.transportActive,
   };
 }
