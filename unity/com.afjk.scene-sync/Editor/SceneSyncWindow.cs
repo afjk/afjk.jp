@@ -415,7 +415,7 @@ namespace Afjk.SceneSync.Editor
             if (!_showQuickGuide)
             {
                 EditorGUILayout.LabelField(
-                    "Unity: Publish Selected -> Move root. Remote: move root.",
+                    "Unity: Publish Selected -> Move root. Optional: Add Selected to Managed.",
                     EditorStyles.miniLabel
                 );
                 return;
@@ -425,7 +425,8 @@ namespace Afjk.SceneSync.Editor
                 "Unity objects:\n" +
                 "1. Select a GameObject.\n" +
                 "2. Click Publish Selected.\n" +
-                "3. Move the Scene Sync root to sync transforms.\n\n" +
+                "3. Move the Scene Sync root to sync transforms.\n" +
+                "- Use Add Selected to Managed when you want to keep objects in the managed list before publishing.\n\n" +
                 "Remote objects:\n" +
                 "- Remote GLB objects are temporary.\n" +
                 "- Move the Scene Sync root, not imported children.\n" +
@@ -480,11 +481,11 @@ namespace Afjk.SceneSync.Editor
 
                 summary.RootCount++;
 
-                if (TryGetAddSelectedBlockReason(root, out var addBlockReason))
+                if (TryGetSelectionBlockReason(root, manager, out var selectionBlockReason))
                 {
                     summary.BlockedCount++;
                     if (string.IsNullOrEmpty(firstBlockedReason))
-                        firstBlockedReason = addBlockReason;
+                        firstBlockedReason = selectionBlockReason;
                     continue;
                 }
 
@@ -536,12 +537,18 @@ namespace Afjk.SceneSync.Editor
             return summary;
         }
 
-        private bool TryGetAddSelectedBlockReason(GameObject root, out string reason)
+        private bool TryGetSelectionBlockReason(GameObject root, SceneSyncManager manager, out string reason)
         {
             reason = null;
             if (root == null)
             {
                 reason = "No Scene Sync root found.";
+                return true;
+            }
+
+            if (manager != null && root == manager.gameObject)
+            {
+                reason = "SceneSyncManager itself cannot be managed or published.";
                 return true;
             }
 
@@ -581,7 +588,7 @@ namespace Afjk.SceneSync.Editor
             {
                 var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
                 if (root == null || !roots.Add(root)) continue;
-                if (TryGetAddSelectedBlockReason(root, out _)) continue;
+                if (TryGetSelectionBlockReason(root, manager, out _)) continue;
 
                 EnsureManagedUnityIdentity(manager, root, out var identityChanged);
                 if (identityChanged)
