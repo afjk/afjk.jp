@@ -96,6 +96,29 @@ test('updates paused audio immediately when the player timeline seeks', () => {
   assert.equal(audio.currentTime, 8);
 });
 
+test('does not freeze edited audio while player transport is active', () => {
+  let seenClockState = null;
+  const { audio, controller } = createHarness({
+    isObjectBeingEdited: (_objectId, clockState) => {
+      seenClockState = clockState;
+      return !clockState?.transportActive;
+    },
+  });
+
+  controller.tick(0, {
+    mode: 'local',
+    t: 3,
+    isPaused: false,
+    rate: 1,
+    transportActive: true,
+  });
+
+  assert.equal(seenClockState?.transportActive, true);
+  assert.equal(audio.paused, false);
+  assert.equal(audio.pauseCount, 0);
+  assert.equal(audio.currentTime, 3);
+});
+
 test('resyncs audio to animation position after deselect in host-follow mode', () => {
   // Simulate: object was selected (isObjectBeingEdited=true) which forced audio.currentTime=0,
   // then deselected. In host-follow mode getTimelineTargetTime returns null (epoch >> 3600),

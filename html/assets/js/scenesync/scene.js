@@ -55,6 +55,7 @@ import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
 import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './utils/crash-probe-helper.js';
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
+import { shouldFreezeObjectForEditorRuntime } from './runtime/editing-state.js';
 import { buildExportPackage } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
@@ -1514,9 +1515,15 @@ function ensureObjectRuntime(obj) {
   return obj.userData.runtime;
 }
 
-function isRuntimeFrozenForSelection(objectId) {
-  if (!objectId) return false;
-  return selectedObjectIds.has(objectId);
+function shouldFreezeRuntimeForEditor(objectId, clockState = null) {
+  return shouldFreezeObjectForEditorRuntime({
+    objectId,
+    selectedObjectIds,
+    transformObject: transformCtrl.object,
+    xrTwoHand: xrState.twoHand,
+    grabbers: xrState.grabbers,
+    transportActive: clockState?.transportActive === true,
+  });
 }
 
 function getObjectRuntimeTime(objectId, now = performance.now(), clockState = null) {
@@ -1526,8 +1533,9 @@ function getObjectRuntimeTime(objectId, now = performance.now(), clockState = nu
   const runtime = ensureObjectRuntime(obj);
   if (!runtime?.enabled) return 0;
 
-  // selected/edited object: freeze to t=0
-  if (isRuntimeFrozenForSelection(objectId)) {
+  // Freeze selected/actively edited objects, except selection-only freeze is
+  // disabled while the Player transport explicitly owns scene time.
+  if (shouldFreezeRuntimeForEditor(objectId, clockState)) {
     return runtime.selectedTime ?? 0;
   }
 
@@ -2477,6 +2485,7 @@ function serializeObjectAnimationState(obj) {
     clipName,
     mode: raw.mode === 'once' ? 'once' : 'loop',
     speed: Number.isFinite(raw.speed) ? raw.speed : 1,
+    offset: Number.isFinite(raw.offset) ? raw.offset : 0,
   };
 }
 
@@ -4443,6 +4452,7 @@ const sceneClockState = {
   lastUpdateNow: performance.now(),
   lastHostNow: Date.now() / 1000,    // host-follow mode の delta 計算用
   rate: 1,                       // 再生速度倍率
+  transportActive: false,         // Player transport UI がScene Clockを明示制御中
 };
 
 function getSceneClockTime(now = performance.now()) {
@@ -4491,6 +4501,7 @@ function getSceneClockStateForLoomlet(now = performance.now()) {
     mode: sceneClockState.mode,
     rate: sceneClockState.rate,
     hostNow: Date.now() / 1000,
+    transportActive: sceneClockState.transportActive,
   };
 }
 
@@ -4520,6 +4531,8 @@ function setSceneClockMode(mode, now = performance.now()) {
     sceneClockState.localTime = 0;
     sceneClockState.paused = false;
     sceneClockState.pausedAt = null;
+    sceneClockState.lastHostNow = Date.now() / 1000;
+    sceneClockState.lastUpdateNow = now;
   }
 
   sceneClockState.mode = mode;
@@ -4577,6 +4590,20 @@ function followHostClock(now = performance.now()) {
   setSceneClockMode('host-follow', now);
 }
 
+function activateSceneClockTransport(now = performance.now()) {
+  setSceneClockRate(1, now);
+  stopSceneClock(now);
+  sceneClockState.transportActive = true;
+  notifySceneSyncShellStateChanged('scene-clock-transport-activated');
+}
+
+function deactivateSceneClockTransport(now = performance.now()) {
+  setSceneClockRate(1, now);
+  sceneClockState.transportActive = false;
+  followHostClock(now);
+  notifySceneSyncShellStateChanged('scene-clock-transport-deactivated');
+}
+
 function setSceneClockRate(rate, now = performance.now()) {
   const nextRate = Number(rate);
   if (!Number.isFinite(nextRate) || nextRate < 0) return;
@@ -4618,29 +4645,13 @@ function getSceneClockStateForShell() {
     mode: sceneClockState.mode,
     rate: sceneClockState.rate,
     duration: 60,
+    transportActive: sceneClockState.transportActive,
   };
 }
 
 // ── Loom 統合初期化 ──────────────────────────────────
-function isObjectBeingEditedNow(objectId) {
-  if (!objectId) return false;
-
-  if (selectedObjectIds.has(objectId)) return true;
-
-  const transformObjectId = transformCtrl.object?.userData?.objectId;
-  if (transformObjectId === objectId) return true;
-
-  if (xrState.twoHand?.active && xrState.twoHand.object?.userData?.objectId === objectId) {
-    return true;
-  }
-
-  for (const grabber of xrState.grabbers || []) {
-    if (grabber.active && grabber.object?.userData?.objectId === objectId) {
-      return true;
-    }
-  }
-
-  return false;
+function isObjectBeingEditedNow(objectId, clockState = null) {
+  return shouldFreezeRuntimeForEditor(objectId, clockState);
 }
 
 // 指定 GLB clip の現在再生位置を返す（AudioSource の animation 同期補助に使用）。
@@ -12453,6 +12464,9 @@ mountSceneSyncShellFromDom({
     seekSceneClock,
     setSceneClockRate,
     resetSceneClock,
+    followSceneClock: followHostClock,
+    activateSceneClockTransport,
+    deactivateSceneClockTransport,
   },
   getSelection: getSceneSyncShellSelection,
   getEditorState,

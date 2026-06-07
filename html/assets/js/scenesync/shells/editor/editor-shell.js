@@ -1,4 +1,5 @@
 import { createEditorActions } from './editor-actions.js';
+import { createEditorPlayerTransport } from './editor-player-transport.js';
 import { createDesktopEditorLayout } from './layouts/desktop-editor-layout.js';
 import { createMobileEditorLayout } from './layouts/mobile-editor-layout.js';
 import { createXrEditorLayout } from './layouts/xr-editor-layout.js'; // forward placeholder for WebXR/MR editing
@@ -9,6 +10,7 @@ function isMobileSurface() {
 
 export function createSceneSyncShell({ id = 'editor', requestedId = 'editor', availableShellIds = [] } = {}) {
   let layout = null;
+  let playerTransport = null;
 
   return {
     id,
@@ -18,7 +20,7 @@ export function createSceneSyncShell({ id = 'editor', requestedId = 'editor', av
     layouts: ['desktop', 'mobile', 'xr'],
     inputs: ['pointer', 'touch', 'keyboard', 'xr'],
 
-    mount({ core, root } = {}) {
+    async mount({ core, root } = {}) {
       const actions = createEditorActions(core);
 
       document.body.dataset.sceneSyncShell = 'editor';
@@ -30,6 +32,8 @@ export function createSceneSyncShell({ id = 'editor', requestedId = 'editor', av
         : createDesktopEditorLayout();
 
       layout.mount({ core, actions, root });
+      playerTransport = createEditorPlayerTransport();
+      await playerTransport.mount({ core, root });
 
       if (core?.debug) {
         console.debug('[SceneSyncShell] mounted editor shell', {
@@ -41,6 +45,8 @@ export function createSceneSyncShell({ id = 'editor', requestedId = 'editor', av
     },
 
     unmount() {
+      playerTransport?.unmount?.();
+      playerTransport = null;
       layout?.unmount?.();
       layout = null;
       document.body.classList.remove('scene-sync-shell-editor');
