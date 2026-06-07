@@ -39,12 +39,6 @@ export function createEditorActions(core) {
     deselect() {
       core?.commands?.deselect?.();
     },
-    setInputRoutingMode(mode) {
-      core?.commands?.setInputRoutingMode?.(mode);
-    },
-    toggleInputRoutingMode() {
-      core?.commands?.toggleInputRoutingMode?.();
-    },
   };
 }
 

@@ -4,8 +4,7 @@
 .scene-sync-shell-studio #scene-clock-panel,
 .scene-sync-shell-studio #history-toolbar,
 .scene-sync-shell-studio #mobile-toolbar,
-.scene-sync-shell-studio #add-btn,
-.scene-sync-shell-studio #mode {
+.scene-sync-shell-studio #add-btn {
   display: none !important;
 }
 /* Keep: canvas, #toast, #scene-inspector-panel（Properties）, #xr-button-container */

@@ -5,7 +5,6 @@
 .scene-sync-shell-minimal #add-btn,
 .scene-sync-shell-minimal #history-toolbar,
 .scene-sync-shell-minimal #mobile-toolbar,
-.scene-sync-shell-minimal #mode,
 .scene-sync-shell-minimal #xr-toggle-btn,
 .scene-sync-shell-minimal #xr-calibrate-btn {
   display: none !important;

@@ -25,15 +25,13 @@ export function createDesktopEditorLayout() {
       const linkBtn = document.getElementById('link-btn');
       const sceneInspectorToggleBtn = document.getElementById('scene-inspector-toggle');
       const sceneInspectorCloseBtn = document.getElementById('scene-inspector-close');
-      const modeBtn = document.getElementById('mode'); // Edit/Interact 切替（desktop のみ表示）
 
       disposers.push(
         addListener(exportBtn, 'click', () => actions?.exportScene?.()),
         addListener(helpBtn, 'click', () => actions?.openHelp?.()),
         addListener(linkBtn, 'click', () => actions?.startAiLink?.()),
         addListener(sceneInspectorToggleBtn, 'click', () => core?.commands?.toggleSceneInspector?.()),
-        addListener(sceneInspectorCloseBtn, 'click', () => actions?.closeSceneInspector?.()),
-        addListener(modeBtn, 'click', () => actions?.toggleInputRoutingMode?.())
+        addListener(sceneInspectorCloseBtn, 'click', () => actions?.closeSceneInspector?.())
       );
     },
 

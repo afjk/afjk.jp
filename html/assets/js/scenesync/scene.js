@@ -228,12 +228,11 @@ dom.clearBgmButton?.addEventListener('click', () => {
   notifySceneStateChanged('bgm-cleared');
 });
 
-// Input routing mode toggle。#mode の DOM 反映は editor shell（editor-chrome.js）が担う。
+// Input routing mode is local-only shell state. Standard Editor stays in edit mode,
+// while Viewer/Studio can set interact mode through commands.
 function updateInputRoutingModeUI() {
   notifySceneSyncShellStateChanged('input-routing-mode-changed');
 }
-
-// #mode クリック配線は Editor Shell の desktop layout へ移管（actions.toggleInputRoutingMode）。
 
 setupXrButtons({
   renderer,
@@ -2893,12 +2892,6 @@ function setInputRoutingMode(mode) {
   notifySceneSyncShellStateChanged('input-routing-mode-changed');
 }
 
-function toggleInputRoutingMode() {
-  const nextMode = inputRoutingMode === 'edit' ? 'interact' : 'edit';
-  setInputRoutingMode(nextMode);
-  showToast(`Mode: ${nextMode.toUpperCase()}`);
-}
-
 function enqueueLoomletHostEvent(objectId, eventName) {
   if (!objectId || !eventName) return;
   if (!loomletHostEvents.has(objectId)) {
@@ -4133,7 +4126,7 @@ function deleteSelectedObjects() {
 }
 
 // ── モバイルツールバー（DOM 反映は editor shell 側） ──────────────
-// editor chrome（#mode / #mobile-toolbar / #history-toolbar）の DOM は
+// editor chrome（#mobile-toolbar / #history-toolbar）の DOM は
 // すべて editor shell の editor-chrome.js が getEditorState を見て描画する。
 // core は表示意図（editorToolbarVisible）と状態通知のみを保持する。
 
@@ -12558,7 +12551,6 @@ mountSceneSyncShellFromDom({
     duplicateSelected: duplicateSelectedObject,
     deselect: () => clearSelection({ reason: 'selection-cleared-shell' }),
     setInputRoutingMode,
-    toggleInputRoutingMode,
     // Environment / view
     setEnvironment: (envId) => {
       if (typeof envId !== 'string' || !envId) return;
