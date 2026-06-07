@@ -12,8 +12,9 @@ export async function ensurePlayerTransportStylesheet() {
   document.head.appendChild(link);
 }
 
-function resolvePlayerDuration(core) {
-  return core?.getSceneClockState?.()?.duration ?? DEFAULT_DURATION;
+function resolvePlayerDuration(core, state = null) {
+  const duration = state?.duration ?? core?.getSceneClockState?.()?.duration;
+  return Number.isFinite(duration) && duration > 0 ? duration : DEFAULT_DURATION;
 }
 
 function formatTime(seconds) {
@@ -93,7 +94,7 @@ export function createPlayerTransportPanel({
     const isPaused = state.isPaused === true || state.playing === false;
     const mode = state.mode ?? 'local';
     const rate = state.rate ?? 1;
-    const duration = resolvePlayerDuration(core);
+    const duration = resolvePlayerDuration(core, state);
 
     const timeEl = panel.querySelector('[data-player-current-time]');
     if (timeEl) timeEl.textContent = formatTime(time);
