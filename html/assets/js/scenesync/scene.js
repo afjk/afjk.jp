@@ -1326,28 +1326,86 @@ function endMultiTransformHistory() {
 
 // ── サンプルオブジェクト ──────────────────────────────────
 
-const sampleGeo = new THREE.BoxGeometry(1, 1, 1);
-const sampleMat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
-const sampleCube = new THREE.Mesh(sampleGeo, sampleMat);
-sampleCube.position.set(0, 0.5, 0);
-sampleCube.userData.objectId = 'sample-cube';
-sampleCube.userData.name = 'Sample Cube';
-const color = `#${sampleMat.color.getHexString()}`;
-sampleCube.userData.asset = {
-  type: 'primitive',
-  primitive: 'box',
-  color,
-};
-scene.add(sampleCube);
+const SAMPLE_CUBE_OBJECT_ID = 'sample-cube';
+const SAMPLE_CUBE_COLOR = '#4488ff';
+
+function createSampleCube() {
+  const sampleGeo = new THREE.BoxGeometry(1, 1, 1);
+  const sampleMat = new THREE.MeshStandardMaterial({ color: 0x4488ff });
+  const sampleCube = new THREE.Mesh(sampleGeo, sampleMat);
+  sampleCube.position.set(0, 0.5, 0);
+  sampleCube.userData.objectId = SAMPLE_CUBE_OBJECT_ID;
+  sampleCube.userData.name = 'Sample Cube';
+  sampleCube.userData._samplePlaceholder = true;
+  sampleCube.userData.asset = {
+    type: 'primitive',
+    primitive: 'box',
+    color: SAMPLE_CUBE_COLOR,
+  };
+  return sampleCube;
+}
 
 // ── オブジェクト管理 ─────────────────────────────────────
 
 // objectId → THREE.Object3D
 const managedObjects = new Map();
-managedObjects.set('sample-cube', sampleCube);
 const selectedObjectIds = new Set();
 const selectionHelpers = new Map();
 const removedObjectIds = new Set();
+
+function isSampleCubeObjectId(objectId) {
+  return objectId === SAMPLE_CUBE_OBJECT_ID;
+}
+
+function hasSampleCube() {
+  return managedObjects.has(SAMPLE_CUBE_OBJECT_ID);
+}
+
+function ensureSampleCube(reason = 'unknown') {
+  if (hasSampleCube()) return false;
+
+  const sampleCube = createSampleCube();
+  scene.add(sampleCube);
+  managedObjects.set(SAMPLE_CUBE_OBJECT_ID, sampleCube);
+  console.debug('[sample-cube] added', { reason });
+  notifyInspectorStateChanged?.(`sample-cube:${reason}`);
+  notifySceneSyncShellStateChanged?.(`sample-cube:${reason}`);
+  return true;
+}
+
+function removeSampleCube(reason = 'unknown') {
+  const sampleCube = managedObjects.get(SAMPLE_CUBE_OBJECT_ID);
+  if (!sampleCube) return false;
+
+  if (transformCtrl.object === sampleCube) transformCtrl.detach();
+  selectedObjectIds.delete(SAMPLE_CUBE_OBJECT_ID);
+  removeSelectionHelper(SAMPLE_CUBE_OBJECT_ID);
+  scene.remove(sampleCube);
+  sampleCube.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+      else child.material.dispose();
+    }
+  });
+  managedObjects.delete(SAMPLE_CUBE_OBJECT_ID);
+  console.debug('[sample-cube] removed', { reason });
+  notifyInspectorStateChanged?.(`sample-cube:${reason}`);
+  notifySceneSyncShellStateChanged?.(`sample-cube:${reason}`);
+  return true;
+}
+
+function ensureSampleCubeForEmptyRoom(reason = 'unknown') {
+  if (!getCurrentRoomId()) return false;
+  if (!sceneReceived) return false;
+
+  if (hasOtherParticipants() || hasSnapshotRestorableObjects()) {
+    removeSampleCube(reason);
+    return false;
+  }
+
+  return ensureSampleCube(reason);
+}
 
 // Shell 状態変更リスナー集合。早期初期化（updateHistoryButtonState 等が
 // 初期化フェーズで notifySceneSyncShellStateChanged を呼ぶため TDZ を避ける）。
@@ -4923,7 +4981,6 @@ function resetSceneState() {
   }
 
   for (const [objectId, obj] of [...managedObjects]) {
-    if (objectId === 'sample-cube') continue;
     removeLoadingOverlay(objectId);
     removeLockOverlay(objectId);
     locks.delete(objectId);
@@ -5153,6 +5210,9 @@ function connectPresence() {
         const isFirstPeers = presenceState.peers.length === 0
           && (data.peers || []).length > 0;
         presenceState.peers = data.peers || [];
+        if (hasOtherParticipants()) {
+          removeSampleCube('peers-present');
+        }
         updateStatus(true);
         // 切断したピアのロックを解除
         const peerIds = new Set(data.peers.map(p => p.id));
@@ -5176,6 +5236,8 @@ function connectPresence() {
         if (!hasOtherParticipants()) {
           if (!sceneReceived) sceneReceived = true;
           scheduleMaybeRestoreRoomSnapshot('peers-updated');
+        } else {
+          removeSampleCube('peers-updated');
         }
         break;
       }
@@ -5311,6 +5373,8 @@ async function respondToSceneRequest(from) {
   const objects = {};
 
   for (const [objectId, obj] of managedObjects) {
+    if (isSampleCubeObjectId(objectId)) continue;
+
     const entry = {
       name: obj.userData.name || obj.name || objectId,
       position: obj.position.toArray(),
@@ -5453,9 +5517,11 @@ function handleHandoff(data) {
         });
       }
       const objects = payload.objects || {};
+      removeSampleCube('scene-state-received');
       for (const [objectId, info] of Object.entries(objects)) {
         addOrUpdateObject(objectId, info);
       }
+      ensureSampleCubeForEmptyRoom('scene-state-applied');
 
       // BGM 状態を復元
       if ('bgm' in payload) {
@@ -6836,6 +6902,9 @@ function cleanupPreviewForLoadedObject(options = {}) {
 function addOrUpdateObject(objectId, info, options = {}) {
   removedObjectIds.delete(objectId);
   const existing = managedObjects.get(objectId);
+  if (!isSampleCubeObjectId(objectId)) {
+    removeSampleCube('object-added');
+  }
   let asset = info.asset;
   asset = normalizeSceneAsset(asset, info);
 
@@ -11745,7 +11814,7 @@ function safeCloneJson(value) {
 
 function isSnapshotExcludedObject(objectId, object) {
   if (!object) return true;
-  if (objectId === 'sample-cube') return true;
+  if (isSampleCubeObjectId(objectId)) return true;
 
   const userData = object.userData || {};
   if (userData._temporary) return true;
@@ -11865,10 +11934,12 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
 
   if (isSnapshotRestoreDisabled()) {
     console.warn('[SceneSync] room snapshot restore disabled by ?noRestore=1');
+    ensureSampleCubeForEmptyRoom('snapshot-restore-disabled');
     return;
   }
 
   if (hasSnapshotRestorableObjects()) {
+    removeSampleCube('snapshot-restore-has-objects');
     console.debug('[scene-snapshot] skip restore: scene already has objects', {
       roomId,
       objectCount: managedObjects.size,
@@ -11878,6 +11949,7 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
   }
 
   if (hasOtherParticipants()) {
+    removeSampleCube('snapshot-restore-peers-present');
     console.debug('[scene-snapshot] skip restore: other participants exist', {
       roomId,
       reason,
@@ -11897,6 +11969,7 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
   const snapshot = record?.snapshot;
   if (!snapshot?.objects?.length) {
     console.debug('[scene-snapshot] no snapshot to restore', { roomId, reason });
+    ensureSampleCubeForEmptyRoom('snapshot-empty');
     return;
   }
 
@@ -11952,10 +12025,13 @@ async function applyRoomSnapshot(snapshot, options = {}) {
   });
 
   if (restored > 0) {
+    removeSampleCube('snapshot-restored');
     showToast?.(`前回のシーンの復元を開始しました（${restored}件）`);
     if (hasSnapshotRestorableObjects()) {
       notifySceneStateChanged('snapshot-restore');
     }
+  } else {
+    ensureSampleCubeForEmptyRoom('snapshot-restore-no-objects');
   }
 }
 
