@@ -52,6 +52,7 @@ import { computeAssetId } from './assets/asset-id.js';
 import { createSceneAssetCache } from './assets/asset-cache.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
+import { fetchMeshBlobWithRetry } from './assets/mesh-blob-fetch.js';
 import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
 import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './utils/crash-probe-helper.js';
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
@@ -6994,6 +6995,63 @@ function addOrUpdateObject(objectId, info, options = {}) {
   notifySceneStateChanged('managed-object-updated');
 }
 
+async function recoverUnavailableMeshBlob({
+  objectId,
+  info,
+  meshPath,
+  existing,
+  assetId,
+  expectedSize,
+  options,
+  reason,
+}) {
+  removeLoadingOverlay(objectId);
+
+  let cachedBeforeRecovery = null;
+  try {
+    cachedBeforeRecovery = assetId
+      ? await assetCache.getByAssetId(assetId)
+      : await assetCache.getByMeshPath(meshPath);
+  } catch (cacheErr) {
+    console.warn('[asset-cache] recovery pre-check failed:', cacheErr);
+  }
+
+  if (cachedBeforeRecovery?.blob) {
+    await loadGlbBlobForObject(objectId, cachedBeforeRecovery.blob, {
+      info,
+      existing,
+      meshPath,
+      assetId: cachedBeforeRecovery.assetId || assetId || null,
+    });
+    cleanupPreviewForLoadedObject(options);
+    return true;
+  }
+
+  console.warn('[SceneSync] Mesh blob unavailable; requesting recovery', {
+    objectId,
+    meshPath,
+    assetId,
+    expectedSize,
+    reason,
+  });
+
+  addRecoveringOverlay(objectId, info);
+  const recoveryResult = await expiredGlbRecovery.handleMissingGlb(
+    objectId,
+    meshPath,
+    expectedSize,
+    assetId,
+    info
+  );
+  if (recoveryResult?.started === false) {
+    removeRecoveringOverlay(objectId);
+    return false;
+  }
+
+  cleanupPreviewForLoadedObject(options);
+  return true;
+}
+
 function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   removeFailedOverlay(objectId);
   removeRecoveringOverlay(objectId);
@@ -7066,51 +7124,50 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         console.warn('[asset-cache] lookup failed, falling back to network fetch:', cacheErr);
       }
 
-      const response = await fetch(url);
-      if (!response.ok) {
-        if (response.status === 404) {
+      let blob = null;
+      try {
+        const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath });
+        blob = result.blob;
+      } catch (fetchErr) {
+        const status = Number(fetchErr?.status || 0);
+        if (status === 404) {
           console.warn('[SceneSync] Mesh blob expired (404):', meshPath);
-          removeLoadingOverlay(objectId);
+        } else {
+          console.warn('[SceneSync] Mesh fetch failed after retry:', {
+            objectId,
+            meshPath,
+            status: status || null,
+            expectedSize: fetchErr?.expectedSize || null,
+            error: fetchErr?.message || String(fetchErr),
+          });
+        }
 
-          const assetId = incomingAssetId;
-          const expectedSize = null;
-          let cachedBeforeRecovery = null;
-
-          try {
-            cachedBeforeRecovery = assetId
-              ? await assetCache.getByAssetId(assetId)
-              : await assetCache.getByMeshPath(meshPath);
-          } catch (cacheErr) {
-            console.warn('[asset-cache] recovery pre-check failed:', cacheErr);
-          }
-
-          if (cachedBeforeRecovery?.blob) {
-            await loadGlbBlobForObject(objectId, cachedBeforeRecovery.blob, {
-              info,
-              existing,
-              meshPath,
-              assetId: cachedBeforeRecovery.assetId || assetId || null,
-            });
+        const recoveryHandled = await recoverUnavailableMeshBlob({
+          objectId,
+          info,
+          meshPath,
+          existing,
+          assetId: incomingAssetId,
+          expectedSize: fetchErr?.expectedSize || null,
+          options,
+          reason: status === 404 ? 'http-404' : 'fetch-failed',
+        });
+        if (!recoveryHandled) {
+          removeFailedOverlay(objectId);
+          if (removedObjectIds.has(objectId)) {
             cleanupPreviewForLoadedObject(options);
             return;
           }
-
-          addRecoveringOverlay(objectId, info);
-          await expiredGlbRecovery.handleMissingGlb(
-            objectId,
-            meshPath,
-            expectedSize,
-            assetId,
-            info
-          );
+          if (!existing && !skipFallbackOnFailure) {
+            replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
+          } else if (!suppressSnapshotSaveOnFailure) {
+            notifySceneStateChanged('mesh-load-failed');
+          }
           cleanupPreviewForLoadedObject(options);
-
-          return;
         }
-        throw new Error(`HTTP ${response.status} loading mesh`);
+        return;
       }
 
-      const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
       let loadCompleted = false;
 

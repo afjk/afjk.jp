@@ -72,7 +72,7 @@ export function createExpiredGlbRecovery({
           console.warn('[ExpiredGlbRecovery] Error in recovery failed callback:', err);
         }
       });
-      return;
+      return { started: false, requestId, reason: 'no-peers' };
     }
 
     const request = {
@@ -132,6 +132,8 @@ export function createExpiredGlbRecovery({
         });
       }
     }, RECOVERY_TIMEOUT_MS);
+
+    return { started: true, requestId, peerCount: peers.length };
   }
 
   async function handleSceneAssetRequest({ payload, from }) {
