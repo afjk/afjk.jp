@@ -75,9 +75,12 @@ namespace Afjk.SceneSync.Editor
         private bool _firstPeersReceived = false;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private bool _applyingRemoteTransform;
+        private bool _showConnectionSettings = false;
         private bool _showSetup = false;
         private bool _showQuickGuide = false;
-        private bool _showManagedUnityObjects = true;
+        private bool _showManagedUnityObjects = false;
+        private bool _showExportSettings = false;
+        private bool _showTroubleshooting = false;
         private Vector2 _scrollPosition;
         private bool _isSceneSwitching = false;
         private bool _isManualDisconnect = false;
@@ -282,49 +285,69 @@ namespace Afjk.SceneSync.Editor
         {
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
 
-            GUILayout.Label("Scene Sync", EditorStyles.boldLabel);
-            GUILayout.Space(4);
+            DrawHeaderSection();
+            GUILayout.Space(6);
+
+            DrawSetupPromptSection();
+            GUILayout.Space(6);
 
             DrawConnectionSection();
             GUILayout.Space(8);
 
-            DrawManagedUnityObjectsSection();
+            DrawPrimaryActionsSection();
             GUILayout.Space(8);
 
-            DrawActionsSection();
+            DrawSelectionStatusSection();
             GUILayout.Space(8);
 
-            DrawExportSettingsSection();
-            GUILayout.Space(8);
+            DrawManagedSummarySection();
+            GUILayout.Space(10);
 
-            DrawSetupSection();
-            GUILayout.Space(8);
-
-            DrawQuickGuide();
+            DrawAdvancedSection();
 
             EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawHeaderSection()
+        {
+            GUILayout.Label("Scene Sync", EditorStyles.boldLabel);
+        }
+
+        private void DrawSetupPromptSection()
+        {
+            var manager = FindSceneSyncManager();
+            var temporaryRoot = FindTemporaryRoot();
+            if (manager != null && temporaryRoot != null) return;
+
+            EditorGUILayout.HelpBox(
+                "Scene Sync setup is required before publishing Unity objects.",
+                MessageType.Warning
+            );
+
+            if (GUILayout.Button("Create Scene Sync Setup", GUILayout.Height(28)))
+            {
+                CreateSceneSyncSetup();
+            }
         }
 
         private void DrawConnectionSection()
         {
             GUILayout.Label("Connection", EditorStyles.boldLabel);
 
-            _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
-            _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
+            DrawConnectionStatus();
+
             EditorGUI.BeginChangeCheck();
             _room = EditorGUILayout.TextField("Room", _room);
             if (EditorGUI.EndChangeCheck())
             {
                 SyncRoomToSceneSyncManager();
             }
-            _nickname = EditorGUILayout.TextField("Nickname", _nickname);
-            GUILayout.Space(8);
 
-            DrawConnectionStatus();
+            GUILayout.Space(4);
 
             if (!_connected)
             {
-                if (GUILayout.Button("Connect"))
+                if (GUILayout.Button("Connect", GUILayout.Height(28)))
                 {
                     SyncRoomToSceneSyncManager();
                     _ = _client.ConnectAsync(_presenceUrl, _room, _nickname);
@@ -332,29 +355,36 @@ namespace Afjk.SceneSync.Editor
             }
             else
             {
-                EditorGUILayout.HelpBox(
-                    "Connected\nRoom: " + _client.Room + "\nPeers: " + _peers.Count,
-                    MessageType.Info
-                );
-
-                if (_peers.Count > 0)
-                {
-                    GUILayout.Label("Peers:", EditorStyles.miniLabel);
-                    foreach (var p in _peers)
-                    {
-                        GUILayout.Label("  " + p.nickname + " (" + p.device + ")",
-                            EditorStyles.miniLabel);
-                    }
-                }
-
-                GUILayout.Space(8);
-
-                if (GUILayout.Button("Disconnect"))
+                if (GUILayout.Button("Disconnect", GUILayout.Height(24)))
                 {
                     ClearTemporaryObjects();
                     _isManualDisconnect = true;
                     _client.Disconnect();
                     _isManualDisconnect = false;
+                }
+            }
+
+            _showConnectionSettings = EditorGUILayout.Foldout(
+                _showConnectionSettings,
+                "Connection Settings",
+                true
+            );
+            if (!_showConnectionSettings) return;
+
+            _presenceUrl = EditorGUILayout.TextField("Presence URL", _presenceUrl);
+            _blobUrl = EditorGUILayout.TextField("Blob URL", _blobUrl);
+            _nickname = EditorGUILayout.TextField("Nickname", _nickname);
+
+            if (_connected && _peers.Count > 0)
+            {
+                GUILayout.Space(4);
+                GUILayout.Label("Peers", EditorStyles.miniLabel);
+                foreach (var p in _peers)
+                {
+                    GUILayout.Label(
+                        "  " + p.nickname + " (" + p.device + ")",
+                        EditorStyles.miniLabel
+                    );
                 }
             }
         }
@@ -370,7 +400,8 @@ namespace Afjk.SceneSync.Editor
                 : _room;
             GUILayout.Label(
                 (connected ? "● Connected" : "● Disconnected") +
-                (string.IsNullOrWhiteSpace(activeRoom) ? "" : "  Room: " + activeRoom),
+                (string.IsNullOrWhiteSpace(activeRoom) ? "" : "  Room: " + activeRoom) +
+                (connected ? "  Peers: " + _peers.Count : ""),
                 EditorStyles.boldLabel
             );
 
@@ -384,7 +415,7 @@ namespace Afjk.SceneSync.Editor
             if (!_showQuickGuide)
             {
                 EditorGUILayout.LabelField(
-                    "Unity: Add Selected → Publish Selected → Move root. Remote: move root.",
+                    "Unity: Publish Selected -> Move root. Remote: move root.",
                     EditorStyles.miniLabel
                 );
                 return;
@@ -393,21 +424,190 @@ namespace Afjk.SceneSync.Editor
             EditorGUILayout.HelpBox(
                 "Unity objects:\n" +
                 "1. Select a GameObject.\n" +
-                "2. Click Add Selected.\n" +
-                "3. Click Publish Selected.\n" +
-                "4. Move the Scene Sync root to sync transforms.\n\n" +
+                "2. Click Publish Selected.\n" +
+                "3. Move the Scene Sync root to sync transforms.\n\n" +
                 "Remote objects:\n" +
                 "- Remote GLB objects are temporary.\n" +
                 "- Move the Scene Sync root, not imported children.\n" +
-                "- Temporary objects are removed on Disconnect.\n" +
-                "- Fix Remote Object Selection is only needed if imported child meshes become selectable.",
+                "- Temporary objects are removed on Disconnect.",
                 MessageType.Info
             );
         }
 
+        private struct SelectionPublishSummary
+        {
+            public int RootCount;
+            public int AddableCount;
+            public int PublishableCount;
+            public int BlockedCount;
+            public string Message;
+            public MessageType MessageType;
+
+            public bool HasAddableSelection => AddableCount > 0;
+            public bool HasPublishableSelection => PublishableCount > 0;
+        }
+
+        private SelectionPublishSummary BuildSelectionPublishSummary(SceneSyncManager manager)
+        {
+            var selected = Selection.gameObjects;
+            if (selected == null || selected.Length == 0)
+            {
+                return new SelectionPublishSummary
+                {
+                    Message = "Select a GameObject to publish or add to Managed Objects.",
+                    MessageType = MessageType.Info
+                };
+            }
+
+            if (manager == null)
+            {
+                return new SelectionPublishSummary
+                {
+                    RootCount = selected.Length,
+                    Message = "Create Scene Sync setup before publishing Unity objects.",
+                    MessageType = MessageType.Warning
+                };
+            }
+
+            var roots = new HashSet<GameObject>();
+            var firstBlockedReason = "";
+            var summary = new SelectionPublishSummary();
+
+            foreach (var selectedObject in selected)
+            {
+                var root = SceneSyncManager.ResolveSceneSyncRoot(selectedObject);
+                if (root == null || !roots.Add(root)) continue;
+
+                summary.RootCount++;
+
+                if (TryGetAddSelectedBlockReason(root, out var addBlockReason))
+                {
+                    summary.BlockedCount++;
+                    if (string.IsNullOrEmpty(firstBlockedReason))
+                        firstBlockedReason = addBlockReason;
+                    continue;
+                }
+
+                summary.AddableCount++;
+
+                if (!HasPublishableMesh(root))
+                {
+                    summary.BlockedCount++;
+                    if (string.IsNullOrEmpty(firstBlockedReason))
+                        firstBlockedReason = $"{root.name} has no MeshFilter or SkinnedMeshRenderer.";
+                    continue;
+                }
+
+                summary.PublishableCount++;
+            }
+
+            if (summary.RootCount == 0)
+            {
+                summary.Message = "Select a GameObject to publish or add to Managed Objects.";
+                summary.MessageType = MessageType.Info;
+            }
+            else if (summary.PublishableCount == summary.RootCount)
+            {
+                summary.Message = summary.PublishableCount == 1
+                    ? "Selected object is ready to publish."
+                    : $"{summary.PublishableCount} selected objects are ready to publish.";
+                summary.MessageType = MessageType.Info;
+            }
+            else if (summary.PublishableCount > 0)
+            {
+                summary.Message =
+                    $"{summary.PublishableCount} selected object(s) are ready to publish. " +
+                    $"{summary.BlockedCount} skipped: {firstBlockedReason}";
+                summary.MessageType = MessageType.Warning;
+            }
+            else if (summary.AddableCount > 0)
+            {
+                summary.Message =
+                    "Selection can be added to Managed Objects, but cannot be published yet: " +
+                    firstBlockedReason;
+                summary.MessageType = MessageType.Warning;
+            }
+            else
+            {
+                summary.Message = "Selection cannot be published: " + firstBlockedReason;
+                summary.MessageType = MessageType.Warning;
+            }
+
+            return summary;
+        }
+
+        private bool TryGetAddSelectedBlockReason(GameObject root, out string reason)
+        {
+            reason = null;
+            if (root == null)
+            {
+                reason = "No Scene Sync root found.";
+                return true;
+            }
+
+            var temporaryRoot = FindTemporaryRoot();
+            if (temporaryRoot != null
+                && (root == temporaryRoot || root.transform.IsChildOf(temporaryRoot.transform)))
+            {
+                reason = "Remote temporary objects cannot be managed from Unity.";
+                return true;
+            }
+
+            var identity = SceneSyncManager.FindSceneSyncIdentityInParents(root);
+            if (identity != null && (identity.Temporary || identity.Origin == SceneSyncOrigin.Remote))
+            {
+                reason = "Remote temporary objects cannot be managed from Unity.";
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool HasPublishableMesh(GameObject go)
+        {
+            return go != null
+                && (go.GetComponentInChildren<MeshFilter>() != null
+                    || go.GetComponentInChildren<SkinnedMeshRenderer>() != null);
+        }
+
+        private void AddSelectedToManagedObjects()
+        {
+            var manager = FindSceneSyncManager();
+            if (manager == null) return;
+
+            var changed = false;
+            var roots = new HashSet<GameObject>();
+            foreach (var selected in Selection.gameObjects)
+            {
+                var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
+                if (root == null || !roots.Add(root)) continue;
+                if (TryGetAddSelectedBlockReason(root, out _)) continue;
+
+                EnsureManagedUnityIdentity(manager, root, out var identityChanged);
+                if (identityChanged)
+                {
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                MarkManagerDirty(manager);
+                Repaint();
+            }
+        }
+
         private void DrawManagedUnityObjectsSection()
         {
-            GUILayout.Label("Managed Unity Objects", EditorStyles.boldLabel);
+            _showManagedUnityObjects = EditorGUILayout.Foldout(
+                _showManagedUnityObjects,
+                "Managed Object Details",
+                true
+            );
+            if (!_showManagedUnityObjects)
+            {
+                return;
+            }
 
             var manager = FindSceneSyncManager();
             if (manager == null)
@@ -448,87 +648,85 @@ namespace Afjk.SceneSync.Editor
             GUILayout.Space(4);
 
             var list = manager.ManagedObjects;
-            _showManagedUnityObjects = EditorGUILayout.Foldout(
-                _showManagedUnityObjects,
-                $"Object List ({list.Count})",
-                true
-            );
+            GUILayout.Label($"Object List ({list.Count})", EditorStyles.miniLabel);
 
-            if (_showManagedUnityObjects)
+            var removeIndex = -1;
+            EditorGUI.BeginChangeCheck();
+            for (var i = 0; i < list.Count; i++)
             {
-                var removeIndex = -1;
-                EditorGUI.BeginChangeCheck();
-                for (var i = 0; i < list.Count; i++)
+                EditorGUILayout.BeginHorizontal();
+                list[i] = (GameObject)EditorGUILayout.ObjectField(
+                    $"Object {i + 1}",
+                    list[i],
+                    typeof(GameObject),
+                    true
+                );
+                if (GUILayout.Button("×", GUILayout.Width(24)))
                 {
-                    EditorGUILayout.BeginHorizontal();
-                    list[i] = (GameObject)EditorGUILayout.ObjectField(
-                        $"Object {i + 1}",
-                        list[i],
-                        typeof(GameObject),
-                        true
-                    );
-                    if (GUILayout.Button("×", GUILayout.Width(24)))
-                    {
-                        removeIndex = i;
-                    }
-                    EditorGUILayout.EndHorizontal();
+                    removeIndex = i;
                 }
-                var fieldChanged = EditorGUI.EndChangeCheck();
-
-                if (removeIndex >= 0)
-                {
-                    list.RemoveAt(removeIndex);
-                    manager.ValidateManagedObjects();
-                    MarkManagerDirty(manager);
-                    Repaint();
-                }
-                else if (fieldChanged)
-                {
-                    manager.ValidateManagedObjects();
-                    MarkManagerDirty(manager);
-                }
+                EditorGUILayout.EndHorizontal();
             }
+            var fieldChanged = EditorGUI.EndChangeCheck();
 
-            using (new EditorGUILayout.HorizontalScope())
+            if (removeIndex >= 0)
             {
-                if (GUILayout.Button("Add Selected"))
-                {
-                    var changed = false;
-                    foreach (var selected in Selection.gameObjects)
-                    {
-                        var root = SceneSyncManager.ResolveSceneSyncRoot(selected);
-                        if (root == null) continue;
-                        if (ShouldSkipPublishObject(root)) continue;
-
-                        EnsureManagedUnityIdentity(manager, root, out var identityChanged);
-                        if (identityChanged)
-                        {
-                            changed = true;
-                        }
-                    }
-
-                    if (changed)
-                    {
-                        MarkManagerDirty(manager);
-                    }
-                }
+                list.RemoveAt(removeIndex);
+                manager.ValidateManagedObjects();
+                MarkManagerDirty(manager);
+                Repaint();
+            }
+            else if (fieldChanged)
+            {
+                manager.ValidateManagedObjects();
+                MarkManagerDirty(manager);
             }
         }
 
-        private void DrawActionsSection()
+        private void DrawPrimaryActionsSection()
         {
-            GUILayout.Label("Actions", EditorStyles.boldLabel);
+            GUILayout.Label("Primary Actions", EditorStyles.boldLabel);
 
-            using (new EditorGUI.DisabledScope(!_connected || _publishInProgress))
+            var manager = FindSceneSyncManager();
+            var selectionSummary = BuildSelectionPublishSummary(manager);
+            var managedCount = manager != null ? manager.GetManagedUnityObjects().Count : 0;
+
+            var canPublishSelected = _connected
+                && !_publishInProgress
+                && manager != null
+                && selectionSummary.HasPublishableSelection;
+            var canPublishManaged = _connected
+                && !_publishInProgress
+                && manager != null
+                && managedCount > 0;
+            var canAddSelected = manager != null
+                && !_publishInProgress
+                && selectionSummary.HasAddableSelection;
+
+            using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("Publish Selected"))
+                using (new EditorGUI.DisabledScope(!canPublishSelected))
                 {
-                    QueuePublishSelectedObjects();
+                    if (GUILayout.Button("Publish Selected", GUILayout.Height(32)))
+                    {
+                        QueuePublishSelectedObjects();
+                    }
                 }
 
-                if (GUILayout.Button("Publish Managed Objects"))
+                using (new EditorGUI.DisabledScope(!canPublishManaged))
                 {
-                    QueuePublishManagedObjects();
+                    if (GUILayout.Button("Publish Managed Objects", GUILayout.Height(32)))
+                    {
+                        QueuePublishManagedObjects();
+                    }
+                }
+            }
+
+            using (new EditorGUI.DisabledScope(!canAddSelected))
+            {
+                if (GUILayout.Button("Add Selected to Managed", GUILayout.Height(24)))
+                {
+                    AddSelectedToManagedObjects();
                 }
             }
 
@@ -536,13 +734,107 @@ namespace Afjk.SceneSync.Editor
             {
                 EditorGUILayout.LabelField("Publishing...", EditorStyles.miniLabel);
             }
+            else if (!_connected)
+            {
+                EditorGUILayout.LabelField("Connect before publishing.", EditorStyles.miniLabel);
+            }
+            else if (manager == null)
+            {
+                EditorGUILayout.LabelField("Create setup before publishing.", EditorStyles.miniLabel);
+            }
+        }
 
-            if (GUILayout.Button("Fix Remote Object Selection"))
+        private void DrawSelectionStatusSection()
+        {
+            GUILayout.Label("Selection", EditorStyles.boldLabel);
+            var summary = BuildSelectionPublishSummary(FindSceneSyncManager());
+            EditorGUILayout.HelpBox(summary.Message, summary.MessageType);
+            if (!_connected && summary.HasPublishableSelection)
+            {
+                EditorGUILayout.LabelField("Connect before publishing selected objects.", EditorStyles.miniLabel);
+            }
+        }
+
+        private void DrawManagedSummarySection()
+        {
+            GUILayout.Label("Managed Summary", EditorStyles.boldLabel);
+
+            var manager = FindSceneSyncManager();
+            if (manager == null)
+            {
+                EditorGUILayout.LabelField(
+                    "No SceneSyncManager found.",
+                    EditorStyles.miniLabel
+                );
+                return;
+            }
+
+            var managedUnityObjects = manager.GetManagedUnityObjects();
+            var managedCount = managedUnityObjects.Count;
+            var identifiedCount = 0;
+            var publishedCount = 0;
+            var errorCount = 0;
+            foreach (var go in managedUnityObjects)
+            {
+                var identity = go != null ? go.GetComponent<SceneSyncIdentity>() : null;
+                if (identity == null || identity.Origin != SceneSyncOrigin.Unity || identity.Temporary)
+                    continue;
+
+                identifiedCount++;
+                if (!string.IsNullOrWhiteSpace(identity.MeshPath))
+                    publishedCount++;
+                if (identity.State == SceneSyncState.Error)
+                    errorCount++;
+            }
+
+            GUILayout.Label(
+                $"Managed: {managedCount}    Published: {publishedCount}    With Identity: {identifiedCount}",
+                EditorStyles.miniLabel
+            );
+
+            if (errorCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{errorCount} managed object(s) are in an error state. Check the Console for publish details.",
+                    MessageType.Warning
+                );
+            }
+        }
+
+        private void DrawAdvancedSection()
+        {
+            GUILayout.Label("Details & Advanced", EditorStyles.boldLabel);
+
+            DrawManagedUnityObjectsSection();
+            GUILayout.Space(4);
+
+            DrawExportSettingsSection();
+            GUILayout.Space(4);
+
+            DrawSetupSection();
+            GUILayout.Space(4);
+
+            DrawTroubleshootingSection();
+            GUILayout.Space(4);
+
+            DrawQuickGuide();
+        }
+
+        private void DrawTroubleshootingSection()
+        {
+            _showTroubleshooting = EditorGUILayout.Foldout(
+                _showTroubleshooting,
+                "Troubleshooting",
+                true
+            );
+            if (!_showTroubleshooting) return;
+
+            if (GUILayout.Button("Repair Remote Object Picking", GUILayout.Height(24)))
             {
                 ApplyPickingRules();
             }
             EditorGUILayout.LabelField(
-                "Repair only: makes imported remote roots selectable while imported child meshes stay unpickable.",
+                "Use this only if imported GLB child meshes become selectable. Scene Sync normally applies this automatically.",
                 EditorStyles.wordWrappedMiniLabel
             );
 
@@ -556,9 +848,21 @@ namespace Afjk.SceneSync.Editor
 
         private void DrawExportSettingsSection()
         {
-            GUILayout.Label("Export Settings", EditorStyles.boldLabel);
-
             var currentBackend = GlbExporter.ConfiguredBackend;
+            _showExportSettings = EditorGUILayout.Foldout(
+                _showExportSettings,
+                "Export Settings",
+                true
+            );
+            if (!_showExportSettings)
+            {
+                EditorGUILayout.LabelField(
+                    "GLB Export Backend: " + currentBackend,
+                    EditorStyles.miniLabel
+                );
+                return;
+            }
+
             var newBackend = (SceneSyncGlbExportBackend)EditorGUILayout.EnumPopup("GLB Export Backend", currentBackend);
             if (newBackend != currentBackend)
             {
@@ -681,7 +985,7 @@ namespace Afjk.SceneSync.Editor
 
                 GUILayout.Space(4);
 
-                if (GUILayout.Button("Refresh UnityGLTF Status", GUILayout.Height(24)))
+                if (GUILayout.Button("Check UnityGLTF Status Again", GUILayout.Height(24)))
                 {
                     SceneSyncUnityGltfInstaller.RefreshUnityGltfPackageStatus();
                 }
