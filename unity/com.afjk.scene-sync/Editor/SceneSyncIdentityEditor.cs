@@ -31,7 +31,7 @@ namespace Afjk.SceneSync.Editor
             if (string.IsNullOrWhiteSpace(identity.ObjectId))
             {
                 EditorGUILayout.HelpBox(
-                    "This object has SceneSyncIdentity but no ObjectId. If this is a Unity-managed object, use Ensure Identities from the Scene Sync window.",
+                    "This object has SceneSyncIdentity but no ObjectId. If this is a Unity-managed object, use Add Selected to Managed or Publish Selected from the Scene Sync window.",
                     MessageType.Warning
                 );
             }
