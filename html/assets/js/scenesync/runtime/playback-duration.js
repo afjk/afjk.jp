@@ -19,13 +19,13 @@ function normalizeSpeed(value) {
 }
 
 function getCompanionClipIndices(entry) {
+  let indices = [];
   if (Array.isArray(entry?.companionClipIndices)) {
-    return entry.companionClipIndices;
+    indices = entry.companionClipIndices;
+  } else if (Array.isArray(entry?.companionActions)) {
+    indices = entry.companionActions.map((companion) => companion?.clipIndex);
   }
-  if (Array.isArray(entry?.companionActions)) {
-    return entry.companionActions.map((companion) => companion?.clipIndex);
-  }
-  return [];
+  return indices.filter((index) => Number.isInteger(index));
 }
 
 export function calculateAnimationEntryPlaybackDuration(entry) {
@@ -43,7 +43,16 @@ export function calculateAnimationEntryPlaybackDuration(entry) {
   }
 
   if (duration <= 0) return 0;
-  return duration / normalizeSpeed(entry.speed);
+  const speed = Number(entry.speed);
+  if (speed === 0) return 0;
+
+  const normalizedSpeed = normalizeSpeed(speed);
+  if (entry.mode === 'once') {
+    const offset = Number.isFinite(entry.offset) ? entry.offset : 0;
+    return Math.max(0, duration - offset) / normalizedSpeed;
+  }
+
+  return duration / normalizedSpeed;
 }
 
 export function calculateScenePlaybackDuration({

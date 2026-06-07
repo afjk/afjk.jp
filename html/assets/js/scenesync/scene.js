@@ -2244,6 +2244,7 @@ function setupObjectGlbAnimation(objectId, model) {
     clips,
     action,
     clipIndex,
+    companionClipIndices,
     companionActions,
   });
 }
@@ -2430,6 +2431,7 @@ function updateObjectGlbAnimationClip(objectId, nextClipIndex) {
 
   entry.action = action;
   entry.clipIndex = clipIndex;
+  entry.companionClipIndices = companionClipIndices;
   entry.companionActions = companionActions;
 
   const obj = managedObjects.get(objectId);
@@ -2632,8 +2634,12 @@ function getSceneAnimationPlaybackEntries() {
       enabled: state.enabled,
       clips: entry.clips,
       clipIndex,
-      companionClipIndices: getCompanionMorphClipIndices(entry.clips, clipIndex),
+      companionClipIndices: Array.isArray(entry.companionClipIndices)
+        ? entry.companionClipIndices
+        : (entry.companionActions || []).map((companion) => companion?.clipIndex),
       speed: state.speed,
+      offset: state.offset,
+      mode: state.mode,
     });
   }
 

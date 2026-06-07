@@ -44,12 +44,46 @@ test('includes companion morph clips for the active animation', () => {
   assert.equal(duration, 96);
 });
 
+test('uses cached companionActions clip indices', () => {
+  const duration = calculateScenePlaybackDuration({
+    animationEntries: [{
+      clips: [{ duration: 48 }, { duration: 96 }],
+      clipIndex: 0,
+      companionActions: [{ clipIndex: 1 }],
+    }],
+  });
+
+  assert.equal(duration, 96);
+});
+
 test('accounts for animation speed', () => {
   assert.equal(calculateAnimationEntryPlaybackDuration({
     clips: [{ duration: 120 }],
     clipIndex: 0,
     speed: 2,
   }), 60);
+});
+
+test('accounts for negative animation offset in once mode', () => {
+  assert.equal(calculateAnimationEntryPlaybackDuration({
+    clips: [{ duration: 120 }],
+    clipIndex: 0,
+    speed: 1,
+    offset: -30,
+    mode: 'once',
+  }), 150);
+});
+
+test('ignores zero-speed animation entries', () => {
+  const duration = calculateScenePlaybackDuration({
+    animationEntries: [{
+      clips: [{ duration: 180 }],
+      clipIndex: 0,
+      speed: 0,
+    }],
+  });
+
+  assert.equal(duration, 60);
 });
 
 test('ignores disabled animation entries', () => {
