@@ -17,7 +17,7 @@ namespace Afjk.SceneSync
     public static class GlbExporter
     {
         public static SceneSyncGlbExportBackend ConfiguredBackend { get; set; } = SceneSyncGlbExportBackend.Auto;
-        public static bool ApplyTransparentNameHintsForExport { get; set; } = false;
+        public static bool ApplyTransparentNameHintsForExport { get; set; } = true;
         private static readonly string[] TransparentNameHints =
         {
             "glass",
