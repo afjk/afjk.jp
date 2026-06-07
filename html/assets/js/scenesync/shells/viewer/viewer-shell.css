@@ -6,7 +6,6 @@
 .scene-sync-shell-viewer #history-toolbar,
 .scene-sync-shell-viewer #mobile-toolbar,
 .scene-sync-shell-viewer #add-btn,
-.scene-sync-shell-viewer #mode,
 .scene-sync-shell-viewer #status {
   display: none !important;
 }

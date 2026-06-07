@@ -5,8 +5,7 @@
 .scene-sync-shell-player #scene-clock-panel,
 .scene-sync-shell-player #history-toolbar,
 .scene-sync-shell-player #mobile-toolbar,
-.scene-sync-shell-player #add-btn,
-.scene-sync-shell-player #mode {
+.scene-sync-shell-player #add-btn {
   display: none !important;
 }
 

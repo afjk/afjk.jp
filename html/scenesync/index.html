@@ -37,10 +37,6 @@
       display: none !important;
     }
 
-    body.scene-sync-device-mobile #mode {
-      display: none !important;
-    }
-
     /* ── 共通 chip スタイル ── */
     .chip {
       display: inline-flex;
@@ -148,33 +144,6 @@
     }
     .room-input:focus { border-color: rgba(68,136,255,0.7); }
 
-    #mode {
-      position: fixed;
-      bottom: 12px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 6px 14px;
-      border-radius: 6px;
-      font: 13px/1.4 monospace;
-      color: #fff;
-      background: rgba(0,0,0,0.55);
-      border: none;
-      cursor: pointer;
-      z-index: 10;
-      user-select: none;
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-    }
-    #mode:hover {
-      background: rgba(0,0,0,0.75);
-    }
-    #mode.interact {
-      background: rgba(68,136,255,0.55);
-      color: #fff;
-    }
-    #mode.interact:hover {
-      background: rgba(68,136,255,0.8);
-    }
     #add-btn {
       position: fixed;
       bottom: 12px;
@@ -1608,7 +1577,6 @@
       </div>
     </div>
   </div>
-  <button id="mode" type="button" title="W: Move / E: Rotate / R: Scale">Mode: Edit</button>
   <div id="toast"></div>
   <div id="history-toolbar">
     <button id="btn-undo" class="tb-btn" title="取り消す (Ctrl+Z)">↶</button>

@@ -233,7 +233,7 @@ Player Shell runs a `requestAnimationFrame` loop for smooth time display. The lo
 
 ## Editor Shell v4: Edit command + state API and chrome wiring migration
 
-The Editor Shell shell-ization is completed by exposing the remaining edit operations as commands and by moving the editor chrome (mode toggle + transform toolbar) click wiring out of `scene.js` into the layouts.
+The Editor Shell shell-ization is completed by exposing the remaining edit operations as commands and by moving editor chrome wiring out of `scene.js` into the layouts. The standard Editor Shell no longer exposes Edit/Interact switching; it mounts in `edit` input routing mode.
 
 ### New edit commands (`core.commands`)
 
@@ -242,10 +242,10 @@ The Editor Shell shell-ization is completed by exposing the remaining edit opera
 | `setTransformMode(mode)` | Switch gizmo mode: `'translate' \| 'rotate' \| 'scale'` |
 | `duplicateSelected()` | Duplicate the selected object |
 | `deselect()` | Clear the current selection |
-| `setInputRoutingMode(mode)` | Set `'edit' \| 'interact'` |
-| `toggleInputRoutingMode()` | Toggle Edit/Interact (shows a toast) |
 
 These join the existing commands (`openAddMenu`, `undo`, `redo`, `deleteSelected`, `exportScene`, `openHelp`, `startAiLink`, `open/close/toggleSceneInspector`, `closeMobileActionSheet`, scene-clock transport).
+
+Input routing remains a core capability for shell-specific controls: `setInputRoutingMode(mode)` is still exposed by core for Viewer / Studio / future shells that intentionally switch between `'edit'` and `'interact'`. It is not wrapped as a standard Editor action, and the standard Editor does not expose an input-routing mode switch.
 
 ### Edit state snapshot (`core.getEditorState()`)
 
@@ -268,11 +268,12 @@ Any shell can read a unified edit-state snapshot and re-render on `core.onStateC
 
 ### Chrome wiring migration
 
-- `desktop-editor-layout.js` now wires `#mode` → `actions.toggleInputRoutingMode()` (the button is desktop-only; hidden on mobile).
+- The standard Editor has no mode button and does not wire Edit/Interact switching.
+- `editor-shell.js` resets input routing to `'edit'` when the standard Editor mounts so state from Viewer / Studio does not leak back into editing.
 - `mobile-editor-layout.js` now wires the transform toolbar (`#btn-move/rotate/scale/copy/delete/deselect`) → editor actions.
 - The corresponding `addEventListener` calls were removed from `scene.js` to avoid double-firing.
 
-**Remaining in core (`scene.js`)**: transform gizmo, raycast selection, the toolbar's *visual* state writes (`showToolbar`/`hideToolbar`/`updateToolbarActive`/`updateInputRoutingModeUI`, enable/disable on selection), drag & drop, Inspector internal editing, AI Link pairing, presence/history implementation. The W/E/R keyboard shortcuts also remain in `scene.js` (input-adapter migration is future work).
+**Remaining in core (`scene.js`)**: transform gizmo, raycast selection, toolbar state notifications (`showToolbar`/`hideToolbar`/`updateToolbarActive`, enable/disable on selection), input routing state for shell-specific controls, drag & drop, Inspector internal editing, AI Link pairing, presence/history implementation. The W/E/R keyboard shortcuts also remain in `scene.js` (input-adapter migration is future work).
 
 > Dev note: editor shell modules are loaded via dynamic `import()`. After editing them, a normal reload may serve a cached module; use a hard reload (Cmd/Ctrl+Shift+R) during development.
 
@@ -322,7 +323,7 @@ Scene Sync Core (`scene.js`) exposes a stable surface to shells via `mountSceneS
 | `duplicateSelected()` | Duplicate the selected object |
 | `deselect()` | Clear the selection |
 | `setTransformMode(mode)` | `'translate' \| 'rotate' \| 'scale'` |
-| `setInputRoutingMode(mode)` / `toggleInputRoutingMode()` | `'edit' \| 'interact'` |
+| `setInputRoutingMode(mode)` | `'edit' \| 'interact'`; for Viewer / Studio / shell-specific controls, not exposed by the standard Editor |
 | `setEnvironment(envId)` | Change & broadcast HDRI environment |
 | `resetView()` | Reset orbit camera to default |
 | `exportScene()` / `openHelp()` / `startAiLink()` | Misc editor actions |
@@ -370,7 +371,7 @@ html/assets/js/scenesync/shells/editor/inputs/
 
 ## Editor chrome fully shell-owned (v4 follow-up)
 
-`scene.js` no longer writes editor DOM. `shells/editor/editor-chrome.js` renders `#mode`, `#mobile-toolbar` and `#history-toolbar` (label / visibility / active / disabled) from `getEditorState()` and wires undo/redo clicks. Both desktop and mobile editor layouts mount it. Core keeps only the *state* (`editorToolbarVisible` + notifications), not the DOM.
+`scene.js` no longer writes editor DOM. `shells/editor/editor-chrome.js` renders `#mobile-toolbar` and `#history-toolbar` (visibility / active / disabled) from `getEditorState()` and wires undo/redo clicks. Both desktop and mobile editor layouts mount it. Core keeps only the *state* (`editorToolbarVisible` + notifications), not the DOM.
 
 ## Viewer Shell
 

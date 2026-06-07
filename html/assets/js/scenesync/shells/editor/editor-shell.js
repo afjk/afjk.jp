@@ -26,6 +26,7 @@ export function createSceneSyncShell({ id = 'editor', requestedId = 'editor', av
       document.body.dataset.sceneSyncShell = 'editor';
       document.body.classList.add('scene-sync-shell-editor');
       document.body.classList.remove('scene-sync-shell-minimal');
+      core?.commands?.setInputRoutingMode?.('edit');
 
       layout = isMobileSurface()
         ? createMobileEditorLayout()

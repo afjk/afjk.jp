@@ -1,6 +1,6 @@
 // Editor chrome の DOM 反映を一手に担うモジュール。
 // core は状態（getEditorState）と通知（onStateChange）のみを提供し、
-// #mode / #mobile-toolbar / #history-toolbar の実際の DOM 更新と
+// #mobile-toolbar / #history-toolbar の実際の DOM 更新と
 // undo/redo のクリック配線はここ（editor shell 側）で行う。
 // desktop / mobile どちらの layout からも mount して共有する。
 
@@ -12,7 +12,6 @@ function addListener(target, type, handler, options) {
 
 export function createEditorChrome(core) {
   const els = {
-    mode: document.getElementById('mode'),
     toolbar: document.getElementById('mobile-toolbar'),
     btnMove: document.getElementById('btn-move'),
     btnRotate: document.getElementById('btn-rotate'),
@@ -28,13 +27,6 @@ export function createEditorChrome(core) {
 
   function render() {
     const s = core?.getEditorState?.() || {};
-
-    // #mode（Edit / Interact）
-    if (els.mode) {
-      const interact = s.inputRoutingMode === 'interact';
-      els.mode.textContent = `Mode: ${interact ? 'Interact' : 'Edit'}`;
-      els.mode.classList.toggle('interact', interact);
-    }
 
     // #mobile-toolbar 表示/非表示
     if (els.toolbar) {
