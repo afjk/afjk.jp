@@ -2,13 +2,20 @@
 
 Unity Editor / Unity Runtime と Web ブラウザ間で 3D シーンをリアルタイム共有するプラグイン。
 
-afjk.jp/pipe の presence-server と blob store を利用して通信する。
+afjk.jp/pipe の presence-server と blob store を利用して通信します。
+
+## 対応環境
+
+- Unity 2021.3 以降
+- Editor publish / Runtime import の基本 GLB 処理には `com.unity.cloud.gltfast@6.0.0` を使用
+- Loomlet graph runtime として `com.afjk.loomlet-runtime@0.3.0` に依存
+- Animation 付き GLB export には任意で UnityGLTF を使用
 
 ## インストール
 
 ### UPM スコープドレジストリ（推奨）
 
-`Packages/manifest.json` に以下を追加:
+`Packages/manifest.json` に scoped registry と dependency を追加します。
 
 ```json
 {
@@ -20,29 +27,25 @@ afjk.jp/pipe の presence-server と blob store を利用して通信する。
     }
   ],
   "dependencies": {
-    "com.afjk.scene-sync": "0.19.5"
+    "com.afjk.scene-sync": "0.21.0"
   }
 }
 ```
 
-Scene Sync は `com.afjk.loomlet-runtime@0.3.0` に依存しています。`upm.afjk.jp` の scoped registry が設定されていれば、Scene Sync のインストール時に Loomlet Runtime も自動で解決されます。
-
-`com.afjk.loomlet-runtime@0.3.0` が `upm.afjk.jp` に publish 済みである必要があります。Scene Sync 側の依存 version は package release ごとに固定します。
-
-Unity 受信側は `scene-graph-set` / `scene-graph-clear` と `scene-state.loomGraphs` を受け取り、対象 GameObject に `SceneSyncLoomletBehaviour` を bind します。Object scope の graph は同じ object への再送で置き換わり、clear または replace 時に `sceneOffsetPosition` の base position を復元します。Unity 側は Loomlet DSL を parse せず、compile 済み Graph JSON だけを評価します。
+`upm.afjk.jp` の scoped registry が設定されていれば、`com.afjk.loomlet-runtime@0.3.0` も Scene Sync の依存として解決されます。
 
 ### Git URL
 
-Unity Editor の **Window > Package Manager > + > Add package from git URL** に以下を入力:
+Unity Editor の **Window > Package Manager > + > Add package from git URL** に以下を入力します。
 
-```
+```text
 https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync
 ```
 
 特定バージョンを指定する場合:
 
-```
-https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.19.5
+```text
+https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.21.0
 ```
 
 `Packages/manifest.json` に直接記述する場合:
@@ -50,25 +53,104 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.19.5
 ```json
 {
   "dependencies": {
-    "com.afjk.scene-sync": "https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync"
+    "com.afjk.scene-sync": "https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.21.0"
   }
 }
 ```
 
 Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` と `com.unity.cloud.gltfast@6.0.0` は package dependency として解決されます。解決されない場合は、`upm.afjk.jp` scoped registry と Unity package registry の設定を確認してください。
 
----
+## Unity Editor で使う
 
-## 使い方
+### 基本フロー
 
-### Editor 拡張
+1. Unity Editor で **Window > Scene Sync** を開く
+2. `Create Scene Sync Setup` が表示されたら押す
+   - `SceneSyncManager`
+   - `SceneSync Temporary`
+   がシーンに作成されます
+3. `Room` にルームコードを入力する
+4. `Connect` を押す
+5. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
+6. Unity の Hierarchy で共有したい GameObject を選択する
+7. `Publish Selected` を押す
+8. 以後は Scene Sync root を移動 / 回転 / scale すると、接続先に transform が同期されます
 
-1. `Window > Scene Sync` を開く
-2. Presence URL（デフォルト: `wss://afjk.jp/presence`）とルームコードを入力
-3. `Connect` ボタンを押す
-4. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
+`Publish Selected` は、選択 GameObject を Unity 管理オブジェクトとして登録し、必要な `SceneSyncIdentity` を付与してから GLB を upload / broadcast します。通常は先に `Add Selected to Managed` を押す必要はありません。
 
-### Runtime（MonoBehaviour）
+### Window の主なセクション
+
+#### Connection
+
+接続状態、Room、`Connect` / `Disconnect` を操作します。
+
+通常は `Room` だけを入力すれば十分です。`Presence URL`、`Blob URL`、`Nickname` は `Connection Settings` foldout にあります。
+
+#### Primary Actions
+
+通常操作で使うボタンです。
+
+- `Publish Selected`
+  - 選択中の publish 可能な Unity GameObject を Scene Sync に公開します
+- `Publish Managed Objects`
+  - Managed Objects に含まれる Unity GameObject をまとめて publish します
+- `Add Selected to Managed`
+  - 選択中の Unity GameObject を Managed Objects に追加します
+  - publish 前に管理対象だけを整えたい場合に使います
+
+`Publish Selected` と `Publish Managed Objects` は接続中のみ有効です。
+
+#### Selection
+
+現在の選択が publish / manage 可能かを表示します。
+
+- MeshFilter または SkinnedMeshRenderer を含む Unity GameObject は publish 可能
+- mesh を持たない GameObject は Managed Objects には追加できますが、そのままでは publish できません
+- remote temporary object は Unity 側の原本ではないため、manage / publish できません
+- `SceneSyncManager` 自身は manage / publish できません
+
+#### Managed Summary
+
+Managed Objects の概要を表示します。
+
+- Managed 数
+- publish 済み数
+- `SceneSyncIdentity` 付与済み数
+- error 状態の有無
+
+詳細な ObjectField リストは `Details & Advanced > Managed Object Details` にあります。
+
+#### Details & Advanced
+
+通常は折りたたんだままで使えます。
+
+- `Managed Object Details`
+  - `Include Manager Children`
+  - Managed Objects の ObjectField リスト
+- `Export Settings`
+  - GLB export backend
+  - UnityGLTF status
+  - transparent name hints
+  - max GLB upload size
+- `Setup`
+  - `SceneSyncManager` / `SceneSync Temporary` の作成・選択
+- `Troubleshooting`
+  - `Repair Remote Object Picking`
+  - `Show Scene Sync Gizmos`
+- `Quick Guide`
+  - Editor window 内の短い操作ガイド
+
+### リモートオブジェクトの扱い
+
+ブラウザや他の Scene Sync クライアントから来た GLB は `SceneSync Temporary` 配下に temporary object として作成されます。
+
+- Unity 由来の GameObject は Unity プロジェクト側の原本です
+- Remote temporary object は Scene Sync から受信した一時オブジェクトです
+- Remote temporary object は手動 disconnect 時に削除されます
+- Remote GLB は子メッシュではなく Scene Sync root を移動してください
+- `Repair Remote Object Picking` は、インポート済み GLB の子メッシュが選択可能になってしまった時だけ使う修復用です
+
+## Runtime（MonoBehaviour）で使う
 
 1. GameObject に `SceneSyncManager` コンポーネントをアタッチ
 2. Inspector で以下を設定:
@@ -79,17 +161,17 @@ Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` 
    - `Auto Connect`: 起動時に自動接続する場合はチェック
 3. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く
 
-### Animated GLB Export
+Editor は制作ツールとして Unity GameObject を原本扱いします。一方、Runtime / Player は一時的な Scene Sync 参加者として扱います。Runtime で受信したオブジェクトは temporary object として生成され、Scene Sync 上で削除された場合はローカルでも削除されます。
 
-**UnityGLTF はオプショナル依存です。**
+## Animated GLB Export
+
+UnityGLTF は optional dependency です。
 
 - Scene Sync は UnityGLTF を自動インストールしません
-- Editor で animation を含む GLB エクスポートが必要な場合のみインストールしてください
+- Editor で animation を含む GLB export が必要な場合のみインストールしてください
 - Runtime / Player builds は常に glTFast を使用します（UnityGLTF 不要）
 
-#### インストール（オプション）
-
-##### manifest.json による方法
+### UnityGLTF のインストール（オプション）
 
 UnityGLTF は git package のため、default branch ではなく release tag 固定を推奨します。
 
@@ -101,55 +183,71 @@ UnityGLTF は git package のため、default branch ではなく release tag �
 }
 ```
 
-既存 project で UnityGLTF の PackageCache 由来の `.meta` 警告が出る場合は、Unity Editor を閉じてから
-`Library/PackageCache/org.khronos.unitygltf@*` を削除し、Unity に再取得させてください。
-
-##### Package Manager UI による方法
+Package Manager UI から入れる場合:
 
 1. **Window > Package Manager** を開く
 2. **+** ボタン > **Add package from git URL** を選択
 3. 以下を入力:
-   ```
-   https://github.com/KhronosGroup/UnityGLTF.git#release/2.19.5
-   ```
 
-#### 有効化
-
-以下の Define を Project Settings > Player > Scripting Define Symbols に追加:
-
+```text
+https://github.com/KhronosGroup/UnityGLTF.git#release/2.19.5
 ```
+
+既存 project で UnityGLTF の PackageCache 由来の `.meta` 警告が出る場合は、Unity Editor を閉じてから `Library/PackageCache/org.khronos.unitygltf@*` を削除し、Unity に再取得させてください。
+
+### UnityGLTF の有効化
+
+`Window > Scene Sync > Details & Advanced > Export Settings` の UnityGLTF セクションで状態を確認できます。
+
+- `Install UnityGLTF`
+  - UnityGLTF package を追加します
+- `Enable UnityGLTF Support`
+  - `SCENESYNC_USE_UNITYGLTF` define を追加します
+- `Check UnityGLTF Status Again`
+  - Package / Define / Exporter 状態を再確認します
+
+手動で define を設定する場合は、Project Settings > Player > Scripting Define Symbols に以下を追加します。
+
+```text
 SCENESYNC_USE_UNITYGLTF
 ```
 
-#### Export Backend 選択
+### Export Backend
 
-Window > Scene Sync の Export Settings で backend を選択:
+`Details & Advanced > Export Settings` で backend を選択できます。
 
-- **Auto**（デフォルト）: Animation を検出して自動選択
-  - Animation あり + UnityGLTF 利用可 → UnityGLTF
-  - Animation なし or UnityGLTF 未インストール → glTFast
-- **glTFast**: 常に glTFast を使用（Animation 非対応）
-- **UnityGltf**: 常に UnityGLTF を使用（Editor のみ）
+- `Auto`（デフォルト）
+  - Animation あり + UnityGLTF 利用可: UnityGLTF
+  - Animation なし or UnityGLTF 未インストール: glTFast
+- `glTFast`
+  - 常に glTFast を使用
+  - animation は export されません
+- `UnityGltf`
+  - 常に UnityGLTF を使用
+  - Editor のみ
 
-### Export Support
+UnityGLTF による publish 時は、名前付き clip を呼ぶ Animation Event を検出し、export 中だけ一時的な AnimatorOverrideController で焼き込み済み clip に差し替えます。元の AnimatorController や AnimationClip asset は変更しません。
+
+## Export Support
 
 Editor の補助メニューとして **Tools > Scene Sync > Support** を利用できます。
 
-- **Apply Transparent Name Hints To Selection**
+- `Apply Transparent Name Hints To Selection`
   - 選択中の Material または GameObject 配下の Material を走査します
   - Material 名または Shader 名に `transparent` / `trans` / `alpha` / `cheek` / `glass` などのヒントがある場合、透明 Material として扱われるように設定します
-- **Report Animation Events In Selection**
+- `Report Animation Events In Selection`
   - 選択中の AnimationClip、Prefab、GameObject 配下の AnimationClip を走査します
   - Animation Event が含まれている場合、GLB にそのまま保持されない可能性を Console に警告します
-- **Bake Event-Named Clip Curves To New Clips**
+- `Bake Event-Named Clip Curves To New Clips`
   - Animation Event の `stringParameter` または `functionName` が別の AnimationClip 名と一致する場合、その clip の curve を event 時刻へコピーした publish 用 clip を作成します
   - 選択中の GameObject 配下の Animation / Animator / serialized field から AnimationClip 候補を集めます
   - 任意の MonoBehaviour callback の実行結果までは推測できないため、curve として表現されている blend shape / material / transform などが対象です
-
-UnityGLTF による publish 時は、名前付き clip を呼ぶ Animation Event を検出し、export 中だけ一時的な AnimatorOverrideController で焼き込み済み clip に差し替えます。元の AnimatorController や AnimationClip asset は変更しません。
 
 透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が任意の MonoBehaviour callback に依存している場合、その callback の実行結果までは自動推測できません。AnimationCurve として表現されている blend shape / material / transform などが自動 bake の対象です。
 
 ## 技術仕様
 
-詳細は [docs/scene-sync-spec.md](../../docs/scene-sync-spec.md) を参照。
+- [Scene Sync Spec](../../docs/scene-sync-spec.md)
+- [Unity オーサリングモデル](../../docs/scene-sync-unity-authoring.md)
+- [座標系と visualBasis](../../docs/scene-sync-coordinate-system.md)
+- [Asset / Blob / Cache](../../docs/scene-sync-assets-and-cache.md)
