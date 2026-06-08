@@ -1,5 +1,12 @@
 import { createPlayerTransportPanel } from '../player/player-transport.js';
 
+export function getEditorPlayerDeactivateSceneClockOptions() {
+  return {
+    preserveLocalTimeline: true,
+    resumeLocalTimeline: true,
+  };
+}
+
 function addListener(target, type, handler, options) {
   if (!target) return () => {};
   target.addEventListener(type, handler, options);
@@ -76,7 +83,7 @@ export function createEditorPlayerTransport() {
     if (!opened) return;
     opened = false;
     transport?.setHidden(true);
-    core?.commands?.deactivateSceneClockTransport?.();
+    core?.commands?.deactivateSceneClockTransport?.(getEditorPlayerDeactivateSceneClockOptions());
     renderToggleState();
   }
 
@@ -120,7 +127,7 @@ export function createEditorPlayerTransport() {
 
     unmount() {
       if (opened) {
-        mountedCore?.commands?.deactivateSceneClockTransport?.();
+        mountedCore?.commands?.deactivateSceneClockTransport?.(getEditorPlayerDeactivateSceneClockOptions());
       }
       opened = false;
       for (const dispose of disposers.splice(0)) dispose();
