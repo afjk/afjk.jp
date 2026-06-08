@@ -102,6 +102,7 @@ export function createObjectAudioController({
   const byKey = new Map();
   const oneShots = new Set();
   const startMs = now();
+  let audioUnlocked = false;
 
   function keyFor(objectId, name = 'default') {
     return `${objectId}:${name || 'default'}`;
@@ -113,6 +114,47 @@ export function createObjectAudioController({
 
   function getPlaybackTargetEntries() {
     return entries.filter((entry) => entry.desiredState === 'playing');
+  }
+
+  function restoreAfterUnlockAttempt(entry, snapshot) {
+    const audio = entry.audio;
+    if (!audio) return;
+
+    safePause(audio);
+    safeSeek(audio, snapshot.currentTime);
+    audio.muted = snapshot.muted;
+
+    if (!snapshot.paused && entry.desiredState === 'playing' && !entry.userPaused) {
+      tryPlay(entry, { force: true });
+    }
+  }
+
+  function unlockEntryAudio(entry) {
+    const audio = entry?.audio;
+    if (!audio) return Promise.resolve(false);
+
+    const snapshot = {
+      paused: audio.paused !== false,
+      currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+      muted: audio.muted === true,
+    };
+
+    try {
+      audio.muted = true;
+      const result = audio.play?.();
+      return Promise.resolve(result).then(() => {
+        entry.autoplayBlocked = false;
+        entry.warnedAutoplayBlocked = false;
+        restoreAfterUnlockAttempt(entry, snapshot);
+        return true;
+      }).catch(() => {
+        restoreAfterUnlockAttempt(entry, snapshot);
+        return false;
+      });
+    } catch {
+      restoreAfterUnlockAttempt(entry, snapshot);
+      return Promise.resolve(false);
+    }
   }
 
   function tryPlay(entry, { force = false } = {}) {
@@ -263,6 +305,32 @@ export function createObjectAudioController({
   return {
     elements: entries.map((entry) => entry.audio),
 
+    hasAudioSources() {
+      return entries.length > 0;
+    },
+
+    hasPlaybackTargets() {
+      return getPlaybackTargetEntries().length > 0;
+    },
+
+    isAudioUnlocked() {
+      return audioUnlocked;
+    },
+
+    unlockAudio() {
+      if (audioUnlocked) return Promise.resolve(true);
+      if (entries.length === 0) return Promise.resolve(false);
+
+      const attempts = entries.map((entry) => unlockEntryAudio(entry));
+      return Promise.allSettled(attempts).then((results) => {
+        const unlocked = results.some((result) => (
+          result.status === 'fulfilled' && result.value === true
+        ));
+        if (unlocked) audioUnlocked = true;
+        return unlocked;
+      });
+    },
+
     getPlaybackTargetElements() {
       return getPlaybackTargetEntries().map((entry) => entry.audio);
     },
@@ -366,6 +434,7 @@ export function createObjectAudioController({
       entries.length = 0;
       oneShots.clear();
       byKey.clear();
+      audioUnlocked = false;
     },
   };
 }

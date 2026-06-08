@@ -103,13 +103,18 @@ async function main() {
   }
 
   const objectAudioElements = viewerCore.getObjectAudioElements?.() || [];
-  const initialPlaybackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
-  if (objectAudioElements.length > 0 && initialPlaybackElements.length > 0 && controlsEl) {
+  const hasObjectAudioSources = viewerCore.hasObjectAudioSources?.() ?? objectAudioElements.length > 0;
+  const hasPlaybackTargets = viewerCore.hasObjectAudioPlaybackTargets?.()
+    ?? (viewerCore.getObjectAudioPlaybackElements?.() || []).length > 0;
+
+  if (hasObjectAudioSources && hasPlaybackTargets && controlsEl) {
     const audioBtn = document.createElement('button');
     audioBtn.className = 'viewer-btn';
     audioBtn.textContent = '▶ Play Audio';
     let playing = false;
-    audioBtn.addEventListener('click', () => {
+    let pending = false;
+    audioBtn.addEventListener('click', async () => {
+      if (pending) return;
       if (playing) {
         viewerCore.pauseObjectAudioPlaybackTargets?.();
         audioBtn.textContent = '▶ Play Audio';
@@ -117,19 +122,43 @@ async function main() {
       } else {
         const playbackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
         if (playbackElements.length > 0) {
-          Promise.resolve(viewerCore.playObjectAudioPlaybackTargets?.())
-            .then((results) => {
-              if (Array.isArray(results) && results.some((result) => (
-                result.status === 'fulfilled' && result.value === true
-              ))) {
-                audioBtn.textContent = '⏸ Pause Audio';
-                playing = true;
-              }
-            });
+          pending = true;
+          audioBtn.disabled = true;
+          await Promise.resolve(viewerCore.unlockObjectAudio?.()).catch(() => false);
+          const results = await Promise.resolve(viewerCore.playObjectAudioPlaybackTargets?.()).catch(() => []);
+          if (Array.isArray(results) && results.some((result) => (
+            result.status === 'fulfilled' && result.value === true
+          ))) {
+            audioBtn.textContent = '⏸ Pause Audio';
+            playing = true;
+          }
+          audioBtn.disabled = false;
+          pending = false;
         }
       }
     });
     controlsEl.appendChild(audioBtn);
+  } else if (hasObjectAudioSources && controlsEl) {
+    const enableBtn = document.createElement('button');
+    enableBtn.className = 'viewer-btn';
+    enableBtn.textContent = 'Enable Audio';
+    let pending = false;
+    enableBtn.addEventListener('click', async () => {
+      if (pending || viewerCore.isObjectAudioUnlocked?.()) return;
+      pending = true;
+      enableBtn.disabled = true;
+      enableBtn.textContent = 'Enabling Audio...';
+
+      const unlocked = await Promise.resolve(viewerCore.unlockObjectAudio?.()).catch(() => false);
+      if (unlocked || viewerCore.isObjectAudioUnlocked?.()) {
+        enableBtn.textContent = 'Audio Enabled';
+      } else {
+        enableBtn.textContent = 'Enable Audio';
+        enableBtn.disabled = false;
+      }
+      pending = false;
+    });
+    controlsEl.appendChild(enableBtn);
   }
 
   // Immersive entry button

@@ -11,14 +11,17 @@ class FakeAudio {
     this.playbackRate = 1;
     this.currentTime = 0;
     this.duration = 10;
+    this.muted = false;
     this.paused = true;
     this.playCalls = 0;
     this.pauseCalls = 0;
     this.loadCalls = 0;
+    this.mutedDuringPlay = [];
   }
 
   play() {
     this.playCalls += 1;
+    this.mutedDuringPlay.push(this.muted);
     this.paused = false;
     return Promise.resolve();
   }
@@ -78,6 +81,8 @@ test('static object AudioSource controller', async (t) => {
     });
 
     assert.equal(controller.elements.length, 3);
+    assert.equal(controller.hasAudioSources(), true);
+    assert.equal(controller.hasPlaybackTargets(), true);
     assert.deepEqual(controller.getPlaybackTargetElements().map((audio) => audio.src), [
       'ambience.mp3',
       'narration.mp3',
@@ -97,6 +102,32 @@ test('static object AudioSource controller', async (t) => {
     assert.equal(created[0].playCalls, 2);
     assert.equal(created[1].playCalls, 2);
     assert.equal(created[2].playCalls, 0);
+  });
+
+  await t.test('unlocks event-only audio sources without leaving them playing', async () => {
+    const { controller, created } = makeController({
+      audioSources: {
+        click: { name: 'click', url: 'click.mp3' },
+        hit: { name: 'hit', url: 'hit.mp3', state: 'stopped' },
+      },
+    });
+
+    created[0].currentTime = 3;
+
+    assert.equal(controller.hasAudioSources(), true);
+    assert.equal(controller.hasPlaybackTargets(), false);
+    assert.equal(controller.isAudioUnlocked(), false);
+
+    const unlocked = await controller.unlockAudio();
+
+    assert.equal(unlocked, true);
+    assert.equal(controller.isAudioUnlocked(), true);
+    assert.equal(created[0].mutedDuringPlay[0], true);
+    assert.equal(created[1].mutedDuringPlay[0], true);
+    assert.equal(created[0].muted, false);
+    assert.equal(created[0].paused, true);
+    assert.equal(created[0].currentTime, 3);
+    assert.equal(created[1].paused, true);
   });
 
   await t.test('syncs playing audio sources to animation samples', () => {

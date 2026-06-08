@@ -603,8 +603,24 @@ export async function createViewerCore({
       return objectAudioController.elements;
     },
 
+    hasObjectAudioSources() {
+      return objectAudioController.hasAudioSources();
+    },
+
+    hasObjectAudioPlaybackTargets() {
+      return objectAudioController.hasPlaybackTargets();
+    },
+
     getObjectAudioPlaybackElements() {
       return objectAudioController.getPlaybackTargetElements();
+    },
+
+    unlockObjectAudio() {
+      return objectAudioController.unlockAudio();
+    },
+
+    isObjectAudioUnlocked() {
+      return objectAudioController.isAudioUnlocked();
     },
 
     playObjectAudioPlaybackTargets() {
