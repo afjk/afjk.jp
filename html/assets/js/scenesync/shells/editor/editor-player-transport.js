@@ -76,7 +76,7 @@ export function createEditorPlayerTransport() {
     if (!opened) return;
     opened = false;
     transport?.setHidden(true);
-    core?.commands?.deactivateSceneClockTransport?.();
+    core?.commands?.deactivateSceneClockTransport?.({ preserveLocalTimeline: true });
     renderToggleState();
   }
 
@@ -120,7 +120,7 @@ export function createEditorPlayerTransport() {
 
     unmount() {
       if (opened) {
-        mountedCore?.commands?.deactivateSceneClockTransport?.();
+        mountedCore?.commands?.deactivateSceneClockTransport?.({ preserveLocalTimeline: true });
       }
       opened = false;
       for (const dispose of disposers.splice(0)) dispose();
