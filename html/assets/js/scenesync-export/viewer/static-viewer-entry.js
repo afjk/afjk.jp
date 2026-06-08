@@ -103,24 +103,30 @@ async function main() {
   }
 
   const objectAudioElements = viewerCore.getObjectAudioElements?.() || [];
-  if (objectAudioElements.length > 0 && controlsEl) {
+  const initialPlaybackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
+  if (objectAudioElements.length > 0 && initialPlaybackElements.length > 0 && controlsEl) {
     const audioBtn = document.createElement('button');
     audioBtn.className = 'viewer-btn';
     audioBtn.textContent = '▶ Play Audio';
     let playing = false;
     audioBtn.addEventListener('click', () => {
       if (playing) {
-        for (const audio of objectAudioElements) audio.pause();
+        viewerCore.pauseObjectAudioPlaybackTargets?.();
         audioBtn.textContent = '▶ Play Audio';
         playing = false;
       } else {
-        Promise.allSettled(objectAudioElements.map((audio) => audio.play()))
-          .then((results) => {
-            if (results.some((result) => result.status === 'fulfilled')) {
-              audioBtn.textContent = '⏸ Pause Audio';
-              playing = true;
-            }
-          });
+        const playbackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
+        if (playbackElements.length > 0) {
+          Promise.resolve(viewerCore.playObjectAudioPlaybackTargets?.())
+            .then((results) => {
+              if (Array.isArray(results) && results.some((result) => (
+                result.status === 'fulfilled' && result.value === true
+              ))) {
+                audioBtn.textContent = '⏸ Pause Audio';
+                playing = true;
+              }
+            });
+        }
       }
     });
     controlsEl.appendChild(audioBtn);

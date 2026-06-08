@@ -5,6 +5,7 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { isValidSceneDocument } from './scene-document.js';
 import { createStaticAssetResolver } from './static-asset-resolver.js';
 import { createSceneSyncRuntime } from './loomlet/loomlet-scenesync-runtime.browser.js';
+import { createObjectAudioController } from './object-audio-controller.js';
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
 
@@ -16,6 +17,8 @@ const AUDIO_SOURCE_EFFECT_TYPES = new Set([
   'audioSource.playOneShot',
   'audioSource.setVolume',
   'audioSource.setClip',
+  'audioSource.syncToAnimation',
+  'audioSource.unsync',
 ]);
 
 const TEXT_LAYOUT_DEFAULTS = Object.freeze({
@@ -68,11 +71,6 @@ function finiteNumber(value, fallback) {
 
 function positiveNumber(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function clamp01(value, fallback = 1) {
-  const n = Number.isFinite(value) ? value : fallback;
-  return Math.max(0, Math.min(1, n));
 }
 
 const OBJECT_TARGET_NODE_TYPES = new Set([
@@ -268,108 +266,16 @@ function setupAnimation(mixer, gltf, animState) {
   }
 
   action.play();
-  return action;
-}
-
-function resolveAudioPath(source, resolver) {
-  return resolver.resolveAsset(source?.asset) || source?.url || null;
-}
-
-function createObjectAudioController(sceneDoc, resolver, onMissingAsset) {
-  const entries = [];
-  const byKey = new Map();
-
-  function findEntry(objectId, name = 'default') {
-    return byKey.get(`${objectId}:${name || 'default'}`);
-  }
-
-  for (const objectEntry of sceneDoc.objects || []) {
-    const audioSources = objectEntry.audioSources;
-    if (!audioSources || typeof audioSources !== 'object' || Array.isArray(audioSources)) continue;
-
-    for (const [name, source] of Object.entries(audioSources)) {
-      if (!source || typeof source !== 'object') continue;
-      const audioPath = resolveAudioPath(source, resolver);
-      if (!audioPath) {
-        onMissingAsset?.({
-          id: `${objectEntry.id}:${name}`,
-          objectId: objectEntry.id,
-          kind: 'audioSource',
-          name,
-          reason: 'no path or url',
-        });
-        continue;
-      }
-
-      const audio = new Audio(audioPath);
-      audio.preload = 'auto';
-      audio.loop = source.loop === true;
-      audio.volume = clamp01(source.volume, 1);
-      audio.playbackRate = positiveNumber(source.playbackRate, 1);
-
-      const offset = Math.max(0, finiteNumber(source.offset, 0));
-      if (offset > 0) {
-        const applyOffset = () => {
-          try {
-            audio.currentTime = Number.isFinite(audio.duration)
-              ? Math.min(offset, audio.duration)
-              : offset;
-          } catch {}
-        };
-        audio.addEventListener('loadedmetadata', applyOffset, { once: true });
-      }
-
-      const entry = {
-        objectId: objectEntry.id,
-        name: source.name || name || 'default',
-        source,
-        audio,
-      };
-      entries.push(entry);
-      byKey.set(`${entry.objectId}:${entry.name}`, entry);
-
-      if (source.playOnAwake === true || source.state === 'playing') {
-        audio.play().catch(() => {});
-      }
-    }
-  }
-
   return {
-    elements: entries.map((entry) => entry.audio),
-    applyEffect(effect) {
-      const objectId = effect.objectId || effect.target;
-      const name = effect.name || 'default';
-      const entry = findEntry(objectId, name);
-      if (!entry) return;
-
-      if (effect.type === 'audioSource.play') {
-        entry.audio.play().catch(() => {});
-      } else if (effect.type === 'audioSource.pause') {
-        entry.audio.pause();
-      } else if (effect.type === 'audioSource.stop') {
-        entry.audio.pause();
-        try { entry.audio.currentTime = 0; } catch {}
-      } else if (effect.type === 'audioSource.seek') {
-        const time = Math.max(0, finiteNumber(effect.time, 0));
-        try { entry.audio.currentTime = time; } catch {}
-      } else if (effect.type === 'audioSource.playOneShot') {
-        try { entry.audio.currentTime = 0; } catch {}
-        entry.audio.play().catch(() => {});
-      } else if (effect.type === 'audioSource.setVolume') {
-        entry.audio.volume = clamp01(effect.volume, entry.audio.volume);
-      } else if (effect.type === 'audioSource.setClip' && typeof effect.url === 'string') {
-        entry.audio.src = effect.url;
-        entry.audio.load?.();
-      }
-    },
-    dispose() {
-      for (const entry of entries) {
-        entry.audio.pause();
-        entry.audio.removeAttribute?.('src');
-        entry.audio.load?.();
-      }
-      entries.length = 0;
-      byKey.clear();
+    action,
+    clip,
+    getSample(requestedClipName = null) {
+      const name = typeof requestedClipName === 'string' ? requestedClipName.trim() : '';
+      if (name && clip.name && name !== clip.name) return null;
+      return {
+        time: Number.isFinite(action.time) ? action.time : 0,
+        duration: Number.isFinite(clip.duration) ? clip.duration : null,
+      };
     },
   };
 }
@@ -454,6 +360,7 @@ export async function createViewerCore({
   const mixers = [];
   const clock = new THREE.Clock();
   const objectMap = new Map();
+  const animationSamples = new Map();
 
   // Ambient + directional lights as fallback
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -634,8 +541,11 @@ export async function createViewerCore({
 
         if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(wrapper);
-          setupAnimation(mixer, gltf, entry.animation);
-          mixers.push(mixer);
+          const animationRuntime = setupAnimation(mixer, gltf, entry.animation);
+          if (animationRuntime) {
+            mixers.push(mixer);
+            animationSamples.set(entry.id, animationRuntime);
+          }
         }
       } catch {
         onMissingAsset?.({ id: entry.id, kind: 'mesh', path: assetPath });
@@ -646,7 +556,12 @@ export async function createViewerCore({
     onProgress?.(loaded / total);
   }
 
-  const objectAudioController = createObjectAudioController(sceneDoc, resolver, onMissingAsset);
+  const objectAudioController = createObjectAudioController({
+    sceneDoc,
+    resolver,
+    onMissingAsset,
+    getAnimationSample: (objectId, clipName) => animationSamples.get(objectId)?.getSample(clipName) || null,
+  });
 
   // BGM setup - returns control object
   let bgmAudio = null;
@@ -673,9 +588,11 @@ export async function createViewerCore({
       const delta = clock.getDelta();
       for (const m of mixers) m.update(delta);
 
+      const now = performance.now();
       if (loomAdapter) {
-        loomAdapter.tick(performance.now());
+        loomAdapter.tick(now);
       }
+      objectAudioController.tick(now);
     },
 
     getBgmAudio() {
@@ -684,6 +601,18 @@ export async function createViewerCore({
 
     getObjectAudioElements() {
       return objectAudioController.elements;
+    },
+
+    getObjectAudioPlaybackElements() {
+      return objectAudioController.getPlaybackTargetElements();
+    },
+
+    playObjectAudioPlaybackTargets() {
+      return objectAudioController.playPlaybackTargets();
+    },
+
+    pauseObjectAudioPlaybackTargets() {
+      objectAudioController.pausePlaybackTargets();
     },
 
     dispose() {
