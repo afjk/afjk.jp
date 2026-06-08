@@ -35,8 +35,8 @@ function positiveOrDefault(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function finiteOrDefault(value, fallback) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+function nonNegativeOrDefault(value, fallback) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function resolveName(input, options) {
@@ -87,7 +87,7 @@ export function normalizeAudioSource(input, options = {}) {
     volume: clampVolume(input.volume),
     loop: input.loop === true,
     playOnAwake: input.playOnAwake === true,
-    offset: finiteOrDefault(input.offset, AUDIO_SOURCE_DEFAULTS.offset),
+    offset: nonNegativeOrDefault(input.offset, AUDIO_SOURCE_DEFAULTS.offset),
     playbackRate: positiveOrDefault(input.playbackRate, AUDIO_SOURCE_DEFAULTS.playbackRate),
     spatial: input.spatial !== false,
   };

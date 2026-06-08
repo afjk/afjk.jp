@@ -14,6 +14,9 @@ function makeMockObject(objectId, overrides = {}) {
       asset: overrides.asset || null,
       meshPath: overrides.meshPath || null,
       animationState: overrides.animationState || null,
+      metadata: overrides.metadata || undefined,
+      audioSources: overrides.audioSources || undefined,
+      scenesync: overrides.scenesync || undefined,
       role: overrides.role || undefined,
       nonSerializable: overrides.nonSerializable || false,
       _temporary: overrides._temporary || false,
@@ -91,6 +94,85 @@ test('createSceneDocumentFromSceneSyncState', async (t) => {
     assert.equal(obj.animation.enabled, true);
     assert.equal(obj.animation.clip, 1);
     assert.equal(obj.animation.speed, 1.5);
+  });
+
+  await t.test('includes animation clipName and offset when present', () => {
+    const managedObjects = new Map();
+    managedObjects.set('model-anim', makeMockObject('model-anim', {
+      asset: { type: 'mesh', meshPath: 'anim-path' },
+      animationState: { enabled: true, clip: 1, clipName: 'Run', mode: 'once', speed: 0.75, offset: 2.25 },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const obj = doc.objects.find(o => o.id === 'model-anim');
+    assert.equal(obj.animation.clipName, 'Run');
+    assert.equal(obj.animation.offset, 2.25);
+    assert.equal(obj.animation.mode, 'once');
+  });
+
+  await t.test('includes metadata and normalized object audio sources', () => {
+    const managedObjects = new Map();
+    managedObjects.set('speaker-1', makeMockObject('speaker-1', {
+      asset: { type: 'primitive', primitive: 'box', color: '#fff' },
+      metadata: { role: 'speaker', accepts: ['audio'] },
+      audioSources: {
+        default: {
+          url: 'https://example.com/sound.mp3',
+          volume: 0.4,
+          loop: true,
+          playOnAwake: true,
+          offset: 1.5,
+          playbackRate: 1.25,
+          spatial: false,
+        },
+        empty: { url: '' },
+      },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const obj = doc.objects.find(o => o.id === 'speaker-1');
+    assert.deepEqual(obj.metadata, { role: 'speaker', accepts: ['audio'] });
+    assert.equal(Object.keys(obj.audioSources).length, 1);
+    assert.equal(obj.audioSources.default.url, 'https://example.com/sound.mp3');
+    assert.equal(obj.audioSources.default.volume, 0.4);
+    assert.equal(obj.audioSources.default.loop, true);
+    assert.equal(obj.audioSources.default.playOnAwake, true);
+    assert.equal(obj.audioSources.default.offset, 1.5);
+    assert.equal(obj.audioSources.default.playbackRate, 1.25);
+    assert.equal(obj.audioSources.default.spatial, false);
+  });
+
+  await t.test('includes text layout and scroll state', () => {
+    const managedObjects = new Map();
+    managedObjects.set('text-1', makeMockObject('text-1', {
+      asset: {
+        type: 'text',
+        source: 'inline',
+        text: 'hello',
+        layout: { width: 3.2, height: 1.1, padding: 0.2, lineHeight: 1.4, mode: 'scroll' },
+        scroll: { y: 0.5 },
+      },
+    }));
+
+    const doc = createSceneDocumentFromSceneSyncState({
+      managedObjects,
+      bgmState: null,
+      envId: null,
+    });
+
+    const obj = doc.objects.find(o => o.id === 'text-1');
+    assert.deepEqual(obj.asset.layout, { width: 3.2, height: 1.1, padding: 0.2, lineHeight: 1.4, mode: 'scroll' });
+    assert.deepEqual(obj.asset.scroll, { y: 0.5 });
   });
 
   await t.test('excludes nonSerializable objects', () => {

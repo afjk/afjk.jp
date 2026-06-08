@@ -102,6 +102,36 @@ async function main() {
     controlsEl.appendChild(bgmBtn);
   }
 
+  const objectAudioElements = viewerCore.getObjectAudioElements?.() || [];
+  const initialPlaybackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
+  if (objectAudioElements.length > 0 && initialPlaybackElements.length > 0 && controlsEl) {
+    const audioBtn = document.createElement('button');
+    audioBtn.className = 'viewer-btn';
+    audioBtn.textContent = '▶ Play Audio';
+    let playing = false;
+    audioBtn.addEventListener('click', () => {
+      if (playing) {
+        viewerCore.pauseObjectAudioPlaybackTargets?.();
+        audioBtn.textContent = '▶ Play Audio';
+        playing = false;
+      } else {
+        const playbackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
+        if (playbackElements.length > 0) {
+          Promise.resolve(viewerCore.playObjectAudioPlaybackTargets?.())
+            .then((results) => {
+              if (Array.isArray(results) && results.some((result) => (
+                result.status === 'fulfilled' && result.value === true
+              ))) {
+                audioBtn.textContent = '⏸ Pause Audio';
+                playing = true;
+              }
+            });
+        }
+      }
+    });
+    controlsEl.appendChild(audioBtn);
+  }
+
   // Immersive entry button
   if (navigator.xr && controlsEl) {
     for (const mode of ['immersive-vr', 'immersive-ar']) {
@@ -146,13 +176,17 @@ function rewriteAssetPaths(doc) {
   if (!doc) return doc;
 
   const objects = (doc.objects || []).map(obj => {
-    if (!obj.asset?.path) return obj;
+    const audioSources = rewriteAudioSourcePaths(obj.audioSources);
+    if (!obj.asset?.path) {
+      return audioSources === obj.audioSources ? obj : { ...obj, audioSources };
+    }
     return {
       ...obj,
       asset: {
         ...obj.asset,
         path: resolveFromRoot(obj.asset.path),
       },
+      audioSources,
     };
   });
 
@@ -170,6 +204,30 @@ function rewriteAssetPaths(doc) {
   }
 
   return { ...doc, objects, skybox, bgm };
+}
+
+function rewriteAudioSourcePaths(audioSources) {
+  if (!audioSources || typeof audioSources !== 'object' || Array.isArray(audioSources)) {
+    return audioSources;
+  }
+
+  let changed = false;
+  const updated = {};
+  for (const [name, source] of Object.entries(audioSources)) {
+    if (source?.asset?.path) {
+      changed = true;
+      updated[name] = {
+        ...source,
+        asset: {
+          ...source.asset,
+          path: resolveFromRoot(source.asset.path),
+        },
+      };
+    } else {
+      updated[name] = source;
+    }
+  }
+  return changed ? updated : audioSources;
 }
 
 main();

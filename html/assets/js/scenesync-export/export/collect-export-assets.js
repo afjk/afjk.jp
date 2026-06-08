@@ -19,6 +19,16 @@ function extensionFor(mime, fallback = 'bin') {
   return fallback;
 }
 
+function audioExtForUrl(url) {
+  if (typeof url !== 'string') return 'mp3';
+  const clean = url.split(/[?#]/)[0].toLowerCase();
+  if (clean.endsWith('.ogg') || clean.endsWith('.oga')) return 'ogg';
+  if (clean.endsWith('.wav')) return 'wav';
+  if (clean.endsWith('.m4a') || clean.endsWith('.mp4')) return 'm4a';
+  if (clean.endsWith('.webm')) return 'webm';
+  return 'mp3';
+}
+
 async function tryFetch(url) {
   if (!url) return null;
   try {
@@ -96,17 +106,86 @@ export async function collectExportAssets({
     return 'mp4';
   }
 
+  async function withCollectedAudioSources(obj) {
+    if (!obj?.audioSources || typeof obj.audioSources !== 'object' || Array.isArray(obj.audioSources)) {
+      return obj;
+    }
+
+    const updatedAudioSources = {};
+    let changed = false;
+
+    for (const [name, source] of Object.entries(obj.audioSources)) {
+      if (!source || typeof source !== 'object') {
+        updatedAudioSources[name] = source;
+        continue;
+      }
+
+      const existingPath = source.asset?.path;
+      if (existingPath) {
+        updatedAudioSources[name] = source;
+        continue;
+      }
+
+      const audioUrl = source.url;
+      if (!audioUrl) {
+        updatedAudioSources[name] = source;
+        continue;
+      }
+
+      const zipPath = uniquePath(sanitizeFilename(`${obj.id}-${name || 'audio'}`), audioExtForUrl(audioUrl));
+      const buffer = await tryFetch(audioUrl);
+      changed = true;
+
+      if (buffer) {
+        files[zipPath] = buffer;
+        assetManifest.push({
+          id: `${obj.id}:${name}`,
+          objectId: obj.id,
+          kind: 'audioSource',
+          name,
+          path: zipPath,
+          status: 'included',
+        });
+        updatedAudioSources[name] = {
+          ...source,
+          asset: {
+            ...(source.asset || {}),
+            path: zipPath,
+          },
+        };
+      } else {
+        missingAssets.push({
+          id: `${obj.id}:${name}`,
+          objectId: obj.id,
+          kind: 'audioSource',
+          name,
+          url: audioUrl,
+          reason: 'fetch-failed',
+        });
+        updatedAudioSources[name] = {
+          ...source,
+          asset: {
+            ...(source.asset || {}),
+            path: null,
+          },
+        };
+      }
+    }
+
+    return changed ? { ...obj, audioSources: updatedAudioSources } : obj;
+  }
+
   // Collect mesh / image / video / text assets
   const updatedObjects = [];
   for (const obj of sceneDocument.objects) {
     if (!obj.asset || obj.asset.type === 'primitive') {
-      updatedObjects.push(obj);
+      updatedObjects.push(await withCollectedAudioSources(obj));
       continue;
     }
 
     if (obj.asset.type === 'image') {
       const imageUrl = obj.asset.url;
-      if (!imageUrl) { updatedObjects.push(obj); continue; }
+      if (!imageUrl) { updatedObjects.push(await withCollectedAudioSources(obj)); continue; }
 
       const ext = extensionFor(obj.asset.mime || 'image/jpeg', 'jpg');
       const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
@@ -114,17 +193,17 @@ export async function collectExportAssets({
       if (buffer) {
         files[zipPath] = buffer;
         assetManifest.push({ id: obj.id, kind: 'image', path: zipPath, status: 'included' });
-        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: zipPath } });
+        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, path: zipPath } }));
       } else {
         missingAssets.push({ id: obj.id, kind: 'image', url: imageUrl, reason: 'fetch-failed' });
-        updatedObjects.push(obj); // keep url as fallback for static-asset-resolver
+        updatedObjects.push(await withCollectedAudioSources(obj)); // keep url as fallback for static-asset-resolver
       }
       continue;
     }
 
     if (obj.asset.type === 'video') {
       const videoUrl = obj.asset.url;
-      if (!videoUrl) { updatedObjects.push(obj); continue; }
+      if (!videoUrl) { updatedObjects.push(await withCollectedAudioSources(obj)); continue; }
 
       const ext = videoExtFor(obj.asset.mime);
       const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
@@ -132,11 +211,11 @@ export async function collectExportAssets({
       if (buffer) {
         files[zipPath] = buffer;
         assetManifest.push({ id: obj.id, kind: 'video', path: zipPath, status: 'included' });
-        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: zipPath } });
+        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, path: zipPath } }));
       } else {
         // Videos often have CORS restrictions; keep url so static viewer can stream
         missingAssets.push({ id: obj.id, kind: 'video', url: videoUrl, reason: 'fetch-failed' });
-        updatedObjects.push(obj);
+        updatedObjects.push(await withCollectedAudioSources(obj));
       }
       continue;
     }
@@ -144,21 +223,21 @@ export async function collectExportAssets({
     if (obj.asset.type === 'text') {
       if (obj.asset.source === 'inline') {
         // Text is embedded in scene.json — no file needed
-        updatedObjects.push(obj);
+        updatedObjects.push(await withCollectedAudioSources(obj));
         continue;
       }
       const textUrl = obj.asset.url;
-      if (!textUrl) { updatedObjects.push(obj); continue; }
+      if (!textUrl) { updatedObjects.push(await withCollectedAudioSources(obj)); continue; }
 
       const zipPath = uniquePath(sanitizeFilename(obj.id), 'txt');
       const buffer = await tryFetch(textUrl);
       if (buffer) {
         files[zipPath] = buffer;
         assetManifest.push({ id: obj.id, kind: 'text', path: zipPath, status: 'included' });
-        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: zipPath } });
+        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, path: zipPath } }));
       } else {
         missingAssets.push({ id: obj.id, kind: 'text', url: textUrl, reason: 'fetch-failed' });
-        updatedObjects.push(obj);
+        updatedObjects.push(await withCollectedAudioSources(obj));
       }
       continue;
     }
@@ -180,10 +259,10 @@ export async function collectExportAssets({
     if (blobBuffer) {
       files[zipPath] = blobBuffer;
       assetManifest.push({ id: obj.id, kind: 'mesh', path: zipPath, status: 'included', source: 'blob' });
-      updatedObjects.push({
+      updatedObjects.push(await withCollectedAudioSources({
         ...obj,
         asset: { ...obj.asset, path: zipPath, meshPath: undefined, assetId: undefined },
-      });
+      }));
     } else {
       // Try IndexedDB cache as fallback
       const cachedAsset = await tryGetCachedAssetBuffer({ assetCache, assetId, meshPath });
@@ -197,10 +276,10 @@ export async function collectExportAssets({
           status: 'included',
           source: 'indexeddb',
         });
-        updatedObjects.push({
+        updatedObjects.push(await withCollectedAudioSources({
           ...obj,
           asset: { ...obj.asset, path: zipPath, meshPath: undefined, assetId: undefined },
-        });
+        }));
       } else {
         missingAssets.push({
           id: obj.id,
@@ -209,7 +288,10 @@ export async function collectExportAssets({
           meshPath: meshPath || null,
           reason: cachedAsset.hasError ? 'blob-fetch-and-cache-error' : 'blob-fetch-and-cache-miss',
         });
-        updatedObjects.push({ ...obj, asset: { ...obj.asset, path: null, meshPath: undefined, assetId: undefined } });
+        updatedObjects.push(await withCollectedAudioSources({
+          ...obj,
+          asset: { ...obj.asset, path: null, meshPath: undefined, assetId: undefined },
+        }));
       }
     }
   }

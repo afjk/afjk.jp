@@ -76,10 +76,15 @@ test('export package construction', async (t) => {
     const expectedViewerFiles = [
       'viewer/viewer.js',
       'viewer/create-viewer-core.js',
+      'viewer/object-audio-controller.js',
       'viewer/static-asset-resolver.js',
       'viewer/scene-document.js',
       'viewer/viewer.css',
     ];
+    const destPaths = VIEWER_SOURCES.map(s => s.dest);
+    for (const f of expectedViewerFiles) {
+      assert.ok(destPaths.includes(f), `VIEWER_SOURCES should contain ${f}`);
+    }
     // All expected paths start with viewer/
     for (const f of expectedViewerFiles) {
       assert.ok(f.startsWith('viewer/'));
