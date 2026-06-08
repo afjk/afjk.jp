@@ -116,6 +116,12 @@ export function createObjectAudioController({
     return entries.filter((entry) => entry.desiredState === 'playing');
   }
 
+  function cancelEntryOneShot(entry) {
+    if (!entry) return;
+    entry.oneShotToken += 1;
+    entry.oneShotActive = false;
+  }
+
   function restoreAfterUnlockAttempt(entry, snapshot) {
     const audio = entry.audio;
     if (!audio) return;
@@ -224,6 +230,7 @@ export function createObjectAudioController({
 
   function tickEntry(entry, nowMs) {
     if (!entry.audio) return;
+    if (entry.oneShotActive) return;
 
     applyAudioElementConfig(entry.audio, entry.source);
 
@@ -249,6 +256,68 @@ export function createObjectAudioController({
 
     entry.started = true;
     tryPlay(entry);
+  }
+
+  function playUnlockedEntryOneShot(entry, url, options = {}) {
+    const audio = entry?.audio;
+    if (!audio) return Promise.resolve(false);
+
+    const snapshot = {
+      src: audio.src,
+      currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+      muted: audio.muted === true,
+      volume: Number.isFinite(audio.volume) ? audio.volume : 1,
+      playbackRate: Number.isFinite(audio.playbackRate) ? audio.playbackRate : 1,
+      loop: audio.loop === true,
+    };
+    const token = entry.oneShotToken + 1;
+
+    let restored = false;
+    const restore = () => {
+      if (entry.oneShotToken !== token) return;
+      if (restored) return;
+      restored = true;
+      entry.oneShotActive = false;
+      safePause(audio);
+      audio.loop = snapshot.loop;
+      audio.volume = snapshot.volume;
+      audio.muted = snapshot.muted;
+      try { audio.playbackRate = snapshot.playbackRate; } catch {}
+      if (snapshot.src && audio.src !== snapshot.src) {
+        audio.src = snapshot.src;
+        safeLoad(audio);
+      }
+      safeSeek(audio, snapshot.currentTime);
+      applyAudioElementConfig(audio, entry.source);
+    };
+
+    entry.oneShotToken = token;
+    entry.oneShotActive = true;
+    safePause(audio);
+    if (url && audio.src !== url) {
+      audio.src = url;
+      safeLoad(audio);
+    }
+    audio.loop = false;
+    audio.muted = false;
+    audio.volume = clamp01(options.volume, snapshot.volume);
+    try { audio.playbackRate = positiveNumber(options.playbackRate, snapshot.playbackRate); } catch {}
+    safeSeek(audio, Math.max(0, finiteNumber(options.offset, 0)));
+    audio.addEventListener?.('ended', restore, { once: true });
+
+    try {
+      const result = audio.play?.();
+      if (result && typeof result.then === 'function') {
+        return result.then(() => true).catch(() => {
+          restore();
+          return false;
+        });
+      }
+      return Promise.resolve(true);
+    } catch {
+      restore();
+      return Promise.resolve(false);
+    }
   }
 
   function createEntry(objectEntry, name, source) {
@@ -280,6 +349,8 @@ export function createObjectAudioController({
       autoplayBlocked: false,
       warnedAutoplayBlocked: false,
       lastSampleTime: null,
+      oneShotActive: false,
+      oneShotToken: 0,
     };
 
     if (typeof audio.addEventListener === 'function') {
@@ -344,6 +415,7 @@ export function createObjectAudioController({
 
     pausePlaybackTargets() {
       for (const entry of getPlaybackTargetEntries()) {
+        cancelEntryOneShot(entry);
         entry.userPaused = true;
         safePause(entry.audio);
       }
@@ -356,14 +428,17 @@ export function createObjectAudioController({
       if (!entry) return;
 
       if (effect.type === 'audioSource.play') {
+        cancelEntryOneShot(entry);
         entry.desiredState = 'playing';
         entry.userPaused = false;
         tryPlay(entry, { force: true });
       } else if (effect.type === 'audioSource.pause') {
+        cancelEntryOneShot(entry);
         entry.desiredState = 'paused';
         entry.userPaused = false;
         safePause(entry.audio);
       } else if (effect.type === 'audioSource.stop') {
+        cancelEntryOneShot(entry);
         entry.desiredState = 'stopped';
         entry.userPaused = false;
         safePause(entry.audio);
@@ -374,6 +449,12 @@ export function createObjectAudioController({
         const options = effect.options || {};
         const url = typeof options.url === 'string' && options.url ? options.url : entry.source.url;
         if (!url) return;
+
+        if (audioUnlocked && entry.desiredState !== 'playing') {
+          playUnlockedEntryOneShot(entry, url, options);
+          return;
+        }
+
         const oneShot = createAudio(url);
         oneShot.loop = false;
         oneShot.volume = clamp01(options.volume, entry.audio.volume);
@@ -396,6 +477,7 @@ export function createObjectAudioController({
         entry.source.volume = volume;
         entry.audio.volume = volume;
       } else if (effect.type === 'audioSource.setClip' && typeof effect.url === 'string') {
+        cancelEntryOneShot(entry);
         entry.source.url = effect.url;
         entry.audio.src = effect.url;
         entry.started = false;

@@ -130,6 +130,54 @@ test('static object AudioSource controller', async (t) => {
     assert.equal(created[1].paused, true);
   });
 
+  await t.test('playOneShot reuses unlocked event-only audio element', async () => {
+    const { controller, created } = makeController({
+      audioSources: {
+        click: { name: 'click', url: 'click.mp3' },
+      },
+    });
+
+    assert.equal(await controller.unlockAudio(), true);
+    assert.equal(created.length, 1);
+
+    controller.applyEffect({
+      type: 'audioSource.playOneShot',
+      objectId: 'speaker-1',
+      name: 'click',
+      options: { offset: 1.25, volume: 0.35 },
+    });
+
+    assert.equal(created.length, 1, 'playOneShot should not create a new Audio after unlock');
+    assert.equal(created[0].playCalls, 2);
+    assert.equal(created[0].mutedDuringPlay[1], false);
+    assert.equal(created[0].volume, 0.35);
+    assert.equal(created[0].currentTime, 1.25);
+    assert.equal(created[0].paused, false);
+
+    controller.tick(16);
+    assert.equal(created[0].paused, false, 'tick should not immediately stop the transient one-shot');
+  });
+
+  await t.test('playOneShot keeps using transient audio for playing sources', async () => {
+    const { controller, created } = makeController({
+      audioSources: {
+        music: { name: 'music', url: 'music.mp3', state: 'playing' },
+      },
+    });
+
+    assert.equal(await controller.unlockAudio(), true);
+    controller.applyEffect({
+      type: 'audioSource.playOneShot',
+      objectId: 'speaker-1',
+      name: 'music',
+    });
+
+    assert.equal(created.length, 2);
+    assert.equal(created[0].src, 'music.mp3');
+    assert.equal(created[1].src, 'music.mp3');
+    assert.equal(created[1].playCalls, 1);
+  });
+
   await t.test('syncs playing audio sources to animation samples', () => {
     let sampleTime = 2;
     const { controller, created } = makeController({
