@@ -150,6 +150,88 @@ test('collectExportAssets', async (t) => {
     }
   });
 
+  await t.test('collects object audioSource assets and rewrites audio path', async () => {
+    const audioBuf = new ArrayBuffer(6);
+    const restore = mockFetch({
+      'https://example.com/audio/speaker.mp3': audioBuf,
+    });
+
+    try {
+      const doc = makeSceneDoc([{
+        id: 'speaker-1',
+        asset: { type: 'primitive', primitive: 'box', color: '#ff0000' },
+        position: [0, 0, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        visible: true,
+        audioSources: {
+          default: {
+            type: 'audioSource',
+            name: 'default',
+            url: 'https://example.com/audio/speaker.mp3',
+            volume: 0.7,
+            loop: true,
+            playOnAwake: true,
+          },
+        },
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: null,
+        envOrigin: null,
+      });
+
+      const obj = result.document.objects[0];
+      const audioPath = obj.audioSources.default.asset.path;
+      assert.ok(audioPath.startsWith('assets/'), `audio path should be in assets/, got: ${audioPath}`);
+      assert.ok(audioPath.endsWith('.mp3'));
+      assert.ok(result.files[audioPath], 'audio file should be included in ZIP files');
+      assert.equal(result.missingAssets.length, 0);
+      assert.equal(result.assetManifest[0].kind, 'audioSource');
+      assert.equal(result.assetManifest[0].objectId, 'speaker-1');
+      assert.equal(result.assetManifest[0].name, 'default');
+    } finally {
+      restore();
+    }
+  });
+
+  await t.test('records missing object audioSource asset when fetch fails', async () => {
+    const restore = mockFetch({});
+
+    try {
+      const doc = makeSceneDoc([{
+        id: 'speaker-missing',
+        asset: { type: 'primitive', primitive: 'box', color: '#ff0000' },
+        position: [0, 0, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        visible: true,
+        audioSources: {
+          default: {
+            type: 'audioSource',
+            name: 'default',
+            url: 'https://example.com/missing.wav',
+          },
+        },
+      }]);
+
+      const result = await collectExportAssets({
+        sceneDocument: doc,
+        blobBase: null,
+        envOrigin: null,
+      });
+
+      const missing = result.missingAssets[0];
+      assert.equal(missing.id, 'speaker-missing:default');
+      assert.equal(missing.kind, 'audioSource');
+      assert.equal(missing.reason, 'fetch-failed');
+      assert.equal(result.document.objects[0].audioSources.default.asset.path, null);
+    } finally {
+      restore();
+    }
+  });
+
   await t.test('rewrites remote asset path to /presence/blob → assets/', async () => {
     const buf = new ArrayBuffer(4);
     const restore = mockFetch({

@@ -8,6 +8,23 @@ import { createSceneSyncRuntime } from './loomlet/loomlet-scenesync-runtime.brow
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
 
+const AUDIO_SOURCE_EFFECT_TYPES = new Set([
+  'audioSource.play',
+  'audioSource.pause',
+  'audioSource.stop',
+  'audioSource.seek',
+  'audioSource.playOneShot',
+  'audioSource.setVolume',
+  'audioSource.setClip',
+]);
+
+const TEXT_LAYOUT_DEFAULTS = Object.freeze({
+  width: 2.4,
+  height: 1.6,
+  padding: 0.12,
+  lineHeight: 1.35,
+});
+
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -45,6 +62,19 @@ function clonePosition(position) {
   };
 }
 
+function finiteNumber(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function positiveNumber(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function clamp01(value, fallback = 1) {
+  const n = Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.min(1, n));
+}
+
 const OBJECT_TARGET_NODE_TYPES = new Set([
   'sceneSetPosition',
   'sceneOffsetPosition',
@@ -77,11 +107,16 @@ function graphForRuntime(graph, scopeObjectId) {
   };
 }
 
-function createExportBehaviorRuntime(behaviorState, objectMap) {
+function createExportBehaviorRuntime(behaviorState, objectMap, audioController = null) {
   const runtimes = [];
   const behaviorBases = new Map();
 
   function applySceneEffect(effect, scopeKey) {
+    if (effect?.type && AUDIO_SOURCE_EFFECT_TYPES.has(effect.type)) {
+      audioController?.applyEffect(effect);
+      return;
+    }
+
     const objectId = effect?.objectId;
     if (!objectId) return;
 
@@ -196,14 +231,24 @@ function applyTransform(obj, entry) {
   }
 }
 
+function resolveAnimationClip(clips, animState) {
+  const clipName = typeof animState?.clipName === 'string' ? animState.clipName.trim() : '';
+  if (clipName) {
+    const byName = clips.find((clip) => clip.name === clipName);
+    if (byName) return byName;
+  }
+
+  const clipIndex = Number.isInteger(animState?.clip) ? animState.clip : 0;
+  const safeIndex = Math.max(0, Math.min(clipIndex, clips.length - 1));
+  return clips[safeIndex];
+}
+
 function setupAnimation(mixer, gltf, animState) {
   const clips = gltf.animations;
   if (!Array.isArray(clips) || clips.length === 0) return null;
   if (animState && animState.enabled === false) return null;
 
-  const clipIndex = Number.isInteger(animState?.clip) ? animState.clip : 0;
-  const safeIndex = Math.max(0, Math.min(clipIndex, clips.length - 1));
-  const clip = clips[safeIndex];
+  const clip = resolveAnimationClip(clips, animState);
 
   const action = mixer.clipAction(clip);
   action.reset();
@@ -215,8 +260,182 @@ function setupAnimation(mixer, gltf, animState) {
   const speed = Number.isFinite(animState?.speed) ? animState.speed : 1;
   action.timeScale = speed;
 
+  const offset = Number.isFinite(animState?.offset) ? animState.offset : 0;
+  if (offset !== 0 && Number.isFinite(clip.duration) && clip.duration > 0) {
+    action.time = mode === THREE.LoopRepeat
+      ? ((offset % clip.duration) + clip.duration) % clip.duration
+      : Math.max(0, Math.min(offset, clip.duration));
+  }
+
   action.play();
   return action;
+}
+
+function resolveAudioPath(source, resolver) {
+  return resolver.resolveAsset(source?.asset) || source?.url || null;
+}
+
+function createObjectAudioController(sceneDoc, resolver, onMissingAsset) {
+  const entries = [];
+  const byKey = new Map();
+
+  function findEntry(objectId, name = 'default') {
+    return byKey.get(`${objectId}:${name || 'default'}`);
+  }
+
+  for (const objectEntry of sceneDoc.objects || []) {
+    const audioSources = objectEntry.audioSources;
+    if (!audioSources || typeof audioSources !== 'object' || Array.isArray(audioSources)) continue;
+
+    for (const [name, source] of Object.entries(audioSources)) {
+      if (!source || typeof source !== 'object') continue;
+      const audioPath = resolveAudioPath(source, resolver);
+      if (!audioPath) {
+        onMissingAsset?.({
+          id: `${objectEntry.id}:${name}`,
+          objectId: objectEntry.id,
+          kind: 'audioSource',
+          name,
+          reason: 'no path or url',
+        });
+        continue;
+      }
+
+      const audio = new Audio(audioPath);
+      audio.preload = 'auto';
+      audio.loop = source.loop === true;
+      audio.volume = clamp01(source.volume, 1);
+      audio.playbackRate = positiveNumber(source.playbackRate, 1);
+
+      const offset = Math.max(0, finiteNumber(source.offset, 0));
+      if (offset > 0) {
+        const applyOffset = () => {
+          try {
+            audio.currentTime = Number.isFinite(audio.duration)
+              ? Math.min(offset, audio.duration)
+              : offset;
+          } catch {}
+        };
+        audio.addEventListener('loadedmetadata', applyOffset, { once: true });
+      }
+
+      const entry = {
+        objectId: objectEntry.id,
+        name: source.name || name || 'default',
+        source,
+        audio,
+      };
+      entries.push(entry);
+      byKey.set(`${entry.objectId}:${entry.name}`, entry);
+
+      if (source.playOnAwake === true || source.state === 'playing') {
+        audio.play().catch(() => {});
+      }
+    }
+  }
+
+  return {
+    elements: entries.map((entry) => entry.audio),
+    applyEffect(effect) {
+      const objectId = effect.objectId || effect.target;
+      const name = effect.name || 'default';
+      const entry = findEntry(objectId, name);
+      if (!entry) return;
+
+      if (effect.type === 'audioSource.play') {
+        entry.audio.play().catch(() => {});
+      } else if (effect.type === 'audioSource.pause') {
+        entry.audio.pause();
+      } else if (effect.type === 'audioSource.stop') {
+        entry.audio.pause();
+        try { entry.audio.currentTime = 0; } catch {}
+      } else if (effect.type === 'audioSource.seek') {
+        const time = Math.max(0, finiteNumber(effect.time, 0));
+        try { entry.audio.currentTime = time; } catch {}
+      } else if (effect.type === 'audioSource.playOneShot') {
+        try { entry.audio.currentTime = 0; } catch {}
+        entry.audio.play().catch(() => {});
+      } else if (effect.type === 'audioSource.setVolume') {
+        entry.audio.volume = clamp01(effect.volume, entry.audio.volume);
+      } else if (effect.type === 'audioSource.setClip' && typeof effect.url === 'string') {
+        entry.audio.src = effect.url;
+        entry.audio.load?.();
+      }
+    },
+    dispose() {
+      for (const entry of entries) {
+        entry.audio.pause();
+        entry.audio.removeAttribute?.('src');
+        entry.audio.load?.();
+      }
+      entries.length = 0;
+      byKey.clear();
+    },
+  };
+}
+
+function getTextLayout(assetDef) {
+  const layout = assetDef?.layout && typeof assetDef.layout === 'object'
+    ? assetDef.layout
+    : {};
+
+  return {
+    width: positiveNumber(layout.width, TEXT_LAYOUT_DEFAULTS.width),
+    height: positiveNumber(layout.height, TEXT_LAYOUT_DEFAULTS.height),
+    padding: Math.max(0, finiteNumber(layout.padding, TEXT_LAYOUT_DEFAULTS.padding)),
+    lineHeight: positiveNumber(layout.lineHeight, TEXT_LAYOUT_DEFAULTS.lineHeight),
+  };
+}
+
+function renderTextPanelTexture(assetDef, text) {
+  const FONT_PRESETS = {
+    'system-sans':    'system-ui, -apple-system, "Segoe UI", sans-serif',
+    'serif':          'Georgia, "Times New Roman", serif',
+    'monospace':      '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+    'japanese-sans':  'system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif',
+    'japanese-serif': '"Hiragino Mincho ProN", "Yu Mincho", serif',
+  };
+
+  const layout = getTextLayout(assetDef);
+  const pixelsPerUnit = 512;
+  const cw = Math.max(256, Math.round(layout.width * pixelsPerUnit));
+  const ch = Math.max(256, Math.round(layout.height * pixelsPerUnit));
+  const canvas = document.createElement('canvas');
+  canvas.width = cw;
+  canvas.height = ch;
+
+  const ctx2d = canvas.getContext('2d');
+  ctx2d.clearRect(0, 0, cw, ch);
+  ctx2d.fillStyle = assetDef.backgroundColor || 'rgba(0,0,0,0.65)';
+  ctx2d.fillRect(0, 0, cw, ch);
+
+  const fontSize = positiveNumber(assetDef.fontSize, 32);
+  const fontFamily = FONT_PRESETS[assetDef.fontFamily] || FONT_PRESETS['system-sans'];
+  const fontWeight = assetDef.fontWeight || 'normal';
+  const fontStyle = assetDef.fontStyle || 'normal';
+  ctx2d.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
+  ctx2d.fillStyle = assetDef.color || '#ffffff';
+  ctx2d.textAlign = assetDef.align === 'left' ? 'left' : assetDef.align === 'right' ? 'right' : 'center';
+  ctx2d.textBaseline = 'top';
+
+  const paddingPx = layout.padding * pixelsPerUnit;
+  const lineHeight = fontSize * layout.lineHeight;
+  const scrollY = Math.max(0, finiteNumber(assetDef.scroll?.y, 0)) * pixelsPerUnit;
+  const x = assetDef.align === 'left'
+    ? paddingPx
+    : assetDef.align === 'right'
+      ? cw - paddingPx
+      : cw / 2;
+
+  let y = paddingPx - scrollY;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    ctx2d.fillText(line, x, y, Math.max(1, cw - paddingPx * 2));
+    y += lineHeight;
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return { texture, width: layout.width, height: layout.height };
 }
 
 export async function createViewerCore({
@@ -365,14 +584,6 @@ export async function createViewerCore({
         onMissingAsset?.({ id: entry.id, kind: 'video', path: assetPath });
       }
     } else if (assetDef.type === 'text') {
-      const FONT_PRESETS = {
-        'system-sans':    'system-ui, -apple-system, "Segoe UI", sans-serif',
-        'serif':          'Georgia, "Times New Roman", serif',
-        'monospace':      '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-        'japanese-sans':  'system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif',
-        'japanese-serif': '"Hiragino Mincho ProN", "Yu Mincho", serif',
-      };
-
       let text = '';
       if (assetDef.source === 'inline') {
         text = assetDef.text || '';
@@ -386,42 +597,11 @@ export async function createViewerCore({
         }
       }
 
-      const fontSize = assetDef.fontSize || 32;
-      const fontFamily = FONT_PRESETS[assetDef.fontFamily] || FONT_PRESETS['system-sans'];
-      const fontWeight = assetDef.fontWeight || 'normal';
-      const fontStyle = assetDef.fontStyle || 'normal';
-      const color = assetDef.color || '#ffffff';
-      const bgColor = assetDef.backgroundColor || 'rgba(0,0,0,0.65)';
-      const align = assetDef.align || 'center';
-
-      const cw = 1024, ch = 256;
-      const canvas = document.createElement('canvas');
-      canvas.width = cw;
-      canvas.height = ch;
-      const ctx2d = canvas.getContext('2d');
-
-      ctx2d.clearRect(0, 0, cw, ch);
-      ctx2d.fillStyle = bgColor;
-      ctx2d.fillRect(0, 0, cw, ch);
-
-      ctx2d.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
-      ctx2d.fillStyle = color;
-      ctx2d.textAlign = align === 'left' ? 'left' : align === 'right' ? 'right' : 'center';
-      ctx2d.textBaseline = 'middle';
-
-      const lines = text.split('\n');
-      const lineHeight = fontSize * 1.2;
-      const startY = (ch - lines.length * lineHeight) / 2 + lineHeight / 2;
-      const x = align === 'left' ? 20 : align === 'right' ? cw - 20 : cw / 2;
-      for (let i = 0; i < lines.length; i++) {
-        ctx2d.fillText(lines[i], x, startY + i * lineHeight);
-      }
-
-      const texture = new THREE.CanvasTexture(canvas);
-      const geo = new THREE.PlaneGeometry(2, 0.5); // 4:1 canvas aspect (1024×256)
+      const { texture, width, height } = renderTextPanelTexture(assetDef, text);
+      const geo = new THREE.PlaneGeometry(width, height);
       const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: true });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.y = 0.5 / 2; // align origin to bottom edge, matching web runtime
+      mesh.position.y = height / 2; // align origin to bottom edge, matching web runtime
 
       const group = new THREE.Group();
       group.add(mesh);
@@ -466,6 +646,8 @@ export async function createViewerCore({
     onProgress?.(loaded / total);
   }
 
+  const objectAudioController = createObjectAudioController(sceneDoc, resolver, onMissingAsset);
+
   // BGM setup - returns control object
   let bgmAudio = null;
   let bgmReady = false;
@@ -483,7 +665,7 @@ export async function createViewerCore({
   // Loomlet behavior graph runtime
   let loomAdapter = null;
   if (sceneDoc.behaviors) {
-    loomAdapter = createExportBehaviorRuntime(sceneDoc.behaviors, objectMap);
+    loomAdapter = createExportBehaviorRuntime(sceneDoc.behaviors, objectMap, objectAudioController);
   }
 
   const api = {
@@ -500,9 +682,14 @@ export async function createViewerCore({
       return bgmReady ? bgmAudio : null;
     },
 
+    getObjectAudioElements() {
+      return objectAudioController.elements;
+    },
+
     dispose() {
       dracoLoader.dispose();
       bgmAudio?.pause();
+      objectAudioController.dispose();
       loomAdapter?.dispose?.();
     },
   };

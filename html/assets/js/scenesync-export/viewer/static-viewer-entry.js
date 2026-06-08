@@ -102,6 +102,30 @@ async function main() {
     controlsEl.appendChild(bgmBtn);
   }
 
+  const objectAudioElements = viewerCore.getObjectAudioElements?.() || [];
+  if (objectAudioElements.length > 0 && controlsEl) {
+    const audioBtn = document.createElement('button');
+    audioBtn.className = 'viewer-btn';
+    audioBtn.textContent = '▶ Play Audio';
+    let playing = false;
+    audioBtn.addEventListener('click', () => {
+      if (playing) {
+        for (const audio of objectAudioElements) audio.pause();
+        audioBtn.textContent = '▶ Play Audio';
+        playing = false;
+      } else {
+        Promise.allSettled(objectAudioElements.map((audio) => audio.play()))
+          .then((results) => {
+            if (results.some((result) => result.status === 'fulfilled')) {
+              audioBtn.textContent = '⏸ Pause Audio';
+              playing = true;
+            }
+          });
+      }
+    });
+    controlsEl.appendChild(audioBtn);
+  }
+
   // Immersive entry button
   if (navigator.xr && controlsEl) {
     for (const mode of ['immersive-vr', 'immersive-ar']) {
@@ -146,13 +170,17 @@ function rewriteAssetPaths(doc) {
   if (!doc) return doc;
 
   const objects = (doc.objects || []).map(obj => {
-    if (!obj.asset?.path) return obj;
+    const audioSources = rewriteAudioSourcePaths(obj.audioSources);
+    if (!obj.asset?.path) {
+      return audioSources === obj.audioSources ? obj : { ...obj, audioSources };
+    }
     return {
       ...obj,
       asset: {
         ...obj.asset,
         path: resolveFromRoot(obj.asset.path),
       },
+      audioSources,
     };
   });
 
@@ -170,6 +198,30 @@ function rewriteAssetPaths(doc) {
   }
 
   return { ...doc, objects, skybox, bgm };
+}
+
+function rewriteAudioSourcePaths(audioSources) {
+  if (!audioSources || typeof audioSources !== 'object' || Array.isArray(audioSources)) {
+    return audioSources;
+  }
+
+  let changed = false;
+  const updated = {};
+  for (const [name, source] of Object.entries(audioSources)) {
+    if (source?.asset?.path) {
+      changed = true;
+      updated[name] = {
+        ...source,
+        asset: {
+          ...source.asset,
+          path: resolveFromRoot(source.asset.path),
+        },
+      };
+    } else {
+      updated[name] = source;
+    }
+  }
+  return changed ? updated : audioSources;
 }
 
 main();
