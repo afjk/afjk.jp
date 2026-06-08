@@ -58,7 +58,10 @@ import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './uti
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
 import { shouldFreezeObjectForEditorRuntime } from './runtime/editing-state.js';
 import { calculateScenePlaybackDuration } from './runtime/playback-duration.js';
-import { normalizeSceneClockDeactivateArgs } from './runtime/scene-clock-transport.js';
+import {
+  normalizeSceneClockDeactivateArgs,
+  preserveLocalSceneClockTimeline,
+} from './runtime/scene-clock-transport.js';
 import { buildExportPackage } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
@@ -4687,15 +4690,17 @@ function activateSceneClockTransport(now = performance.now()) {
 }
 
 function deactivateSceneClockTransport(nowOrOptions = performance.now(), maybeOptions = {}) {
-  const { now, preserveLocalTimeline } = normalizeSceneClockDeactivateArgs(nowOrOptions, maybeOptions);
+  const { now, preserveLocalTimeline, resumeLocalTimeline } =
+    normalizeSceneClockDeactivateArgs(nowOrOptions, maybeOptions);
 
   setSceneClockRate(1, now);
   sceneClockState.transportActive = false;
   if (preserveLocalTimeline) {
-    if (sceneClockState.mode === 'local') {
-      sceneClockState.localTime = getSceneClockTime(now);
-      sceneClockState.lastUpdateNow = now;
-    }
+    preserveLocalSceneClockTimeline(sceneClockState, {
+      now,
+      getSceneClockTime,
+      resume: resumeLocalTimeline,
+    });
   } else {
     followHostClock(now);
   }
