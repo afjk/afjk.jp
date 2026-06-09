@@ -109,8 +109,12 @@ export class ClipboardImportManager {
 
       case 'text':
         try {
-          await this.handleText(payload.text, position, payload.filename, placement);
-          this.showToast?.('クリップボードからテキストを追加しました');
+          const result = await this.handleText(payload.text, position, payload.filename, placement);
+          // text handler が独自の通知を出した場合は汎用 toast を抑止する
+          // （例: Loomlet graph として consume したケース）
+          if (!result?.suppressToast) {
+            this.showToast?.('クリップボードからテキストを追加しました');
+          }
         } catch (err) {
           console.warn('[clipboard] text import failed:', err);
           this.showToast?.(err?.message || 'テキストの読み込みに失敗しました');

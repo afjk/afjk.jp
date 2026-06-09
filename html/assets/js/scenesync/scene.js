@@ -11,6 +11,7 @@ import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
+import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
 import { createImageCanvasForScene } from './loaders/image-optimizer.js';
@@ -4605,6 +4606,55 @@ function applySceneGraphOperation(operation) {
   }
   loomIntegration.handlePayload(operation);
   notifySceneStateChanged('scene-graph-operation-applied');
+  return true;
+}
+
+// 通常ペースト導線に Loomlet graph を統合する。
+// selectedObjectIds から primary selected object を解決する（MVP: 単一対象）。
+function getPrimarySelectedObjectId() {
+  for (const id of selectedObjectIds) {
+    if (managedObjects.has(id)) return id;
+  }
+  return null;
+}
+
+// text paste の特殊ケースとして Loomlet graph を検出・適用する。
+// consume した場合は true を返し、呼び出し側は通常 text paste を行わない。
+function tryHandleLoomletGraphPaste(text) {
+  const parsed = parseLoomletGraphClipboardText(text);
+  if (!parsed) return false;
+
+  // Loomlet graph と認識した以上、text panel 化はしない（必ず consume する）。
+  const selectedObjectId = getPrimarySelectedObjectId();
+  if (!selectedObjectId) {
+    showToast('Loomlet graphを貼るには、先にオブジェクトを選択してください');
+    return true;
+  }
+
+  // MVP: scene scope へは寄せず、常に選択中オブジェクトへ attach / clear する。
+  const scope = { object: selectedObjectId };
+
+  try {
+    if (parsed.kind === 'clear') {
+      // 空 graph は attach せず Loomlet Behavior を外す。
+      const operation = { type: 'scene-graph-clear', scope };
+      applyOperationToScene(operation); // 自分の画面に即時反映
+      broadcast(operation);             // 同ルームの他クライアントへ同期
+      showToast('Loomletの振る舞いを外しました');
+    } else {
+      const operation = { type: 'scene-graph-set', scope, graph: parsed.graph };
+      applyOperationToScene(operation);
+      broadcast(operation);
+      showToast('Loomletの振る舞いを適用しました');
+    }
+  } catch (err) {
+    console.warn('[loomlet] graph paste failed:', err);
+    showToast('Loomlet graphの適用に失敗しました');
+  }
+
+  // TODO(loomlet): graph paste / clear を Undo/Redo 対象にする。
+  // 理想は graph paste = behavior attach、empty graph paste = behavior clear を
+  // historyManager 経由で前後状態に戻せるようにすること。MVP では未対応。
   return true;
 }
 
@@ -9231,6 +9281,13 @@ async function imageImporterCallback(file, position, context = {}) {
 }
 
 async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
+  // 通常ペースト導線の特殊ケース: 貼り付け内容が Loomlet graph なら
+  // text panel 化せず、選択中オブジェクトへ attach / clear する。
+  // 独自 toast を出すため、呼び出し側の汎用 toast は抑止する。
+  if (tryHandleLoomletGraphPaste(text)) {
+    return { suppressToast: true };
+  }
+
   const existingMetadata = (context.metadata && typeof context.metadata === 'object')
     ? context.metadata
     : {};
