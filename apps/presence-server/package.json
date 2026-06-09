@@ -6,7 +6,8 @@
   "license": "MIT",
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node --test tests/api.test.mjs tests/inferred-room.test.mjs tests/scenesync-guards.test.mjs",
+    "test": "node --test tests/api.test.mjs tests/inferred-room.test.mjs tests/scenesync-guards.test.mjs tests/loomlet-graph-clipboard.test.mjs",
+    "test:loomlet-graph-clipboard": "node --test tests/loomlet-graph-clipboard.test.mjs",
     "scenesync:cleanup-backups": "node scripts/cleanup-backups.mjs",
     "scenesync:load-test": "node ../../tools/scenesync/load-test-presence.mjs"
   },
