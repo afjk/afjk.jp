@@ -9702,18 +9702,27 @@ function openPasteSheet() {
 
 async function pasteFromClipboardAtDefaultPosition() {
   showToast('クリップボードを読み込みます…');
-  const result = await clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext())
+  // silent: true — read/readText が失敗しても manager 側で強い error toast を出さない。
+  // 成功時は importPayload が { ok: true } を返すので、それを成否判定に使う。
+  const result = await clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext(), { silent: true })
     .catch((error) => {
       console.warn('[clipboard] navigator clipboard paste failed:', error);
       return null;
     });
 
-  if (result) {
+  if (result?.ok) {
     return result;
   }
 
-  showToast('クリップボードを読み取れません');
-  return null;
+  // ここで強いエラー toast は出さない。
+  // - result?.ok === false: importPayload 側が既に適切な失敗 toast を出している。
+  // - result == null: navigator.clipboard.read/readText が使えない/失敗したケース。
+  //   この場合でも、実際の paste event 側で処理が成功していることがある（iOS Safari 等）ため、
+  //   誤った失敗表示を避け console.warn に留める。
+  if (result == null) {
+    console.warn('[clipboard] navigator clipboard unavailable or read failed');
+  }
+  return result ?? null;
 }
 
 pasteBtn?.addEventListener('click', () => {

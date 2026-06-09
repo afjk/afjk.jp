@@ -91,21 +91,23 @@ export class ClipboardImportManager {
       case 'file':
         try {
           await this.handleFile(payload.file, placement);
+          return { ok: true, kind: 'file' };
         } catch (err) {
           console.warn('[clipboard] file import failed:', err);
           this.showToast?.(err?.message || 'ファイルの読み込みに失敗しました');
+          return { ok: false, kind: 'file' };
         }
-        break;
 
       case 'url':
         try {
           this.showToast?.('クリップボードからURLを読み込みます');
           await this.handleUrl(payload.url, position, placement);
+          return { ok: true, kind: 'url' };
         } catch (err) {
           console.warn('[clipboard] url import failed:', err);
           this.showToast?.(err?.message || 'URLの追加に失敗しました');
+          return { ok: false, kind: 'url' };
         }
-        break;
 
       case 'text':
         try {
@@ -115,19 +117,23 @@ export class ClipboardImportManager {
           if (!result?.suppressToast) {
             this.showToast?.('クリップボードからテキストを追加しました');
           }
+          return { ok: true, kind: 'text', result };
         } catch (err) {
           console.warn('[clipboard] text import failed:', err);
           this.showToast?.(err?.message || 'テキストの読み込みに失敗しました');
+          return { ok: false, kind: 'text' };
         }
-        break;
 
       default:
         this.showToast?.('このクリップボード内容は読み込めません');
+        return { ok: false, kind: payload?.kind || 'unknown' };
     }
   }
 
   // navigator.clipboard fallback (for future context menu)
-  async pasteFromNavigatorClipboard(position) {
+  // silent=true の場合、read/readText が両方失敗しても強いエラー toast を出さない。
+  // （通常の paste event 側で既に処理できているケースで誤った失敗表示を避けるため）
+  async pasteFromNavigatorClipboard(position, { silent = false } = {}) {
     if (navigator.clipboard?.read) {
       try {
         const items = await navigator.clipboard.read();
@@ -151,7 +157,9 @@ export class ClipboardImportManager {
       }
     }
 
-    this.showToast?.('クリップボードを読み取れません');
+    if (!silent) {
+      this.showToast?.('クリップボードを読み取れません');
+    }
     return null;
   }
 
