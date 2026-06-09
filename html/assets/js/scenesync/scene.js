@@ -4631,19 +4631,22 @@ function tryHandleLoomletGraphPaste(text) {
     return true;
   }
 
-  // MVP: scene scope へは寄せず、常に選択中オブジェクトへ attach / clear する。
+  // MVP: paste 時は parsed.scope（scene / { object: 'box-1' } 等）を尊重せず、
+  // 常に選択中オブジェクトへ上書きして attach / clear する。
+  // parser は scope を保持するが、適用側のこの正規化が最終的な貼り付け先を決める。
   const scope = { object: selectedObjectId };
 
   try {
     if (parsed.kind === 'clear') {
       // 空 graph は attach せず Loomlet Behavior を外す。
+      // applySceneGraphOperation: loomIntegration.handlePayload + notifySceneStateChanged
       const operation = { type: 'scene-graph-clear', scope };
-      applyOperationToScene(operation); // 自分の画面に即時反映
-      broadcast(operation);             // 同ルームの他クライアントへ同期
+      applySceneGraphOperation(operation); // 自分の画面に即時反映
+      broadcast(operation);                // 同ルームの他クライアントへ同期
       showToast('Loomletの振る舞いを外しました');
     } else {
       const operation = { type: 'scene-graph-set', scope, graph: parsed.graph };
-      applyOperationToScene(operation);
+      applySceneGraphOperation(operation);
       broadcast(operation);
       showToast('Loomletの振る舞いを適用しました');
     }

@@ -8,6 +8,12 @@ import {
   normalizeScope,
 } from '../../../html/assets/js/scenesync/components/loomlet-graph-clipboard.js';
 
+// 注意: parser は scope（'scene' / { object: 'box-1' } 等）を保持・正規化するが、
+// これはあくまで parse 結果。実際の paste 適用側（scene.js tryHandleLoomletGraphPaste）
+// では MVP 方針として parsed.scope を尊重せず、常に「選択中オブジェクト」へ
+// 上書きして attach / clear する。以下の scope 関連テストは parser の挙動のみを
+// 検証しており、最終的な貼り付け先を意味しない点に注意。
+
 test('raw graph is parsed as set', () => {
   const text = JSON.stringify({
     nodes: [{ id: 'clock', type: 'clock' }],
