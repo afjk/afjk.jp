@@ -61,6 +61,7 @@ export function createEditorPlayerTransport() {
   let mobileButton = null;
   let mountedCore = null;
   let opened = false;
+  let inputRoutingModeBeforePlayerUi = null;
   const disposers = [];
 
   function renderToggleState() {
@@ -74,6 +75,9 @@ export function createEditorPlayerTransport() {
   function open(core) {
     if (opened) return;
     opened = true;
+    const state = core?.getEditorState?.();
+    inputRoutingModeBeforePlayerUi = state?.inputRoutingMode ?? 'edit';
+    core?.commands?.setInputRoutingMode?.('interact');
     core?.commands?.activateSceneClockTransport?.();
     transport?.setHidden(false);
     renderToggleState();
@@ -84,6 +88,9 @@ export function createEditorPlayerTransport() {
     opened = false;
     transport?.setHidden(true);
     core?.commands?.deactivateSceneClockTransport?.(getEditorPlayerDeactivateSceneClockOptions());
+    const restoreMode = inputRoutingModeBeforePlayerUi ?? 'edit';
+    inputRoutingModeBeforePlayerUi = null;
+    core?.commands?.setInputRoutingMode?.(restoreMode);
     renderToggleState();
   }
 
@@ -128,6 +135,9 @@ export function createEditorPlayerTransport() {
     unmount() {
       if (opened) {
         mountedCore?.commands?.deactivateSceneClockTransport?.(getEditorPlayerDeactivateSceneClockOptions());
+        const restoreMode = inputRoutingModeBeforePlayerUi ?? 'edit';
+        inputRoutingModeBeforePlayerUi = null;
+        mountedCore?.commands?.setInputRoutingMode?.(restoreMode);
       }
       opened = false;
       for (const dispose of disposers.splice(0)) dispose();
