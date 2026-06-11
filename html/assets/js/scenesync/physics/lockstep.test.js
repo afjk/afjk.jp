@@ -133,6 +133,73 @@ test('a late joiner resyncs from a state snapshot and stays in sync', () => {
   void pending;
 });
 
+test('issued commands are canonical raw-int payloads and frozen', () => {
+  const session = createLockstepSession({ peerId: 'peer-a', worldOptions: WORLD_OPTIONS });
+  session.issueCommand('add-body', { body: { id: 'ball', shape: 'sphere', position: [0, 2, 0] } });
+  const cmd = session.issueCommand('impulse', { bodyId: 'ball', impulse: [1, 2, 3] });
+
+  assert.deepEqual(cmd.impulseFp, [65536, 131072, 196608]);
+  assert.equal('impulse' in cmd, false);
+  assert.ok(Object.isFrozen(cmd));
+  assert.throws(() => { cmd.tick = 999; }, TypeError);
+  assert.throws(() => { cmd.impulseFp[0] = 12345; }, TypeError);
+});
+
+test('mutating a received message after the fact cannot diverge the log', () => {
+  const a = createLockstepSession({ peerId: 'peer-a', worldOptions: WORLD_OPTIONS });
+  const b = createLockstepSession({ peerId: 'peer-b', worldOptions: WORLD_OPTIONS });
+  const spawn = a.issueCommand('add-body', { body: { id: 'ball', shape: 'sphere', position: [0, 2, 0] } });
+  exchange(a, b, spawn);
+
+  const message = JSON.parse(JSON.stringify(
+    a.issueCommand('impulse', { bodyId: 'ball', impulse: [2, 0, 0] }),
+  ));
+  b.receiveCommand(message);
+  // sender-side tampering with the retained message object must not matter
+  message.impulseFp[0] = 999999;
+  message.tick = 1;
+
+  a.advanceTo(120);
+  b.advanceTo(120);
+  assert.equal(a.stateHash(), b.stateHash());
+});
+
+test('after a resync, slightly-late commands are replayed instead of rejected', () => {
+  const a = createLockstepSession({ peerId: 'peer-a', worldOptions: WORLD_OPTIONS });
+  const spawn = a.issueCommand('add-body', {
+    body: { id: 'ball', shape: 'sphere', radius: 0.5, position: [0, 2, 0] },
+  });
+  a.advanceTo(95);
+
+  const c = createLockstepSession({ peerId: 'peer-c', worldOptions: WORLD_OPTIONS });
+  assert.equal(c.applyResyncState(JSON.parse(JSON.stringify(a.createResyncState()))), true);
+
+  const late = a.issueCommand('impulse', { bodyId: 'ball', impulse: [3, 5, 0] }); // tick 101
+  a.advanceTo(150);
+  c.advanceTo(110); // c has passed tick 101 with no snapshot interval boundary since 95
+
+  const result = exchange(a, c, late);
+  assert.equal(result.applied, true);
+  assert.equal(result.rolledBack, true);
+
+  c.advanceTo(150);
+  assert.equal(a.stateHash(), c.stateHash());
+  void spawn;
+});
+
+test('seqCounter resumes after own pending commands found in a resync state', () => {
+  const a = createLockstepSession({ peerId: 'peer-a', worldOptions: WORLD_OPTIONS });
+  const c = createLockstepSession({ peerId: 'peer-c', worldOptions: WORLD_OPTIONS });
+  exchange(c, a, c.issueCommand('add-body', { body: { id: 'ball', shape: 'sphere', position: [0, 2, 0] } }));
+  exchange(c, a, c.issueCommand('impulse', { bodyId: 'ball', impulse: [1, 0, 0] }));
+
+  // peer-c rejoins from a's state, which still holds peer-c's pending commands
+  const rejoined = createLockstepSession({ peerId: 'peer-c', worldOptions: WORLD_OPTIONS });
+  assert.equal(rejoined.applyResyncState(JSON.parse(JSON.stringify(a.createResyncState()))), true);
+  const next = rejoined.issueCommand('remove-body', { bodyId: 'ball' });
+  assert.equal(next.seq, 2);
+});
+
 test('issued commands are scheduled commandDelayTicks ahead', () => {
   const session = createLockstepSession({ peerId: 'peer-a', worldOptions: WORLD_OPTIONS, commandDelayTicks: 6 });
   session.advanceTo(10);

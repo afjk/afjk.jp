@@ -163,3 +163,69 @@ test('stateHash changes when the simulation state changes', () => {
   world.step();
   assert.notEqual(world.stateHash(), h0);
 });
+
+test('stateHash covers material parameters, not just position and velocity', () => {
+  const make = (overrides) => {
+    const world = createWorld({ ground: null });
+    world.addBody({ id: 'ball', shape: 'sphere', position: [0, 1, 0], ...overrides });
+    return world.stateHash();
+  };
+  const base = make({});
+  assert.notEqual(make({ restitution: 0.9 }), base);
+  assert.notEqual(make({ friction: 0.1 }), base);
+  assert.notEqual(make({ mass: 5 }), base);
+  assert.notEqual(make({ radius: 0.7 }), base);
+  assert.notEqual(make({ shape: 'box' }), base);
+});
+
+test('stateHash covers world configuration', () => {
+  const hashFor = (options) => {
+    const world = createWorld(options);
+    world.addBody({ id: 'ball', shape: 'sphere', position: [0, 1, 0] });
+    return world.stateHash();
+  };
+  const base = hashFor({ ground: { y: 0 } });
+  assert.notEqual(hashFor({ ground: null }), base);
+  assert.notEqual(hashFor({ ground: { y: 1 } }), base);
+  assert.notEqual(hashFor({ ground: { y: 0 }, gravity: -5 }), base);
+  assert.notEqual(hashFor({ ground: { y: 0 }, timestepFp: 2184 }), base);
+});
+
+test('stateHash covers sleepCounter progress', () => {
+  const a = createWorld({ ground: { y: 0 } });
+  a.addBody({ id: 'ball', shape: 'sphere', radius: 0.5, position: [0, 0.5, 0] });
+  const b = createWorld({ ground: { y: 0 } });
+  b.addBody({ id: 'ball', shape: 'sphere', radius: 0.5, position: [0, 0.5, 0] });
+  for (let i = 0; i < 10; i += 1) { a.step(); b.step(); }
+  assert.equal(a.stateHash(), b.stateHash());
+  const snapA = a.snapshot();
+  const snapB = b.snapshot();
+  assert.equal(snapA.bodies[0].sleepCounter, snapB.bodies[0].sleepCounter);
+  // Worlds whose only difference is sleep progress must not hash-collide
+  snapB.bodies[0].sleepCounter += 1;
+  b.restore(snapB);
+  assert.notEqual(a.stateHash(), b.stateHash());
+});
+
+test('addBodyRecord and raw mutators sanitize network input deterministically', () => {
+  const world = createWorld({ ground: null });
+  assert.equal(world.addBodyRecord(null), null);
+  assert.equal(world.addBodyRecord({ id: '' }), null);
+  const added = world.addBodyRecord({
+    id: 'ball',
+    shape: 'sphere',
+    radiusFp: 32768,
+    positionFp: [0, 65536, 0],
+    velocityFp: ['bogus', 1.5, 2 ** 60],
+    invMassFp: 65536,
+    restitutionFp: 99999999,
+    frictionFp: -5,
+  });
+  assert.deepEqual(added.velocity, [0, 0, 0]);
+  assert.equal(world.applyImpulseFp('ball', [65536, 0, 0]), true);
+  assert.equal(world.getBody('ball').velocity[0], 1);
+  assert.equal(world.setVelocityFp('ball', [0, 131072, 0]), true);
+  assert.equal(world.getBody('ball').velocity[1], 2);
+  assert.equal(world.teleportFp('ball', [196608, 0, 0]), true);
+  assert.equal(world.getBody('ball').position[0], 3);
+});

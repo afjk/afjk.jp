@@ -18,7 +18,9 @@ Scene Sync で物理演算を複数クライアント間で同期するための
 1. **16.16 固定小数点整数演算のみ** — 浮動小数点の実行系差を排除
 2. **固定タイムステップ** — シミュレーションは tick 数のみに依存し、実時間に依存しない
 3. **決定論的な反復順序** — body は挿入順、コマンドは `(tick, peerId, seq)` で全クライアント同一順に適用
-4. **状態ハッシュ(FNV-1a 32bit)** — 分岐検出。不一致時は snapshot で再同期
+4. **プロトコルは raw int** — float→固定小数点変換はコマンド発行クライアントで 1 回だけ行い、wire には固定小数点 raw int を流す。受信側は決定論的なサニタイズ(safe int 化 + クランプ)のみ行う
+5. **コマンドの canonical 化** — 発行・受信時に正規化 + deep freeze してから log に入れる。呼び出し側が保持した参照を後から変更しても log は変わらない
+6. **フルステートハッシュ(FNV-1a 32bit)** — 将来の挙動に影響する全フィールド(world 設定 + tick + 全 body の形状・質量・材質・sleepCounter 含む)を hash。分岐検出時は snapshot で再同期
 
 ## 固定小数点の演算規則(移植ルール)
 
@@ -30,8 +32,11 @@ FP_ONE = 65536 (16.16)
 fmul(a, b) = floor((a * b) / 2^16)      # C#: (a * b) >> 16  (long, 算術シフト)
 fdiv(a, b) = floor((a * 2^16) / b)      # 注意: floor 除算。C# の / は 0 方向切り捨てなので負数は補正が必要
 fsqrt(a)   = floor(sqrt(a * 2^16))      # 64bit 整数 sqrt(Newton 法等)で厳密に
-toFp(x)    = round(x * 65536)           # float→固定小数点は body 定義の取り込み時のみ
+toFp(x)    = floor(x * 2^16 + 0.5)      # IEEE754 double で評価。2 のべき乗倍と floor は厳密なので移植可能
 ```
+
+`toFp` を `Math.round` / C# `Math.Round` で実装してはいけない(0.5 の丸め規則が処理系で異なる)。
+ただし `toFp` が必要になるのはコマンド発行クライアントと world 生成時(`physics-start` の float options)のみで、コマンド payload は raw int で broadcast されるため、通常の同期経路に float 変換は乗らない。
 
 - 乱数は xorshift32(32bit 演算)、状態ハッシュは FNV-1a 32bit。
 - JS 実装は Number(倍精度)の整数演算が 2^53 まで厳密であることを利用する。
@@ -96,6 +101,8 @@ const session = createLockstepSession({
 });
 
 // ローカル操作 → コマンド発行 → broadcast
+// payload の float はここで一度だけ固定小数点 raw int へ変換され、
+// canonical 化 + freeze 済みのコマンドが返る(log にも同じものが入る)
 const command = session.issueCommand('add-body', {
   body: { id: 'ball-1', shape: 'sphere', position: [0, 3, 0] },
 });
@@ -114,10 +121,16 @@ render(session.getBodies());
 // 途中参加 / ハッシュ不一致時の再同期
 const state = session.createResyncState();   // { tick, hash, snapshot, commands }
 newSession.applyResyncState(state);
+// applyResyncState は復元状態を rollback 起点 snapshot として seed し、
+// state 内に自分の peerId のコマンドがあれば seq をその先から再開する
 ```
 
 コマンド種別: `add-body` / `remove-body` / `impulse` / `set-velocity` / `teleport`。
+canonical なコマンド payload は raw int(`body`(raw record) / `impulseFp` / `velocityFp` / `positionFp`)。
 未知の type・不正な payload は **全クライアントで同一に無視** する(前方互換)。
+
+`stateHash()` は world 設定(gravity / timestep / ground)も hash に含めるため、
+`physics-start` の `worldOptions` が一致しないクライアントは即座にハッシュ不一致として検出される。
 
 ## broadcast メッセージ(案)
 
@@ -129,7 +142,7 @@ Scene Sync の broadcast に以下の kind を載せる。シミュレーショ�
 
 { "kind": "physics-command", "sessionId": "phys-1",
   "command": { "tick": 126, "seq": 3, "peerId": "peer-abc", "type": "impulse",
-               "bodyId": "ball-1", "impulse": [2, 4, 0] } }
+               "bodyId": "ball-1", "impulseFp": [131072, 262144, 0] } }
 
 { "kind": "physics-state", "sessionId": "phys-1",
   "tick": 600, "hash": "3fa2c81b", "snapshot": { }, "commands": [] }

@@ -17,8 +17,13 @@ export const FP_ONE = 65536;
 
 export function toFp(value) {
   if (!Number.isFinite(value)) return 0;
-  // `+ 0` normalizes -0 so raw state never contains negative zero
-  return Math.round(value * FP_ONE) + 0;
+  // Spec: toFp(x) = floor(x * 2^16 + 0.5) evaluated in IEEE754 doubles.
+  // Multiplying by a power of two and flooring are exact, so this definition
+  // is bit-portable — unlike Math.round / C# Math.Round whose half-way tie
+  // rules differ. Conversion happens only when commands are issued; the wire
+  // protocol carries raw fixed-point ints (see docs/scene-sync-physics.md).
+  // `+ 0` normalizes -0 so raw state never contains negative zero.
+  return Math.floor(value * FP_ONE + 0.5) + 0;
 }
 
 export function fromFp(raw) {
@@ -56,6 +61,21 @@ export function fdiv(a, b) {
 
 export function fclamp(value, min, max) {
   return value < min ? min : value > max ? max : value;
+}
+
+// Deterministic coercion for raw fixed-point values received from the
+// network: anything that is not a safe integer becomes the fallback.
+export function toSafeInt(value, fallback = 0) {
+  return Number.isSafeInteger(value) ? value + 0 : fallback;
+}
+
+export function sanitizeFpVec(value, limit) {
+  const v = Array.isArray(value) && value.length >= 3 ? value : [0, 0, 0];
+  return [
+    fclamp(toSafeInt(v[0]), -limit, limit),
+    fclamp(toSafeInt(v[1]), -limit, limit),
+    fclamp(toSafeInt(v[2]), -limit, limit),
+  ];
 }
 
 export function fsqrt(a) {

@@ -9,8 +9,71 @@
 // Command ordering is (tick, peerId, seq) so all clients apply concurrent
 // commands in the same order regardless of arrival order.
 
-import { FP_ONE } from './fixed.js';
-import { createWorld, DEFAULT_TIMESTEP_FP } from './world.js';
+import { FP_ONE, toFp, toSafeInt, sanitizeFpVec } from './fixed.js';
+import {
+  createWorld,
+  DEFAULT_TIMESTEP_FP,
+  normalizeBodyDef,
+  sanitizeBodyRecord,
+  MAX_POSITION_FP,
+  MAX_VELOCITY_FP,
+  MAX_IMPULSE_FP,
+} from './world.js';
+
+function toFpVecLoose(value) {
+  const v = Array.isArray(value) && value.length >= 3 ? value : [0, 0, 0];
+  return [toFp(Number(v[0])), toFp(Number(v[1])), toFp(Number(v[2]))];
+}
+
+function deepFreeze(object) {
+  for (const value of Object.values(object)) {
+    if (value && typeof value === 'object') deepFreeze(value);
+  }
+  return Object.freeze(object);
+}
+
+// Builds the canonical, JSON-safe, frozen command that goes into the log.
+// Payloads are raw fixed-point ints; every peer runs the same coercion, so a
+// command observed anywhere is byte-identical everywhere, and callers cannot
+// mutate logged commands through retained references.
+export function canonicalizeCommand(command) {
+  const canonical = {
+    tick: toSafeInt(command.tick, -1),
+    seq: toSafeInt(command.seq, -1),
+    peerId: String(command.peerId ?? ''),
+    type: String(command.type ?? ''),
+  };
+  switch (canonical.type) {
+    case 'add-body': {
+      const body = sanitizeBodyRecord(command.body);
+      if (body) {
+        body.sleepCounter = 0;
+        body.sleeping = false;
+        canonical.body = body;
+      }
+      break;
+    }
+    case 'remove-body':
+      canonical.bodyId = String(command.bodyId ?? '');
+      break;
+    case 'impulse':
+      canonical.bodyId = String(command.bodyId ?? '');
+      canonical.impulseFp = sanitizeFpVec(command.impulseFp, MAX_IMPULSE_FP);
+      break;
+    case 'set-velocity':
+      canonical.bodyId = String(command.bodyId ?? '');
+      canonical.velocityFp = sanitizeFpVec(command.velocityFp, MAX_VELOCITY_FP);
+      break;
+    case 'teleport':
+      canonical.bodyId = String(command.bodyId ?? '');
+      canonical.positionFp = sanitizeFpVec(command.positionFp, MAX_POSITION_FP);
+      break;
+    default:
+      // 未知 type は payload を持たない inert なコマンドとして残す
+      break;
+  }
+  return deepFreeze(canonical);
+}
 
 export function compareCommands(a, b) {
   if (a.tick !== b.tick) return a.tick - b.tick;
@@ -57,29 +120,25 @@ export function createLockstepSession({
   }
 
   function applyCommand(command) {
-    try {
-      switch (command.type) {
-        case 'add-body':
-          if (command.body) world.addBody(command.body);
-          break;
-        case 'remove-body':
-          world.removeBody(command.bodyId);
-          break;
-        case 'impulse':
-          if (Array.isArray(command.impulse)) world.applyImpulse(command.bodyId, command.impulse);
-          break;
-        case 'set-velocity':
-          if (Array.isArray(command.velocity)) world.setVelocity(command.bodyId, command.velocity);
-          break;
-        case 'teleport':
-          if (Array.isArray(command.position)) world.teleport(command.bodyId, command.position);
-          break;
-        default:
-          // 未知のコマンドは全クライアントで同一に無視する
-          break;
-      }
-    } catch {
-      // 不正な payload も全クライアントで同一に無視する
+    switch (command.type) {
+      case 'add-body':
+        if (command.body) world.addBodyRecord(command.body);
+        break;
+      case 'remove-body':
+        world.removeBody(command.bodyId);
+        break;
+      case 'impulse':
+        world.applyImpulseFp(command.bodyId, command.impulseFp);
+        break;
+      case 'set-velocity':
+        world.setVelocityFp(command.bodyId, command.velocityFp);
+        break;
+      case 'teleport':
+        world.teleportFp(command.bodyId, command.positionFp);
+        break;
+      default:
+        // 未知のコマンドは全クライアントで同一に無視する
+        break;
     }
   }
 
@@ -121,23 +180,52 @@ export function createLockstepSession({
     commandLog.splice(index, 0, command);
   }
 
+  // Accepts ergonomic float payloads ({ body }, { impulse }, { velocity },
+  // { position }) or pre-converted raw payloads ({ impulseFp }, ...). Floats
+  // are converted to fixed point here, once, on the issuing client — the
+  // canonical raw-int command is what gets logged and broadcast.
   function issueCommand(type, payload = {}) {
-    const command = {
-      ...payload,
+    const draft = {
       tick: world.tick + commandDelayTicks,
       seq: seqCounter,
       peerId,
       type,
     };
+    switch (type) {
+      case 'add-body':
+        draft.body = payload.body && !Array.isArray(payload.body)
+          ? (payload.body.positionFp ? payload.body : normalizeBodyDef(payload.body))
+          : null;
+        break;
+      case 'remove-body':
+        draft.bodyId = payload.bodyId;
+        break;
+      case 'impulse':
+        draft.bodyId = payload.bodyId;
+        draft.impulseFp = payload.impulseFp ?? toFpVecLoose(payload.impulse);
+        break;
+      case 'set-velocity':
+        draft.bodyId = payload.bodyId;
+        draft.velocityFp = payload.velocityFp ?? toFpVecLoose(payload.velocity);
+        break;
+      case 'teleport':
+        draft.bodyId = payload.bodyId;
+        draft.positionFp = payload.positionFp ?? toFpVecLoose(payload.position);
+        break;
+      default:
+        break;
+    }
+    const command = canonicalizeCommand(draft);
     seqCounter += 1;
     insertCommand(command);
     return command;
   }
 
-  function receiveCommand(command) {
-    if (!isValidCommand(command)) {
+  function receiveCommand(message) {
+    if (!isValidCommand(message)) {
       return { applied: false, reason: 'invalid' };
     }
+    const command = canonicalizeCommand(message);
     if (findDuplicate(command)) {
       return { applied: false, reason: 'duplicate' };
     }
@@ -180,9 +268,22 @@ export function createLockstepSession({
     if (!state || typeof state !== 'object' || !state.snapshot) return false;
     world.restore(state.snapshot);
     snapshots.length = 0;
+    // Seed the restored state as a rollback anchor so slightly-late commands
+    // arriving before the next snapshot interval can still be replayed
+    // instead of being rejected as too-old.
+    snapshots.push({ tick: world.tick, snapshot: world.snapshot() });
     commandLog.length = 0;
-    for (const command of state.commands ?? []) {
-      if (isValidCommand(command) && !findDuplicate(command)) insertCommand(command);
+    for (const message of state.commands ?? []) {
+      if (!isValidCommand(message)) continue;
+      const command = canonicalizeCommand(message);
+      if (!findDuplicate(command)) insertCommand(command);
+    }
+    // Never reuse a (peerId, seq) pair that may already exist in the room:
+    // resume our sequence after the highest seq attributed to us.
+    for (const command of commandLog) {
+      if (command.peerId === peerId && command.seq >= seqCounter) {
+        seqCounter = command.seq + 1;
+      }
     }
     return true;
   }

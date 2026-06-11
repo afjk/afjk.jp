@@ -16,6 +16,8 @@ import {
   fdiv,
   fsqrt,
   fclamp,
+  toSafeInt,
+  sanitizeFpVec,
   vadd,
   vsub,
   vneg,
@@ -32,8 +34,8 @@ export const DEFAULT_GRAVITY_FP = -642908; // -9.81 m/s²
 
 export const MAX_POSITION_FP = 1 << 28; // ±4096 m
 export const MAX_VELOCITY_FP = 1 << 24; // ±256 m/s
-const MAX_EXTENT_FP = 1 << 24;
-const MAX_IMPULSE_FP = 2 ** 36;
+export const MAX_EXTENT_FP = 1 << 24;
+export const MAX_IMPULSE_FP = 2 ** 36;
 
 const MIN_MASS = 0.01;
 const MAX_MASS = 1000;
@@ -72,6 +74,69 @@ function normalizeGround(ground) {
     yFp: fclamp(toFp(Number.isFinite(def.y) ? def.y : 0), -MAX_POSITION_FP, MAX_POSITION_FP),
     restitutionFp: fclamp(toFp(Number.isFinite(def.restitution) ? def.restitution : 0.2), 0, FP_ONE),
     frictionFp: fclamp(toFp(Number.isFinite(def.friction) ? def.friction : 0.5), 0, FP_ONE),
+  };
+}
+
+const MAX_INV_MASS_FP = 6553600; // fdiv(FP_ONE, toFp(MIN_MASS))
+
+// Converts a float body definition into a raw fixed-point body record.
+// Conversion happens once on the issuing client; the record (not the float
+// def) is what travels over the wire and feeds the simulation.
+export function normalizeBodyDef(def) {
+  if (!def || typeof def.id !== 'string' || def.id.length === 0) {
+    throw new TypeError('normalizeBodyDef: body def requires a non-empty string id');
+  }
+  const shape = def.shape === 'box' ? 'box' : 'sphere';
+  const halfSource = Array.isArray(def.halfExtents) && def.halfExtents.length >= 3
+    ? def.halfExtents
+    : [0.5, 0.5, 0.5];
+  const mass = Number.isFinite(def.mass) ? def.mass : 1;
+  const isStatic = def.static === true || mass <= 0;
+  return {
+    id: def.id,
+    shape,
+    radiusFp: shape === 'sphere'
+      ? fclamp(toFp(Number.isFinite(def.radius) ? def.radius : 0.5), 1, MAX_EXTENT_FP)
+      : 0,
+    halfFp: shape === 'box'
+      ? [
+        fclamp(toFp(Number(halfSource[0])), 1, MAX_EXTENT_FP),
+        fclamp(toFp(Number(halfSource[1])), 1, MAX_EXTENT_FP),
+        fclamp(toFp(Number(halfSource[2])), 1, MAX_EXTENT_FP),
+      ]
+      : [0, 0, 0],
+    positionFp: sanitizeFpVec(toFpVecSafe(def.position), MAX_POSITION_FP),
+    velocityFp: sanitizeFpVec(toFpVecSafe(def.velocity), MAX_VELOCITY_FP),
+    invMassFp: isStatic ? 0 : fdiv(FP_ONE, toFp(clampNumber(mass, MIN_MASS, MAX_MASS))),
+    restitutionFp: fclamp(toFp(Number.isFinite(def.restitution) ? def.restitution : 0.2), 0, FP_ONE),
+    frictionFp: fclamp(toFp(Number.isFinite(def.friction) ? def.friction : 0.5), 0, FP_ONE),
+    sleepCounter: 0,
+    sleeping: false,
+  };
+}
+
+// Deterministically coerces a raw body record received from the network
+// (command payload or snapshot) back into safe bounds. Returns null when the
+// record has no usable id, which every client treats the same way.
+export function sanitizeBodyRecord(record) {
+  if (!record || typeof record.id !== 'string' || record.id.length === 0) return null;
+  const shape = record.shape === 'box' ? 'box' : 'sphere';
+  return {
+    id: record.id,
+    shape,
+    radiusFp: shape === 'sphere'
+      ? fclamp(toSafeInt(record.radiusFp, FP_ONE >> 1), 1, MAX_EXTENT_FP)
+      : 0,
+    halfFp: shape === 'box'
+      ? sanitizeFpVec(record.halfFp, MAX_EXTENT_FP).map((v) => fclamp(v, 1, MAX_EXTENT_FP))
+      : [0, 0, 0],
+    positionFp: sanitizeFpVec(record.positionFp, MAX_POSITION_FP),
+    velocityFp: sanitizeFpVec(record.velocityFp, MAX_VELOCITY_FP),
+    invMassFp: fclamp(toSafeInt(record.invMassFp, FP_ONE), 0, MAX_INV_MASS_FP),
+    restitutionFp: fclamp(toSafeInt(record.restitutionFp), 0, FP_ONE),
+    frictionFp: fclamp(toSafeInt(record.frictionFp), 0, FP_ONE),
+    sleepCounter: fclamp(toSafeInt(record.sleepCounter), 0, SLEEP_TICKS),
+    sleeping: record.sleeping === true,
   };
 }
 
@@ -131,42 +196,14 @@ export function createWorld(options = {}) {
     return vclampComponents(v, MAX_VELOCITY_FP);
   }
 
-  function normalizeBodyDef(def) {
-    if (!def || typeof def.id !== 'string' || def.id.length === 0) {
-      throw new TypeError('addBody: body def requires a non-empty string id');
-    }
-    const shape = def.shape === 'box' ? 'box' : 'sphere';
-    const halfSource = Array.isArray(def.halfExtents) && def.halfExtents.length >= 3
-      ? def.halfExtents
-      : [0.5, 0.5, 0.5];
-    const body = {
-      id: def.id,
-      shape,
-      radiusFp: shape === 'sphere'
-        ? fclamp(toFp(Number.isFinite(def.radius) ? def.radius : 0.5), 1, MAX_EXTENT_FP)
-        : 0,
-      halfFp: shape === 'box'
-        ? [
-          fclamp(toFp(Number(halfSource[0])), 1, MAX_EXTENT_FP),
-          fclamp(toFp(Number(halfSource[1])), 1, MAX_EXTENT_FP),
-          fclamp(toFp(Number(halfSource[2])), 1, MAX_EXTENT_FP),
-        ]
-        : [0, 0, 0],
-      positionFp: clampPosition(toFpVecSafe(def.position)),
-      velocityFp: clampVelocity(toFpVecSafe(def.velocity)),
-      restitutionFp: fclamp(toFp(Number.isFinite(def.restitution) ? def.restitution : 0.2), 0, FP_ONE),
-      frictionFp: fclamp(toFp(Number.isFinite(def.friction) ? def.friction : 0.5), 0, FP_ONE),
-      sleepCounter: 0,
-      sleeping: false,
-    };
-    const mass = Number.isFinite(def.mass) ? def.mass : 1;
-    const isStatic = def.static === true || mass <= 0;
-    body.invMassFp = isStatic ? 0 : fdiv(FP_ONE, toFp(clampNumber(mass, MIN_MASS, MAX_MASS)));
-    return body;
+  function addBody(def) {
+    return addBodyRecord(normalizeBodyDef(def));
   }
 
-  function addBody(def) {
-    const body = normalizeBodyDef(def);
+  // Raw fixed-point entry point used by the lockstep command log.
+  function addBodyRecord(record) {
+    const body = sanitizeBodyRecord(record);
+    if (!body) return null;
     if (bodyIndex.has(body.id)) removeBody(body.id);
     bodyIndex.set(body.id, bodies.length);
     bodies.push(body);
@@ -187,11 +224,11 @@ export function createWorld(options = {}) {
     return bodyIndex.has(id);
   }
 
-  function applyImpulse(id, impulse) {
+  function applyImpulseFp(id, impulseFpInput) {
     const body = getRecord(id);
     if (!body || body.invMassFp === 0) return false;
     wake(body);
-    const impulseFp = vclampComponents(toFpVecSafe(impulse), MAX_IMPULSE_FP);
+    const impulseFp = sanitizeFpVec(impulseFpInput, MAX_IMPULSE_FP);
     body.velocityFp = clampVelocity([
       body.velocityFp[0] + fmul(body.invMassFp, impulseFp[0]),
       body.velocityFp[1] + fmul(body.invMassFp, impulseFp[1]),
@@ -200,20 +237,32 @@ export function createWorld(options = {}) {
     return true;
   }
 
-  function setVelocity(id, velocity) {
+  function applyImpulse(id, impulse) {
+    return applyImpulseFp(id, toFpVecSafe(impulse));
+  }
+
+  function setVelocityFp(id, velocityFpInput) {
     const body = getRecord(id);
     if (!body || body.invMassFp === 0) return false;
     wake(body);
-    body.velocityFp = clampVelocity(toFpVecSafe(velocity));
+    body.velocityFp = sanitizeFpVec(velocityFpInput, MAX_VELOCITY_FP);
+    return true;
+  }
+
+  function setVelocity(id, velocity) {
+    return setVelocityFp(id, toFpVecSafe(velocity));
+  }
+
+  function teleportFp(id, positionFpInput) {
+    const body = getRecord(id);
+    if (!body) return false;
+    if (body.invMassFp !== 0) wake(body);
+    body.positionFp = sanitizeFpVec(positionFpInput, MAX_POSITION_FP);
     return true;
   }
 
   function teleport(id, position) {
-    const body = getRecord(id);
-    if (!body) return false;
-    if (body.invMassFp !== 0) wake(body);
-    body.positionFp = clampPosition(toFpVecSafe(position));
-    return true;
+    return teleportFp(id, toFpVecSafe(position));
   }
 
   // --- contact generation ---
@@ -475,28 +524,42 @@ export function createWorld(options = {}) {
   }
 
   function restore(snap) {
-    tick = Number.isInteger(snap?.tick) ? snap.tick : 0;
+    tick = Number.isInteger(snap?.tick) && snap.tick >= 0 ? snap.tick : 0;
     bodies.length = 0;
     bodyIndex.clear();
     for (const record of snap?.bodies ?? []) {
-      const body = {
-        ...record,
-        halfFp: [...record.halfFp],
-        positionFp: [...record.positionFp],
-        velocityFp: [...record.velocityFp],
-      };
+      const body = sanitizeBodyRecord(record);
+      if (!body || bodyIndex.has(body.id)) continue;
       bodyIndex.set(body.id, bodies.length);
       bodies.push(body);
     }
   }
 
+  // Hashes every value that can influence future simulation steps — the same
+  // set of fields a snapshot carries, plus the world configuration. Two
+  // worlds must only compare hashes when they agree on all of this.
   function stateHash() {
     let h = hashInit();
+    h = hashInt(h, timestepFp);
+    for (const component of gravityFp) h = hashInt(h, component);
+    h = hashInt(h, ground ? 1 : 0);
+    if (ground) {
+      h = hashInt(h, ground.yFp);
+      h = hashInt(h, ground.restitutionFp);
+      h = hashInt(h, ground.frictionFp);
+    }
     h = hashInt(h, tick);
     for (const body of bodies) {
       h = hashString(h, body.id);
+      h = hashString(h, body.shape);
+      h = hashInt(h, body.radiusFp);
+      for (const component of body.halfFp) h = hashInt(h, component);
       for (const component of body.positionFp) h = hashInt(h, component);
       for (const component of body.velocityFp) h = hashInt(h, component);
+      h = hashInt(h, body.invMassFp);
+      h = hashInt(h, body.restitutionFp);
+      h = hashInt(h, body.frictionFp);
+      h = hashInt(h, body.sleepCounter);
       h = hashInt(h, body.sleeping ? 1 : 0);
     }
     return h >>> 0;
@@ -506,11 +569,15 @@ export function createWorld(options = {}) {
     get tick() { return tick; },
     timestepFp,
     addBody,
+    addBodyRecord,
     removeBody,
     hasBody,
     applyImpulse,
+    applyImpulseFp,
     setVelocity,
+    setVelocityFp,
     teleport,
+    teleportFp,
     step,
     stepTo,
     getBody,
