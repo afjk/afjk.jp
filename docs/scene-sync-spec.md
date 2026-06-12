@@ -11,6 +11,7 @@ Scene Sync 仕様の入口です。詳細仕様は以下に分冊します。
 - [Avatar / Presence](./scene-sync-avatar-and-presence.md)
 - [Animation](./scene-sync-animation.md)
 - [Runtime Time Model](./scene-sync-runtime-time-model.md)
+- [Deterministic Physics](./scene-sync-physics.md)
 - [Loom / Behavior Graph Protocol](./scene-sync-loom-protocol.md)
 - [Realtime Streaming Notes](./scene-sync-realtime-streaming.md)
 

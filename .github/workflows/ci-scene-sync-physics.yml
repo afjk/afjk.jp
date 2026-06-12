@@ -1,0 +1,42 @@
+name: CI - Scene Sync Physics
+
+on:
+  pull_request:
+    paths:
+      - "html/assets/js/scenesync/physics/**"
+      - "package.json"
+      - ".github/workflows/ci-scene-sync-physics.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "html/assets/js/scenesync/physics/**"
+      - "package.json"
+      - ".github/workflows/ci-scene-sync-physics.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Scene Sync Physics
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax check
+        run: |
+          node --check html/assets/js/scenesync/physics/index.js
+          node --check html/assets/js/scenesync/physics/fixed.js
+          node --check html/assets/js/scenesync/physics/world.js
+          node --check html/assets/js/scenesync/physics/lockstep.js
+
+      - name: Run physics tests
+        run: npm run test:physics
