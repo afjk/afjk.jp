@@ -10,6 +10,7 @@ import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFa
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
+import { tryOpenSceneSyncExportFile } from './importers/scene-sync-export/index.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
@@ -9488,6 +9489,12 @@ const dragDropManager = new DragDropManager({
     const target = getReplaceTarget(inputKind, context.hitObjectId || null);
     return target?.userData?.objectId || null;
   },
+  sceneSyncExportImporter: (file) => tryOpenSceneSyncExportFile(file, {
+    managedObjects,
+    addOrUpdateObject,
+    broadcast,
+    showToast,
+  }),
   onLoadStart: async ({
     objectId,
     file,
