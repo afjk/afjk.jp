@@ -6334,6 +6334,7 @@ async function importGlbFileAsSceneObject(file, {
   position,
   rotation,
   scale,
+  visible = true,
   metadata,
   animation,
   audioSources,
@@ -6353,7 +6354,7 @@ async function importGlbFileAsSceneObject(file, {
     position: Array.isArray(position) ? position : model.position.toArray(),
     rotation: Array.isArray(rotation) ? rotation : model.quaternion.toArray(),
     scale: Array.isArray(scale) ? scale : model.scale.toArray(),
-    visible: true,
+    visible,
   };
   if (metadata) info.metadata = metadata;
   if (animation) info.animation = animation;
@@ -6383,6 +6384,7 @@ async function importGlbFileAsSceneObject(file, {
     : await file.arrayBuffer();
 
   await uploadAndBroadcast(objectId, name || file.name, model, arrayBuffer, {
+    visible,
     ...(metadata ? { metadata } : {}),
     ...(animation ? { animation } : {}),
     ...(audioSources !== undefined ? { audioSources } : {}),
