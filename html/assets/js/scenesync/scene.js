@@ -6324,6 +6324,73 @@ async function uploadGlbFromUrl(url, params = {}) {
   };
 }
 
+// Loads a GLB File into the scene as a managed object with an explicit
+// objectId/transform, reusing the same normalization/animation/upload
+// pipeline as the normal drag-and-drop GLB route. Used by Scene Sync Export
+// Import to restore GLB objects while keeping their original objectId.
+async function importGlbFileAsSceneObject(file, {
+  objectId,
+  name,
+  position,
+  rotation,
+  scale,
+  metadata,
+  animation,
+  audioSources,
+  selectAfterLoad = false,
+  showImportToast = false,
+} = {}) {
+  const loadPosition = Array.isArray(position)
+    ? new THREE.Vector3().fromArray(position)
+    : new THREE.Vector3();
+
+  const model = await glbLoader.loadFromFile(file, loadPosition, scene);
+  model.userData.objectId = objectId;
+  model.userData.name = name || file.name;
+
+  const info = {
+    name: name || file.name,
+    position: Array.isArray(position) ? position : model.position.toArray(),
+    rotation: Array.isArray(rotation) ? rotation : model.quaternion.toArray(),
+    scale: Array.isArray(scale) ? scale : model.scale.toArray(),
+    visible: true,
+  };
+  if (metadata) info.metadata = metadata;
+  if (animation) info.animation = animation;
+  if (audioSources !== undefined) info.audioSources = audioSources;
+
+  // GLB は内部に元のシーン座標を持つため、info の transform で上書きする
+  replaceManagedObject(objectId, model, info);
+
+  if (selectAfterLoad) {
+    selectManagedObject(model);
+    notifySelectionChanged('drag-drop-object-selected');
+  }
+
+  // 正規化の結果をトーストで通知
+  const glbMetadata = model.userData?.scenesync?.glbMetadata;
+  if (showImportToast) {
+    if (glbMetadata?.normalized) {
+      showToast('Sketchfab形式のマテリアルをScene Sync向けに変換しました');
+    } else if (glbMetadata?.normalizationSkipped) {
+      showToast('このモデルはScene Syncで正しく表示できない可能性があるマテリアルを使用しています');
+    }
+  }
+
+  // 変換後 ArrayBuffer を優先（upload / broadcast / cache すべてに変換後を使う）
+  const arrayBuffer = model.userData.normalizedGlbArrayBuffer
+    ? model.userData.normalizedGlbArrayBuffer
+    : await file.arrayBuffer();
+
+  await uploadAndBroadcast(objectId, name || file.name, model, arrayBuffer, {
+    ...(metadata ? { metadata } : {}),
+    ...(animation ? { animation } : {}),
+    ...(audioSources !== undefined ? { audioSources } : {}),
+  });
+
+  return model;
+}
+
 function readVector3Array(value, fallback) {
   return Array.isArray(value) && value.length === 3 ? value : fallback;
 }
@@ -8694,7 +8761,7 @@ function generateRandomPath() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
+async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}) {
   const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const meshPath = generateRandomPath();
   let actualMeshPath = null;
@@ -8768,6 +8835,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer) {
       scale: model.scale.toArray(),
       asset: { ...asset },
       meshPath: actualMeshPath,
+      ...extraFields,
     };
 
     presenceState.historyManager.push(
@@ -9494,6 +9562,8 @@ const dragDropManager = new DragDropManager({
     addOrUpdateObject,
     broadcast,
     showToast,
+    environmentManager,
+    importGlbFileAsSceneObject,
   }),
   onLoadStart: async ({
     objectId,
