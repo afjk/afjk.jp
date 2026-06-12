@@ -28,13 +28,7 @@ export function applySceneDocument(sceneDocument, { managedObjects, addOrUpdateO
     }
 
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
-
-    // For objects whose asset was resolved to a local blob: URL, broadcast a
-    // placeholder instead so other peers don't receive an unusable URL.
-    const broadcastPayload = obj.broadcastAsset
-      ? { ...payload, asset: obj.broadcastAsset }
-      : payload;
-    broadcast(broadcastPayload);
+    broadcast(payload);
   }
 
   return { total: sceneDocument.objects?.length || 0, added, updated };

@@ -18,10 +18,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     return { handled: true, error: result.reason };
   }
 
-  const { document: resolvedDocument } = await resolveSceneDocumentAssets(
-    result.sceneDocument,
-    result.zip
-  );
+  const { document: resolvedDocument } = await resolveSceneDocumentAssets(result.sceneDocument);
 
   const objects = resolvedDocument.objects || [];
   const updateCount = objects.filter((obj) => managedObjects.has(obj.id)).length;
