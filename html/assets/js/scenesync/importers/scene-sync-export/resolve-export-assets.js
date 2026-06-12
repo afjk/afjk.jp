@@ -36,7 +36,15 @@ export async function resolveSceneDocumentAssets(sceneDocument, zip) {
         blobUrls.push(url);
         objects.push({
           ...obj,
+          // Blob URL for local rendering only.
           asset: { ...asset, url, source: 'url' },
+          // blob: URLs are only valid in this browser session, so other
+          // peers must not receive them — broadcast a placeholder instead.
+          broadcastAsset: { ...asset, path: null, url: null },
+          metadata: {
+            ...(obj.metadata || {}),
+            importWarning: `Asset not synced to other peers: ${asset.path}`,
+          },
         });
         continue;
       } catch {
