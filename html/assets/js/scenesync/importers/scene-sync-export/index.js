@@ -2,6 +2,7 @@ import { isZipFile } from './detect-scene-sync-export.js';
 import { loadExportPackageFromBlob } from './load-export-package.js';
 import { resolveSceneDocumentAssets } from './resolve-export-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
+import { applySceneDocumentSettings } from './apply-scene-settings.js';
 
 export { isZipFile };
 
@@ -10,7 +11,15 @@ export { isZipFile };
 export async function tryOpenSceneSyncExportFile(file, context = {}) {
   if (!isZipFile(file)) return { handled: false };
 
-  const { managedObjects, addOrUpdateObject, broadcast, showToast, confirmOpen } = context;
+  const {
+    managedObjects,
+    addOrUpdateObject,
+    broadcast,
+    showToast,
+    confirmOpen,
+    environmentManager,
+    importGlbFileAsSceneObject,
+  } = context;
 
   const result = await loadExportPackageFromBlob(file);
   if (!result.valid) {
@@ -18,7 +27,9 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     return { handled: true, error: result.reason };
   }
 
-  const { document: resolvedDocument } = await resolveSceneDocumentAssets(result.sceneDocument);
+  const { document: resolvedDocument } = await resolveSceneDocumentAssets(result.sceneDocument, {
+    zip: result.zip,
+  });
 
   const objects = resolvedDocument.objects || [];
   const updateCount = objects.filter((obj) => managedObjects.has(obj.id)).length;
@@ -38,8 +49,22 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     return { handled: true, cancelled: true };
   }
 
-  const stats = applySceneDocument(resolvedDocument, { managedObjects, addOrUpdateObject, broadcast });
-  showToast?.(`Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated}）`);
+  const stats = await applySceneDocument(resolvedDocument, {
+    managedObjects,
+    addOrUpdateObject,
+    broadcast,
+    importGlbFileAsSceneObject,
+    zip: result.zip,
+  });
 
-  return { handled: true, stats };
+  const settingsResult = applySceneDocumentSettings(resolvedDocument, {
+    environmentManager,
+    broadcast,
+  });
+
+  showToast?.(
+    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}）`
+  );
+
+  return { handled: true, stats, settings: settingsResult };
 }

@@ -10,7 +10,8 @@
     "test:mesh-blob-fetch": "node --test html/assets/js/scenesync/assets/mesh-blob-fetch.test.js",
     "test:glb-normalizer": "node --test html/assets/js/scenesync/loaders/glb-normalizer.test.js",
     "test:playback-duration": "node --test html/assets/js/scenesync/runtime/playback-duration.test.js",
-    "test:physics": "node --test html/assets/js/scenesync/physics/fixed.test.js html/assets/js/scenesync/physics/world.test.js html/assets/js/scenesync/physics/lockstep.test.js"
+    "test:physics": "node --test html/assets/js/scenesync/physics/fixed.test.js html/assets/js/scenesync/physics/world.test.js html/assets/js/scenesync/physics/lockstep.test.js",
+    "test:scene-sync-export-import": "node --test html/assets/js/scenesync/importers/scene-sync-export/*.test.js"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.3.0",
