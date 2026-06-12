@@ -2,6 +2,7 @@ import { CoordinateTransformer } from '../utils/coordinate-utils.js';
 import { GLBFileLoader } from '../loaders/glb-file-loader.js';
 import { parseUriList, extractUrlFromText } from '../loaders/url-classifier.js';
 import { generateTemporaryImageObjectId } from '../loaders/image-preview.js';
+import { isZipFile } from '../importers/scene-sync-export/detect-scene-sync-export.js';
 
 function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
@@ -117,6 +118,7 @@ export class DragDropManager {
       wallSurfaceOffset = 0.01,
       THREE: ThreeModule,
       getReplaceTargetForContent = null,
+      sceneSyncExportImporter = null,
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -138,6 +140,7 @@ export class DragDropManager {
     this.textImporter = textImporter;
     this.urlImporter = urlImporter;
     this.getReplaceTargetForContent = getReplaceTargetForContent;
+    this.sceneSyncExportImporter = sceneSyncExportImporter;
     this.wallSurfaceOffset = wallSurfaceOffset;
     this.getPlacementTargets = getPlacementTargets;
     this.THREE = ThreeModule || (globalThis.THREE || {});
@@ -463,6 +466,11 @@ export class DragDropManager {
   }
 
   async handleFile(file, positionContext) {
+    if (this.sceneSyncExportImporter && isZipFile(file)) {
+      const result = await this.sceneSyncExportImporter(file, positionContext);
+      if (result?.handled) return null;
+    }
+
     const normalized = normalizePositionContext(
       positionContext,
       this._defaultDropPosition()
