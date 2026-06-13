@@ -2715,6 +2715,12 @@ function markScenePhysicsRuntimeDirty() {
   scenePhysicsRuntime.markDirty();
 }
 
+function resetScenePhysicsRuntimeBeforePersistence() {
+  // Until authoring/base transforms are stored separately from runtime transforms,
+  // persistence paths must read the initial physics pose rather than the last sim pose.
+  scenePhysicsRuntime.resetActiveToInitialPose();
+}
+
 function applyScenePhysics(physics, options = {}) {
   scenePhysicsState = normalizeScenePhysics(physics);
   markScenePhysicsRuntimeDirty();
@@ -4144,6 +4150,8 @@ function deleteObjectById(objectId, options = {}) {
   const rotation = attached.quaternion.toArray();
   const scale = attached.scale.toArray();
   const asset = attached.userData.asset || {};
+  const physics = getObjectPhysicsForSerialize(attached);
+  const audioSources = getObjectAudioSourcesForSerialize(attached);
 
   scene.remove(attached);
   attached.traverse(child => {
@@ -4157,6 +4165,7 @@ function deleteObjectById(objectId, options = {}) {
     }
   });
   managedObjects.delete(objectId);
+  markScenePhysicsRuntimeDirty();
   removedObjectIds.add(objectId);
   selectedObjectIds.delete(objectId);
   removeSelectionHelper(objectId);
@@ -4168,7 +4177,10 @@ function deleteObjectById(objectId, options = {}) {
   // 履歴に追加
   if (pushHistory) {
     presenceState.historyManager?.push(
-      HistoryManager.createRemoveEntry(objectId, name, asset, position, rotation, scale)
+      HistoryManager.createRemoveEntry(objectId, name, asset, position, rotation, scale, {
+        physics,
+        audioSources,
+      })
     );
   }
 
@@ -5576,6 +5588,8 @@ async function respondToSceneRequest(from) {
   console.log('[SceneSync] Responding to scene-request from:',
     from?.nickname || from?.id);
 
+  resetScenePhysicsRuntimeBeforePersistence();
+
   const objects = {};
 
   for (const [objectId, obj] of managedObjects) {
@@ -5968,7 +5982,11 @@ function handleHandoff(data) {
           obj.userData?.asset || {},
           obj.position.toArray(),
           obj.quaternion.toArray(),
-          obj.scale.toArray()
+          obj.scale.toArray(),
+          {
+            physics: getObjectPhysicsForSerialize(obj),
+            audioSources: getObjectAudioSourcesForSerialize(obj),
+          }
         );
         presenceState.historyManager.push(historyEntry);
       }
@@ -12403,6 +12421,8 @@ function hasSnapshotRestorableObjects() {
 }
 
 function createCurrentSceneSnapshot() {
+  resetScenePhysicsRuntimeBeforePersistence();
+
   const objects = [];
 
   for (const [objectId, object] of managedObjects.entries()) {
@@ -13236,6 +13256,7 @@ async function triggerExport() {
   showToast('Exporting...');
 
   try {
+    resetScenePhysicsRuntimeBeforePersistence();
     const behaviorState = loomIntegration?.exportState?.() ?? null;
     const { missingAssets } = await buildExportPackage({
       managedObjects,

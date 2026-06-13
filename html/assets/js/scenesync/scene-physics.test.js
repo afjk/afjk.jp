@@ -113,3 +113,67 @@ test('scene physics runtime resets to initial pose when the clock becomes inacti
   assert.equal(result.reset, true);
   assert.equal(object.position.toArray()[1], 2);
 });
+
+test('scene physics runtime drops removed bodies after it is marked dirty', () => {
+  const object = makeObject();
+  let entries = [{
+    objectId: 'ball',
+    object,
+    physics: object.userData.physics,
+  }];
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    worldOptions: {
+      gravity: -9.81,
+      ground: null,
+    },
+  });
+  const runtime = createScenePhysicsRuntime({
+    getScenePhysics: () => scenePhysics,
+    getObjectEntries: () => entries,
+    isClockActive: () => true,
+  });
+
+  runtime.update({ t: 0, mode: 'local', transportActive: true });
+  assert.equal(runtime.hasBodies(), true);
+
+  entries = [];
+  runtime.markDirty();
+
+  assert.equal(runtime.hasBodies(), false);
+  const result = runtime.update({ t: 0.5, mode: 'local', transportActive: true });
+  assert.equal(result.active, false);
+  assert.equal(result.reason, 'no-bodies');
+});
+
+test('scene physics runtime does not reset inactive dirty authoring transforms', () => {
+  const object = makeObject();
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    worldOptions: {
+      gravity: -9.81,
+      ground: null,
+    },
+  });
+  const runtime = createScenePhysicsRuntime({
+    getScenePhysics: () => scenePhysics,
+    getObjectEntries: () => [{
+      objectId: 'ball',
+      object,
+      physics: object.userData.physics,
+    }],
+    isClockActive: (clockState) => clockState?.transportActive === true,
+  });
+
+  runtime.update({ t: 0.5, mode: 'local', transportActive: true });
+  assert.ok(object.position.toArray()[1] < 2);
+
+  runtime.update({ t: 0.5, mode: 'local', transportActive: false });
+  assert.equal(object.position.toArray()[1], 2);
+
+  object.position.fromArray([0, 5, 0]);
+  runtime.markDirty();
+
+  assert.equal(runtime.resetActiveToInitialPose(), false);
+  assert.equal(object.position.toArray()[1], 5);
+});

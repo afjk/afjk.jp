@@ -282,9 +282,17 @@ export function createScenePhysicsRuntime({
   }
 
   function resetToInitialPose() {
-    if (!world || !initialSnapshot) return;
+    if (!world || !initialSnapshot) return false;
     world.restore(initialSnapshot);
     applyWorldToObjects();
+    return true;
+  }
+
+  function resetActiveToInitialPose() {
+    if (!active) return false;
+    const reset = resetToInitialPose();
+    if (reset) active = false;
+    return reset;
   }
 
   function update(clockState = null) {
@@ -295,12 +303,7 @@ export function createScenePhysicsRuntime({
     }
 
     if (!isClockActive(clockState)) {
-      let reset = false;
-      if (active) {
-        resetToInitialPose();
-        reset = true;
-      }
-      active = false;
+      const reset = resetActiveToInitialPose();
       return { active: false, reason: 'clock-inactive', reset };
     }
 
@@ -326,6 +329,7 @@ export function createScenePhysicsRuntime({
     rebuild,
     update,
     resetToInitialPose,
+    resetActiveToInitialPose,
     hasBodies() {
       if (dirty || !world) {
         return collectRuntimeEntries(getObjectEntries?.()).length > 0;

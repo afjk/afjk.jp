@@ -90,7 +90,24 @@ export class HistoryManager {
     };
   }
 
-  static createRemoveEntry(objectId, name, asset, position, rotation, scale) {
+  static createRemoveEntry(objectId, name, asset, position, rotation, scale, extra = {}) {
+    const backward = {
+      kind: 'scene-add',
+      objectId,
+      name,
+      position,
+      rotation,
+      scale,
+      asset,
+    };
+
+    if (extra.physics !== undefined) {
+      backward.physics = extra.physics;
+    }
+    if (extra.audioSources !== undefined) {
+      backward.audioSources = extra.audioSources;
+    }
+
     return {
       id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: Date.now(),
@@ -99,15 +116,7 @@ export class HistoryManager {
         kind: 'scene-remove',
         objectId,
       },
-      backward: {
-        kind: 'scene-add',
-        objectId,
-        name,
-        position,
-        rotation,
-        scale,
-        asset,
-      },
+      backward,
     };
   }
 
