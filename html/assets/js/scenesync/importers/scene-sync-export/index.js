@@ -170,6 +170,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     importGlbFileAsSceneObject,
     uploadBlobToStore,
     applySceneBgm,
+    applyScenePhysics,
   } = context;
 
   const result = await loadExportPackageFromBlob(file);
@@ -239,6 +240,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
       environmentManager,
       broadcast,
       applySceneBgm,
+      applyScenePhysics,
       zip: result.zip,
       uploadBlobToStore,
     });
@@ -265,6 +267,7 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
     importGlbFileAsSceneObject,
     uploadBlobToStore,
     applySceneBgm,
+    applyScenePhysics,
     fetchImpl,
   } = context;
 
@@ -338,6 +341,7 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
       environmentManager,
       broadcast,
       applySceneBgm,
+      applyScenePhysics,
       zip: result.zip,
       uploadBlobToStore,
     });

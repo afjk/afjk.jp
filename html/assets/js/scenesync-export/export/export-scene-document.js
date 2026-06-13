@@ -174,6 +174,7 @@ export function createSceneDocumentFromSceneSyncState({
   bgmState,
   envId,
   behaviorState = null,
+  physicsState = null,
 }) {
   if (!(managedObjects instanceof Map)) {
     throw new Error('managedObjects must be a Map');
@@ -218,6 +219,11 @@ export function createSceneDocumentFromSceneSyncState({
       docObj.audioSources = audioSources;
     }
 
+    const physics = clonePlainObject(obj.userData?.physics);
+    if (physics) {
+      docObj.physics = physics;
+    }
+
     objects.push(docObj);
   }
 
@@ -233,6 +239,11 @@ export function createSceneDocumentFromSceneSyncState({
 
   if (behaviorState) {
     doc.behaviors = JSON.parse(JSON.stringify(behaviorState));
+  }
+
+  const physics = clonePlainObject(physicsState);
+  if (physics?.enabled) {
+    doc.physics = physics;
   }
 
   return doc;

@@ -174,7 +174,8 @@ Touch / click / grab / trigger などの event は、発生時刻を environment
 - runtime / animation / Loomlet graph を `enabled = false` にしない
 - GLB animation は `mixer.update(delta)` だけに依存しない
 - GLB animation と Loomlet object graph は同じ runtime time model を使う
-- 将来の particles / physics / scripts / sounds も同じ `f(t)` モデルに乗せる
+- physics は Scene Clock / Player UI が供給する `time.t` を入力にし、seek 時は初期 snapshot から対象 tick まで再計算する
+- 将来の particles / scripts / sounds も同じ `f(t)` モデルに乗せる
 - 同期が必要な animation / behavior は、必要に応じて host-provided time 基準で評価する
 
 ---

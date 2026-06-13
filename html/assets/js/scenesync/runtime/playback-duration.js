@@ -57,6 +57,7 @@ export function calculateAnimationEntryPlaybackDuration(entry) {
 
 export function calculateScenePlaybackDuration({
   animationEntries = [],
+  physicsDuration = 0,
   defaultDuration = DEFAULT_SCENE_PLAYBACK_DURATION,
 } = {}) {
   let duration = isPositiveFiniteNumber(defaultDuration)
@@ -65,6 +66,9 @@ export function calculateScenePlaybackDuration({
 
   for (const entry of animationEntries) {
     duration = Math.max(duration, calculateAnimationEntryPlaybackDuration(entry));
+  }
+  if (isPositiveFiniteNumber(physicsDuration)) {
+    duration = Math.max(duration, physicsDuration);
   }
 
   return Math.ceil(duration * 100) / 100;

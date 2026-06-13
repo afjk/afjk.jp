@@ -241,6 +241,7 @@ export async function applySceneDocument(sceneDocument, {
           metadata: prepared.metadata,
           animation: obj.animation,
           audioSources: prepared.audioSources,
+          physics: obj.physics,
           selectAfterLoad: false,
           source: 'scene-sync-export-import',
         });
@@ -275,6 +276,7 @@ export async function applySceneDocument(sceneDocument, {
     if (prepared.metadata) payload.metadata = prepared.metadata;
     if (obj.animation) payload.animation = obj.animation;
     if (prepared.audioSources) payload.audioSources = prepared.audioSources;
+    if (obj.physics) payload.physics = obj.physics;
 
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
     broadcast(payload);

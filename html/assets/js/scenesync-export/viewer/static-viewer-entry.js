@@ -161,6 +161,67 @@ async function main() {
     controlsEl.appendChild(enableBtn);
   }
 
+  let updatePhysicsControls = null;
+  if (viewerCore.hasPhysics?.() && controlsEl) {
+    const physicsGroup = document.createElement('div');
+    physicsGroup.className = 'viewer-transport';
+
+    const playBtn = document.createElement('button');
+    playBtn.className = 'viewer-btn';
+    playBtn.textContent = 'Play Physics';
+
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'viewer-btn';
+    resetBtn.textContent = 'Reset';
+
+    const seek = document.createElement('input');
+    seek.className = 'viewer-range';
+    seek.type = 'range';
+    seek.min = '0';
+    seek.step = '0.01';
+    seek.value = '0';
+
+    const timeLabel = document.createElement('span');
+    timeLabel.className = 'viewer-time-label';
+    timeLabel.textContent = '0.00s';
+
+    physicsGroup.append(playBtn, resetBtn, seek, timeLabel);
+    controlsEl.appendChild(physicsGroup);
+
+    playBtn.addEventListener('click', () => {
+      const state = viewerCore.getPhysicsPlaybackState?.();
+      if (state?.playing) {
+        viewerCore.pausePhysics?.();
+      } else {
+        viewerCore.playPhysics?.();
+      }
+      updatePhysicsControls?.();
+    });
+
+    resetBtn.addEventListener('click', () => {
+      viewerCore.resetPhysics?.();
+      updatePhysicsControls?.();
+    });
+
+    seek.addEventListener('input', () => {
+      viewerCore.seekPhysics?.(Number(seek.value));
+      updatePhysicsControls?.();
+    });
+
+    updatePhysicsControls = () => {
+      const state = viewerCore.getPhysicsPlaybackState?.();
+      if (!state) return;
+      playBtn.textContent = state.playing ? 'Pause Physics' : 'Play Physics';
+      const duration = Number.isFinite(state.duration) && state.duration > 0 ? state.duration : 10;
+      seek.max = String(duration);
+      if (document.activeElement !== seek) {
+        seek.value = String(Math.max(0, Math.min(duration, state.time || 0)));
+      }
+      timeLabel.textContent = `${(state.time || 0).toFixed(2)}s`;
+    };
+    updatePhysicsControls();
+  }
+
   // Immersive entry button
   if (navigator.xr && controlsEl) {
     for (const mode of ['immersive-vr', 'immersive-ar']) {
@@ -196,6 +257,7 @@ async function main() {
   // Render loop
   renderer.setAnimationLoop(() => {
     viewerCore.update();
+    updatePhysicsControls?.();
     controls.update();
     renderer.render(scene, camera);
   });
