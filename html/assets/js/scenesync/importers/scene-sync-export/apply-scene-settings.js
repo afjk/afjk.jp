@@ -21,6 +21,7 @@ export async function applySceneDocumentSettings(sceneDocument, {
   environmentManager,
   broadcast,
   applySceneBgm,
+  applyScenePhysics,
   zip,
   uploadBlobToStore,
 } = {}) {
@@ -64,6 +65,18 @@ export async function applySceneDocumentSettings(sceneDocument, {
       result.bgmApplied = false;
       result.bgmSkipped = true;
     }
+  }
+
+  if (sceneDocument?.physics && typeof sceneDocument.physics === 'object') {
+    const appliedPhysics = applyScenePhysics?.(sceneDocument.physics, {
+      source: 'scene-sync-export-import',
+      notify: true,
+    });
+    broadcast?.({
+      kind: 'scene-physics',
+      physics: appliedPhysics || sceneDocument.physics,
+    });
+    result.physicsApplied = true;
   }
 
   return result;

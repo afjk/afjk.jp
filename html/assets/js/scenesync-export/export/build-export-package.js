@@ -10,6 +10,11 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/object-audio-controller.js', dest: 'viewer/object-audio-controller.js' },
   { src: '/assets/js/scenesync-export/viewer/static-asset-resolver.js', dest: 'viewer/static-asset-resolver.js' },
   { src: '/assets/js/scenesync-export/viewer/scene-document.js', dest: 'viewer/scene-document.js' },
+  { src: '/assets/js/scenesync/scene-physics.js', dest: 'viewer/scene-physics.js' },
+  { src: '/assets/js/scenesync/physics/fixed.js', dest: 'viewer/physics/fixed.js' },
+  { src: '/assets/js/scenesync/physics/world.js', dest: 'viewer/physics/world.js' },
+  { src: '/assets/js/scenesync/physics/lockstep.js', dest: 'viewer/physics/lockstep.js' },
+  { src: '/assets/js/scenesync/physics/index.js', dest: 'viewer/physics/index.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
   // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
   {
@@ -134,6 +139,7 @@ export async function buildExportPackage({
   envOrigin = location.origin,
   assetCache = null,
   behaviorState = null,
+  physicsState = null,
 }) {
   // 1. Build SceneDocument from current state
   let sceneDocument;
@@ -143,6 +149,7 @@ export async function buildExportPackage({
       bgmState,
       envId,
       behaviorState,
+      physicsState,
     });
   } catch (err) {
     throw new Error(`SceneDocument generation failed: ${err.message}`);

@@ -6,6 +6,10 @@ import { isValidSceneDocument } from './scene-document.js';
 import { createStaticAssetResolver } from './static-asset-resolver.js';
 import { createSceneSyncRuntime } from './loomlet/loomlet-scenesync-runtime.browser.js';
 import { createObjectAudioController } from './object-audio-controller.js';
+import {
+  createScenePhysicsRuntime,
+  normalizeScenePhysics,
+} from './scene-physics.js';
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
 
@@ -229,6 +233,14 @@ function applyTransform(obj, entry) {
   }
 }
 
+function registerViewerObject(objectMap, entry, object) {
+  object.userData.objectId = entry.id;
+  if (entry.physics && typeof entry.physics === 'object') {
+    object.userData.physics = cloneJson(entry.physics);
+  }
+  objectMap.set(entry.id, object);
+}
+
 function resolveAnimationClip(clips, animState) {
   const clipName = typeof animState?.clipName === 'string' ? animState.clipName.trim() : '';
   if (clipName) {
@@ -406,9 +418,8 @@ export async function createViewerCore({
     if (!assetDef || assetDef.type === 'primitive') {
       const mesh = buildPrimitive(assetDef || {});
       applyTransform(mesh, entry);
-      mesh.userData.objectId = entry.id;
       scene.add(mesh);
-      objectMap.set(entry.id, mesh);
+      registerViewerObject(objectMap, entry, mesh);
     } else if (assetDef.type === 'image') {
       const assetPath = resolver.resolveAsset(assetDef);
       if (!assetPath) {
@@ -435,9 +446,8 @@ export async function createViewerCore({
         const group = new THREE.Group();
         group.add(mesh);
         applyTransform(group, entry);
-        group.userData.objectId = entry.id;
         scene.add(group);
-        objectMap.set(entry.id, group);
+        registerViewerObject(objectMap, entry, group);
       } catch {
         onMissingAsset?.({ id: entry.id, kind: 'image', path: assetPath });
       }
@@ -481,9 +491,8 @@ export async function createViewerCore({
         const group = new THREE.Group();
         group.add(mesh);
         applyTransform(group, entry);
-        group.userData.objectId = entry.id;
         scene.add(group);
-        objectMap.set(entry.id, group);
+        registerViewerObject(objectMap, entry, group);
 
         video.autoplay = true;
         video.play().catch(() => {});
@@ -513,9 +522,8 @@ export async function createViewerCore({
       const group = new THREE.Group();
       group.add(mesh);
       applyTransform(group, entry);
-      group.userData.objectId = entry.id;
       scene.add(group);
-      objectMap.set(entry.id, group);
+      registerViewerObject(objectMap, entry, group);
     } else {
       const assetPath = resolver.resolveAsset(assetDef);
       if (!assetPath) {
@@ -535,9 +543,8 @@ export async function createViewerCore({
         const wrapper = new THREE.Group();
         wrapper.add(gltf.scene);
         applyTransform(wrapper, entry);
-        wrapper.userData.objectId = entry.id;
         scene.add(wrapper);
-        objectMap.set(entry.id, wrapper);
+        registerViewerObject(objectMap, entry, wrapper);
 
         if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(wrapper);
@@ -583,16 +590,95 @@ export async function createViewerCore({
     loomAdapter = createExportBehaviorRuntime(sceneDoc.behaviors, objectMap, objectAudioController);
   }
 
+  const physicsState = normalizeScenePhysics(sceneDoc.physics);
+  const physicsPlayback = {
+    time: 0,
+    playing: false,
+    lastNow: performance.now(),
+    duration: physicsState.enabled ? physicsState.duration : 0,
+  };
+  const physicsRuntime = createScenePhysicsRuntime({
+    getScenePhysics: () => physicsState,
+    getObjectEntries: () => (sceneDoc.objects || []).map((entry) => ({
+      objectId: entry.id,
+      object: objectMap.get(entry.id),
+      physics: entry.physics,
+    })),
+    isClockActive: () => true,
+  });
+
+  function tickPhysicsPlayback(now = performance.now()) {
+    if (!physicsState.enabled) return;
+    if (physicsPlayback.playing) {
+      const delta = Math.max(0, (now - physicsPlayback.lastNow) / 1000);
+      physicsPlayback.time += delta;
+      if (physicsPlayback.duration > 0 && physicsPlayback.time > physicsPlayback.duration) {
+        physicsPlayback.time = physicsPlayback.duration;
+        physicsPlayback.playing = false;
+      }
+    }
+    physicsPlayback.lastNow = now;
+    physicsRuntime.update({
+      t: physicsPlayback.time,
+      mode: 'local',
+      transportActive: true,
+      isPaused: !physicsPlayback.playing,
+      rate: 1,
+    });
+  }
+
   const api = {
     update() {
       const delta = clock.getDelta();
       for (const m of mixers) m.update(delta);
 
       const now = performance.now();
+      tickPhysicsPlayback(now);
       if (loomAdapter) {
         loomAdapter.tick(now);
       }
       objectAudioController.tick(now);
+    },
+
+    hasPhysics() {
+      return physicsState.enabled && physicsRuntime.hasBodies();
+    },
+
+    getPhysicsPlaybackState() {
+      return {
+        time: physicsPlayback.time,
+        duration: physicsPlayback.duration,
+        playing: physicsPlayback.playing,
+      };
+    },
+
+    playPhysics() {
+      if (!physicsState.enabled) return;
+      if (physicsPlayback.duration > 0 && physicsPlayback.time >= physicsPlayback.duration) {
+        physicsPlayback.time = 0;
+        physicsRuntime.markDirty();
+      }
+      physicsPlayback.playing = true;
+      physicsPlayback.lastNow = performance.now();
+    },
+
+    pausePhysics() {
+      physicsPlayback.playing = false;
+      physicsPlayback.lastNow = performance.now();
+    },
+
+    resetPhysics() {
+      physicsPlayback.time = 0;
+      physicsPlayback.playing = false;
+      physicsPlayback.lastNow = performance.now();
+      physicsRuntime.markDirty();
+      tickPhysicsPlayback(physicsPlayback.lastNow);
+    },
+
+    seekPhysics(time) {
+      physicsPlayback.time = Math.max(0, Math.min(Number(time) || 0, physicsPlayback.duration || Number.MAX_SAFE_INTEGER));
+      physicsPlayback.lastNow = performance.now();
+      tickPhysicsPlayback(physicsPlayback.lastNow);
     },
 
     getBgmAudio() {
@@ -636,6 +722,7 @@ export async function createViewerCore({
       bgmAudio?.pause();
       objectAudioController.dispose();
       loomAdapter?.dispose?.();
+      physicsRuntime.dispose();
     },
   };
 

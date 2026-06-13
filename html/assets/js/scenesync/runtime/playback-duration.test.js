@@ -97,3 +97,11 @@ test('ignores disabled animation entries', () => {
 
   assert.equal(duration, 60);
 });
+
+test('extends duration for physics playback', () => {
+  const duration = calculateScenePlaybackDuration({
+    physicsDuration: 75.234,
+  });
+
+  assert.equal(duration, 75.24);
+});

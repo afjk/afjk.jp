@@ -92,6 +92,44 @@ test('applies BGM from ZIP-bundled asset via shared Scene Sync URL', async () =>
   });
 });
 
+test('applies scene physics settings and broadcasts scene-physics', async () => {
+  const calls = { physics: [], broadcast: [] };
+  const physics = {
+    version: 1,
+    enabled: true,
+    duration: 8,
+    worldOptions: {
+      gravity: -9.81,
+      ground: { y: 0, restitution: 0.2, friction: 0.5 },
+      timestepFp: 1092,
+    },
+  };
+
+  const result = await applySceneDocumentSettings({ physics }, {
+    applyScenePhysics: (next, options) => {
+      calls.physics.push({ next, options });
+      return { ...next, applied: true };
+    },
+    broadcast: (payload) => calls.broadcast.push(payload),
+  });
+
+  deepStrictEqual(result, {
+    envApplied: false,
+    physicsApplied: true,
+  });
+  deepStrictEqual(calls.physics[0], {
+    next: physics,
+    options: {
+      source: 'scene-sync-export-import',
+      notify: true,
+    },
+  });
+  deepStrictEqual(calls.broadcast[0], {
+    kind: 'scene-physics',
+    physics: { ...physics, applied: true },
+  });
+});
+
 test('does nothing when skybox is absent (keeps current environment)', async () => {
   const calls = { loadEnvironment: [], broadcast: [] };
   const environmentManager = {

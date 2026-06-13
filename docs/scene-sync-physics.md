@@ -132,6 +132,36 @@ canonical なコマンド payload は raw int(`body`(raw record) / `impulseFp` /
 `stateHash()` は world 設定(gravity / timestep / ground)も hash に含めるため、
 `physics-start` の `worldOptions` が一致しないクライアントは即座にハッシュ不一致として検出される。
 
+## Scene Sync 組み込み
+
+Web 版 Scene Sync では、まず object component と Export/Import 対応として physics を組み込む。
+
+- object state: `objects.<id>.physics`
+- scene state / SceneDocument root: `physics`
+- Editor 再生: 既存の Scene Clock / Player UI が供給する `time.t` を入力にして評価する
+- seek / pause / reset: 物理 world を初期 snapshot から対象 tick まで再計算する
+- Export Viewer: `scene.json` の `physics` と object physics を読み込み、静的 Viewer 内の最小 Player UI で再生する
+
+現在の object physics は以下の形を想定する。
+
+```json
+{
+  "enabled": true,
+  "bodyType": "dynamic",
+  "shape": "sphere",
+  "mass": 1,
+  "restitution": 0.2,
+  "friction": 0.5,
+  "velocity": [0, 0, 0]
+}
+```
+
+`bodyType` は `dynamic` / `static`、`shape` は `sphere` / `box`。
+`radius` / `halfExtents` が省略された場合は Scene object の scale から推定する。
+
+Editor の通常表示中は host-follow の wall-clock 秒を物理に直接使わない。
+Player transport が local timeline を所有している間だけ、Scene Clock の `t` から物理 tick を計算する。
+
 ## broadcast メッセージ(案)
 
 Scene Sync の broadcast に以下の kind を載せる。シミュレーションは tick のみに依存するため、`hostTime` はペーシング(進行速度合わせ)にだけ使い、結果には影響しない。

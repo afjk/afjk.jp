@@ -586,7 +586,8 @@
     .scene-inspector-object-actions .chip {
       justify-content: center;
     }
-    .scene-inspector-animation-controls {
+    .scene-inspector-animation-controls,
+    .scene-inspector-physics-controls {
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -614,6 +615,11 @@
     .scene-inspector-number-input:focus {
       border-color: rgba(68,136,255,0.5);
       outline: none;
+    }
+    .scene-inspector-vector-inputs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
     }
     .scene-inspector-body {
       flex: 1 1 auto;
@@ -1379,7 +1385,7 @@
         <a class="chip" href="/scenesync/dev-tool/">Payload Tester</a>
       </div>
       <p id="scene-inspector-edit-note" class="scene-inspector-note" hidden>
-        Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, and primitive `asset.color` changes are broadcast. Root metadata, object add/remove, locks, and non-editable fields are ignored and shown in the preview below.
+        Prototype edit mode: only existing object `name`, `position`, `rotation`, `scale`, `visible`, `audio`, `physics`, and primitive `asset.color` changes are broadcast. Root metadata, object add/remove, locks, and non-editable fields are ignored and shown in the preview below.
       </p>
       <div id="scene-inspector-edit-meta" class="scene-inspector-edit-meta" hidden></div>
       <div id="scene-inspector-validation" class="scene-inspector-validation" hidden></div>
@@ -1425,6 +1431,58 @@
           <label class="scene-inspector-control-row">
             <span>Offset (s)</span>
             <input id="scene-inspector-animation-offset" class="scene-inspector-number-input" type="number" step="0.1" value="0">
+          </label>
+        </div>
+
+        <div id="scene-inspector-physics-controls" class="scene-inspector-physics-controls" hidden>
+          <div class="scene-inspector-section-header">
+            <div class="scene-inspector-section-title">Physics</div>
+            <div id="scene-inspector-physics-meta" class="scene-inspector-section-meta"></div>
+          </div>
+
+          <label class="scene-inspector-control-row">
+            <span>Enabled</span>
+            <input id="scene-inspector-physics-enabled" type="checkbox">
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Body</span>
+            <select id="scene-inspector-physics-body-type" class="chip">
+              <option value="dynamic">Dynamic</option>
+              <option value="static">Static</option>
+            </select>
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Shape</span>
+            <select id="scene-inspector-physics-shape" class="chip">
+              <option value="box">Box</option>
+              <option value="sphere">Sphere</option>
+            </select>
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Mass</span>
+            <input id="scene-inspector-physics-mass" class="scene-inspector-number-input" type="number" min="0" step="0.1" value="1">
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Bounce</span>
+            <input id="scene-inspector-physics-restitution" class="scene-inspector-number-input" type="number" min="0" max="1" step="0.05" value="0.2">
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Friction</span>
+            <input id="scene-inspector-physics-friction" class="scene-inspector-number-input" type="number" min="0" max="1" step="0.05" value="0.5">
+          </label>
+
+          <label class="scene-inspector-control-row">
+            <span>Velocity</span>
+            <div class="scene-inspector-vector-inputs">
+              <input id="scene-inspector-physics-velocity-x" class="scene-inspector-number-input" type="number" step="0.1" value="0" aria-label="Velocity X">
+              <input id="scene-inspector-physics-velocity-y" class="scene-inspector-number-input" type="number" step="0.1" value="0" aria-label="Velocity Y">
+              <input id="scene-inspector-physics-velocity-z" class="scene-inspector-number-input" type="number" step="0.1" value="0" aria-label="Velocity Z">
+            </div>
           </label>
         </div>
         <div id="scene-inspector-object-actions" class="scene-inspector-object-actions" hidden>

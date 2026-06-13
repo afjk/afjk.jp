@@ -84,6 +84,7 @@ Unity Editor / Unity Runtime / Godot 4.x / Web ブラウザ間で 3D シーン�
 - **編集ロック**: オブジェクト選択時に自動ロック。他クライアントはバウンディングボックス + ラベルで視覚表示
 - **参加者一覧**: 接続中のクライアント名・編集中オブジェクトをリアルタイム表示
 - **モバイル対応**: iPhone Safari タッチ操作（ダブルタップ選択、スワイプカメラ）対応
+- **Physics**: Scene Clock / Player UI の時刻を入力にした deterministic physics。現在は並進のみ、sphere / AABB box / ground をサポート
 - **Unity パッケージ**: `com.afjk.scene-sync`（upm.afjk.jp）で配布。Editor 拡張と Runtime（MonoBehaviour）の両方を提供
 - **Godot addon**: `godot/addons/scene_sync`。Editor Dock と Runtime `SceneSyncManager` ノードを提供
 

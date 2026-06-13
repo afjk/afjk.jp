@@ -64,6 +64,13 @@ import {
   normalizeSceneClockDeactivateArgs,
   preserveLocalSceneClockTimeline,
 } from './runtime/scene-clock-transport.js';
+import {
+  createScenePhysicsRuntime,
+  normalizeObjectPhysics,
+  normalizeScenePhysics,
+  serializeObjectPhysics,
+  serializeScenePhysics,
+} from './scene-physics.js';
 import { buildExportPackage } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
@@ -511,6 +518,7 @@ function onXrSelectEnd(ctrl) {
   if (!stillHeld) {
     if (obj.userData?.objectId) {
       // 最終姿勢を送信してから unlock
+      markScenePhysicsRuntimeDirty();
       broadcastObjectDelta(obj, broadcast);
       ensureUnlock(obj.userData.objectId);
     }
@@ -727,6 +735,7 @@ function updateXrGrab() {
   if (xrState.twoHand.active && xrState.twoHand.object) {
     const id = xrState.twoHand.object.userData?.objectId;
     if (id && !sentIds.has(id)) {
+      markScenePhysicsRuntimeDirty();
       broadcastObjectDelta(xrState.twoHand.object, broadcast);
       sentIds.add(id);
     }
@@ -735,6 +744,7 @@ function updateXrGrab() {
       if (!grabber.active || !grabber.object) continue;
       const id = grabber.object.userData?.objectId;
       if (id && !sentIds.has(id)) {
+        markScenePhysicsRuntimeDirty();
         broadcastObjectDelta(grabber.object, broadcast);
         sentIds.add(id);
       }
@@ -884,6 +894,7 @@ renderer.xr.addEventListener('sessionend', () => {
     grabber.active = false;
     grabber.object = null;
     if (obj.userData?.objectId) {
+      markScenePhysicsRuntimeDirty();
       broadcastObjectDelta(obj, broadcast);
       ensureUnlock(obj.userData.objectId);
     }
@@ -1060,6 +1071,7 @@ function sendSelectedDelta() {
   }
 
   broadcast(payload);
+  markScenePhysicsRuntimeDirty();
   notifySceneStateChanged('selected-transform-sent');
 }
 
@@ -1358,6 +1370,16 @@ function createSampleCube() {
 const managedObjects = new Map();
 const selectedObjectIds = new Set();
 const selectionHelpers = new Map();
+let scenePhysicsState = normalizeScenePhysics();
+const scenePhysicsRuntime = createScenePhysicsRuntime({
+  getScenePhysics: () => scenePhysicsState,
+  getObjectEntries: () => Array.from(managedObjects.entries()).map(([objectId, object]) => ({
+    objectId,
+    object,
+    physics: object.userData?.physics,
+  })),
+  isClockActive: (clockState) => clockState?.transportActive === true && clockState?.mode === 'local',
+});
 const removedObjectIds = new Set();
 
 function isSampleCubeObjectId(objectId) {
@@ -1552,6 +1574,7 @@ function updateTransformTweens(now = performance.now()) {
   }
 
   if (completedCount > 0) {
+    markScenePhysicsRuntimeDirty();
     updateSelectionHelpers();
     scheduleAiTransformTweenSnapshot();
   }
@@ -2653,9 +2676,77 @@ function getSceneAnimationPlaybackEntries() {
 }
 
 function getScenePlaybackDuration() {
+  const physicsDuration = getScenePhysicsPlaybackDuration();
   return calculateScenePlaybackDuration({
     animationEntries: getSceneAnimationPlaybackEntries(),
+    physicsDuration,
+    defaultDuration: physicsDuration > 0 ? physicsDuration : undefined,
   });
+}
+
+function hasPhysicsObjects() {
+  for (const obj of managedObjects.values()) {
+    if (normalizeObjectPhysics(obj?.userData?.physics)) return true;
+  }
+  return false;
+}
+
+function getScenePhysicsPlaybackDuration() {
+  const physics = normalizeScenePhysics(scenePhysicsState);
+  return physics.enabled && hasPhysicsObjects() ? physics.duration : 0;
+}
+
+function getScenePhysicsForSerialize({ enableWhenObjectsExist = true } = {}) {
+  const physics = normalizeScenePhysics(scenePhysicsState);
+  if (!physics.enabled && enableWhenObjectsExist && hasPhysicsObjects()) {
+    return {
+      ...physics,
+      enabled: true,
+    };
+  }
+  return serializeScenePhysics(physics);
+}
+
+function getObjectPhysicsForSerialize(obj) {
+  return serializeObjectPhysics(obj?.userData?.physics);
+}
+
+function markScenePhysicsRuntimeDirty() {
+  scenePhysicsRuntime.markDirty();
+}
+
+function applyScenePhysics(physics, options = {}) {
+  scenePhysicsState = normalizeScenePhysics(physics);
+  markScenePhysicsRuntimeDirty();
+  if (options.broadcastChange) {
+    const serialized = getScenePhysicsForSerialize({ enableWhenObjectsExist: false });
+    broadcast({
+      kind: 'scene-physics',
+      physics: serialized || { enabled: false },
+    });
+  }
+  if (options.notify !== false) {
+    notifySceneStateChanged(options.reason || 'scene-physics-updated');
+  }
+  return getScenePhysicsForSerialize({ enableWhenObjectsExist: false });
+}
+
+function applyObjectPhysicsDelta(obj, physics) {
+  if (!obj) return null;
+  const next = normalizeObjectPhysics(physics);
+  if (next) {
+    obj.userData.physics = next;
+    if (!scenePhysicsState.enabled) {
+      scenePhysicsState = {
+        ...normalizeScenePhysics(scenePhysicsState),
+        enabled: true,
+      };
+    }
+  } else {
+    delete obj.userData.physics;
+  }
+  markScenePhysicsRuntimeDirty();
+  return next;
 }
 
 function showTemporaryImagePreview(objectId, file, position, options = {}) {
@@ -4282,6 +4373,10 @@ renderer.setAnimationLoop((time, frame) => {
 
   const now = performance.now();
   const sceneClockStateForTick = getSceneClockStateForLoomlet(now);
+  const physicsTick = scenePhysicsRuntime.update(sceneClockStateForTick);
+  if ((physicsTick.active || physicsTick.reset) && selectedObjectIds.size > 0) {
+    updateSelectionHelpers();
+  }
   updateObjectGlbAnimations(now, sceneClockStateForTick);
   updateGazeStateFromCamera();
   updateGazeDwellState(now);
@@ -4364,6 +4459,17 @@ const sceneInspectorAnimationEnabledEl = document.getElementById('scene-inspecto
 const sceneInspectorAnimationClipEl = document.getElementById('scene-inspector-animation-clip');
 const sceneInspectorAnimationSpeedEl = document.getElementById('scene-inspector-animation-speed');
 const sceneInspectorAnimationOffsetEl = document.getElementById('scene-inspector-animation-offset');
+const sceneInspectorPhysicsControlsEl = document.getElementById('scene-inspector-physics-controls');
+const sceneInspectorPhysicsMetaEl = document.getElementById('scene-inspector-physics-meta');
+const sceneInspectorPhysicsEnabledEl = document.getElementById('scene-inspector-physics-enabled');
+const sceneInspectorPhysicsBodyTypeEl = document.getElementById('scene-inspector-physics-body-type');
+const sceneInspectorPhysicsShapeEl = document.getElementById('scene-inspector-physics-shape');
+const sceneInspectorPhysicsMassEl = document.getElementById('scene-inspector-physics-mass');
+const sceneInspectorPhysicsRestitutionEl = document.getElementById('scene-inspector-physics-restitution');
+const sceneInspectorPhysicsFrictionEl = document.getElementById('scene-inspector-physics-friction');
+const sceneInspectorPhysicsVelocityXEl = document.getElementById('scene-inspector-physics-velocity-x');
+const sceneInspectorPhysicsVelocityYEl = document.getElementById('scene-inspector-physics-velocity-y');
+const sceneInspectorPhysicsVelocityZEl = document.getElementById('scene-inspector-physics-velocity-z');
 
 function resolvePresenceUrl() {
   const params = new URLSearchParams(location.search);
@@ -5514,6 +5620,11 @@ async function respondToSceneRequest(from) {
       entry.audioSources = audioSources;
     }
 
+    const physics = getObjectPhysicsForSerialize(obj);
+    if (physics) {
+      entry.physics = physics;
+    }
+
     objects[objectId] = entry;
   }
 
@@ -5531,6 +5642,11 @@ async function respondToSceneRequest(from) {
     const loomGraphState = loomIntegration.exportState();
     if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
       payload.loomGraphs = loomGraphState;
+    }
+
+    const physicsState = getScenePhysicsForSerialize();
+    if (physicsState) {
+      payload.physics = physicsState;
     }
 
     ws.send(JSON.stringify({
@@ -5591,7 +5707,8 @@ function handleHandoff(data) {
     payload.kind === 'scene-batch' ||
     payload.kind === 'scene-delta' ||
     payload.kind === 'scene-add' ||
-    payload.kind === 'scene-remove'
+    payload.kind === 'scene-remove' ||
+    payload.kind === 'scene-physics'
   ) {
     console.debug('[handoff] scene mutation received', {
       kind: payload.kind,
@@ -5614,6 +5731,12 @@ function handleHandoff(data) {
         environmentManager.loadEnvironment(payload.envId, {
           source: 'handoff',
           broadcastChange: false,
+        });
+      }
+      if (payload.physics && typeof payload.physics === 'object') {
+        applyScenePhysics(payload.physics, {
+          notify: false,
+          reason: 'scene-state-physics',
         });
       }
       const objects = payload.objects || {};
@@ -5709,6 +5832,9 @@ function handleHandoff(data) {
               : obj.userData?.metadata,
             // コンテンツ差し替え時も既存の AudioSource component を保持する。
             audioSources: payload.audioSources ?? obj.userData?.audioSources,
+            physics: Object.prototype.hasOwnProperty.call(payload, 'physics')
+              ? payload.physics
+              : obj.userData?.physics,
           };
           addOrUpdateObject(payload.objectId, mergedInfo);
 
@@ -5723,6 +5849,7 @@ function handleHandoff(data) {
               asset: cloneJsonSafe(mergedInfo.asset),
               metadata: cloneJsonSafe(mergedInfo.metadata || null),
               audioSources: cloneJsonSafe(getObjectAudioSourcesForSerialize(managedObjects.get(payload.objectId)) || {}),
+              physics: cloneJsonSafe(getObjectPhysicsForSerialize(managedObjects.get(payload.objectId)) || null),
             };
 
             presenceState.historyManager?.push(
@@ -5754,6 +5881,13 @@ function handleHandoff(data) {
           audioSources: payload.audioSources,
         });
       }
+      if (Object.prototype.hasOwnProperty.call(payload, 'physics')) {
+        applyObjectPhysicsDelta(obj, payload.physics);
+        console.debug('[scene-delta] physics applied', {
+          objectId: payload.objectId,
+          physics: payload.physics,
+        });
+      }
 
       // Handle transform updates (animated or immediate)
       if (shouldAnimateTransform && (
@@ -5778,6 +5912,9 @@ function handleHandoff(data) {
         if (payload.position) obj.position.fromArray(payload.position);
         if (payload.rotation) obj.quaternion.fromArray(payload.rotation);
         if (payload.scale) obj.scale.fromArray(payload.scale);
+        if (payload.position || payload.rotation || payload.scale) {
+          markScenePhysicsRuntimeDirty();
+        }
         console.debug('[scene-delta] applied', {
           objectId: payload.objectId,
           position: obj.position.toArray(),
@@ -5845,6 +5982,15 @@ function handleHandoff(data) {
       loomIntegration.clearObjectGraph(objectId);
       notifySceneStateChanged('scene-remove-handoff');
       updateEnvironmentMenuSkyboxControls();
+      break;
+    }
+    case 'scene-physics': {
+      if (isOwn) break;
+      applyScenePhysics(payload.physics || { enabled: false }, {
+        notify: false,
+        reason: 'scene-physics-handoff',
+      });
+      notifySceneStateChanged('scene-physics-handoff');
       break;
     }
     case 'scene-mesh': {
@@ -6338,6 +6484,7 @@ async function importGlbFileAsSceneObject(file, {
   metadata,
   animation,
   audioSources,
+  physics,
   selectAfterLoad = false,
   showImportToast = false,
 } = {}) {
@@ -6359,6 +6506,7 @@ async function importGlbFileAsSceneObject(file, {
   if (metadata) info.metadata = metadata;
   if (animation) info.animation = animation;
   if (audioSources !== undefined) info.audioSources = audioSources;
+  if (physics !== undefined) info.physics = physics;
 
   // GLB は内部に元のシーン座標を持つため、info の transform で上書きする
   replaceManagedObject(objectId, model, info);
@@ -6388,6 +6536,7 @@ async function importGlbFileAsSceneObject(file, {
     ...(metadata ? { metadata } : {}),
     ...(animation ? { animation } : {}),
     ...(audioSources !== undefined ? { audioSources } : {}),
+    ...(physics !== undefined ? { physics } : {}),
   });
 
   return model;
@@ -6619,6 +6768,11 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
   const audioSources = getObjectAudioSourcesForSerialize(obj);
   if (audioSources) {
     result.audioSources = audioSources;
+  }
+
+  const physics = getObjectPhysicsForSerialize(obj);
+  if (physics) {
+    result.physics = physics;
   }
 
   return result;
@@ -7129,6 +7283,9 @@ function addOrUpdateObject(objectId, info, options = {}) {
   applyObjectVisibility(existing, info.visible);
   if (info.audioSources !== undefined) {
     setObjectAudioSourcesFull(objectId, info.audioSources);
+  }
+  if (info.physics !== undefined) {
+    applyObjectPhysicsDelta(existing, info.physics);
   }
   notifySceneStateChanged('managed-object-updated');
 }
@@ -7910,6 +8067,7 @@ function createContentReplaceSnapshot(obj, fallbackObjectId = null) {
     asset: cloneJsonSafe(obj.userData?.asset || null),
     metadata: cloneJsonSafe(obj.userData?.metadata || null),
     audioSources: cloneJsonSafe(getObjectAudioSourcesForSerialize(obj) || {}),
+    physics: cloneJsonSafe(getObjectPhysicsForSerialize(obj) || null),
   };
 }
 
@@ -7987,6 +8145,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
 
   // コンテンツ差し替えではオブジェクトを作り直すため、既存の AudioSource component を保持する。
   const preservedAudioSources = getObjectAudioSourcesForSerialize(existing) || {};
+  const preservedPhysics = getObjectPhysicsForSerialize(existing);
 
   const deltaPayload = {
     kind: 'scene-delta',
@@ -7995,6 +8154,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
     asset: newAsset,
     metadata: newMetadata,
     audioSources: preservedAudioSources,
+    ...(preservedPhysics ? { physics: preservedPhysics } : {}),
   };
 
   broadcast(deltaPayload);
@@ -8009,6 +8169,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
     asset: newAsset,
     metadata: newMetadata,
     audioSources: preservedAudioSources,
+    ...(preservedPhysics ? { physics: preservedPhysics } : {}),
   };
   addOrUpdateObject(objectId, mergedInfo, { ...options, pushHistory: false });
 
@@ -8023,6 +8184,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
       asset: cloneJsonSafe(newAsset),
       metadata: cloneJsonSafe(newMetadata),
       audioSources: cloneJsonSafe(preservedAudioSources),
+      physics: cloneJsonSafe(preservedPhysics),
     };
 
     presenceState.historyManager?.push(
@@ -8160,6 +8322,22 @@ function replaceManagedObject(objectId, nextObject, info) {
   if (info.audioSources !== undefined) {
     setObjectAudioSourcesFull(objectId, info.audioSources);
   }
+
+  const nextPhysics = Object.prototype.hasOwnProperty.call(info || {}, 'physics')
+    ? normalizeObjectPhysics(info.physics)
+    : getObjectPhysicsForSerialize(current);
+  if (nextPhysics) {
+    nextObject.userData.physics = nextPhysics;
+    if (!scenePhysicsState.enabled) {
+      scenePhysicsState = {
+        ...normalizeScenePhysics(scenePhysicsState),
+        enabled: true,
+      };
+    }
+  } else {
+    delete nextObject.userData.physics;
+  }
+  markScenePhysicsRuntimeDirty();
 
   console.debug('[scene-add] applied transform', {
     objectId: nextObject.userData?.objectId || null,
@@ -8510,6 +8688,9 @@ function applyOperationToScene(operation) {
             audioSources: Object.prototype.hasOwnProperty.call(operation, 'audioSources')
               ? cloneJsonSafe(operation.audioSources)
               : cloneJsonSafe(getObjectAudioSourcesForSerialize(obj) || {}),
+            physics: Object.prototype.hasOwnProperty.call(operation, 'physics')
+              ? cloneJsonSafe(operation.physics)
+              : cloneJsonSafe(getObjectPhysicsForSerialize(obj) || null),
           };
 
           addOrUpdateObject(operation.objectId, mergedInfo, {
@@ -8523,6 +8704,9 @@ function applyOperationToScene(operation) {
 
         if (typeof operation.name === 'string') applyObjectName(obj, operation.name);
         applyTransform(obj, operation);
+        if (operation.position || operation.rotation || operation.scale) {
+          markScenePhysicsRuntimeDirty();
+        }
         if (typeof operation.visible === 'boolean') applyObjectVisibility(obj, operation.visible);
         if (operation.asset) {
           applyAssetDelta(obj, operation.asset);
@@ -8533,8 +8717,19 @@ function applyOperationToScene(operation) {
         if (operation.audioSources !== undefined) {
           applyIncomingAudioSources(operation.objectId, operation.audioSources);
         }
+        if (Object.prototype.hasOwnProperty.call(operation, 'physics')) {
+          applyObjectPhysicsDelta(obj, operation.physics);
+        }
       }
       notifySceneStateChanged('undo-redo-scene-delta');
+      break;
+    }
+    case 'scene-physics': {
+      applyScenePhysics(operation.physics || { enabled: false }, {
+        notify: false,
+        reason: 'undo-redo-scene-physics',
+      });
+      notifySceneStateChanged('undo-redo-scene-physics');
       break;
     }
     case 'scene-env': {
@@ -8598,6 +8793,9 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
   const preservedAudioSources = Object.prototype.hasOwnProperty.call(info || {}, 'audioSources')
     ? info.audioSources
     : obj?.userData?.audioSources;
+  const preservedPhysics = Object.prototype.hasOwnProperty.call(info || {}, 'physics')
+    ? info.physics
+    : getObjectPhysicsForSerialize(obj);
   if (!obj && !info) {
     console.warn('[SceneSync] Object not found for loading recovered GLB:', objectId);
     return;
@@ -8674,6 +8872,9 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       ? structuredClone(obj.userData.asset)
       : (info?.asset ? structuredClone(info.asset) : null);
     if (options.assetId) wrapper.userData.assetId = options.assetId;
+    if (preservedPhysics) {
+      wrapper.userData.physics = normalizeObjectPhysics(preservedPhysics);
+    }
 
     const animations = Array.isArray(gltf.animations) ? gltf.animations : [];
     const animationState = animations.length > 0
@@ -8723,6 +8924,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
     if (preservedAudioSources !== undefined) {
       setObjectAudioSourcesFull(objectId, preservedAudioSources);
     }
+    markScenePhysicsRuntimeDirty();
     notifySceneStateChanged('glb-blob-loaded');
     markCrashProbe('glb-scene-attach-success', { objectId });
     clearCrashProbe('glb-object-ready');
@@ -8893,6 +9095,15 @@ function applySceneActionLocally(action, options = {}) {
     loomIntegration.clearObjectGraph(action.objectId);
     updateEnvironmentMenuSkyboxControls();
     notifySceneStateChanged('local-scene-remove');
+    return;
+  }
+
+  if (action.kind === 'scene-physics') {
+    applyScenePhysics(action.physics || { enabled: false }, {
+      notify: false,
+      reason: 'local-scene-physics',
+    });
+    notifySceneStateChanged('local-scene-physics');
     return;
   }
 
@@ -9481,6 +9692,7 @@ async function urlImporterCallback(url, position, context = {}) {
       importGlbFileAsSceneObject,
       uploadBlobToStore,
       applySceneBgm,
+      applyScenePhysics,
     });
     if (sceneSyncExportResult?.handled) return;
   }
@@ -9582,6 +9794,7 @@ const dragDropManager = new DragDropManager({
     importGlbFileAsSceneObject,
     uploadBlobToStore,
     applySceneBgm,
+    applyScenePhysics,
   }),
   onLoadStart: async ({
     objectId,
@@ -10112,6 +10325,7 @@ const EDITABLE_SCENE_OBJECT_FIELDS = new Set([
   'visible',
   'asset',
   'audioSources',
+  'physics',
 ]);
 
 const EDITABLE_TEXT_ASSET_FIELDS = new Set([
@@ -10515,6 +10729,18 @@ function buildSceneInspectorEditableDiff(baseSnapshot, editedSnapshot) {
       }
     }
 
+    if (!valuesEqual(baseObject.physics ?? null, editedObject.physics ?? null)) {
+      if (editedObject.physics == null) {
+        objectDelta.physics = null;
+        changedFields.push('physics');
+      } else if (typeof editedObject.physics !== 'object' || Array.isArray(editedObject.physics)) {
+        errors.push(`objects.${objectId}.physics must be an object or null.`);
+      } else {
+        objectDelta.physics = normalizeObjectPhysics(editedObject.physics);
+        changedFields.push('physics');
+      }
+    }
+
     const objectKeys = new Set([
       ...Object.keys(baseObject || {}),
       ...Object.keys(editedObject || {}),
@@ -10805,7 +11031,7 @@ function setOrDeleteInspectorValueAtPath(root, path, value) {
 function applyBaseInspectorField(targetObject, baseObject, field) {
   if (!targetObject || !baseObject || typeof field !== 'string') return;
 
-  if (['name', 'position', 'rotation', 'scale', 'visible', 'audioSources'].includes(field)) {
+  if (['name', 'position', 'rotation', 'scale', 'visible', 'audioSources', 'physics'].includes(field)) {
     setOrDeleteInspectorValueAtPath(targetObject, [field], baseObject[field]);
     return;
   }
@@ -11222,6 +11448,71 @@ function renderSceneInspectorAnimationControls(selectedObject) {
   }
 }
 
+function setSceneInspectorPhysicsFieldsDisabled(disabled) {
+  for (const el of [
+    sceneInspectorPhysicsBodyTypeEl,
+    sceneInspectorPhysicsShapeEl,
+    sceneInspectorPhysicsMassEl,
+    sceneInspectorPhysicsRestitutionEl,
+    sceneInspectorPhysicsFrictionEl,
+    sceneInspectorPhysicsVelocityXEl,
+    sceneInspectorPhysicsVelocityYEl,
+    sceneInspectorPhysicsVelocityZEl,
+  ]) {
+    if (el) el.disabled = disabled;
+  }
+}
+
+function renderSceneInspectorPhysicsControls(selectedObject) {
+  const objectId = selectedObject?.objectId;
+  const objectSnapshot = selectedObject?.objectSnapshot;
+  const hasSelection = !!objectId && !!objectSnapshot;
+
+  if (sceneInspectorPhysicsControlsEl) {
+    sceneInspectorPhysicsControlsEl.hidden = !hasSelection;
+  }
+  if (!hasSelection) return;
+
+  const physics = normalizeObjectPhysics(objectSnapshot.physics) || {
+    enabled: false,
+    bodyType: 'dynamic',
+    shape: objectSnapshot.asset?.primitive === 'sphere' ? 'sphere' : 'box',
+    mass: 1,
+    restitution: 0.2,
+    friction: 0.5,
+    velocity: [0, 0, 0],
+  };
+  const enabled = physics.enabled === true;
+
+  if (sceneInspectorPhysicsMetaEl) {
+    sceneInspectorPhysicsMetaEl.textContent = enabled ? physics.bodyType : 'Off';
+  }
+  if (sceneInspectorPhysicsEnabledEl) {
+    sceneInspectorPhysicsEnabledEl.checked = enabled;
+  }
+  if (sceneInspectorPhysicsBodyTypeEl) {
+    sceneInspectorPhysicsBodyTypeEl.value = physics.bodyType || 'dynamic';
+  }
+  if (sceneInspectorPhysicsShapeEl) {
+    sceneInspectorPhysicsShapeEl.value = physics.shape || 'box';
+  }
+  if (sceneInspectorPhysicsMassEl) {
+    sceneInspectorPhysicsMassEl.value = String(Number.isFinite(physics.mass) ? physics.mass : 1);
+  }
+  if (sceneInspectorPhysicsRestitutionEl) {
+    sceneInspectorPhysicsRestitutionEl.value = String(Number.isFinite(physics.restitution) ? physics.restitution : 0.2);
+  }
+  if (sceneInspectorPhysicsFrictionEl) {
+    sceneInspectorPhysicsFrictionEl.value = String(Number.isFinite(physics.friction) ? physics.friction : 0.5);
+  }
+  const velocity = Array.isArray(physics.velocity) ? physics.velocity : [0, 0, 0];
+  if (sceneInspectorPhysicsVelocityXEl) sceneInspectorPhysicsVelocityXEl.value = String(Number(velocity[0]) || 0);
+  if (sceneInspectorPhysicsVelocityYEl) sceneInspectorPhysicsVelocityYEl.value = String(Number(velocity[1]) || 0);
+  if (sceneInspectorPhysicsVelocityZEl) sceneInspectorPhysicsVelocityZEl.value = String(Number(velocity[2]) || 0);
+
+  setSceneInspectorPhysicsFieldsDisabled(!enabled);
+}
+
 function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   let selectedObject = buildSelectedObjectInspectorContext(snapshot);
   let objectEditorState = sceneInspectorState.objectEditor;
@@ -11278,7 +11569,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (sceneInspectorEditMetaEl) {
     const baseTime = baseSnapshot?.generatedAt || 'unknown';
     sceneInspectorEditMetaEl.textContent =
-      `Base snapshot captured at ${baseTime}.\nApplied fields: existing object \`name\`, \`position\`, \`rotation\`, \`scale\`, \`visible\`, \`audio\`, and primitive \`asset.color\`.\nIgnored fields: root metadata, object add/remove, ids, locks, room, connection, environment, raw Loom graph state, \`meshPath\`, and all other non-editable fields.`;
+      `Base snapshot captured at ${baseTime}.\nApplied fields: existing object \`name\`, \`position\`, \`rotation\`, \`scale\`, \`visible\`, \`audio\`, \`physics\`, and primitive \`asset.color\`.\nIgnored fields: root metadata, object add/remove, ids, locks, room, connection, environment, raw Loom graph state, \`meshPath\`, and all other non-editable fields.`;
   }
 
   const hasErrors = sceneInspectorState.validationErrors.length > 0;
@@ -11352,6 +11643,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   updateSceneInspectorObjectEditorModeUi();
 
   renderSceneInspectorAnimationControls(selectedObject);
+  renderSceneInspectorPhysicsControls(selectedObject);
 
   const objectHasErrors = objectEditorState.validationErrors.length > 0;
   const objectSummary = objectEditorState.diffSummary;
@@ -11497,6 +11789,7 @@ function hasSceneDeltaPayload(operation) {
     'visible',
     'animation',
     'audioSources',
+    'physics',
   ].some((key) => Object.prototype.hasOwnProperty.call(operation, key));
 }
 
@@ -11512,7 +11805,7 @@ function applySceneInspectorTextAssetPreviewDelta(operation, fieldMask) {
       kind: 'scene-delta',
       objectId: operation.objectId,
     };
-    for (const key of ['name', 'position', 'rotation', 'scale', 'visible', 'animation', 'audioSources']) {
+    for (const key of ['name', 'position', 'rotation', 'scale', 'visible', 'animation', 'audioSources', 'physics']) {
       if (Object.prototype.hasOwnProperty.call(operation, key)) {
         nonAssetOperation[key] = cloneInspectorValue(operation[key]);
       }
@@ -12019,9 +12312,15 @@ function buildSceneInspectorSnapshot() {
       entry.audioSources = audioSources;
     }
 
+    const physics = getObjectPhysicsForSerialize(obj);
+    if (physics) {
+      entry.physics = physics;
+    }
+
     objects[objectId] = entry;
   }
 
+  const physicsState = getScenePhysicsForSerialize({ enableWhenObjectsExist: false });
   const snapshot = {
     kind: 'scene-inspector',
     room: presenceState.room || activeRoomCode || null,
@@ -12042,6 +12341,10 @@ function buildSceneInspectorSnapshot() {
     objects,
     generatedAt: new Date().toISOString(),
   };
+
+  if (physicsState) {
+    snapshot.physics = physicsState;
+  }
 
   if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
     snapshot.loomGraphs = loomGraphState;
@@ -12109,6 +12412,7 @@ function createCurrentSceneSnapshot() {
     const metadata = safeCloneJson(object.userData?.metadata || null);
     const animation = serializeObjectAnimationState(object);
     const audioSources = getObjectAudioSourcesForSerialize(object);
+    const physics = getObjectPhysicsForSerialize(object);
 
     const entry = {
       objectId,
@@ -12128,16 +12432,26 @@ function createCurrentSceneSnapshot() {
     if (audioSources) {
       entry.audioSources = audioSources;
     }
+    if (physics) {
+      entry.physics = physics;
+    }
 
     objects.push(entry);
   }
 
-  return {
+  const snapshot = {
     schemaVersion: 1,
     savedAt: Date.now(),
     envId: environmentManager.getCurrentEnvId?.() || dom.envSelect?.value || null,
     objects,
   };
+
+  const physicsState = getScenePhysicsForSerialize();
+  if (physicsState) {
+    snapshot.physics = physicsState;
+  }
+
+  return snapshot;
 }
 
 function getCurrentRoomId() {
@@ -12268,6 +12582,13 @@ async function applyRoomSnapshot(snapshot, options = {}) {
       });
     }
 
+    if (snapshot.physics && typeof snapshot.physics === 'object') {
+      applyScenePhysics(snapshot.physics, {
+        notify: false,
+        reason: 'snapshot-physics-restore',
+      });
+    }
+
     for (const entry of snapshot.objects || []) {
       try {
         restoreSnapshotObject(entry, options);
@@ -12338,6 +12659,9 @@ function restoreSnapshotObject(entry, options = {}) {
   if (audioSources) {
     payload.audioSources = audioSources;
   }
+  if (entry.physics && typeof entry.physics === 'object') {
+    payload.physics = safeCloneJson(entry.physics);
+  }
 
   addOrUpdateObject(objectId, payload, {
     skipFallbackOnFailure: true,
@@ -12372,6 +12696,44 @@ function broadcastSelectedObjectAnimationDelta(delta) {
   broadcast(operation);
   notifySceneStateChanged('scene-inspector-animation-updated');
   notifySelectionChanged('scene-inspector-animation-updated');
+}
+
+function readSceneInspectorPhysicsControls() {
+  if (!sceneInspectorPhysicsEnabledEl?.checked) return null;
+
+  return normalizeObjectPhysics({
+    enabled: true,
+    bodyType: sceneInspectorPhysicsBodyTypeEl?.value || 'dynamic',
+    shape: sceneInspectorPhysicsShapeEl?.value || 'box',
+    mass: Number(sceneInspectorPhysicsMassEl?.value),
+    restitution: Number(sceneInspectorPhysicsRestitutionEl?.value),
+    friction: Number(sceneInspectorPhysicsFrictionEl?.value),
+    velocity: [
+      Number(sceneInspectorPhysicsVelocityXEl?.value) || 0,
+      Number(sceneInspectorPhysicsVelocityYEl?.value) || 0,
+      Number(sceneInspectorPhysicsVelocityZEl?.value) || 0,
+    ],
+  });
+}
+
+function broadcastSelectedObjectPhysicsDelta(physics) {
+  const snapshot = buildSceneInspectorSnapshot();
+  const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
+  if (!objectId || !objectSnapshot) {
+    showToast('オブジェクトを選択してください');
+    return;
+  }
+
+  const operation = {
+    kind: 'scene-delta',
+    objectId,
+    physics,
+  };
+
+  applyOperationToScene(operation);
+  broadcast(operation);
+  notifySceneStateChanged('scene-inspector-physics-updated');
+  notifySelectionChanged('scene-inspector-physics-updated');
 }
 
 function notifySceneStateChanged(reason) {
@@ -12627,6 +12989,26 @@ sceneInspectorAnimationOffsetEl?.addEventListener('change', () => {
   });
 });
 
+sceneInspectorPhysicsEnabledEl?.addEventListener('change', () => {
+  broadcastSelectedObjectPhysicsDelta(readSceneInspectorPhysicsControls());
+});
+
+for (const control of [
+  sceneInspectorPhysicsBodyTypeEl,
+  sceneInspectorPhysicsShapeEl,
+  sceneInspectorPhysicsMassEl,
+  sceneInspectorPhysicsRestitutionEl,
+  sceneInspectorPhysicsFrictionEl,
+  sceneInspectorPhysicsVelocityXEl,
+  sceneInspectorPhysicsVelocityYEl,
+  sceneInspectorPhysicsVelocityZEl,
+]) {
+  control?.addEventListener('change', () => {
+    if (!sceneInspectorPhysicsEnabledEl?.checked) return;
+    broadcastSelectedObjectPhysicsDelta(readSceneInspectorPhysicsControls());
+  });
+}
+
 pairingDialog?.addEventListener('click', (event) => {
   if (event.target === pairingDialog) {
     cancelPairing();
@@ -12863,6 +13245,7 @@ async function triggerExport() {
       envOrigin: location.origin,
       assetCache,
       behaviorState,
+      physicsState: getScenePhysicsForSerialize(),
     });
 
     if (missingAssets.length > 0) {
