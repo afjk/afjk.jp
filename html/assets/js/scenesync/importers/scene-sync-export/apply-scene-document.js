@@ -182,11 +182,27 @@ export async function applySceneDocument(sceneDocument, {
   importGlbFileAsSceneObject,
   zip,
   uploadBlobToStore,
+  onProgress,
 } = {}) {
   let added = 0;
   let updated = 0;
   let glbImported = 0;
   let skippedAssets = 0;
+  const total = sceneDocument.objects?.length || 0;
+  let processed = 0;
+
+  function reportProgress(obj) {
+    processed += 1;
+    onProgress?.({
+      total,
+      processed,
+      objectId: obj?.id || null,
+      added,
+      updated,
+      glbImported,
+      skippedAssets,
+    });
+  }
 
   for (const obj of sceneDocument.objects || []) {
     const existed = managedObjects.has(obj.id);
@@ -227,6 +243,7 @@ export async function applySceneDocument(sceneDocument, {
         });
 
         glbImported += 1;
+        reportProgress(obj);
         continue;
       }
 
@@ -258,10 +275,11 @@ export async function applySceneDocument(sceneDocument, {
 
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
     broadcast(payload);
+    reportProgress(obj);
   }
 
   return {
-    total: sceneDocument.objects?.length || 0,
+    total,
     added,
     updated,
     glbImported,
