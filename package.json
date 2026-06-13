@@ -11,11 +11,14 @@
     "test:glb-normalizer": "node --test html/assets/js/scenesync/loaders/glb-normalizer.test.js",
     "test:playback-duration": "node --test html/assets/js/scenesync/runtime/playback-duration.test.js",
     "test:physics": "node --test html/assets/js/scenesync/physics/fixed.test.js html/assets/js/scenesync/physics/world.test.js html/assets/js/scenesync/physics/lockstep.test.js",
-    "test:scene-sync-export-import": "node --test html/assets/js/scenesync/importers/scene-sync-export/*.test.js"
+    "test:scene-sync-export-import": "node --test html/assets/js/scenesync/importers/scene-sync-export/*.test.js",
+    "test:e2e:install-browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
+    "test:e2e:scene-sync-export-import": "node scripts/scenesync-export-import-browser-e2e.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/extensions": "^4.3.0",
-    "@gltf-transform/functions": "^4.3.0"
+    "@gltf-transform/functions": "^4.3.0",
+    "playwright": "^1.60.0"
   }
 }

@@ -49,6 +49,101 @@ test('marks ZIP-bundled GLB assets with an importAsset plan when the zip entry e
   strictEqual(obj.asset.type, 'mesh');
 });
 
+test('marks ZIP-bundled image/video/text assets with upload import plans even when URL fallback exists', async () => {
+  const zip = createFakeZip(['assets/img-1.jpg', 'assets/video-1.mp4', 'assets/story.md']);
+  const sceneDocument = {
+    objects: [
+      {
+        id: 'img-1',
+        asset: {
+          type: 'image',
+          path: 'assets/img-1.jpg',
+          url: 'https://example.com/img-1.jpg',
+          mime: 'image/jpeg',
+        },
+      },
+      {
+        id: 'video-1',
+        asset: {
+          type: 'video',
+          path: 'assets/video-1.mp4',
+          url: 'https://example.com/video-1.mp4',
+          mime: 'video/mp4',
+        },
+      },
+      {
+        id: 'story',
+        asset: {
+          type: 'text',
+          source: 'url',
+          path: 'assets/story.md',
+          url: 'https://example.com/story.md',
+          mime: 'text/markdown',
+        },
+      },
+    ],
+  };
+
+  const { document } = await resolveSceneDocumentAssets(sceneDocument, { zip });
+
+  deepStrictEqual(
+    document.objects.map((obj) => obj.importAsset),
+    [
+      { kind: 'blob-file', path: 'assets/img-1.jpg', originalName: 'img-1.jpg', mime: 'image/jpeg' },
+      { kind: 'blob-file', path: 'assets/video-1.mp4', originalName: 'video-1.mp4', mime: 'video/mp4' },
+      { kind: 'blob-file', path: 'assets/story.md', originalName: 'story.md', mime: 'text/markdown' },
+    ]
+  );
+});
+
+test('marks ZIP-bundled object audio source assets with upload import plans', async () => {
+  const zip = createFakeZip(['assets/speaker-default.mp3']);
+  const sceneDocument = {
+    objects: [
+      {
+        id: 'speaker',
+        asset: { type: 'primitive', primitive: 'box' },
+        audioSources: {
+          default: {
+            url: 'https://example.com/speaker-default.mp3',
+            asset: { path: 'assets/speaker-default.mp3', mime: 'audio/mpeg' },
+          },
+        },
+      },
+    ],
+  };
+
+  const { document } = await resolveSceneDocumentAssets(sceneDocument, { zip });
+  deepStrictEqual(document.objects[0].importAudioSources, {
+    default: {
+      kind: 'blob-file',
+      path: 'assets/speaker-default.mp3',
+      originalName: 'speaker-default.mp3',
+      mime: 'audio/mpeg',
+    },
+  });
+});
+
+test('marks ZIP-bundled BGM asset with upload import plan', async () => {
+  const zip = createFakeZip(['assets/bgm.mp3']);
+  const sceneDocument = {
+    objects: [],
+    bgm: {
+      url: 'https://example.com/bgm.mp3',
+      name: 'bgm.mp3',
+      asset: { path: 'assets/bgm.mp3', mime: 'audio/mpeg' },
+    },
+  };
+
+  const { document } = await resolveSceneDocumentAssets(sceneDocument, { zip });
+  deepStrictEqual(document.bgm.importAsset, {
+    kind: 'blob-file',
+    path: 'assets/bgm.mp3',
+    originalName: 'bgm.mp3',
+    mime: 'audio/mpeg',
+  });
+});
+
 test('falls back to importWarning placeholder when GLB zip entry is missing', async () => {
   const zip = createFakeZip([]);
   const sceneDocument = {

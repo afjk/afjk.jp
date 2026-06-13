@@ -77,8 +77,8 @@ function buildAssetEntry(obj) {
       source: asset.source || 'url',
       url: asset.url || null,
       path: null, // filled by collect-export-assets.js
-      mime: asset.mime || 'image/jpeg',
     };
+    copyStringField(entry, asset, 'mime');
     copyFiniteNumberField(entry, asset, 'width');
     copyFiniteNumberField(entry, asset, 'height');
     copyStringField(entry, asset, 'assetId');
@@ -92,8 +92,8 @@ function buildAssetEntry(obj) {
       source: asset.source || 'url',
       url: asset.url || null,
       path: null, // filled by collect-export-assets.js
-      mime: asset.mime || 'video/mp4',
     };
+    copyStringField(entry, asset, 'mime');
     copyFiniteNumberField(entry, asset, 'width');
     copyFiniteNumberField(entry, asset, 'height');
     copyStringField(entry, asset, 'assetId');
@@ -131,8 +131,9 @@ function buildAssetEntry(obj) {
   const meshPath = obj.userData?.meshPath || asset.meshPath || null;
   const assetId = asset.assetId || obj.userData?.assetId || obj.userData?.scenesync?.assetId || null;
 
-  return {
+  const entry = {
     type: 'mesh',
+    source: asset.source || (asset.url ? 'url' : 'carrier'),
     // path will be filled by collect-export-assets.js
     path: null,
     meshPath,
@@ -141,6 +142,9 @@ function buildAssetEntry(obj) {
     visualBasis: asset.visualBasis || null,
     originalName: asset.originalName || null,
   };
+
+  copyStringField(entry, asset, 'url');
+  return entry;
 }
 
 function buildSkyboxEntry(envId) {

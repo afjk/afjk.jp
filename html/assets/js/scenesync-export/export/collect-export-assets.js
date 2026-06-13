@@ -30,11 +30,19 @@ function audioExtForUrl(url) {
 }
 
 async function tryFetch(url) {
+  const fetched = await tryFetchAsset(url);
+  return fetched?.buffer || null;
+}
+
+async function tryFetchAsset(url) {
   if (!url) return null;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
-    return await res.arrayBuffer();
+    return {
+      buffer: await res.arrayBuffer(),
+      contentType: res.headers.get('content-type') || null,
+    };
   } catch {
     return null;
   }
@@ -187,13 +195,14 @@ export async function collectExportAssets({
       const imageUrl = obj.asset.url;
       if (!imageUrl) { updatedObjects.push(await withCollectedAudioSources(obj)); continue; }
 
-      const ext = extensionFor(obj.asset.mime || 'image/jpeg', 'jpg');
-      const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
-      const buffer = await tryFetch(imageUrl);
-      if (buffer) {
-        files[zipPath] = buffer;
+      const fetched = await tryFetchAsset(imageUrl);
+      if (fetched) {
+        const mime = obj.asset.mime || fetched.contentType || 'image/jpeg';
+        const ext = extensionFor(mime, 'jpg');
+        const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
+        files[zipPath] = fetched.buffer;
         assetManifest.push({ id: obj.id, kind: 'image', path: zipPath, status: 'included' });
-        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, path: zipPath } }));
+        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, mime, path: zipPath } }));
       } else {
         missingAssets.push({ id: obj.id, kind: 'image', url: imageUrl, reason: 'fetch-failed' });
         updatedObjects.push(await withCollectedAudioSources(obj)); // keep url as fallback for static-asset-resolver
@@ -205,13 +214,14 @@ export async function collectExportAssets({
       const videoUrl = obj.asset.url;
       if (!videoUrl) { updatedObjects.push(await withCollectedAudioSources(obj)); continue; }
 
-      const ext = videoExtFor(obj.asset.mime);
-      const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
-      const buffer = await tryFetch(videoUrl);
-      if (buffer) {
-        files[zipPath] = buffer;
+      const fetched = await tryFetchAsset(videoUrl);
+      if (fetched) {
+        const mime = obj.asset.mime || fetched.contentType || null;
+        const ext = videoExtFor(mime);
+        const zipPath = uniquePath(sanitizeFilename(obj.id), ext);
+        files[zipPath] = fetched.buffer;
         assetManifest.push({ id: obj.id, kind: 'video', path: zipPath, status: 'included' });
-        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, path: zipPath } }));
+        updatedObjects.push(await withCollectedAudioSources({ ...obj, asset: { ...obj.asset, ...(mime ? { mime } : {}), path: zipPath } }));
       } else {
         // Videos often have CORS restrictions; keep url so static viewer can stream
         missingAssets.push({ id: obj.id, kind: 'video', url: videoUrl, reason: 'fetch-failed' });
@@ -250,18 +260,23 @@ export async function collectExportAssets({
     const zipPath = uniquePath(baseName, ext);
 
     let fetchUrl = null;
+    let fetchSource = null;
     if (meshPath && blobBase) {
       fetchUrl = `${blobBase}/${meshPath}`;
+      fetchSource = 'blob';
+    } else if (obj.asset.url) {
+      fetchUrl = obj.asset.url;
+      fetchSource = 'url';
     }
 
     const blobBuffer = await tryFetch(fetchUrl);
 
     if (blobBuffer) {
       files[zipPath] = blobBuffer;
-      assetManifest.push({ id: obj.id, kind: 'mesh', path: zipPath, status: 'included', source: 'blob' });
+      assetManifest.push({ id: obj.id, kind: 'mesh', path: zipPath, status: 'included', source: fetchSource || 'unknown' });
       updatedObjects.push(await withCollectedAudioSources({
         ...obj,
-        asset: { ...obj.asset, path: zipPath, meshPath: undefined, assetId: undefined },
+        asset: { ...obj.asset, path: zipPath, url: undefined, meshPath: undefined, assetId: undefined },
       }));
     } else {
       // Try IndexedDB cache as fallback
@@ -286,6 +301,7 @@ export async function collectExportAssets({
           kind: 'mesh',
           assetId: assetId || null,
           meshPath: meshPath || null,
+          url: obj.asset.url || null,
           reason: cachedAsset.hasError ? 'blob-fetch-and-cache-error' : 'blob-fetch-and-cache-miss',
         });
         updatedObjects.push(await withCollectedAudioSources({

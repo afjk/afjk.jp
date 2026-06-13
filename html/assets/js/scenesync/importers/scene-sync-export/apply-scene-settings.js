@@ -1,10 +1,30 @@
-// Applies scene-level settings (currently: skybox/environment) from a
+import { uploadZipAsset } from './zip-asset-upload.js';
+
+function buildBgmPayload(bgm, uploaded = null) {
+  if (!bgm) return null;
+  const url = uploaded?.url || bgm.url;
+  if (!url) return null;
+  return {
+    version: bgm.version ?? 1,
+    url,
+    name: bgm.name || uploaded?.originalName || 'bgm',
+    loop: bgm.loop !== false,
+    volume: Number.isFinite(bgm.volume) ? bgm.volume : 1,
+    playback: bgm.playback || { mode: 'local-loop' },
+  };
+}
+
+// Applies scene-level settings (skybox/environment and BGM) from a
 // SceneDocument. If the document has no skybox.envId, the current
 // environment is left untouched (no reset to default).
-export function applySceneDocumentSettings(sceneDocument, {
+export async function applySceneDocumentSettings(sceneDocument, {
   environmentManager,
   broadcast,
+  applySceneBgm,
+  zip,
+  uploadBlobToStore,
 } = {}) {
+  const result = { envApplied: false };
   const envId = sceneDocument?.skybox?.envId;
 
   if (typeof envId === 'string' && envId.trim()) {
@@ -18,8 +38,33 @@ export function applySceneDocumentSettings(sceneDocument, {
       envId,
     });
 
-    return { envApplied: true, envId };
+    result.envApplied = true;
+    result.envId = envId;
   }
 
-  return { envApplied: false };
+  const bgm = sceneDocument?.bgm || null;
+  if (bgm) {
+    const uploaded = bgm.importAsset?.kind === 'blob-file'
+      ? await uploadZipAsset({
+          zip,
+          plan: bgm.importAsset,
+          uploadBlobToStore,
+        })
+      : null;
+    const bgmPayload = buildBgmPayload(bgm, uploaded);
+    if (bgmPayload) {
+      applySceneBgm?.(bgmPayload, { source: 'scene-sync-export-import' });
+      broadcast?.({
+        kind: 'scene-bgm',
+        bgm: bgmPayload,
+      });
+      result.bgmApplied = true;
+      result.bgmUrl = bgmPayload.url;
+    } else {
+      result.bgmApplied = false;
+      result.bgmSkipped = true;
+    }
+  }
+
+  return result;
 }
