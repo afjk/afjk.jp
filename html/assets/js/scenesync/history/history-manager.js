@@ -158,6 +158,24 @@ export class HistoryManager {
     };
   }
 
+  static createScenePhysicsEntry(beforePhysics, afterPhysics) {
+    return {
+      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: Date.now(),
+      summary: afterPhysics?.enabled
+        ? 'Scene physics enabled'
+        : 'Scene physics disabled',
+      forward: {
+        kind: 'scene-physics',
+        physics: afterPhysics || { enabled: false },
+      },
+      backward: {
+        kind: 'scene-physics',
+        physics: beforePhysics || { enabled: false },
+      },
+    };
+  }
+
   static createBatchEntry(forwardActions, backwardActions, summary = 'Batch operation') {
     return {
       id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

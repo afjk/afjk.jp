@@ -53,3 +53,26 @@ test('remove history omits optional restore fields when they are not provided', 
   assert.equal(Object.prototype.hasOwnProperty.call(entry.backward, 'physics'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(entry.backward, 'audioSources'), false);
 });
+
+test('scene physics history restores previous scene physics settings', () => {
+  const before = { enabled: false };
+  const after = {
+    enabled: true,
+    duration: 10,
+    worldOptions: {
+      gravity: -9.81,
+      ground: { y: 0, restitution: 0.2, friction: 0.5 },
+    },
+  };
+
+  const entry = HistoryManager.createScenePhysicsEntry(before, after);
+
+  assert.deepEqual(entry.forward, {
+    kind: 'scene-physics',
+    physics: after,
+  });
+  assert.deepEqual(entry.backward, {
+    kind: 'scene-physics',
+    physics: before,
+  });
+});

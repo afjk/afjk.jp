@@ -4446,6 +4446,13 @@ const sceneInspectorModeJsonBtn = document.getElementById('scene-inspector-mode-
 const sceneInspectorFormEl = document.getElementById('scene-inspector-form');
 const sceneInspectorEditorEl = document.getElementById('scene-inspector-editor');
 const sceneInspectorOutputEl = document.getElementById('scene-inspector-output');
+const sceneInspectorScenePhysicsControlsEl = document.getElementById('scene-inspector-scene-physics-controls');
+const sceneInspectorScenePhysicsMetaEl = document.getElementById('scene-inspector-scene-physics-meta');
+const sceneInspectorScenePhysicsEnabledEl = document.getElementById('scene-inspector-scene-physics-enabled');
+const sceneInspectorScenePhysicsDurationEl = document.getElementById('scene-inspector-scene-physics-duration');
+const sceneInspectorScenePhysicsGravityYEl = document.getElementById('scene-inspector-scene-physics-gravity-y');
+const sceneInspectorScenePhysicsGroundEnabledEl = document.getElementById('scene-inspector-scene-physics-ground-enabled');
+const sceneInspectorScenePhysicsGroundYEl = document.getElementById('scene-inspector-scene-physics-ground-y');
 const sceneInspectorObjectMetaEl = document.getElementById('scene-inspector-object-meta');
 const sceneInspectorObjectEmptyEl = document.getElementById('scene-inspector-object-empty');
 const sceneInspectorObjectHeadEl = document.getElementById('scene-inspector-object-head');
@@ -11466,6 +11473,57 @@ function renderSceneInspectorAnimationControls(selectedObject) {
   }
 }
 
+function scenePhysicsGravityY(physics) {
+  const gravity = physics?.worldOptions?.gravity;
+  if (Array.isArray(gravity)) return Number.isFinite(gravity[1]) ? gravity[1] : -9.81;
+  return Number.isFinite(gravity) ? gravity : -9.81;
+}
+
+function setSceneInspectorScenePhysicsFieldsDisabled(disabled) {
+  const groundDisabled = disabled || !sceneInspectorScenePhysicsGroundEnabledEl?.checked;
+  for (const el of [
+    sceneInspectorScenePhysicsDurationEl,
+    sceneInspectorScenePhysicsGravityYEl,
+    sceneInspectorScenePhysicsGroundEnabledEl,
+  ]) {
+    if (el) el.disabled = disabled;
+  }
+  if (sceneInspectorScenePhysicsGroundYEl) {
+    sceneInspectorScenePhysicsGroundYEl.disabled = groundDisabled;
+  }
+}
+
+function renderSceneInspectorScenePhysicsControls(snapshot) {
+  if (!sceneInspectorScenePhysicsControlsEl) return;
+
+  const physics = normalizeScenePhysics(snapshot?.physics || scenePhysicsState);
+  const enabled = physics.enabled === true;
+  const ground = physics.worldOptions?.ground || null;
+
+  if (sceneInspectorScenePhysicsMetaEl) {
+    sceneInspectorScenePhysicsMetaEl.textContent = enabled
+      ? `g ${scenePhysicsGravityY(physics)}`
+      : 'Off';
+  }
+  if (sceneInspectorScenePhysicsEnabledEl) {
+    sceneInspectorScenePhysicsEnabledEl.checked = enabled;
+  }
+  if (sceneInspectorScenePhysicsDurationEl) {
+    sceneInspectorScenePhysicsDurationEl.value = String(Number.isFinite(physics.duration) ? physics.duration : 10);
+  }
+  if (sceneInspectorScenePhysicsGravityYEl) {
+    sceneInspectorScenePhysicsGravityYEl.value = String(scenePhysicsGravityY(physics));
+  }
+  if (sceneInspectorScenePhysicsGroundEnabledEl) {
+    sceneInspectorScenePhysicsGroundEnabledEl.checked = !!ground;
+  }
+  if (sceneInspectorScenePhysicsGroundYEl) {
+    sceneInspectorScenePhysicsGroundYEl.value = String(Number.isFinite(ground?.y) ? ground.y : 0);
+  }
+
+  setSceneInspectorScenePhysicsFieldsDisabled(!enabled);
+}
+
 function setSceneInspectorPhysicsFieldsDisabled(disabled) {
   for (const el of [
     sceneInspectorPhysicsBodyTypeEl,
@@ -11554,6 +11612,7 @@ function renderSceneInspector(snapshot = buildSceneInspectorSnapshot()) {
   if (sceneInspectorOutputEl && !sceneInspectorState.isEditing) {
     sceneInspectorOutputEl.textContent = JSON.stringify(snapshot, null, 2);
   }
+  renderSceneInspectorScenePhysicsControls(snapshot);
 
   const isEditing = sceneInspectorState.isEditing;
   sceneInspectorEditBtn.hidden = isEditing;
@@ -12736,6 +12795,45 @@ function readSceneInspectorPhysicsControls() {
   });
 }
 
+function readSceneInspectorScenePhysicsControls() {
+  if (!sceneInspectorScenePhysicsEnabledEl?.checked) {
+    return { enabled: false };
+  }
+
+  const ground = sceneInspectorScenePhysicsGroundEnabledEl?.checked
+    ? {
+        y: Number(sceneInspectorScenePhysicsGroundYEl?.value),
+      }
+    : null;
+
+  return normalizeScenePhysics({
+    enabled: true,
+    duration: Number(sceneInspectorScenePhysicsDurationEl?.value),
+    worldOptions: {
+      gravity: Number(sceneInspectorScenePhysicsGravityYEl?.value),
+      ground,
+    },
+  });
+}
+
+function broadcastScenePhysicsDelta(physics) {
+  const before = getScenePhysicsForSerialize({ enableWhenObjectsExist: false }) || { enabled: false };
+  const after = serializeScenePhysics(physics) || { enabled: false };
+  if (valuesEqual(before, after)) {
+    renderSceneInspectorScenePhysicsControls(buildSceneInspectorSnapshot());
+    return;
+  }
+
+  presenceState.historyManager?.push(
+    HistoryManager.createScenePhysicsEntry(cloneJsonSafe(before), cloneJsonSafe(after))
+  );
+  applyScenePhysics(after, {
+    broadcastChange: true,
+    reason: 'scene-inspector-scene-physics-updated',
+  });
+  renderSceneInspectorScenePhysicsControls(buildSceneInspectorSnapshot());
+}
+
 function broadcastSelectedObjectPhysicsDelta(physics) {
   const snapshot = buildSceneInspectorSnapshot();
   const { objectId, objectSnapshot } = buildSelectedObjectInspectorContext(snapshot);
@@ -13008,6 +13106,23 @@ sceneInspectorAnimationOffsetEl?.addEventListener('change', () => {
     offset: Number(sceneInspectorAnimationOffsetEl.value),
   });
 });
+
+sceneInspectorScenePhysicsEnabledEl?.addEventListener('change', () => {
+  broadcastScenePhysicsDelta(readSceneInspectorScenePhysicsControls());
+});
+
+for (const control of [
+  sceneInspectorScenePhysicsDurationEl,
+  sceneInspectorScenePhysicsGravityYEl,
+  sceneInspectorScenePhysicsGroundEnabledEl,
+  sceneInspectorScenePhysicsGroundYEl,
+]) {
+  control?.addEventListener('change', () => {
+    setSceneInspectorScenePhysicsFieldsDisabled(!sceneInspectorScenePhysicsEnabledEl?.checked);
+    if (!sceneInspectorScenePhysicsEnabledEl?.checked) return;
+    broadcastScenePhysicsDelta(readSceneInspectorScenePhysicsControls());
+  });
+}
 
 sceneInspectorPhysicsEnabledEl?.addEventListener('change', () => {
   broadcastSelectedObjectPhysicsDelta(readSceneInspectorPhysicsControls());
