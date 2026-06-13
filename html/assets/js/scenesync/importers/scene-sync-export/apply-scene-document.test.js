@@ -320,6 +320,85 @@ test('does not broadcast ZIP-only asset.path when re-upload fails and no fallbac
   }
 });
 
+test('keeps fallback URLs and clears ZIP paths when re-upload throws', async () => {
+  const managedObjects = new Map();
+  const calls = { addOrUpdate: [], broadcast: [] };
+  const zip = createFakeZip({
+    'assets/poster.png': new Uint8Array([1, 2, 3]).buffer,
+    'assets/speaker.mp3': new Uint8Array([4, 5, 6]).buffer,
+  });
+
+  const sceneDocument = {
+    objects: [
+      {
+        id: 'poster',
+        name: 'Poster',
+        position: [1, 2, 3],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        visible: true,
+        asset: {
+          type: 'image',
+          source: 'blob',
+          path: 'assets/poster.png',
+          url: 'https://staging.afjk.jp/presence/blob/poster.png',
+          mime: 'image/png',
+        },
+        importAsset: {
+          kind: 'blob-file',
+          path: 'assets/poster.png',
+          originalName: 'poster.png',
+          mime: 'image/png',
+        },
+        audioSources: {
+          default: {
+            url: 'https://example.com/speaker.mp3',
+            loop: true,
+            asset: { path: 'assets/speaker.mp3', mime: 'audio/mpeg' },
+          },
+        },
+        importAudioSources: {
+          default: {
+            kind: 'blob-file',
+            path: 'assets/speaker.mp3',
+            originalName: 'speaker.mp3',
+            mime: 'audio/mpeg',
+          },
+        },
+      },
+    ],
+  };
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  let stats;
+  try {
+    stats = await applySceneDocument(sceneDocument, {
+      managedObjects,
+      addOrUpdateObject: (id, payload, options) => calls.addOrUpdate.push({ id, payload, options }),
+      broadcast: (payload) => calls.broadcast.push(payload),
+      uploadBlobToStore: async () => {
+        throw new Error('Unsupported Media Type');
+      },
+      zip,
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  deepStrictEqual(stats, { total: 1, added: 1, updated: 0, glbImported: 0, skippedAssets: 0 });
+  strictEqual(warnings.length, 2);
+  strictEqual(calls.broadcast.length, 1);
+
+  const payload = calls.broadcast[0];
+  strictEqual(payload.asset.type, 'image');
+  strictEqual(payload.asset.url, 'https://staging.afjk.jp/presence/blob/poster.png');
+  strictEqual(payload.asset.path, undefined);
+  strictEqual(payload.audioSources.default.url, 'https://example.com/speaker.mp3');
+  strictEqual(payload.audioSources.default.asset, undefined);
+});
+
 test('falls back to placeholder when ZIP entry for importAsset is missing', async () => {
   const managedObjects = new Map();
   const calls = { addOrUpdate: [], broadcast: [] };

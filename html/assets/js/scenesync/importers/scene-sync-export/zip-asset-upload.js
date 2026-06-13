@@ -78,16 +78,25 @@ export async function uploadZipAsset({
   const entry = zip.file(plan.path);
   if (!entry) return null;
 
-  const mime = plan.mime || inferMimeForExportAsset({ path: plan.path });
-  const buffer = await entry.async('arraybuffer');
-  const blob = new Blob([buffer], { type: mime });
-  const uploaded = await uploadBlobToStore(blob, mime, extensionForUpload(plan.path, mime));
-  if (!uploaded?.url) return null;
+  try {
+    const mime = plan.mime || inferMimeForExportAsset({ path: plan.path });
+    const buffer = await entry.async('arraybuffer');
+    const blob = new Blob([buffer], { type: mime });
+    const uploaded = await uploadBlobToStore(blob, mime, extensionForUpload(plan.path, mime));
+    if (!uploaded?.url) return null;
 
-  return {
-    ...uploaded,
-    mime,
-    size: blob.size,
-    originalName: plan.originalName || basename(plan.path),
-  };
+    return {
+      ...uploaded,
+      mime,
+      size: blob.size,
+      originalName: plan.originalName || basename(plan.path),
+    };
+  } catch (error) {
+    console.warn('[SceneSync Export Import] ZIP asset upload failed:', {
+      path: plan.path,
+      mime: plan.mime || inferMimeForExportAsset({ path: plan.path }),
+      error: error?.message || String(error),
+    });
+    return null;
+  }
 }
