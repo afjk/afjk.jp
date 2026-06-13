@@ -269,7 +269,13 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
   } = context;
 
   const result = await loadExportPackageFromUrl(url, { fetchImpl });
-  if (!result.valid) return { handled: false, reason: result.reason };
+  if (!result.valid) {
+    if (result.shouldBlockGenericImport) {
+      showToast?.(`Scene Sync Export URLを読み込めませんでした（${result.reason}）`);
+      return { handled: true, error: result.reason };
+    }
+    return { handled: false, reason: result.reason };
+  }
 
   const { document: resolvedDocument } = result.zip
     ? await resolveSceneDocumentAssets(result.sceneDocument, { zip: result.zip })

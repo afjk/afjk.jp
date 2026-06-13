@@ -247,3 +247,33 @@ test('falls through when URL is not a Scene Sync Export', async () => {
   strictEqual(calls.addOrUpdate.length, 0);
   strictEqual(calls.broadcast.length, 0);
 });
+
+test('stops generic URL fallback for explicit invalid Scene Sync Export URLs', async () => {
+  const fetchImpl = createFetch({
+    'https://example.com/world/scene.json': {
+      body: {
+        format: 'not-scene-sync-export',
+        version: 2,
+        objects: [],
+      },
+    },
+  });
+  const calls = { addOrUpdate: [], broadcast: [], toasts: [] };
+
+  const result = await tryOpenSceneSyncExportUrl('https://example.com/world/scene.json', {
+    managedObjects: new Map(),
+    fetchImpl,
+    confirmOpen: () => {
+      throw new Error('confirm should not be called for invalid exports');
+    },
+    addOrUpdateObject: (id, payload, options) => calls.addOrUpdate.push({ id, payload, options }),
+    broadcast: (payload) => calls.broadcast.push(payload),
+    showToast: (message) => calls.toasts.push(message),
+  });
+
+  strictEqual(result.handled, true);
+  strictEqual(result.error, 'invalid-scene-document');
+  strictEqual(calls.addOrUpdate.length, 0);
+  strictEqual(calls.broadcast.length, 0);
+  strictEqual(calls.toasts[0], 'Scene Sync Export URLを読み込めませんでした（invalid-scene-document）');
+});

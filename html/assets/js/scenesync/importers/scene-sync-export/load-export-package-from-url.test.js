@@ -20,6 +20,18 @@ function sceneDocument(extra = {}) {
   };
 }
 
+async function bodyToText(body) {
+  if (body instanceof Blob) return await body.text();
+  return typeof body === 'string' ? body : JSON.stringify(body);
+}
+
+function bodyToBlob(body, contentType) {
+  if (body instanceof Blob) return body;
+  return new Blob([
+    typeof body === 'string' ? body : JSON.stringify(body),
+  ], { type: contentType });
+}
+
 function response({ url, body, contentType = 'application/json', ok = true, status = 200 }) {
   return {
     ok,
@@ -31,7 +43,13 @@ function response({ url, body, contentType = 'application/json', ok = true, stat
       },
     },
     async text() {
-      return typeof body === 'string' ? body : JSON.stringify(body);
+      return await bodyToText(body);
+    },
+    async blob() {
+      return bodyToBlob(body, contentType);
+    },
+    async arrayBuffer() {
+      return await bodyToBlob(body, contentType).arrayBuffer();
     },
   };
 }
@@ -51,6 +69,76 @@ function createFetch(routes) {
   return fetchImpl;
 }
 
+async function withFakeJSZip(scene, fn) {
+  const original = globalThis.JSZip;
+  globalThis.JSZip = {
+    async loadAsync() {
+      return {
+        file(path) {
+          if (path === 'scene.json') {
+            return {
+              async async(type) {
+                strictEqual(type, 'string');
+                return JSON.stringify(scene);
+              },
+            };
+          }
+          return null;
+        },
+      };
+    },
+  };
+
+  try {
+    return await fn();
+  } finally {
+    if (original === undefined) {
+      delete globalThis.JSZip;
+    } else {
+      globalThis.JSZip = original;
+    }
+  }
+}
+
+test('loads ZIP content from application/zip URLs without requiring a .zip extension', async () => {
+  const fetchImpl = createFetch({
+    'https://example.com/download?id=123': {
+      body: new Blob(['zip-like-bytes'], { type: 'application/zip' }),
+      contentType: 'application/zip',
+    },
+  });
+
+  await withFakeJSZip(sceneDocument({ objects: [{ ...sceneDocument().objects[0], id: 'zip-box' }] }), async () => {
+    const result = await loadExportPackageFromUrl('https://example.com/download?id=123', { fetchImpl });
+
+    strictEqual(result.valid, true);
+    strictEqual(result.kind, 'zip-url');
+    strictEqual(result.sourceUrl, 'https://example.com/download?id=123');
+    strictEqual(result.sceneDocument.objects[0].id, 'zip-box');
+    deepStrictEqual(fetchImpl.calls, ['https://example.com/download?id=123']);
+  });
+});
+
+test('loads octet-stream ZIP content when magic bytes start with PK', async () => {
+  const fetchImpl = createFetch({
+    'https://cdn.example.com/export/abc': {
+      body: new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0])], {
+        type: 'application/octet-stream',
+      }),
+      contentType: 'application/octet-stream',
+    },
+  });
+
+  await withFakeJSZip(sceneDocument({ objects: [{ ...sceneDocument().objects[0], id: 'octet-zip-box' }] }), async () => {
+    const result = await loadExportPackageFromUrl('https://cdn.example.com/export/abc', { fetchImpl });
+
+    strictEqual(result.valid, true);
+    strictEqual(result.kind, 'zip-url');
+    strictEqual(result.sceneDocument.objects[0].id, 'octet-zip-box');
+    deepStrictEqual(fetchImpl.calls, ['https://cdn.example.com/export/abc']);
+  });
+});
+
 test('loads a direct scene.json URL', async () => {
   const fetchImpl = createFetch({
     'https://example.com/world/scene.json': { body: sceneDocument() },
@@ -62,6 +150,43 @@ test('loads a direct scene.json URL', async () => {
   strictEqual(result.kind, 'scene-json-url');
   strictEqual(result.baseUrl, 'https://example.com/world/');
   strictEqual(result.sceneDocument.objects[0].id, 'box-1');
+});
+
+test('marks explicit invalid scene.json URLs as blocking generic URL fallback', async () => {
+  const fetchImpl = createFetch({
+    'https://example.com/world/scene.json': {
+      body: {
+        format: 'not-scene-sync-export',
+        version: 2,
+        objects: [],
+      },
+    },
+  });
+
+  const result = await loadExportPackageFromUrl('https://example.com/world/scene.json', { fetchImpl });
+
+  strictEqual(result.valid, false);
+  strictEqual(result.reason, 'invalid-scene-document');
+  strictEqual(result.shouldBlockGenericImport, true);
+  deepStrictEqual(fetchImpl.calls, ['https://example.com/world/scene.json']);
+});
+
+test('loads a direct current.json URL through versionPath', async () => {
+  const fetchImpl = createFetch({
+    'https://example.com/world/current.json': {
+      body: { versionPath: 'versions/v4/' },
+    },
+    'https://example.com/world/versions/v4/scene.json': {
+      body: sceneDocument({ objects: [{ ...sceneDocument().objects[0], id: 'box-4' }] }),
+    },
+  });
+
+  const result = await loadExportPackageFromUrl('https://example.com/world/current.json', { fetchImpl });
+
+  strictEqual(result.valid, true);
+  strictEqual(result.kind, 'current-json-url');
+  strictEqual(result.baseUrl, 'https://example.com/world/versions/v4/');
+  strictEqual(result.sceneDocument.objects[0].id, 'box-4');
 });
 
 test('loads a version directory URL by resolving ./scene.json', async () => {

@@ -2,6 +2,17 @@ import { isValidSceneDocument } from '../../../scenesync-export/viewer/scene-doc
 import { loadExportPackageFromBlob } from './load-export-package.js';
 
 const ZIP_EXT_RE = /\.zip(?:$|[?#])/i;
+const SCENE_JSON_RE = /(?:^|\/)scene\.json$/i;
+const CURRENT_JSON_RE = /(?:^|\/)current\.json$/i;
+const ZIP_CONTENT_TYPES = new Set([
+  'application/zip',
+  'application/x-zip-compressed',
+]);
+const ZIP_MAGIC_SIGNATURES = new Set([
+  '80,75,3,4',
+  '80,75,5,6',
+  '80,75,7,8',
+]);
 
 function fetchImplFromOptions(options = {}) {
   return options.fetchImpl || globalThis.fetch?.bind(globalThis);
@@ -22,6 +33,22 @@ function isZipUrl(url) {
   }
 }
 
+function isSceneJsonUrl(url) {
+  try {
+    return SCENE_JSON_RE.test(new URL(url).pathname);
+  } catch {
+    return SCENE_JSON_RE.test(String(url || '').split(/[?#]/)[0]);
+  }
+}
+
+function isCurrentJsonUrl(url) {
+  try {
+    return CURRENT_JSON_RE.test(new URL(url).pathname);
+  } catch {
+    return CURRENT_JSON_RE.test(String(url || '').split(/[?#]/)[0]);
+  }
+}
+
 function asDirectoryUrl(url) {
   const parsed = new URL(url);
   if (!parsed.pathname.endsWith('/')) parsed.pathname += '/';
@@ -32,6 +59,51 @@ function asDirectoryUrl(url) {
 
 function directoryOfUrl(url) {
   return new URL('./', url).href;
+}
+
+function normalizeContentType(contentType = '') {
+  return String(contentType || '').split(';')[0].trim().toLowerCase();
+}
+
+function hasZipContentType(contentType) {
+  return ZIP_CONTENT_TYPES.has(normalizeContentType(contentType));
+}
+
+function hasOctetStreamContentType(contentType) {
+  return normalizeContentType(contentType) === 'application/octet-stream';
+}
+
+async function blobHasZipMagic(blob) {
+  if (!blob || typeof blob.slice !== 'function') return false;
+  const buffer = await blob.slice(0, 4).arrayBuffer();
+  const bytes = Array.from(new Uint8Array(buffer));
+  if (bytes.length < 2) return false;
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) return false;
+  if (bytes.length < 4) return true;
+  return ZIP_MAGIC_SIGNATURES.has(bytes.slice(0, 4).join(','));
+}
+
+async function fetchBlob(url, fetchImpl) {
+  const response = await fetchImpl(url, { mode: 'cors' });
+  if (!response?.ok) {
+    return { ok: false, status: response?.status || 0, url };
+  }
+
+  let blob;
+  if (typeof response.blob === 'function') {
+    blob = await response.blob();
+  } else if (typeof response.arrayBuffer === 'function') {
+    blob = new Blob([await response.arrayBuffer()]);
+  } else {
+    blob = new Blob([await response.text()]);
+  }
+
+  return {
+    ok: true,
+    blob,
+    contentType: response.headers?.get?.('content-type') || blob.type || '',
+    url: response.url || url,
+  };
 }
 
 async function fetchText(url, fetchImpl) {
@@ -48,13 +120,10 @@ async function fetchText(url, fetchImpl) {
   };
 }
 
-async function tryFetchSceneJson(sceneUrl, fetchImpl) {
-  const fetched = await fetchText(sceneUrl, fetchImpl);
-  if (!fetched.ok) return { valid: false, reason: 'scene-json-fetch-failed', fetched };
-
+function parseSceneJsonText(text, fetched) {
   let sceneDocument;
   try {
-    sceneDocument = JSON.parse(fetched.text);
+    sceneDocument = JSON.parse(text);
   } catch (error) {
     return { valid: false, reason: 'invalid-scene-json', error, fetched };
   }
@@ -73,6 +142,12 @@ async function tryFetchSceneJson(sceneUrl, fetchImpl) {
   };
 }
 
+async function tryFetchSceneJson(sceneUrl, fetchImpl) {
+  const fetched = await fetchText(sceneUrl, fetchImpl);
+  if (!fetched.ok) return { valid: false, reason: 'scene-json-fetch-failed', fetched };
+  return parseSceneJsonText(fetched.text, fetched);
+}
+
 function looksLikeHtml(text, contentType = '') {
   return /html/i.test(contentType) || /^\s*<!doctype html/i.test(text) || /^\s*<html[\s>]/i.test(text);
 }
@@ -87,16 +162,61 @@ function extractSceneSyncExportHref(html) {
   return metaMatch?.[1] || null;
 }
 
-async function tryFetchZip(url, fetchImpl) {
-  const response = await fetchImpl(url, { mode: 'cors' });
-  if (!response?.ok) return { valid: false, reason: 'zip-fetch-failed' };
-  const blob = await response.blob();
+async function shouldTreatAsZip(fetched, originalUrl) {
+  const contentType = fetched?.contentType || '';
+  if (isZipUrl(originalUrl)) return true;
+  if (hasZipContentType(contentType)) return true;
+  if (hasOctetStreamContentType(contentType) && await blobHasZipMagic(fetched.blob)) return true;
+  return false;
+}
+
+async function tryLoadZipBlob(blob, url) {
   const result = await loadExportPackageFromBlob(blob);
   if (!result.valid) return result;
   return {
     ...result,
-    sourceUrl: response.url || url,
+    sourceUrl: url,
     kind: 'zip-url',
+  };
+}
+
+function shouldBlockSceneJsonFallback(result) {
+  return result && !result.valid && result.reason !== 'scene-json-fetch-failed';
+}
+
+function blockingResult(result, attempts) {
+  return {
+    valid: false,
+    reason: result?.reason || 'invalid-scene-sync-export-url',
+    error: result?.error,
+    attempts,
+    shouldBlockGenericImport: true,
+  };
+}
+
+async function resolveCurrentJson(current, directoryUrl, fetchImpl) {
+  const versionPath = typeof current?.versionPath === 'string' && current.versionPath.trim()
+    ? current.versionPath.trim()
+    : (typeof current?.versionId === 'string' && current.versionId.trim()
+      ? `versions/${current.versionId.trim()}/`
+      : '');
+  if (!versionPath) return { valid: false, reason: 'current-json-missing-version' };
+
+  const versionDirectoryUrl = asDirectoryUrl(new URL(versionPath, directoryUrl).href);
+  const sceneUrl = new URL('scene.json', versionDirectoryUrl).href;
+  const result = await tryFetchSceneJson(sceneUrl, fetchImpl);
+  if (!result.valid) {
+    return {
+      ...result,
+      shouldBlockGenericImport: true,
+    };
+  }
+  return {
+    ...result,
+    current,
+    baseUrl: versionDirectoryUrl,
+    sourceUrl: sceneUrl,
+    kind: 'current-json-url',
   };
 }
 
@@ -112,24 +232,7 @@ async function tryFetchCurrentJson(directoryUrl, fetchImpl) {
     return { valid: false, reason: 'invalid-current-json', error, fetched };
   }
 
-  const versionPath = typeof current?.versionPath === 'string' && current.versionPath.trim()
-    ? current.versionPath.trim()
-    : (typeof current?.versionId === 'string' && current.versionId.trim()
-      ? `versions/${current.versionId.trim()}/`
-      : '');
-  if (!versionPath) return { valid: false, reason: 'current-json-missing-version' };
-
-  const versionDirectoryUrl = asDirectoryUrl(new URL(versionPath, directoryUrl).href);
-  const sceneUrl = new URL('scene.json', versionDirectoryUrl).href;
-  const result = await tryFetchSceneJson(sceneUrl, fetchImpl);
-  if (!result.valid) return result;
-  return {
-    ...result,
-    current,
-    baseUrl: versionDirectoryUrl,
-    sourceUrl: sceneUrl,
-    kind: 'current-json-url',
-  };
+  return resolveCurrentJson(current, directoryUrl, fetchImpl);
 }
 
 export async function loadExportPackageFromUrl(url, options = {}) {
@@ -146,28 +249,49 @@ export async function loadExportPackageFromUrl(url, options = {}) {
   const fetchImpl = ensureFetch(fetchImplFromOptions(options));
   const attempts = [];
 
-  if (isZipUrl(parsed.href)) {
-    const zipResult = await tryFetchZip(parsed.href, fetchImpl).catch((error) => (
-      { valid: false, reason: 'zip-fetch-threw', error }
-    ));
-    if (zipResult.valid) return zipResult;
-    attempts.push({ step: 'zip', reason: zipResult.reason });
-  }
-
-  const directFetched = await fetchText(parsed.href, fetchImpl).catch((error) => (
+  const directFetched = await fetchBlob(parsed.href, fetchImpl).catch((error) => (
     { ok: false, reason: 'direct-fetch-threw', error, url: parsed.href }
   ));
+  let directText = null;
   if (directFetched.ok) {
-    const directResult = await tryFetchSceneJson(directFetched.url, async () => ({
-      ok: true,
-      url: directFetched.url,
-      headers: { get: (name) => name.toLowerCase() === 'content-type' ? directFetched.contentType : '' },
-      text: async () => directFetched.text,
-    }));
+    const zipCandidate = await shouldTreatAsZip(directFetched, parsed.href);
+    if (zipCandidate) {
+      const zipResult = await tryLoadZipBlob(directFetched.blob, directFetched.url)
+        .catch((error) => ({ valid: false, reason: 'zip-load-threw', error }));
+      if (zipResult.valid) return zipResult;
+      attempts.push({ step: 'zip', reason: zipResult.reason });
+      return blockingResult(zipResult, attempts);
+    }
+
+    directText = await directFetched.blob.text();
+    const directResult = parseSceneJsonText(directText, {
+      ...directFetched,
+      text: directText,
+    });
     if (directResult.valid) return directResult;
     attempts.push({ step: 'direct-scene-json', reason: directResult.reason });
+
+    if (isSceneJsonUrl(directFetched.url || parsed.href)) {
+      return blockingResult(directResult, attempts);
+    }
+
+    if (isCurrentJsonUrl(directFetched.url || parsed.href)) {
+      let current;
+      try {
+        current = JSON.parse(directText);
+      } catch (error) {
+        return blockingResult({ reason: 'invalid-current-json', error }, attempts);
+      }
+      const currentResult = await resolveCurrentJson(current, directoryOfUrl(directFetched.url), fetchImpl)
+        .catch((error) => ({ valid: false, reason: 'current-json-threw', error }));
+      if (currentResult.valid) return currentResult;
+      return blockingResult(currentResult, attempts);
+    }
   } else {
     attempts.push({ step: 'direct-scene-json', reason: directFetched.reason || 'fetch-failed' });
+    if (isZipUrl(parsed.href) || isSceneJsonUrl(parsed.href) || isCurrentJsonUrl(parsed.href)) {
+      return blockingResult({ reason: directFetched.reason || 'fetch-failed', error: directFetched.error }, attempts);
+    }
   }
 
   const directoryUrl = asDirectoryUrl(parsed.href);
@@ -179,14 +303,20 @@ export async function loadExportPackageFromUrl(url, options = {}) {
     kind: 'directory-scene-json-url',
   };
   attempts.push({ step: 'directory-scene-json', reason: directorySceneResult.reason });
+  if (shouldBlockSceneJsonFallback(directorySceneResult)) {
+    return blockingResult(directorySceneResult, attempts);
+  }
 
   const currentResult = await tryFetchCurrentJson(directoryUrl, fetchImpl)
     .catch((error) => ({ valid: false, reason: 'current-json-threw', error }));
   if (currentResult.valid) return currentResult;
   attempts.push({ step: 'current-json', reason: currentResult.reason });
+  if (currentResult.shouldBlockGenericImport) {
+    return blockingResult(currentResult, attempts);
+  }
 
-  if (directFetched.ok && looksLikeHtml(directFetched.text, directFetched.contentType)) {
-    const href = extractSceneSyncExportHref(directFetched.text);
+  if (directFetched.ok && looksLikeHtml(directText, directFetched.contentType)) {
+    const href = extractSceneSyncExportHref(directText);
     if (href) {
       const markerSceneUrl = new URL(href, directFetched.url).href;
       const markerResult = await tryFetchSceneJson(markerSceneUrl, fetchImpl)
@@ -196,6 +326,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
         kind: 'html-marker-url',
       };
       attempts.push({ step: 'html-marker', reason: markerResult.reason });
+      return blockingResult(markerResult, attempts);
     }
   }
 
