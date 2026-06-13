@@ -1,6 +1,8 @@
 import { isZipFile } from './detect-scene-sync-export.js';
 import { loadExportPackageFromBlob } from './load-export-package.js';
+import { loadExportPackageFromUrl } from './load-export-package-from-url.js';
 import { resolveSceneDocumentAssets } from './resolve-export-assets.js';
+import { resolveSceneDocumentAssetsFromUrl } from './resolve-url-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
 import { applySceneDocumentSettings } from './apply-scene-settings.js';
 
@@ -250,4 +252,109 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
   );
 
   return { handled: true, stats, settings: settingsResult };
+}
+
+export async function tryOpenSceneSyncExportUrl(url, context = {}) {
+  const {
+    managedObjects,
+    addOrUpdateObject,
+    broadcast,
+    showToast,
+    confirmOpen,
+    environmentManager,
+    importGlbFileAsSceneObject,
+    uploadBlobToStore,
+    applySceneBgm,
+    fetchImpl,
+  } = context;
+
+  const result = await loadExportPackageFromUrl(url, { fetchImpl });
+  if (!result.valid) {
+    if (result.shouldBlockGenericImport) {
+      showToast?.(`Scene Sync Export URLを読み込めませんでした（${result.reason}）`);
+      return { handled: true, error: result.reason };
+    }
+    return { handled: false, reason: result.reason };
+  }
+
+  const { document: resolvedDocument } = result.zip
+    ? await resolveSceneDocumentAssets(result.sceneDocument, { zip: result.zip })
+    : resolveSceneDocumentAssetsFromUrl(result.sceneDocument, { baseUrl: result.baseUrl });
+
+  const objects = resolvedDocument.objects || [];
+  const existingObjectIds = new Set(
+    objects
+      .filter((obj) => managedObjects.has(obj.id))
+      .map((obj) => obj.id)
+  );
+  const updateCount = existingObjectIds.size;
+  const addCount = objects.length - updateCount;
+
+  const confirmFn = confirmOpen
+    || (typeof window !== 'undefined' ? window.confirm.bind(window) : null);
+  const message =
+    'Scene Sync Exportを読み込みます\n\n'
+    + `- objects: ${objects.length}\n`
+    + `- update existing: ${updateCount}\n`
+    + `- add new: ${addCount}\n\n`
+    + '同じIDのオブジェクトは上書きされます。\n'
+    + 'Exportに含まれない既存オブジェクトは残ります。';
+
+  if (confirmFn && !confirmFn(message)) {
+    return { handled: true, cancelled: true };
+  }
+
+  showToast?.(`Scene Sync Exportを復元中…（0/${objects.length}）`, 60000);
+
+  const preview = await showSceneDocumentImportPreview(resolvedDocument, {
+    zip: result.zip,
+    addOrUpdateObject,
+  });
+  if (preview.previewed > 0) {
+    showToast?.(`Scene Sync Exportを復元中…（プレビュー表示 / 0/${objects.length}）`, 60000);
+  }
+
+  let completed = false;
+  let stats;
+  let settingsResult;
+  try {
+    stats = await applySceneDocument(resolvedDocument, {
+      managedObjects,
+      addOrUpdateObject,
+      broadcast,
+      importGlbFileAsSceneObject,
+      zip: result.zip,
+      uploadBlobToStore,
+      existingObjectIds,
+      onProgress: ({ processed, total }) => {
+        showToast?.(`Scene Sync Exportを復元中…（${processed}/${total}）`, 60000);
+      },
+    });
+
+    const settingsMessage = `Scene Sync Exportを復元中…（${objects.length}/${objects.length} / 設定を適用中）`;
+    showToast?.(settingsMessage, 60000);
+
+    settingsResult = await applySceneDocumentSettings(resolvedDocument, {
+      environmentManager,
+      broadcast,
+      applySceneBgm,
+      zip: result.zip,
+      uploadBlobToStore,
+    });
+    completed = true;
+  } finally {
+    if (completed) preview.dispose();
+  }
+
+  showToast?.(
+    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}）`
+  );
+
+  return {
+    handled: true,
+    stats,
+    settings: settingsResult,
+    sourceUrl: result.sourceUrl || url,
+    kind: result.kind,
+  };
 }
