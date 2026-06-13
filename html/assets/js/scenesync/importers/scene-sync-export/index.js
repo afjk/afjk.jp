@@ -19,6 +19,8 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     confirmOpen,
     environmentManager,
     importGlbFileAsSceneObject,
+    uploadBlobToStore,
+    applySceneBgm,
   } = context;
 
   const result = await loadExportPackageFromBlob(file);
@@ -55,11 +57,15 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     broadcast,
     importGlbFileAsSceneObject,
     zip: result.zip,
+    uploadBlobToStore,
   });
 
-  const settingsResult = applySceneDocumentSettings(resolvedDocument, {
+  const settingsResult = await applySceneDocumentSettings(resolvedDocument, {
     environmentManager,
     broadcast,
+    applySceneBgm,
+    zip: result.zip,
+    uploadBlobToStore,
   });
 
   showToast?.(

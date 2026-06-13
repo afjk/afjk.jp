@@ -9566,6 +9566,8 @@ const dragDropManager = new DragDropManager({
     showToast,
     environmentManager,
     importGlbFileAsSceneObject,
+    uploadBlobToStore,
+    applySceneBgm,
   }),
   onLoadStart: async ({
     objectId,
