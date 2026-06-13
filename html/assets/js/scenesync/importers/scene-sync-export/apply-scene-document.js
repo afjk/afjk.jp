@@ -38,12 +38,60 @@ function cleanUploadedAudioSource(source, uploaded) {
   return next;
 }
 
+function appendImportWarning(metadata, warning) {
+  const previous = typeof metadata?.importWarning === 'string'
+    ? metadata.importWarning.trim()
+    : '';
+  if (previous && previous.includes(warning)) {
+    return metadata || {};
+  }
+  return {
+    ...(metadata || {}),
+    importWarning: previous ? `${previous}; ${warning}` : warning,
+  };
+}
+
+function placeholderAssetForFailedZipImport(asset) {
+  return {
+    type: 'primitive',
+    primitive: 'box',
+    color: '#ff4d4f',
+    missingAssetType: asset?.type || 'unknown',
+  };
+}
+
+function cleanFailedZipBackedAsset(asset, plan) {
+  const next = { ...(asset || {}) };
+  delete next.path;
+
+  if (next.url) {
+    return {
+      asset: next,
+      fallbackUsed: true,
+    };
+  }
+
+  return {
+    asset: placeholderAssetForFailedZipImport(asset),
+    fallbackUsed: false,
+    warning: `ZIP asset could not be re-uploaded: ${plan?.path || '(unknown)'}`,
+  };
+}
+
+function cleanFailedZipBackedAudioSource(source) {
+  if (!source?.url) return null;
+  const next = { ...source };
+  delete next.asset;
+  return next;
+}
+
 async function prepareZipBackedObjectAssets(obj, {
   zip,
   uploadBlobToStore,
 } = {}) {
   let asset = cloneJson(obj.asset);
   let audioSources = cloneJson(obj.audioSources);
+  let metadata = cloneJson(obj.metadata);
   let skippedAssets = 0;
 
   if (obj.importAsset?.kind === 'blob-file') {
@@ -55,8 +103,13 @@ async function prepareZipBackedObjectAssets(obj, {
 
     if (uploaded) {
       asset = cleanUploadedAsset(asset, uploaded);
-    } else if (!asset?.url) {
-      skippedAssets += 1;
+    } else {
+      const cleaned = cleanFailedZipBackedAsset(asset, obj.importAsset);
+      asset = cleaned.asset;
+      if (!cleaned.fallbackUsed) {
+        skippedAssets += 1;
+        metadata = appendImportWarning(metadata, cleaned.warning);
+      }
     }
   }
 
@@ -76,12 +129,50 @@ async function prepareZipBackedObjectAssets(obj, {
         ...(audioSources || {}),
         [name]: cleanUploadedAudioSource(source, uploaded),
       };
-    } else if (!source.url) {
-      skippedAssets += 1;
+    } else {
+      const cleanedSource = cleanFailedZipBackedAudioSource(source);
+      audioSources = { ...(audioSources || {}) };
+      if (cleanedSource) {
+        audioSources[name] = cleanedSource;
+      } else {
+        delete audioSources[name];
+        skippedAssets += 1;
+        metadata = appendImportWarning(
+          metadata,
+          `ZIP audio source could not be re-uploaded: ${plan.path || '(unknown)'}`
+        );
+      }
     }
   }
 
-  return { asset, audioSources, skippedAssets };
+  if (asset?.path && !obj.importAsset) {
+    const cleaned = cleanFailedZipBackedAsset(asset, { path: asset.path });
+    asset = cleaned.asset;
+    if (!cleaned.fallbackUsed) {
+      skippedAssets += 1;
+      metadata = appendImportWarning(metadata, cleaned.warning);
+    }
+  }
+
+  if (audioSources && typeof audioSources === 'object' && !Array.isArray(audioSources)) {
+    for (const [name, source] of Object.entries(audioSources)) {
+      if (!source?.asset?.path) continue;
+      const cleanedSource = cleanFailedZipBackedAudioSource(source);
+      audioSources = { ...audioSources };
+      if (cleanedSource) {
+        audioSources[name] = cleanedSource;
+      } else {
+        delete audioSources[name];
+        skippedAssets += 1;
+        metadata = appendImportWarning(
+          metadata,
+          `ZIP audio source could not be re-uploaded: ${source.asset.path || '(unknown)'}`
+        );
+      }
+    }
+  }
+
+  return { asset, audioSources, metadata, skippedAssets };
 }
 
 export async function applySceneDocument(sceneDocument, {
@@ -128,7 +219,7 @@ export async function applySceneDocument(sceneDocument, {
           rotation: obj.rotation,
           scale: obj.scale,
           visible: obj.visible !== false,
-          metadata: obj.metadata,
+          metadata: prepared.metadata,
           animation: obj.animation,
           audioSources: prepared.audioSources,
           selectAfterLoad: false,
@@ -139,7 +230,15 @@ export async function applySceneDocument(sceneDocument, {
         continue;
       }
 
-      skippedAssets += 1;
+      const cleaned = cleanFailedZipBackedAsset(prepared.asset, obj.importAsset);
+      prepared.asset = cleaned.asset;
+      if (!cleaned.fallbackUsed) {
+        skippedAssets += 1;
+        prepared.metadata = appendImportWarning(
+          prepared.metadata,
+          cleaned.warning || `ZIP asset could not be re-uploaded: ${obj.importAsset.path || '(unknown)'}`
+        );
+      }
     }
 
     const payload = {
@@ -153,7 +252,7 @@ export async function applySceneDocument(sceneDocument, {
       visible: obj.visible !== false,
     };
 
-    if (obj.metadata) payload.metadata = obj.metadata;
+    if (prepared.metadata) payload.metadata = prepared.metadata;
     if (obj.animation) payload.animation = obj.animation;
     if (prepared.audioSources) payload.audioSources = prepared.audioSources;
 
