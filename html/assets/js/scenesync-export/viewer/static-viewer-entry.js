@@ -1,12 +1,107 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createViewerCore } from './create-viewer-core.js';
+import { createPlayerTransportPanel } from './player-transport.js';
 
 // Resolve scene.json relative to the document root, not the script location
 const BASE_URL = new URL('./', document.baseURI).href;
 
 function resolveFromRoot(path) {
   return new URL(path, BASE_URL).href;
+}
+
+function isTextInputTarget(target) {
+  const tagName = target?.tagName?.toLowerCase?.();
+  return tagName === 'input'
+    || tagName === 'textarea'
+    || tagName === 'select'
+    || target?.isContentEditable === true;
+}
+
+function createKeyboardCameraNavigation({ camera, controls, domElement }) {
+  const pressed = new Set();
+  const forward = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const offset = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  function normalizeKey(key) {
+    return String(key || '').toLowerCase();
+  }
+
+  function isMovementKey(key) {
+    return key === 'w' || key === 'a' || key === 's' || key === 'd' || key === 'e' || key === 'q';
+  }
+
+  function handleKeyDown(event) {
+    if (event.defaultPrevented || isTextInputTarget(event.target)) return;
+    const key = normalizeKey(event.key);
+    if (key === 'shift') {
+      pressed.add(key);
+      return;
+    }
+    if (!isMovementKey(key)) return;
+    pressed.add(key);
+    event.preventDefault();
+  }
+
+  function handleKeyUp(event) {
+    const key = normalizeKey(event.key);
+    if (key === 'shift') {
+      pressed.delete(key);
+      return;
+    }
+    if (!isMovementKey(key)) return;
+    pressed.delete(key);
+    event.preventDefault();
+  }
+
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+  window.addEventListener('blur', () => pressed.clear());
+
+  return {
+    update(deltaSeconds) {
+      if (pressed.size === 0) return;
+
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      if (forward.lengthSq() < 0.0001) {
+        forward.set(0, 0, -1);
+      } else {
+        forward.normalize();
+      }
+      right.crossVectors(forward, up).normalize();
+
+      offset.set(0, 0, 0);
+      if (pressed.has('w')) offset.add(forward);
+      if (pressed.has('s')) offset.sub(forward);
+      if (pressed.has('d')) offset.add(right);
+      if (pressed.has('a')) offset.sub(right);
+      if (pressed.has('e')) offset.y += 1;
+      if (pressed.has('q')) offset.y -= 1;
+
+      if (offset.lengthSq() === 0) return;
+      const speed = pressed.has('shift') ? 8 : 3.5;
+      offset.normalize().multiplyScalar(speed * Math.max(0, deltaSeconds));
+      camera.position.add(offset);
+      controls.target.add(offset);
+      controls.update();
+      domElement?.focus?.();
+    },
+  };
+}
+
+function createXrSessionInit(mode) {
+  if (mode === 'immersive-ar') {
+    return {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hit-test', 'dom-overlay'],
+      domOverlay: { root: document.body },
+    };
+  }
+  return {
+    optionalFeatures: ['local-floor', 'bounded-floor'],
+  };
 }
 
 async function main() {
@@ -33,10 +128,12 @@ async function main() {
 
   // Build Three.js app
   const canvas = document.getElementById('viewer-canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setClearAlpha(1);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
+  renderer.domElement.tabIndex = 0;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1000);
@@ -48,6 +145,11 @@ async function main() {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 1, 0);
   controls.update();
+  const keyboardNavigation = createKeyboardCameraNavigation({
+    camera,
+    controls,
+    domElement: renderer.domElement,
+  });
 
   const missingAssets = [];
 
@@ -79,6 +181,12 @@ async function main() {
       missingNotice.classList.remove('hidden');
     }
   }
+
+  const playerTransport = createPlayerTransportPanel({
+    title: 'SCENE SYNC · VIEWER',
+    activateOnMount: true,
+  });
+  await playerTransport.mount({ core: viewerCore, root: document.body });
 
   // BGM button
   const bgmAudio = viewerCore.getBgmAudio();
@@ -161,89 +269,48 @@ async function main() {
     controlsEl.appendChild(enableBtn);
   }
 
-  let updatePhysicsControls = null;
-  if (viewerCore.hasPhysics?.() && controlsEl) {
-    const physicsGroup = document.createElement('div');
-    physicsGroup.className = 'viewer-transport';
+  let pendingXrMode = null;
+  let savedSceneBackground = null;
+  renderer.xr.addEventListener('sessionstart', () => {
+    const session = renderer.xr.getSession();
+    const isArSession = pendingXrMode === 'immersive-ar' || session?.environmentBlendMode !== 'opaque';
+    if (isArSession) {
+      savedSceneBackground = scene.background;
+      scene.background = null;
+      renderer.setClearAlpha(0);
+    }
+    pendingXrMode = null;
+  });
+  renderer.xr.addEventListener('sessionend', () => {
+    if (savedSceneBackground !== null) {
+      scene.background = savedSceneBackground;
+      savedSceneBackground = null;
+    }
+    renderer.setClearAlpha(1);
+    pendingXrMode = null;
+  });
 
-    const playBtn = document.createElement('button');
-    playBtn.className = 'viewer-btn';
-    playBtn.textContent = 'Play Physics';
-
-    const resetBtn = document.createElement('button');
-    resetBtn.className = 'viewer-btn';
-    resetBtn.textContent = 'Reset';
-
-    const seek = document.createElement('input');
-    seek.className = 'viewer-range';
-    seek.type = 'range';
-    seek.min = '0';
-    seek.step = '0.01';
-    seek.value = '0';
-
-    const timeLabel = document.createElement('span');
-    timeLabel.className = 'viewer-time-label';
-    timeLabel.textContent = '0.00s';
-
-    physicsGroup.append(playBtn, resetBtn, seek, timeLabel);
-    controlsEl.appendChild(physicsGroup);
-
-    playBtn.addEventListener('click', () => {
-      const state = viewerCore.getPhysicsPlaybackState?.();
-      if (state?.playing) {
-        viewerCore.pausePhysics?.();
-      } else {
-        viewerCore.playPhysics?.();
-      }
-      updatePhysicsControls?.();
-    });
-
-    resetBtn.addEventListener('click', () => {
-      viewerCore.resetPhysics?.();
-      updatePhysicsControls?.();
-    });
-
-    seek.addEventListener('input', () => {
-      viewerCore.seekPhysics?.(Number(seek.value));
-      updatePhysicsControls?.();
-    });
-
-    updatePhysicsControls = () => {
-      const state = viewerCore.getPhysicsPlaybackState?.();
-      if (!state) return;
-      playBtn.textContent = state.playing ? 'Pause Physics' : 'Play Physics';
-      const duration = Number.isFinite(state.duration) && state.duration > 0 ? state.duration : 10;
-      seek.max = String(duration);
-      if (document.activeElement !== seek) {
-        seek.value = String(Math.max(0, Math.min(duration, state.time || 0)));
-      }
-      timeLabel.textContent = `${(state.time || 0).toFixed(2)}s`;
-    };
-    updatePhysicsControls();
-  }
-
-  // Immersive entry button
+  // Immersive entry buttons
   if (navigator.xr && controlsEl) {
     for (const mode of ['immersive-vr', 'immersive-ar']) {
       const supported = await navigator.xr.isSessionSupported(mode).catch(() => false);
-      if (supported) {
-        const label = mode === 'immersive-ar' ? 'Enter AR' : 'Enter VR';
-        const xrBtn = document.createElement('button');
-        xrBtn.className = 'viewer-btn';
-        xrBtn.textContent = label;
-        xrBtn.addEventListener('click', async () => {
-          try {
-            const session = await navigator.xr.requestSession(mode, {
-              optionalFeatures: ['local-floor', 'bounded-floor'],
-            });
-            renderer.xr.setSession(session);
-          } catch (e) {
-            console.warn('[viewer] XR session failed:', e);
-          }
-        });
-        controlsEl.appendChild(xrBtn);
-        break;
-      }
+      if (!supported) continue;
+
+      const label = mode === 'immersive-ar' ? 'Enter AR' : 'Enter VR';
+      const xrBtn = document.createElement('button');
+      xrBtn.className = 'viewer-btn';
+      xrBtn.textContent = label;
+      xrBtn.addEventListener('click', async () => {
+        try {
+          pendingXrMode = mode;
+          const session = await navigator.xr.requestSession(mode, createXrSessionInit(mode));
+          await renderer.xr.setSession(session);
+        } catch (e) {
+          pendingXrMode = null;
+          console.warn('[viewer] XR session failed:', e);
+        }
+      });
+      controlsEl.appendChild(xrBtn);
     }
   }
 
@@ -255,9 +322,15 @@ async function main() {
   });
 
   // Render loop
+  let lastFrameNow = performance.now();
   renderer.setAnimationLoop(() => {
+    const now = performance.now();
+    const deltaSeconds = Math.min(0.1, Math.max(0, (now - lastFrameNow) / 1000));
+    lastFrameNow = now;
+    if (!renderer.xr.isPresenting) {
+      keyboardNavigation.update(deltaSeconds);
+    }
     viewerCore.update();
-    updatePhysicsControls?.();
     controls.update();
     renderer.render(scene, camera);
   });

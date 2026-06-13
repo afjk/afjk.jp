@@ -140,7 +140,7 @@ Web 版 Scene Sync では、まず object component と Export/Import 対応と�
 - scene state / SceneDocument root: `physics`
 - Editor 再生: 既存の Scene Clock / Player UI が供給する `time.t` を入力にして評価する
 - seek / pause / reset: 物理 world を初期 snapshot から対象 tick まで再計算する
-- Export Viewer: `scene.json` の `physics` と object physics を読み込み、静的 Viewer 内の最小 Player UI で再生する
+- Export Viewer: `scene.json` の `physics` と object physics を読み込み、Player Shell と共通の transport UI で再生する
 
 現在の object physics は以下の形を想定する。
 
