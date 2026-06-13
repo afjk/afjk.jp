@@ -659,7 +659,10 @@ async function run() {
       ({ expectedIds }) => {
         const mod = window.__sceneSyncE2eModule;
         if (!mod) return false;
-        return expectedIds.every((objectId) => mod.managedObjects.has(objectId));
+        return expectedIds.every((objectId) => {
+          const obj = mod.managedObjects.get(objectId);
+          return obj && obj.userData?.metadata?.importPreview !== true;
+        });
       },
       { expectedIds: zipInspect.objectIds },
       { timeout: 90000 },
