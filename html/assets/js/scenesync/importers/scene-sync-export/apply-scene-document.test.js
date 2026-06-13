@@ -62,6 +62,41 @@ test('adds new objects and updates existing ones via addOrUpdateObject + broadca
   strictEqual(calls.addOrUpdate[1].payload.visible, false);
 });
 
+test('uses pre-preview existing object ids for added/updated stats', async () => {
+  const managedObjects = new Map([
+    ['existing-1', {}],
+    ['new-1', { userData: { metadata: { importPreview: true } } }],
+  ]);
+  const calls = { addOrUpdate: [], broadcast: [] };
+
+  const sceneDocument = {
+    objects: [
+      {
+        id: 'existing-1',
+        name: 'Existing',
+        asset: { type: 'primitive', primitive: 'box' },
+        visible: true,
+      },
+      {
+        id: 'new-1',
+        name: 'New',
+        asset: { type: 'primitive', primitive: 'sphere' },
+        visible: true,
+      },
+    ],
+  };
+
+  const stats = await applySceneDocument(sceneDocument, {
+    managedObjects,
+    existingObjectIds: new Set(['existing-1']),
+    addOrUpdateObject: (id, payload, options) => calls.addOrUpdate.push({ id, payload, options }),
+    broadcast: (payload) => calls.broadcast.push(payload),
+  });
+
+  deepStrictEqual(stats, { total: 2, added: 1, updated: 1, glbImported: 0, skippedAssets: 0 });
+  deepStrictEqual(calls.addOrUpdate.map((call) => call.id), ['existing-1', 'new-1']);
+});
+
 test('imports ZIP-bundled GLB assets via importGlbFileAsSceneObject, keeping objectId', async () => {
   const managedObjects = new Map();
   const calls = { addOrUpdate: [], broadcast: [], importGlb: [] };

@@ -47,6 +47,12 @@ test('shows local Scene Sync Export import previews without ZIP paths', async ()
           scale: [1, 1, 1],
           asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
           metadata: { role: 'media-panel' },
+          audioSources: {
+            default: {
+              url: 'https://example.com/poster.mp3',
+              asset: { path: 'assets/poster.mp3' },
+            },
+          },
         },
         {
           id: 'caption',
@@ -78,6 +84,8 @@ test('shows local Scene Sync Export import previews without ZIP paths', async ()
     strictEqual(calls[0].payload.asset.url, 'blob:preview-1');
     strictEqual(calls[0].payload.asset.path, undefined);
     strictEqual(calls[0].payload.metadata.importPreview, true);
+    strictEqual(calls[0].payload.audioSources, undefined);
+    strictEqual(JSON.stringify(calls[0].payload).includes('assets/poster.mp3'), false);
 
     strictEqual(calls[1].id, 'caption');
     strictEqual(calls[1].payload.asset.type, 'text');

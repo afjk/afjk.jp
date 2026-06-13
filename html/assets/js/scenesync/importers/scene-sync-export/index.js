@@ -137,9 +137,6 @@ export async function showSceneDocumentImportPreview(sceneDocument, {
   for (const obj of sceneDocument.objects || []) {
     const payload = buildPreviewBasePayload(obj);
     payload.asset = await buildPreviewAsset(obj.asset, zip, objectUrls);
-    if (obj.audioSources !== undefined) {
-      payload.audioSources = cloneJson(obj.audioSources);
-    }
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import-preview' });
     previewed += 1;
   }
@@ -184,7 +181,12 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
   });
 
   const objects = resolvedDocument.objects || [];
-  const updateCount = objects.filter((obj) => managedObjects.has(obj.id)).length;
+  const existingObjectIds = new Set(
+    objects
+      .filter((obj) => managedObjects.has(obj.id))
+      .map((obj) => obj.id)
+  );
+  const updateCount = existingObjectIds.size;
   const addCount = objects.length - updateCount;
 
   const confirmFn = confirmOpen
@@ -222,6 +224,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
       importGlbFileAsSceneObject,
       zip: result.zip,
       uploadBlobToStore,
+      existingObjectIds,
       onProgress: ({ processed, total }) => {
         showToast?.(`Scene Sync Exportを復元中…（${processed}/${total}）`, 60000);
       },

@@ -182,6 +182,7 @@ export async function applySceneDocument(sceneDocument, {
   importGlbFileAsSceneObject,
   zip,
   uploadBlobToStore,
+  existingObjectIds,
   onProgress,
 } = {}) {
   let added = 0;
@@ -205,7 +206,9 @@ export async function applySceneDocument(sceneDocument, {
   }
 
   for (const obj of sceneDocument.objects || []) {
-    const existed = managedObjects.has(obj.id);
+    const existed = existingObjectIds instanceof Set
+      ? existingObjectIds.has(obj.id)
+      : managedObjects.has(obj.id);
     if (existed) {
       updated += 1;
     } else {
