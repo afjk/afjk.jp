@@ -41,6 +41,8 @@ py -m http.server 8080
 
 - これは読み取り専用のエクスポートです。
 - 共同編集や同期機能は含まれていません。
+- 画面下の Player UI で、対応している animation / physics / behavior の時間を再生・停止・シークできます。
+- WASD で前後左右、Q/E で上下にカメラ移動できます。
 - Loomlet behavior graph による動きが設定されている場合、再生されます。
 - 初期版の viewer は、一部の依存ファイルを読み込むためにインターネット接続が必要です。
 - WebXR（VR/AR）機能はブラウザとデバイスに対応している場合に利用可能です。
@@ -139,6 +141,8 @@ export function generateReadmeHtml() {
     <ul>
       <li>これは読み取り専用のエクスポートです。</li>
       <li>共同編集や同期機能は含まれていません。</li>
+      <li>画面下の Player UI で、対応している animation / physics / behavior の時間を再生・停止・シークできます。</li>
+      <li>WASD で前後左右、Q/E で上下にカメラ移動できます。</li>
       <li>Loomlet behavior graph による動きが設定されている場合、再生されます。</li>
       <li>初期版の viewer は、一部の依存ファイルを読み込むためにインターネット接続が必要です。</li>
       <li>WebXR（VR/AR）機能はブラウザとデバイスに対応している場合に利用可能です。</li>

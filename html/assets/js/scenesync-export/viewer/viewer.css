@@ -76,7 +76,7 @@ body {
 /* ── Bottom controls ── */
 #viewer-controls {
   position: absolute;
-  bottom: 16px;
+  top: 12px;
   right: 16px;
   display: flex;
   flex-direction: column;
@@ -105,36 +105,6 @@ body {
 .viewer-btn:disabled {
   opacity: 0.4;
   cursor: default;
-}
-
-.viewer-transport {
-  width: min(320px, calc(100vw - 32px));
-  display: grid;
-  grid-template-columns: auto auto 1fr auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px;
-  border-radius: 8px;
-  background: rgba(30, 30, 40, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(8px);
-}
-
-.viewer-transport .viewer-btn {
-  white-space: nowrap;
-  border-radius: 6px;
-  padding: 7px 10px;
-}
-
-.viewer-range {
-  width: 100%;
-  min-width: 72px;
-}
-
-.viewer-time-label {
-  color: rgba(255, 255, 255, 0.76);
-  font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: nowrap;
 }
 
 /* ── Missing assets notice ── */

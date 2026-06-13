@@ -10,6 +10,11 @@ import {
   createScenePhysicsRuntime,
   normalizeScenePhysics,
 } from './scene-physics.js';
+import {
+  calculateViewerPlaybackDuration,
+  clipTimeForMode,
+  createViewerSceneClock,
+} from './viewer-scene-clock.js';
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
 
@@ -188,8 +193,8 @@ function createExportBehaviorRuntime(behaviorState, objectMap, audioController =
   }
 
   return {
-    tick(now = performance.now()) {
-      const time = now / 1000;
+    tick(clockState = null, now = performance.now()) {
+      const time = Number.isFinite(clockState?.t) ? clockState.t : now / 1000;
       for (const entry of runtimes) {
         entry.runtime.evaluateAt({ time, scope: entry.scope, events: [] }, now);
       }
@@ -278,9 +283,26 @@ function setupAnimation(mixer, gltf, animState) {
   }
 
   action.play();
+  const clipIndex = Math.max(0, clips.indexOf(clip));
+  const playbackMode = animState?.mode === 'once' ? 'once' : 'loop';
   return {
     action,
     clip,
+    clips,
+    enabled: true,
+    clipIndex,
+    mode: playbackMode,
+    speed,
+    offset,
+    sampleAt(sceneTime) {
+      const baseTime = Number.isFinite(sceneTime) ? sceneTime : 0;
+      const duration = clip.duration || 1;
+      const t = baseTime * speed + offset;
+      action.enabled = true;
+      action.paused = false;
+      action.time = clipTimeForMode(t, duration, playbackMode);
+      mixer.update(0);
+    },
     getSample(requestedClipName = null) {
       const name = typeof requestedClipName === 'string' ? requestedClipName.trim() : '';
       if (name && clip.name && name !== clip.name) return null;
@@ -369,10 +391,9 @@ export async function createViewerCore({
   }
 
   const resolver = createStaticAssetResolver();
-  const mixers = [];
-  const clock = new THREE.Clock();
   const objectMap = new Map();
   const animationSamples = new Map();
+  const animationRuntimes = [];
 
   // Ambient + directional lights as fallback
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -550,7 +571,7 @@ export async function createViewerCore({
           const mixer = new THREE.AnimationMixer(wrapper);
           const animationRuntime = setupAnimation(mixer, gltf, entry.animation);
           if (animationRuntime) {
-            mixers.push(mixer);
+            animationRuntimes.push(animationRuntime);
             animationSamples.set(entry.id, animationRuntime);
           }
         }
@@ -591,12 +612,12 @@ export async function createViewerCore({
   }
 
   const physicsState = normalizeScenePhysics(sceneDoc.physics);
-  const physicsPlayback = {
-    time: 0,
-    playing: false,
-    lastNow: performance.now(),
-    duration: physicsState.enabled ? physicsState.duration : 0,
-  };
+  const sceneClock = createViewerSceneClock({
+    duration: calculateViewerPlaybackDuration({
+      animationEntries: animationRuntimes,
+      physicsDuration: physicsState.enabled ? physicsState.duration : 0,
+    }),
+  });
   const physicsRuntime = createScenePhysicsRuntime({
     getScenePhysics: () => physicsState,
     getObjectEntries: () => (sceneDoc.objects || []).map((entry) => ({
@@ -604,81 +625,90 @@ export async function createViewerCore({
       object: objectMap.get(entry.id),
       physics: entry.physics,
     })),
-    isClockActive: () => true,
+    isClockActive: (clockState) => clockState?.transportActive === true,
   });
 
-  function tickPhysicsPlayback(now = performance.now()) {
-    if (!physicsState.enabled) return;
-    if (physicsPlayback.playing) {
-      const delta = Math.max(0, (now - physicsPlayback.lastNow) / 1000);
-      physicsPlayback.time += delta;
-      if (physicsPlayback.duration > 0 && physicsPlayback.time > physicsPlayback.duration) {
-        physicsPlayback.time = physicsPlayback.duration;
-        physicsPlayback.playing = false;
-      }
+  function evaluateSceneAtClock(clockState) {
+    const time = Number.isFinite(clockState?.t) ? clockState.t : 0;
+    for (const runtime of animationRuntimes) {
+      runtime.sampleAt(time);
     }
-    physicsPlayback.lastNow = now;
-    physicsRuntime.update({
-      t: physicsPlayback.time,
-      mode: 'local',
-      transportActive: true,
-      isPaused: !physicsPlayback.playing,
-      rate: 1,
-    });
+    if (!physicsState.enabled) return;
+    physicsRuntime.update(clockState);
   }
+
+  const commands = {
+    playSceneClock() {
+      sceneClock.play();
+    },
+    pauseSceneClock() {
+      sceneClock.pause();
+    },
+    stopSceneClock() {
+      sceneClock.stop();
+      evaluateSceneAtClock(sceneClock.getState());
+    },
+    seekSceneClock(seconds) {
+      sceneClock.seek(seconds);
+      evaluateSceneAtClock(sceneClock.getState());
+    },
+    setSceneClockRate(rate) {
+      sceneClock.setRate(rate);
+    },
+    activateSceneClockTransport() {
+      sceneClock.activateTransport();
+      evaluateSceneAtClock(sceneClock.getState());
+    },
+    deactivateSceneClockTransport() {
+      sceneClock.deactivateTransport();
+      evaluateSceneAtClock(sceneClock.getState());
+    },
+  };
 
   const api = {
     update() {
-      const delta = clock.getDelta();
-      for (const m of mixers) m.update(delta);
-
       const now = performance.now();
-      tickPhysicsPlayback(now);
+      const clockState = sceneClock.tick(now);
+      evaluateSceneAtClock(clockState);
       if (loomAdapter) {
-        loomAdapter.tick(now);
+        loomAdapter.tick(clockState, now);
       }
       objectAudioController.tick(now);
     },
+
+    getSceneClockState() {
+      return sceneClock.getState();
+    },
+
+    onStateChange(listener) {
+      return sceneClock.onChange(listener);
+    },
+
+    commands,
 
     hasPhysics() {
       return physicsState.enabled && physicsRuntime.hasBodies();
     },
 
     getPhysicsPlaybackState() {
-      return {
-        time: physicsPlayback.time,
-        duration: physicsPlayback.duration,
-        playing: physicsPlayback.playing,
-      };
+      const state = sceneClock.getState();
+      return { time: state.time, duration: state.duration, playing: state.playing };
     },
 
     playPhysics() {
-      if (!physicsState.enabled) return;
-      if (physicsPlayback.duration > 0 && physicsPlayback.time >= physicsPlayback.duration) {
-        physicsPlayback.time = 0;
-        physicsRuntime.markDirty();
-      }
-      physicsPlayback.playing = true;
-      physicsPlayback.lastNow = performance.now();
+      commands.playSceneClock();
     },
 
     pausePhysics() {
-      physicsPlayback.playing = false;
-      physicsPlayback.lastNow = performance.now();
+      commands.pauseSceneClock();
     },
 
     resetPhysics() {
-      physicsPlayback.time = 0;
-      physicsPlayback.playing = false;
-      physicsPlayback.lastNow = performance.now();
-      physicsRuntime.markDirty();
-      tickPhysicsPlayback(physicsPlayback.lastNow);
+      commands.stopSceneClock();
     },
 
     seekPhysics(time) {
-      physicsPlayback.time = Math.max(0, Math.min(Number(time) || 0, physicsPlayback.duration || Number.MAX_SAFE_INTEGER));
-      physicsPlayback.lastNow = performance.now();
-      tickPhysicsPlayback(physicsPlayback.lastNow);
+      commands.seekSceneClock(time);
     },
 
     getBgmAudio() {
