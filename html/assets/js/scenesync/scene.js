@@ -10,7 +10,7 @@ import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFa
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
-import { tryOpenSceneSyncExportFile } from './importers/scene-sync-export/index.js';
+import { tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './importers/scene-sync-export/index.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
@@ -9470,6 +9470,20 @@ async function urlImporterCallback(url, position, context = {}) {
   const classified = classifyUrl(resolved.resolvedUrl);
   const normalizedUrl = classified.url || resolved.resolvedUrl;
   const urlKind = classified.kind;
+
+  if (urlKind === URL_KIND.WEBPAGE) {
+    const sceneSyncExportResult = await tryOpenSceneSyncExportUrl(normalizedUrl, {
+      managedObjects,
+      addOrUpdateObject,
+      broadcast,
+      showToast,
+      environmentManager,
+      importGlbFileAsSceneObject,
+      uploadBlobToStore,
+      applySceneBgm,
+    });
+    if (sceneSyncExportResult?.handled) return;
+  }
 
   // Skybox intent takes priority for image URLs when looking up.
   const isImageUrl = urlKind === URL_KIND.IMAGE;
