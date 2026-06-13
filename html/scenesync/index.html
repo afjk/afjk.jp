@@ -586,6 +586,7 @@
     .scene-inspector-object-actions .chip {
       justify-content: center;
     }
+    .scene-inspector-scene-physics-controls,
     .scene-inspector-animation-controls,
     .scene-inspector-physics-controls {
       display: flex;
@@ -1399,6 +1400,37 @@
       <pre id="scene-inspector-output" class="scene-inspector-scene-json">{
   "status": "waiting-for-scene"
 }</pre>
+      <section id="scene-inspector-scene-physics-controls" class="scene-inspector-scene-physics-controls">
+        <div class="scene-inspector-section-header">
+          <div class="scene-inspector-section-title">Scene Physics</div>
+          <div id="scene-inspector-scene-physics-meta" class="scene-inspector-section-meta"></div>
+        </div>
+
+        <label class="scene-inspector-control-row">
+          <span>Enabled</span>
+          <input id="scene-inspector-scene-physics-enabled" type="checkbox">
+        </label>
+
+        <label class="scene-inspector-control-row">
+          <span>Duration</span>
+          <input id="scene-inspector-scene-physics-duration" class="scene-inspector-number-input" type="number" min="0.1" step="0.1" value="10">
+        </label>
+
+        <label class="scene-inspector-control-row">
+          <span>Gravity Y</span>
+          <input id="scene-inspector-scene-physics-gravity-y" class="scene-inspector-number-input" type="number" step="0.1" value="-9.81">
+        </label>
+
+        <label class="scene-inspector-control-row">
+          <span>Ground</span>
+          <input id="scene-inspector-scene-physics-ground-enabled" type="checkbox">
+        </label>
+
+        <label class="scene-inspector-control-row">
+          <span>Ground Y</span>
+          <input id="scene-inspector-scene-physics-ground-y" class="scene-inspector-number-input" type="number" step="0.1" value="0">
+        </label>
+      </section>
       <section id="scene-inspector-object-section" class="scene-inspector-section">
         <div class="scene-inspector-section-header">
           <div class="scene-inspector-section-title">Selected Object</div>
