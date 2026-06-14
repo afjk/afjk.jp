@@ -41,7 +41,7 @@ test('exports scene and object physics state', () => {
     worldOptions: {
       gravity: -9.81,
       ground: null,
-      timestepFp: 1092,
+      timestep: 1 / 60,
     },
   };
 

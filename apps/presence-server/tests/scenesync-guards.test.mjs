@@ -233,7 +233,7 @@ describe('Scene Sync guard helpers', () => {
         worldOptions: {
           gravity: -9.81,
           ground: { y: 0, restitution: 0.35, friction: 0.72 },
-          timestepFp: 1092,
+          timestep: 1 / 60,
         },
       },
     });
