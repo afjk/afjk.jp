@@ -25,6 +25,7 @@ export const DEFAULT_SCENE_PHYSICS = Object.freeze({
 
 const BODY_TYPES = new Set(['dynamic', 'static']);
 const SHAPES = new Set(['box', 'sphere']);
+const ZERO_TIME_EPSILON = 1e-6;
 
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -58,6 +59,25 @@ function readVec3(value, fallback = [0, 0, 0]) {
 function readPositiveVec3(value, fallback) {
   const next = readVec3(value, fallback);
   return next.map((component, index) => positiveNumber(component, fallback[index] || 0.5));
+}
+
+function readQuaternion(value, fallback = [0, 0, 0, 1]) {
+  if (!Array.isArray(value) || value.length < 4) return [...fallback];
+  return [
+    finiteNumber(value[0], fallback[0] || 0),
+    finiteNumber(value[1], fallback[1] || 0),
+    finiteNumber(value[2], fallback[2] || 0),
+    finiteNumber(value[3], fallback[3] ?? 1),
+  ];
+}
+
+function normalizeInitialTransform(input) {
+  if (!input || typeof input !== 'object') return null;
+  return {
+    position: readVec3(input.position, [0, 0, 0]),
+    rotation: readQuaternion(input.rotation, [0, 0, 0, 1]),
+    scale: readPositiveVec3(input.scale, [1, 1, 1]),
+  };
 }
 
 function normalizeGround(input) {
@@ -142,6 +162,10 @@ export function normalizeObjectPhysics(input = null) {
   if (shape === 'box' && Array.isArray(input.halfExtents)) {
     physics.halfExtents = readPositiveVec3(input.halfExtents, [0.5, 0.5, 0.5]);
   }
+  const initialTransform = normalizeInitialTransform(input.initialTransform);
+  if (initialTransform) {
+    physics.initialTransform = initialTransform;
+  }
 
   return physics;
 }
@@ -176,23 +200,58 @@ function getRotationArray(object) {
   return [0, 0, 0, 1];
 }
 
+function applyTransformArrays(object, transform) {
+  if (!object || !transform) return;
+  if (Array.isArray(transform.position)) {
+    if (typeof object.position?.fromArray === 'function') {
+      object.position.fromArray(transform.position);
+    } else if (object.position) {
+      object.position.x = transform.position[0];
+      object.position.y = transform.position[1];
+      object.position.z = transform.position[2];
+    }
+  }
+  if (Array.isArray(transform.rotation)) {
+    if (typeof object.quaternion?.fromArray === 'function') {
+      object.quaternion.fromArray(transform.rotation);
+    } else if (object.quaternion) {
+      object.quaternion.x = transform.rotation[0];
+      object.quaternion.y = transform.rotation[1];
+      object.quaternion.z = transform.rotation[2];
+      object.quaternion.w = transform.rotation[3];
+    }
+  }
+  if (Array.isArray(transform.scale)) {
+    if (typeof object.scale?.fromArray === 'function') {
+      object.scale.fromArray(transform.scale);
+    } else if (object.scale) {
+      object.scale.x = transform.scale[0];
+      object.scale.y = transform.scale[1];
+      object.scale.z = transform.scale[2];
+    }
+  }
+  object.updateMatrixWorld?.(true);
+}
+
 function inferShape(physics, object) {
   if (physics?.shape === 'sphere') return 'sphere';
   if (physics?.shape === 'box') return 'box';
   return object?.userData?.asset?.primitive === 'sphere' ? 'sphere' : 'box';
 }
 
-export function buildPhysicsBodyDef({ objectId, object, physics }) {
+export function buildPhysicsBodyDef({ objectId, object, physics, useInitialTransform = false }) {
   const normalized = normalizeObjectPhysics(physics);
   if (!objectId || !object || !normalized) return null;
 
-  const scale = getScaleArray(object).map((component) => Math.abs(component || 1));
+  const initialTransform = useInitialTransform ? normalized.initialTransform : null;
+  const scale = (initialTransform?.scale || getScaleArray(object))
+    .map((component) => Math.abs(component || 1));
   const shape = inferShape(normalized, object);
   const body = {
     id: objectId,
     shape,
-    position: getPositionArray(object),
-    rotation: getRotationArray(object),
+    position: initialTransform?.position || getPositionArray(object),
+    rotation: initialTransform?.rotation || getRotationArray(object),
     velocity: normalized.bodyType === 'static'
       ? [0, 0, 0]
       : readVec3(normalized.velocity, [0, 0, 0]),
@@ -256,6 +315,65 @@ function collectRuntimeEntries(entries) {
     })
     .filter(Boolean)
     .sort((left, right) => left.objectId.localeCompare(right.objectId));
+}
+
+function finiteNonNegativeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : fallback;
+}
+
+export function isScenePhysicsZeroTime(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && Math.abs(number) <= ZERO_TIME_EPSILON;
+}
+
+export function createPhysicsResetBaseline({
+  time = 0,
+  worldEpochTime = time,
+  preserveMotion = false,
+  reason = 'reset',
+} = {}) {
+  return {
+    kind: 'reset',
+    time: finiteNonNegativeNumber(time, 0),
+    worldEpochTime: finiteNonNegativeNumber(worldEpochTime, 0),
+    preserveMotion: preserveMotion === true,
+    reason,
+  };
+}
+
+export function shouldResetPhysicsForSceneClockPayload(payload, activeTime = null) {
+  if (!payload || typeof payload !== 'object') return false;
+  const baseline = payload.physicsBaseline;
+  if (baseline?.kind === 'reset') {
+    return isScenePhysicsZeroTime(baseline.time ?? payload.targetTime ?? payload.time ?? activeTime);
+  }
+  if (payload.action === 'reset') return true;
+  if (payload.action !== 'seek') return false;
+  return [
+    payload.targetTime,
+    payload.time,
+    payload.pausedTime,
+    activeTime,
+  ].some(isScenePhysicsZeroTime);
+}
+
+export function applyPhysicsResetBaseline(runtime, clockState = null, baseline = null) {
+  if (!runtime) return false;
+  const worldEpochTime = finiteNonNegativeNumber(
+    baseline?.worldEpochTime,
+    finiteNonNegativeNumber(clockState?.t, 0),
+  );
+  const resetClockState = {
+    ...(clockState || {}),
+    t: worldEpochTime,
+  };
+  const reset = runtime.resetToInitialPose?.(resetClockState) === true;
+  runtime.markDirty?.({
+    preserveMotion: baseline?.preserveMotion === true,
+    worldEpochTime,
+  });
+  return reset;
 }
 
 export function createScenePhysicsRuntime({
@@ -359,14 +477,18 @@ export function createScenePhysicsRuntime({
     world = createWorld(scenePhysics.worldOptions);
     timestepSeconds = world.timestep || normalizeRapierWorldOptions(scenePhysics.worldOptions).timestep;
     entryMap = new Map();
+    const useInitialTransform = preserveMotionOnRebuild === false;
     worldEpochTime = Number.isFinite(pendingWorldEpochTime)
       ? pendingWorldEpochTime
       : getClockTime(clockState);
     pendingWorldEpochTime = null;
 
     for (const entry of entries) {
-      const body = buildPhysicsBodyDef(entry);
+      const body = buildPhysicsBodyDef({ ...entry, useInitialTransform });
       if (!body) continue;
+      if (useInitialTransform && entry.physics?.initialTransform) {
+        applyTransformArrays(entry.object, entry.physics.initialTransform);
+      }
       const motion = previousMotion.get(entry.objectId);
       if (motion && !body.static) {
         body.velocity = motion.velocity;
