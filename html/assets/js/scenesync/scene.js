@@ -991,9 +991,9 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
       lockMultiSelectedObjects();
       ensureMultiMoveBroadcastInterval();
     } else {
-      flushMultiMoveBroadcast();
       stopMultiMoveBroadcastInterval();
       endMultiTransformHistory();
+      flushMultiMoveBroadcast();
       unlockMultiSelectedObjects();
     }
     return;
@@ -1018,10 +1018,9 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
     dragIntervalId = null;
 
     // Text Panel scale bake (sendSelectedDelta と history 記録より前)
-    const wasBaked = transformCtrl.object &&
+    if (transformCtrl.object) {
       bakeTextPanelScaleToLayout(transformCtrl.object);
-
-    sendSelectedDelta();
+    }
 
     // ドラッグ終了時に履歴に追加
     if (dragStartState) {
@@ -1054,6 +1053,7 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
       }
       dragStartState = null;
     }
+    sendSelectedDelta({ includeClock: true });
   }
 });
 
@@ -1062,7 +1062,7 @@ function arraysEqual(a, b) {
   return a.every((v, i) => Math.abs(v - b[i]) < 0.0001);
 }
 
-function sendSelectedDelta() {
+function sendSelectedDelta({ includeClock = false } = {}) {
   const obj = transformCtrl.object;
   if (!obj || !obj.userData.objectId) return;
 
@@ -1079,6 +1079,9 @@ function sendSelectedDelta() {
     rotation: rot,
     scale: scl,
   };
+  if (includeClock) {
+    payload.clock = serializeObjectClockForSceneSync(obj);
+  }
 
   // Text Panel scale bake では asset.layout が本体なので、asset を含める
   if (obj.userData?.asset?.type === 'text') {
@@ -5136,7 +5139,12 @@ function applyRemoteSceneClock(payload, from = null) {
   if (!payload || typeof payload !== 'object') return;
   const nextMode = normalizeClockMode(payload.mode, CLOCK_MODES.SHARED_PLAYBACK);
   if (nextMode !== CLOCK_MODES.SHARED_PLAYBACK) return;
-  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (
+    sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK &&
+    payload.action !== 'mode'
+  ) {
+    return;
+  }
 
   const revision = Number(payload.revision);
   if (Number.isFinite(revision) && revision <= sceneClockState.sharedRevision) {
