@@ -69,7 +69,13 @@ function createPanelHtml({ title, closeable }) {
     <header class="player-header">
       <span class="player-title">${title}</span>
       <div class="player-badges">
-        <span class="player-badge player-badge-mode" data-player-clock-mode data-mode="local">local</span>
+        <span class="player-mode-select-wrap" data-player-clock-mode data-mode="local-preview">
+          <select class="player-mode-select" data-player-mode-select aria-label="Clock mode">
+            <option value="local-preview">Local Preview</option>
+            <option value="shared-playback">Shared Playback</option>
+            <option value="room-time">Room Time</option>
+          </select>
+        </span>
         <span class="player-badge player-badge-status" data-player-clock-status data-paused="1">paused</span>
         ${closeable ? '<button class="player-close-btn" data-player-close type="button" title="Close">x</button>' : ''}
       </div>
@@ -81,40 +87,37 @@ function createPanelHtml({ title, closeable }) {
       </div>
       <button class="player-controller-btn" data-player-controller type="button" hidden>Control</button>
     </div>
-    <div class="player-mode-switch" role="group" aria-label="Clock mode">
-      <button class="player-mode-btn" data-player-mode-switch="local-preview" type="button">Local Preview</button>
-      <button class="player-mode-btn" data-player-mode-switch="shared-playback" type="button">Shared Playback</button>
-      <button class="player-mode-btn" data-player-mode-switch="room-time" type="button">Room Time</button>
-    </div>
-    <div class="player-time-display">
-      <span class="player-current-time" data-player-current-time>00:00.00</span>
-      <span class="player-object-age" data-player-object-age>ObjectAge —</span>
-    </div>
     <div class="player-seek-wrap">
       <input class="player-seek" data-player-seek type="range" min="0" max="60" step="0.01" value="0" />
     </div>
-    <div class="player-controls">
-      <button class="player-btn player-btn-stop" data-player-stop type="button" title="Stop">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <rect x="3" y="3" width="10" height="10" rx="2"/>
-        </svg>
-      </button>
-      <button class="player-btn player-btn-play-pause" data-player-play-pause data-player-playing="0" type="button" title="Play">
-        <svg class="icon-play" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
-          <polygon points="5,2 16,9 5,16"/>
-        </svg>
-        <svg class="icon-pause" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
-          <rect x="3" y="2" width="4" height="14" rx="1.5"/>
-          <rect x="11" y="2" width="4" height="14" rx="1.5"/>
-        </svg>
-      </button>
-    </div>
-    <div class="player-rate-row">
-      <span class="player-rate-label">Rate</span>
-      <button class="player-rate-btn" data-player-rate="0.25" type="button">1/4x</button>
-      <button class="player-rate-btn" data-player-rate="0.5" type="button">1/2x</button>
-      <button class="player-rate-btn" data-player-rate="1" type="button" data-active="true">1x</button>
-      <button class="player-rate-btn" data-player-rate="2" type="button">2x</button>
+    <div class="player-transport-row">
+      <div class="player-time-display">
+        <span class="player-current-time" data-player-current-time>00:00.00</span>
+        <span class="player-object-age" data-player-object-age>ObjectAge —</span>
+      </div>
+      <div class="player-controls">
+        <button class="player-btn player-btn-stop" data-player-stop type="button" title="Stop">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <rect x="3" y="3" width="10" height="10" rx="2"/>
+          </svg>
+        </button>
+        <button class="player-btn player-btn-play-pause" data-player-play-pause data-player-playing="0" type="button" title="Play">
+          <svg class="icon-play" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+            <polygon points="5,2 16,9 5,16"/>
+          </svg>
+          <svg class="icon-pause" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+            <rect x="3" y="2" width="4" height="14" rx="1.5"/>
+            <rect x="11" y="2" width="4" height="14" rx="1.5"/>
+          </svg>
+        </button>
+      </div>
+      <div class="player-rate-row">
+        <span class="player-rate-label">Rate</span>
+        <button class="player-rate-btn" data-player-rate="0.25" type="button">1/4x</button>
+        <button class="player-rate-btn" data-player-rate="0.5" type="button">1/2x</button>
+        <button class="player-rate-btn" data-player-rate="1" type="button" data-active="true">1x</button>
+        <button class="player-rate-btn" data-player-rate="2" type="button">2x</button>
+      </div>
     </div>
   `;
 }
@@ -200,9 +203,13 @@ export function createPlayerTransportPanel({
     if (stopBtn) stopBtn.disabled = controlsDisabled;
 
     const modeEl = panel.querySelector('[data-player-clock-mode]');
-    if (modeEl && modeEl.textContent !== modeInfo.title) {
-      modeEl.textContent = modeInfo.title;
+    if (modeEl) {
       modeEl.dataset.mode = mode;
+    }
+
+    const modeSelect = panel.querySelector('[data-player-mode-select]');
+    if (modeSelect && modeSelect.value !== mode) {
+      modeSelect.value = mode;
     }
 
     const statusEl = panel.querySelector('[data-player-clock-status]');
@@ -218,11 +225,6 @@ export function createPlayerTransportPanel({
       const active = String(parseFloat(btn.dataset.playerRate) === rate);
       if (btn.dataset.active !== active) btn.dataset.active = active;
       btn.disabled = controlsDisabled;
-    });
-
-    panel.querySelectorAll('[data-player-mode-switch]').forEach(btn => {
-      const active = btn.dataset.playerModeSwitch === mode;
-      if (btn.dataset.active !== String(active)) btn.dataset.active = String(active);
     });
   }
 
@@ -302,11 +304,9 @@ export function createPlayerTransportPanel({
         addListener(panel.querySelector('[data-player-stop]'), 'click', () => actions.stop())
       );
 
-      panel.querySelectorAll('[data-player-mode-switch]').forEach(btn => {
-        disposers.push(addListener(btn, 'click', () => {
-          actions.setMode(btn.dataset.playerModeSwitch);
-        }));
-      });
+      disposers.push(addListener(panel.querySelector('[data-player-mode-select]'), 'change', (event) => {
+        actions.setMode(event.target.value);
+      }));
 
       disposers.push(addListener(panel.querySelector('[data-player-controller]'), 'click', () => {
         const state = getClockState(core);
