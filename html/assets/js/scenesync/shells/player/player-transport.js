@@ -255,6 +255,21 @@ export function createPlayerTransportPanel({
       panel.hidden = hidden;
       panel.innerHTML = createPanelHtml({ title, closeable });
 
+      // Player UI 内部の操作が背後の Scene 選択 / TransformControls に流れないようにする
+      const stopPanelEvent = (event) => event.stopPropagation();
+      [
+        'pointerdown',
+        'pointermove',
+        'pointerup',
+        'click',
+        'dblclick',
+        'touchstart',
+        'touchmove',
+        'wheel',
+      ].forEach((type) => {
+        disposers.push(addListener(panel, type, stopPanelEvent, { passive: false }));
+      });
+
       const seekEl = panel.querySelector('[data-player-seek]');
       disposers.push(
         addListener(seekEl, 'pointerdown', () => { isSeeking = true; }),
