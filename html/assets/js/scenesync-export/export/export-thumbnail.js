@@ -97,7 +97,15 @@ export function wrapCanvasText(ctx, text, maxWidth, maxLines = 3) {
     if (lines.length >= maxLines) break;
     const current = lines.pop() || '';
     const next = current ? `${current} ${word}` : word;
-    if (!current || ctx.measureText(next).width <= maxWidth) {
+    if (!current) {
+      if (ctx.measureText(word).width <= maxWidth) {
+        lines.push(word);
+      } else {
+        pushBrokenWord(word);
+      }
+      continue;
+    }
+    if (ctx.measureText(next).width <= maxWidth) {
       lines.push(next);
       continue;
     }

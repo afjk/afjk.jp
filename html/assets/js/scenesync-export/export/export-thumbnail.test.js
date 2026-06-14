@@ -105,3 +105,16 @@ test('wraps long title text to a bounded number of lines', () => {
   assert(lines.every((line) => line.length > 0));
   assert(lines[2].endsWith('…'));
 });
+
+test('wraps long unspaced title text', () => {
+  const lines = wrapCanvasText(
+    measureTextByChars(10),
+    'これはとても長いSceneSyncの日本語タイトルです',
+    120,
+    3,
+  );
+
+  assert(lines.length <= 3);
+  assert(lines.every((line) => line.length > 0));
+  assert(lines.some((line) => line.endsWith('…')) || lines.length > 1);
+});
