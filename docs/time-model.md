@@ -25,6 +25,13 @@ SourceNow = LocalNow | RoomNow
 ObjectAge = ActiveTime - ObjectEpoch
 ```
 
+Each object keeps two epoch baselines:
+
+- `clock.epochTime` for Local Preview.
+- `clock.sharedEpochTime` for Shared Playback and Room Time.
+
+Local Preview may rebase `epochTime` independently on each client. Shared Playback and Room Time must use the shared epoch baseline distributed through scene state, scene deltas, and scene-clock baseline events.
+
 `ObjectAge = 0` when an object is placed, edited, reloaded, has a component added or replaced, or is explicitly reset/rebased.
 
 ## Clock Mode
@@ -48,7 +55,7 @@ Clients must not chase the controller's local clock every frame.
 
 Editor Shell defaults to `local-preview`. It synchronizes object creation, deletion, transforms, hierarchy, assets, component settings, Loomlet attachment, physics settings, and animation settings. It does not synchronize play, pause, seek, current frames, ObjectAge progress, Loomlet runtime state, physics velocity, or intermediate simulation state.
 
-Playback / Viewer Shell defaults to `shared-playback`. A controller changes play, pause, seek, reset, and rate; followers use `RoomNow + sharedOffset`.
+Playback / Viewer Shell defaults to `shared-playback`. A controller changes play, pause, seek, reset, and rate; followers use `RoomNow * rate + sharedOffset`.
 
 Room Time Shell defaults to `room-time`.
 
@@ -56,7 +63,7 @@ Game Shell should use game-owned shared simulation time and should not expose fr
 
 ## Reloads
 
-Reload is regeneration, not resume. Restored objects receive a fresh `clock.epochTime = activeClock.now()`. Physics runtime velocity and angular velocity are discarded, and the restored transform becomes the new initial transform.
+Reload is regeneration, not resume. Restored objects receive fresh local and shared epochs for the current active state. Physics runtime velocity and angular velocity are discarded, and the restored transform becomes the new initial transform.
 
 ## XR
 

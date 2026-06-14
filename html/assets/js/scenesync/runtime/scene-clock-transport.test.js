@@ -68,6 +68,14 @@ test('object age is active time minus epoch and clamps at zero', () => {
   assert.equal(getObjectAge(2, { epochTime: 4 }), 0);
 });
 
+test('shared object age uses shared epoch in shared modes', () => {
+  const clock = { epochTime: 90, sharedEpochTime: 4 };
+
+  assert.equal(getObjectAge(10, clock, { mode: CLOCK_MODES.LOCAL_PREVIEW }), 0);
+  assert.equal(getObjectAge(10, clock, { mode: CLOCK_MODES.SHARED_PLAYBACK }), 6);
+  assert.equal(getObjectAge(10, clock, { mode: CLOCK_MODES.ROOM_TIME }), 6);
+});
+
 test('deactivate scene clock args preserve existing numeric now calls', () => {
   const result = normalizeSceneClockDeactivateArgs(1234, undefined, () => 9999);
 

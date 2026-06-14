@@ -44,7 +44,7 @@ Shared Playback
 Following Akihiro
 ```
 
-Followers cannot play, pause, seek, reset, or change rate until they take control. Controller transfer adopts the currently displayed SharedTime and publishes the next shared operation against `RoomNow + sharedOffset`.
+Followers cannot play, pause, seek, reset, or change rate until they take control. Controller transfer adopts the currently displayed SharedTime and publishes the next shared operation against `RoomNow * rate + sharedOffset`.
 
 ## Room Time
 

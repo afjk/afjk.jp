@@ -33,6 +33,19 @@ function hasFiniteNumberArray(value, size) {
     && value.every(item => typeof item === 'number' && Number.isFinite(item));
 }
 
+function validateObjectClock(clock, path = 'clock') {
+  if (clock === undefined) return { ok: true };
+  if (!clock || typeof clock !== 'object' || Array.isArray(clock)) {
+    return { ok: false, reason: `${path} must be an object` };
+  }
+  for (const key of ['epochTime', 'sharedEpochTime', 'sharedEpoch']) {
+    if (clock[key] !== undefined && (typeof clock[key] !== 'number' || !Number.isFinite(clock[key]))) {
+      return { ok: false, reason: `${path}.${key} must be a finite number` };
+    }
+  }
+  return { ok: true };
+}
+
 // AudioSource component map（audioSources）のバリデーション。
 // value が null のキーは「その AudioSource を削除する」patch を意味する。
 // 完全な型の正規化は html/assets/js/scenesync/audio/audio-source.js が担当する。
@@ -110,6 +123,11 @@ export function validateSceneSyncPayload(payload, options = {}) {
     return { ok: false, reason: 'scale must be finite [x,y,z]' };
   }
 
+  const clockValidation = validateObjectClock(payload.clock, 'clock');
+  if (!clockValidation.ok) {
+    return clockValidation;
+  }
+
   if (payload.kind === 'scene-env' && !ENV_IDS.has(payload.envId)) {
     return { ok: false, reason: 'envId is invalid' };
   }
@@ -140,6 +158,20 @@ export function validateSceneSyncPayload(payload, options = {}) {
       }
       if (payload.controller.nickname !== undefined && !isReasonableString(payload.controller.nickname, maxStringLength)) {
         return { ok: false, reason: 'scene-clock.controller.nickname must be a reasonable string' };
+      }
+    }
+    if (payload.objectClocks !== undefined) {
+      if (!payload.objectClocks || typeof payload.objectClocks !== 'object' || Array.isArray(payload.objectClocks)) {
+        return { ok: false, reason: 'scene-clock.objectClocks must be an object map' };
+      }
+      for (const [objectId, clock] of Object.entries(payload.objectClocks)) {
+        if (!isReasonableString(objectId, maxStringLength)) {
+          return { ok: false, reason: 'scene-clock.objectClocks keys must be reasonable strings' };
+        }
+        const objectClockValidation = validateObjectClock(clock, `scene-clock.objectClocks.${objectId}`);
+        if (!objectClockValidation.ok) {
+          return objectClockValidation;
+        }
       }
     }
   }

@@ -1609,7 +1609,8 @@ const glbAnimationMixers = new Map();
 
 // ── Runtime Time Model / ObjectAge ───────────────────────
 // Runtime code evaluates ObjectAge, not raw host or room time.
-// ObjectAge = ActiveTime - object.userData.clock.epochTime.
+// Local Preview uses object.userData.clock.epochTime.
+// Shared Playback and Room Time use object.userData.clock.sharedEpochTime.
 
 function ensureObjectRuntime(obj) {
   if (!obj) return null;
@@ -1647,14 +1648,41 @@ function getActiveClockNow(now = performance.now()) {
   return getActiveClockTime(sceneClockState, getActiveClockSources(now));
 }
 
+function getSharedEpochTimeForCurrentState(now = performance.now()) {
+  return sceneClockState.mode === CLOCK_MODES.LOCAL_PREVIEW
+    ? getRoomNowSeconds()
+    : getSceneClockTime(now);
+}
+
+function readSharedEpochTime(clockLike) {
+  const sharedEpochTime = Number(clockLike?.sharedEpochTime ?? clockLike?.sharedEpoch);
+  return Number.isFinite(sharedEpochTime) ? sharedEpochTime : null;
+}
+
 function ensureObjectClock(obj, now = performance.now()) {
   if (!obj) return null;
   const activeTime = getActiveClockNow(now);
   const current = obj.userData?.clock;
+  const existingSharedEpochTime = readSharedEpochTime(current);
   obj.userData.clock = {
     epochTime: Number.isFinite(current?.epochTime) ? current.epochTime : activeTime,
+    sharedEpochTime: existingSharedEpochTime ?? getSharedEpochTimeForCurrentState(now),
   };
   return obj.userData.clock;
+}
+
+function getObjectAgeMode(clockState = null) {
+  return normalizeClockMode(clockState?.mode || sceneClockState.mode, sceneClockState.mode);
+}
+
+function serializeObjectClockForSceneSync(obj, now = performance.now()) {
+  const clock = ensureObjectClock(obj, now);
+  if (!clock) return null;
+  return {
+    sharedEpochTime: Number.isFinite(clock.sharedEpochTime)
+      ? clock.sharedEpochTime
+      : getSharedEpochTimeForCurrentState(now),
+  };
 }
 
 function resetObjectPhysicsMotion(obj) {
@@ -1677,6 +1705,7 @@ function resetObjectPhysicsMotion(obj) {
 function rebaseObjectClock(obj, {
   now = performance.now(),
   resetPhysicsMotion = false,
+  sharedEpochTime = null,
   reason = 'object-rebased',
 } = {}) {
   if (!obj) return null;
@@ -1688,6 +1717,9 @@ function rebaseObjectClock(obj, {
 
   const clock = {
     epochTime: getActiveClockNow(now),
+    sharedEpochTime: Number.isFinite(sharedEpochTime)
+      ? sharedEpochTime
+      : getSharedEpochTimeForCurrentState(now),
   };
   obj.userData.clock = clock;
 
@@ -1733,7 +1765,9 @@ function getObjectRuntimeTime(objectId, now = performance.now(), clockState = nu
   const activeTime = Number.isFinite(clockState?.t)
     ? clockState.t
     : getActiveClockNow(now);
-  const objectAge = getObjectAgeFromClock(activeTime, objectClock);
+  const objectAge = getObjectAgeFromClock(activeTime, objectClock, {
+    mode: getObjectAgeMode(clockState),
+  });
   const speed = Number.isFinite(runtime.speed) ? runtime.speed : 1;
   return Math.max(0, objectAge * speed);
 }
@@ -1745,23 +1779,13 @@ function getObjectAge(objectId, now = performance.now(), clockState = null) {
   const activeTime = Number.isFinite(clockState?.t)
     ? clockState.t
     : getActiveClockNow(now);
-  return getObjectAgeFromClock(activeTime, clock);
+  return getObjectAgeFromClock(activeTime, clock, {
+    mode: getObjectAgeMode(clockState),
+  });
 }
 
-// The host owns the clock source used for shared runtime behavior.
-// Desired deterministic model when the host supplies a room clock:
-//
-// selected:
-//   t = 0
-//
-// unselected:
-//   t = ((hostNow - runtime.startHostTime) / 1000) * speed
-//
-// On deselect:
-//   runtime.startHostTime = hostNow
-//
-// This should make GLB animation and Loomlet object graphs deterministic
-// for late joiners and multi-client synchronization.
+// Runtime uses ObjectAge derived from ActiveClock. Editor Shell defaults to
+// local-preview; Shared Playback and Room Time use shared object epochs.
 
 function resetObjectRuntimeOrigin(objectId, now = performance.now()) {
   const obj = managedObjects.get(objectId);
@@ -4828,15 +4852,28 @@ function getLocalClockControllerInfo() {
   };
 }
 
-function preserveObjectAgesAcrossActiveTimeChange(previousActiveTime, nextActiveTime) {
+function preserveObjectAgesAcrossActiveTimeChange(previousActiveTime, nextActiveTime, {
+  previousMode = sceneClockState.mode,
+  nextMode = sceneClockState.mode,
+  now = performance.now(),
+} = {}) {
   if (!Number.isFinite(previousActiveTime) || !Number.isFinite(nextActiveTime)) return;
+  const previousClockMode = normalizeClockMode(previousMode, sceneClockState.mode);
+  const nextClockMode = normalizeClockMode(nextMode, sceneClockState.mode);
   for (const obj of managedObjects.values()) {
-    const clock = ensureObjectClock(obj);
-    const age = getObjectAgeFromClock(previousActiveTime, clock);
+    const clock = ensureObjectClock(obj, now);
+    const age = getObjectAgeFromClock(previousActiveTime, clock, {
+      mode: previousClockMode,
+    });
+    const nextEpochTime = nextActiveTime - age;
     obj.userData.clock = {
-      epochTime: nextActiveTime - age,
+      ...clock,
+      ...(nextClockMode === CLOCK_MODES.LOCAL_PREVIEW
+        ? { epochTime: nextEpochTime }
+        : { sharedEpochTime: nextEpochTime }),
     };
   }
+  markScenePhysicsRuntimeDirty();
 }
 
 function updateClockLegacyFields(now = performance.now()) {
@@ -4950,10 +4987,112 @@ function canControlSceneClock() {
   return sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf();
 }
 
+function getSharedObjectClockPayload(now = performance.now()) {
+  const objectClocks = {};
+  for (const [objectId, obj] of managedObjects.entries()) {
+    const clock = serializeObjectClockForSceneSync(obj, now);
+    if (clock) objectClocks[objectId] = clock;
+  }
+  return objectClocks;
+}
+
+function applySharedObjectClockBaseline(objectId, clockLike, {
+  now = performance.now(),
+  resetLocalEpoch = false,
+  resetPhysicsMotion = false,
+} = {}) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return false;
+  const sharedEpochTime = readSharedEpochTime(clockLike);
+  if (!Number.isFinite(sharedEpochTime)) return false;
+
+  const clock = ensureObjectClock(obj, now);
+  obj.userData.clock = {
+    ...clock,
+    ...(resetLocalEpoch ? { epochTime: getActiveClockNow(now) } : {}),
+    sharedEpochTime,
+  };
+
+  if (resetPhysicsMotion) {
+    resetObjectPhysicsMotion(obj);
+  }
+  return true;
+}
+
+function applySharedObjectClockBaselines(objectClocks, {
+  now = performance.now(),
+  resetLocalEpoch = false,
+  resetPhysicsMotion = false,
+} = {}) {
+  if (!objectClocks || typeof objectClocks !== 'object') return false;
+  let applied = false;
+  for (const [objectId, clockLike] of Object.entries(objectClocks)) {
+    applied = applySharedObjectClockBaseline(objectId, clockLike, {
+      now,
+      resetLocalEpoch,
+      resetPhysicsMotion,
+    }) || applied;
+  }
+  if (applied) {
+    markScenePhysicsRuntimeDirty();
+  }
+  return applied;
+}
+
+function resetAllObjectClocksForSceneClock(now = performance.now(), {
+  objectClocks = null,
+  reason = 'player-reset',
+  resetPhysicsMotion = true,
+} = {}) {
+  for (const [objectId, obj] of managedObjects.entries()) {
+    const baseline = objectClocks && Object.prototype.hasOwnProperty.call(objectClocks, objectId)
+      ? objectClocks[objectId]
+      : null;
+    const appliedBaseline = baseline
+      ? applySharedObjectClockBaseline(objectId, baseline, {
+          now,
+          resetLocalEpoch: true,
+          resetPhysicsMotion,
+        })
+      : false;
+    if (appliedBaseline) continue;
+    rebaseObjectClock(obj, {
+      now,
+      resetPhysicsMotion,
+      reason,
+    });
+  }
+
+  scenePhysicsRuntime.resetToInitialPose();
+  markScenePhysicsRuntimeDirty();
+}
+
+function publishSharedObjectClockBaselines(reason = 'baseline') {
+  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (!isSceneClockControllerSelf()) return;
+
+  const now = performance.now();
+  const activeTime = getSceneClockTime(now);
+  preserveObjectAgesAcrossActiveTimeChange(activeTime, activeTime, {
+    previousMode: CLOCK_MODES.SHARED_PLAYBACK,
+    nextMode: CLOCK_MODES.SHARED_PLAYBACK,
+    now,
+  });
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent(reason, {
+    objectClocks: getSharedObjectClockPayload(now),
+  });
+}
+
 function broadcastSceneClockEvent(action, extra = {}) {
   if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
   if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
   sceneClockState.sharedRevision += 1;
+  const shouldIncludeObjectClocks =
+    extra.objectClocks ||
+    action === 'mode' ||
+    action === 'reset' ||
+    action === 'controller';
   broadcast({
     kind: 'scene-clock',
     action,
@@ -4967,6 +5106,9 @@ function broadcastSceneClockEvent(action, extra = {}) {
     revision: sceneClockState.sharedRevision,
     roomNow: getRoomNowSeconds(),
     sentAt: Date.now(),
+    ...(shouldIncludeObjectClocks ? {
+      objectClocks: extra.objectClocks || getSharedObjectClockPayload(),
+    } : {}),
     ...extra,
   });
 }
@@ -4994,6 +5136,12 @@ function applyRemoteSceneClock(payload, from = null) {
   if (!payload || typeof payload !== 'object') return;
   const nextMode = normalizeClockMode(payload.mode, CLOCK_MODES.SHARED_PLAYBACK);
   if (nextMode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+
+  const revision = Number(payload.revision);
+  if (Number.isFinite(revision) && revision <= sceneClockState.sharedRevision) {
+    return;
+  }
 
   sceneClockState.mode = CLOCK_MODES.SHARED_PLAYBACK;
   sceneClockState.source = 'room';
@@ -5007,16 +5155,30 @@ function applyRemoteSceneClock(payload, from = null) {
         id: from.id,
         nickname: from.nickname || 'Controller',
       } : null);
-  sceneClockState.sharedRevision = Math.max(sceneClockState.sharedRevision, Number(payload.revision) || 0);
+  if (Number.isFinite(revision)) {
+    sceneClockState.sharedRevision = revision;
+  }
   sceneClockState.sharedUpdatedAt = Date.now();
   sceneClockState.transportActive = true;
   sceneClockState.active = true;
   updateClockLegacyFields();
+
+  if (payload.action === 'reset') {
+    resetAllObjectClocksForSceneClock(performance.now(), {
+      objectClocks: payload.objectClocks,
+      reason: 'remote-player-reset',
+      resetPhysicsMotion: true,
+    });
+  } else if (payload.objectClocks) {
+    applySharedObjectClockBaselines(payload.objectClocks);
+  }
+
   notifySceneSyncShellStateChanged(`scene-clock-remote-${payload.action || 'update'}`);
 }
 
 function setSceneClockMode(mode, now = performance.now(), options = {}) {
   const nextMode = normalizeClockMode(mode, sceneClockState.mode);
+  const previousMode = sceneClockState.mode;
   const previousActiveTime = getSceneClockTime(now);
   const sources = getSceneClockSources(now);
 
@@ -5041,9 +5203,11 @@ function setSceneClockMode(mode, now = performance.now(), options = {}) {
   }
 
   const nextActiveTime = getSceneClockTime(now);
-  if (nextMode === CLOCK_MODES.ROOM_TIME) {
-    preserveObjectAgesAcrossActiveTimeChange(previousActiveTime, nextActiveTime);
-  }
+  preserveObjectAgesAcrossActiveTimeChange(previousActiveTime, nextActiveTime, {
+    previousMode,
+    nextMode,
+    now,
+  });
 
   sceneClockState.transportActive = true;
   sceneClockState.active = true;
@@ -5072,22 +5236,28 @@ function resumeSceneClock(now = performance.now()) {
   notifySceneSyncShellStateChanged('scene-clock-playing');
 }
 
-function seekSceneClock(t, now = performance.now()) {
+function seekSceneClock(t, now = performance.now(), options = {}) {
   if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
   if (!canControlSceneClock()) return;
   seekClockState(sceneClockState, Math.max(0, Number(t) || 0), getSceneClockSources(now));
   updateClockLegacyFields(now);
-  broadcastSceneClockEvent('seek');
+  if (options.broadcast !== false) {
+    broadcastSceneClockEvent('seek');
+  }
   notifySceneSyncShellStateChanged('scene-clock-seek');
 }
 
 function resetSceneClock(now = performance.now()) {
-  seekSceneClock(0, now);
-  for (const obj of managedObjects.values()) {
-    rebaseObjectClock(obj, { now, resetPhysicsMotion: true, reason: 'player-reset' });
-  }
-  scenePhysicsRuntime.resetToInitialPose();
-  broadcastSceneClockEvent('reset');
+  if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
+  if (!canControlSceneClock()) return;
+  seekSceneClock(0, now, { broadcast: false });
+  resetAllObjectClocksForSceneClock(now, {
+    reason: 'player-reset',
+    resetPhysicsMotion: true,
+  });
+  broadcastSceneClockEvent('reset', {
+    objectClocks: getSharedObjectClockPayload(now),
+  });
 }
 
 function followHostClock(now = performance.now()) {
@@ -5853,6 +6023,10 @@ async function respondToSceneRequest(from) {
       rotation: obj.quaternion.toArray(),
       scale: obj.scale.toArray(),
     };
+    const clock = serializeObjectClockForSceneSync(obj);
+    if (clock) {
+      entry.clock = clock;
+    }
 
     const bounds = computeWorldBoundsForExternalUse(obj);
     if (bounds) {
@@ -6036,6 +6210,7 @@ function handleHandoff(data) {
         }
       }
       notifySceneStateChanged('scene-state-handoff');
+      publishSharedObjectClockBaselines('scene-state-baseline');
       break;
     }
     case 'scene-request': {
@@ -6105,6 +6280,7 @@ function handleHandoff(data) {
             position: Array.isArray(payload.position) ? payload.position : obj.position.toArray(),
             rotation: Array.isArray(payload.rotation) ? payload.rotation : obj.quaternion.toArray(),
             scale: Array.isArray(payload.scale) ? payload.scale : obj.scale.toArray(),
+            clock: payload.clock,
             asset: payload.asset,
             metadata: hasPayloadMetadata
               ? cloneJsonSafe(payload.metadata)
@@ -6142,6 +6318,7 @@ function handleHandoff(data) {
           }
 
           notifySceneStateChanged('scene-delta-content-replace');
+          publishSharedObjectClockBaselines('scene-delta-baseline');
           break;
         }
         applyAssetDelta(obj, payload.asset);
@@ -6213,6 +6390,7 @@ function handleHandoff(data) {
       if (shouldRebaseObjectClock) {
         rebaseObjectClock(obj, {
           resetPhysicsMotion: shouldResetPhysicsMotion,
+          sharedEpochTime: readSharedEpochTime(payload.clock),
           reason: 'scene-delta',
         });
       }
@@ -6232,6 +6410,7 @@ function handleHandoff(data) {
         presenceState.historyManager.push(historyEntry);
       }
       notifySceneStateChanged('scene-delta-handoff');
+      publishSharedObjectClockBaselines('scene-delta-baseline');
       break;
     }
     case 'scene-add': {
@@ -6250,6 +6429,7 @@ function handleHandoff(data) {
         presenceState.historyManager.push(historyEntry);
       }
       notifySceneStateChanged('scene-add-handoff');
+      publishSharedObjectClockBaselines('scene-add-baseline');
       break;
     }
     case 'scene-remove': {
@@ -6289,6 +6469,7 @@ function handleHandoff(data) {
         reason: 'scene-physics-handoff',
       });
       notifySceneStateChanged('scene-physics-handoff');
+      publishSharedObjectClockBaselines('scene-physics-baseline');
       break;
     }
     case 'scene-mesh': {
@@ -6427,6 +6608,7 @@ function handleHandoff(data) {
         handleHandoff({ ...data, payload: child, __batchIndex: index });
       }
       notifySceneStateChanged('scene-batch-handoff');
+      publishSharedObjectClockBaselines('scene-batch-baseline');
       break;
     }
     case 'ai-command': {
@@ -7048,6 +7230,10 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
     metadata: obj.userData?.metadata || null,
     meshPath: obj.userData?.meshPath || obj.userData?.asset?.meshPath || null,
   };
+  const clock = serializeObjectClockForSceneSync(obj);
+  if (clock) {
+    result.clock = clock;
+  }
 
   const bounds = computeWorldBoundsForExternalUse(obj);
   if (bounds) {
@@ -7593,6 +7779,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
   rebaseObjectClock(existing, {
     resetPhysicsMotion: info.resetPhysicsMotion === true ||
       Boolean(info.position || info.rotation || info.scale),
+    sharedEpochTime: readSharedEpochTime(info.clock),
     reason: 'managed-object-updated',
   });
   notifySceneStateChanged('managed-object-updated');
@@ -8648,6 +8835,7 @@ function replaceManagedObject(objectId, nextObject, info) {
 
   rebaseObjectClock(nextObject, {
     resetPhysicsMotion: info?.resetPhysicsMotion === true,
+    sharedEpochTime: readSharedEpochTime(info?.clock),
     reason: 'managed-object-replaced',
   });
   markScenePhysicsRuntimeDirty();
@@ -9075,10 +9263,53 @@ function applyOperationToScene(operation) {
 
 // ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
 
+function attachSharedClockToSceneMutationPayload(payload, now = performance.now()) {
+  if (!payload || typeof payload !== 'object') return payload;
+
+  if (payload.kind === 'scene-batch') {
+    if (Array.isArray(payload.actions)) {
+      payload.actions = payload.actions.map((action) =>
+        attachSharedClockToSceneMutationPayload(action, now));
+    }
+    if (Array.isArray(payload.ops)) {
+      payload.ops = payload.ops.map((op) =>
+        attachSharedClockToSceneMutationPayload(op, now));
+    }
+    return payload;
+  }
+
+  if (payload.kind !== 'scene-add' && payload.kind !== 'scene-delta') return payload;
+  if (typeof payload.objectId !== 'string' || !payload.objectId) return payload;
+
+  const existingClock = readSharedEpochTime(payload.clock);
+  if (Number.isFinite(existingClock)) {
+    payload.clock = {
+      ...(payload.clock || {}),
+      sharedEpochTime: existingClock,
+    };
+    return payload;
+  }
+
+  const obj = managedObjects.get(payload.objectId);
+  const clock = obj
+    ? serializeObjectClockForSceneSync(obj, now)
+    : { sharedEpochTime: getSharedEpochTimeForCurrentState(now) };
+  if (clock) {
+    payload.clock = {
+      ...(payload.clock || {}),
+      ...clock,
+    };
+  }
+  return payload;
+}
+
 function broadcast(payload) {
   const ws = presenceState.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: 'broadcast', payload }));
+  ws.send(JSON.stringify({
+    type: 'broadcast',
+    payload: attachSharedClockToSceneMutationPayload(payload),
+  }));
 }
 
 function sendHandoff({ targetId, payload }) {

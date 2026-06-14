@@ -33,6 +33,8 @@ ObjectAge starts at `0` when:
 - audio or physics components are added or replaced
 - the user explicitly resets or rebases runtime time
 
+Editor Shell rebases each client's local `clock.epochTime` independently. Shared Playback and Room Time use `clock.sharedEpochTime`, so scene-state, scene-delta, and scene-clock reset/mode events must carry shared epoch baselines for synchronized ObjectAge.
+
 ## Physics Rebase / Reset
 
 When transform editing completes, dynamic physics is rebased:
@@ -42,6 +44,7 @@ velocity = [0, 0, 0]
 angularVelocity = [0, 0, 0]
 initialTransform = current transform
 clock.epochTime = activeClock.now()
+clock.sharedEpochTime = shared active baseline
 ```
 
 Reloads also discard physics velocity and angular velocity. Physics uses the restored transform as its initial transform and restarts from ObjectAge `0`.

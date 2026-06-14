@@ -128,6 +128,14 @@ describe('Scene Sync guard helpers', () => {
       paused: false,
       rate: 1,
       controller: { id: 'peer-1', nickname: 'Akihiro' },
+      objectClocks: {
+        'obj-1': { sharedEpochTime: 12.5 },
+      },
+    }).ok, true);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'obj-1',
+      clock: { sharedEpochTime: 12.5 },
     }).ok, true);
     assert.equal(validateSceneSyncPayload({ kind: 'ai-link-established', linkId: 'l1' }).ok, true);
     assert.equal(validateSceneSyncPayload({ kind: 'ai-link-revoked', linkId: 'l1' }).ok, true);
@@ -140,6 +148,21 @@ describe('Scene Sync guard helpers', () => {
       offset: Infinity,
     });
     assert.equal(result.ok, false);
+  });
+
+  it('rejects invalid shared object clock numbers', () => {
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-delta',
+      objectId: 'o1',
+      clock: { sharedEpochTime: Infinity },
+    }).ok, false);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-clock',
+      mode: 'shared-playback',
+      objectClocks: {
+        o1: { sharedEpochTime: NaN },
+      },
+    }).ok, false);
   });
 
   it('rejects scene-batch with NaN in nested op', () => {

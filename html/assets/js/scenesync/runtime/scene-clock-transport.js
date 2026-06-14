@@ -124,8 +124,15 @@ export function setClockMode(state, mode, sources = {}, {
   return true;
 }
 
-export function getObjectAge(activeTime, objectClockState) {
-  const epochTime = Number(objectClockState?.epochTime);
+export function getObjectAge(activeTime, objectClockState, {
+  mode = CLOCK_MODES.LOCAL_PREVIEW,
+} = {}) {
+  const normalizedMode = normalizeClockMode(mode);
+  const epochTime = normalizedMode === CLOCK_MODES.LOCAL_PREVIEW
+    ? Number(objectClockState?.epochTime)
+    : (Number.isFinite(Number(objectClockState?.sharedEpochTime))
+      ? Number(objectClockState.sharedEpochTime)
+      : Number(objectClockState?.epochTime));
   if (!Number.isFinite(activeTime) || !Number.isFinite(epochTime)) return 0;
   return Math.max(0, activeTime - epochTime);
 }
