@@ -119,8 +119,27 @@ describe('Scene Sync guard helpers', () => {
     assert.equal(validateSceneSyncPayload({ kind: 'scene-avatar', position: [0, 1, 2] }).ok, true);
     assert.equal(validateSceneSyncPayload({ kind: 'scene-lock', objectId: 'obj-1' }).ok, true);
     assert.equal(validateSceneSyncPayload({ kind: 'scene-unlock', objectId: 'obj-1' }).ok, true);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-clock',
+      action: 'seek',
+      mode: 'shared-playback',
+      source: 'room',
+      offset: -100,
+      paused: false,
+      rate: 1,
+      controller: { id: 'peer-1', nickname: 'Akihiro' },
+    }).ok, true);
     assert.equal(validateSceneSyncPayload({ kind: 'ai-link-established', linkId: 'l1' }).ok, true);
     assert.equal(validateSceneSyncPayload({ kind: 'ai-link-revoked', linkId: 'l1' }).ok, true);
+  });
+
+  it('rejects invalid scene-clock numbers', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-clock',
+      mode: 'shared-playback',
+      offset: Infinity,
+    });
+    assert.equal(result.ok, false);
   });
 
   it('rejects scene-batch with NaN in nested op', () => {

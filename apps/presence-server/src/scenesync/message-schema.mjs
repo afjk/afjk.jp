@@ -7,6 +7,7 @@ const KNOWN_KINDS = new Set([
   'scene-bgm',
   'scene-state',
   'scene-request',
+  'scene-clock',
   'scene-avatar',
   'scene-lock',
   'scene-unlock',
@@ -111,6 +112,36 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-env' && !ENV_IDS.has(payload.envId)) {
     return { ok: false, reason: 'envId is invalid' };
+  }
+
+  if (payload.kind === 'scene-clock') {
+    const allowedModes = new Set(['local-preview', 'shared-playback', 'room-time']);
+    const allowedSources = new Set(['local', 'room']);
+    if (payload.mode !== undefined && !allowedModes.has(payload.mode)) {
+      return { ok: false, reason: 'scene-clock.mode is invalid' };
+    }
+    if (payload.source !== undefined && !allowedSources.has(payload.source)) {
+      return { ok: false, reason: 'scene-clock.source is invalid' };
+    }
+    for (const key of ['offset', 'pausedTime', 'rate', 'roomNow', 'sentAt', 'revision']) {
+      if (payload[key] !== undefined && (typeof payload[key] !== 'number' || !Number.isFinite(payload[key]))) {
+        return { ok: false, reason: `scene-clock.${key} must be a finite number` };
+      }
+    }
+    if (payload.paused !== undefined && typeof payload.paused !== 'boolean') {
+      return { ok: false, reason: 'scene-clock.paused must be a boolean' };
+    }
+    if (payload.controller !== undefined && payload.controller !== null) {
+      if (typeof payload.controller !== 'object' || Array.isArray(payload.controller)) {
+        return { ok: false, reason: 'scene-clock.controller must be an object or null' };
+      }
+      if (payload.controller.id !== undefined && !isReasonableString(payload.controller.id, maxStringLength)) {
+        return { ok: false, reason: 'scene-clock.controller.id must be a reasonable string' };
+      }
+      if (payload.controller.nickname !== undefined && !isReasonableString(payload.controller.nickname, maxStringLength)) {
+        return { ok: false, reason: 'scene-clock.controller.nickname must be a reasonable string' };
+      }
+    }
   }
 
   // audioSources は scene-add / scene-delta などでオブジェクトに AudioSource を付与する。

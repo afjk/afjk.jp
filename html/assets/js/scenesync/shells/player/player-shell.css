@@ -80,10 +80,16 @@
   border: 1px solid rgba(99, 102, 241, 0.22);
 }
 
-.player-badge-mode[data-mode="host-follow"] {
+.player-badge-mode[data-mode="shared-playback"] {
   background: rgba(16, 185, 129, 0.15);
   color: rgba(110, 231, 183, 0.9);
   border-color: rgba(16, 185, 129, 0.22);
+}
+
+.player-badge-mode[data-mode="room-time"] {
+  background: rgba(14, 165, 233, 0.15);
+  color: rgba(125, 211, 252, 0.9);
+  border-color: rgba(14, 165, 233, 0.24);
 }
 
 .player-badge-status {
@@ -117,6 +123,80 @@
   color: #fff;
 }
 
+/* ── Clock mode ─────────────────────────────────────── */
+.player-mode-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.player-mode-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.player-mode-detail {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(203, 213, 225, 0.72);
+}
+
+.player-controller-btn,
+.player-mode-btn {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 232, 240, 0.82);
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+
+.player-controller-btn {
+  flex: none;
+  min-width: 76px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.player-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.player-mode-btn {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.player-mode-btn[data-active="true"] {
+  background: rgba(99, 102, 241, 0.24);
+  color: rgba(238, 242, 255, 0.96);
+  border-color: rgba(129, 140, 248, 0.46);
+}
+
+.player-controller-btn:hover,
+.player-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-controller-btn:disabled,
+.player-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ── Time display ────────────────────────────────────── */
 .player-time-display {
   text-align: center;
@@ -130,6 +210,15 @@
   letter-spacing: 0.03em;
   color: #f1f5f9;
   font-variant-numeric: tabular-nums;
+}
+
+.player-object-age {
+  display: block;
+  margin-top: 8px;
+  min-height: 14px;
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 /* ── Seek bar ────────────────────────────────────────── */
@@ -207,6 +296,13 @@
 
 .player-btn:active {
   transform: scale(0.91);
+}
+
+.player-btn:disabled,
+.player-rate-btn:disabled,
+.player-seek:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .player-btn-stop {
@@ -305,5 +401,13 @@
 
   .player-rate-row {
     flex-wrap: wrap;
+  }
+
+  .player-mode-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .player-mode-summary {
+    align-items: flex-start;
   }
 }

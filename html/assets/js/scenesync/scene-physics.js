@@ -124,6 +124,12 @@ export function normalizeObjectPhysics(input = null) {
     physics.velocity = [0, 0, 0];
   }
 
+  if (Array.isArray(input.angularVelocity)) {
+    physics.angularVelocity = readVec3(input.angularVelocity);
+  } else if (bodyType === 'dynamic') {
+    physics.angularVelocity = [0, 0, 0];
+  }
+
   if (shape === 'sphere' && Number.isFinite(Number(input.radius))) {
     physics.radius = positiveNumber(input.radius, 0.5);
   }
@@ -227,6 +233,8 @@ export function createScenePhysicsRuntime({
   getScenePhysics,
   getObjectEntries,
   isClockActive = (clockState) => clockState?.transportActive === true,
+  getObjectAge = null,
+  isObjectPaused = null,
 } = {}) {
   let dirty = true;
   let world = null;
@@ -272,27 +280,46 @@ export function createScenePhysicsRuntime({
     return entryMap.size > 0;
   }
 
-  function applyWorldToObjects() {
+  function applyWorldToObjects(clockState = null) {
     if (!world) return;
     for (const [objectId, entry] of entryMap) {
       const body = world.getBody(objectId);
       if (!body || body.static) continue;
+      if (isObjectPaused?.(objectId, clockState) === true) continue;
       applyBodyPosition(entry.object, body);
     }
   }
 
-  function resetToInitialPose() {
+  function resetToInitialPose(clockState = null) {
     if (!world || !initialSnapshot) return false;
     world.restore(initialSnapshot);
-    applyWorldToObjects();
+    applyWorldToObjects(clockState);
     return true;
   }
 
-  function resetActiveToInitialPose() {
+  function resetActiveToInitialPose(clockState = null) {
     if (!active) return false;
-    const reset = resetToInitialPose();
+    const reset = resetToInitialPose(clockState);
     if (reset) active = false;
     return reset;
+  }
+
+  function getTargetTime(clockState) {
+    if (typeof getObjectAge !== 'function' || entryMap.size === 0) {
+      return Math.max(0, Number(clockState?.t) || 0);
+    }
+
+    const ages = [];
+    for (const objectId of entryMap.keys()) {
+      const age = Number(getObjectAge(objectId, clockState));
+      if (Number.isFinite(age)) ages.push(Math.max(0, age));
+    }
+
+    if (ages.length === 0) {
+      return Math.max(0, Number(clockState?.t) || 0);
+    }
+
+    return Math.min(...ages);
   }
 
   function update(clockState = null) {
@@ -303,7 +330,7 @@ export function createScenePhysicsRuntime({
     }
 
     if (!isClockActive(clockState)) {
-      const reset = resetActiveToInitialPose();
+      const reset = resetActiveToInitialPose(clockState);
       return { active: false, reason: 'clock-inactive', reset };
     }
 
@@ -313,13 +340,13 @@ export function createScenePhysicsRuntime({
       }
     }
 
-    const targetTime = Math.max(0, Number(clockState?.t) || 0);
+    const targetTime = getTargetTime(clockState);
     const targetTick = Math.max(0, Math.floor(targetTime / timestepSeconds));
     if (targetTick < world.tick && initialSnapshot) {
       world.restore(initialSnapshot);
     }
     world.stepTo(targetTick);
-    applyWorldToObjects();
+    applyWorldToObjects(clockState);
     active = true;
     return { active: true, tick: world.tick };
   }
