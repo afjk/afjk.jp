@@ -68,10 +68,10 @@ function validateScenePhysicsPayload(physics) {
     }
 
     if (
-      worldOptions.timestepFp !== undefined
-      && (!Number.isInteger(worldOptions.timestepFp) || worldOptions.timestepFp <= 0)
+      worldOptions.timestep !== undefined
+      && (!isFiniteNumber(worldOptions.timestep) || worldOptions.timestep <= 0)
     ) {
-      return { ok: false, reason: 'physics.worldOptions.timestepFp must be a positive integer' };
+      return { ok: false, reason: 'physics.worldOptions.timestep must be a positive finite number' };
     }
 
     const ground = worldOptions.ground;

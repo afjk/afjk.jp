@@ -1,10 +1,15 @@
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createScenePhysicsRuntime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
 } from './scene-physics.js';
+import { initRapierPhysics } from './physics/index.js';
+
+before(async () => {
+  await initRapierPhysics();
+});
 
 function vector(values) {
   return {

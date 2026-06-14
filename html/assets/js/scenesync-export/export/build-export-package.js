@@ -15,11 +15,10 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync/shells/player/player-actions.js', dest: 'viewer/player-actions.js' },
   { src: '/assets/js/scenesync/shells/player/player-shell.css', dest: 'viewer/player-shell.css' },
   { src: '/assets/js/scenesync/scene-physics.js', dest: 'viewer/scene-physics.js' },
-  { src: '/assets/js/scenesync/physics/fixed.js', dest: 'viewer/physics/fixed.js' },
-  { src: '/assets/js/scenesync/physics/world.js', dest: 'viewer/physics/world.js' },
-  { src: '/assets/js/scenesync/physics/lockstep.js', dest: 'viewer/physics/lockstep.js' },
   { src: '/assets/js/scenesync/physics/index.js', dest: 'viewer/physics/index.js' },
+  { src: '/assets/js/scenesync/physics/rapier-world.js', dest: 'viewer/physics/rapier-world.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
+  { src: '/assets/vendor/rapier/0.19.3/rapier.mjs', dest: 'viewer/rapier/rapier.mjs' },
   // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
   {
     src: '/assets/vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js',
@@ -37,7 +36,8 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
   {
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@dimforge/rapier3d-compat": "./viewer/rapier/rapier.mjs"
     }
   }
   <\/script>

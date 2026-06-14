@@ -4,14 +4,22 @@ on:
   pull_request:
     paths:
       - "html/assets/js/scenesync/physics/**"
+      - "html/assets/js/scenesync/scene-physics.js"
+      - "html/assets/js/scenesync/scene-physics.test.js"
+      - "html/assets/vendor/rapier/**"
       - "package.json"
+      - "package-lock.json"
       - ".github/workflows/ci-scene-sync-physics.yml"
   push:
     branches:
       - main
     paths:
       - "html/assets/js/scenesync/physics/**"
+      - "html/assets/js/scenesync/scene-physics.js"
+      - "html/assets/js/scenesync/scene-physics.test.js"
+      - "html/assets/vendor/rapier/**"
       - "package.json"
+      - "package-lock.json"
       - ".github/workflows/ci-scene-sync-physics.yml"
 
 permissions:
@@ -31,12 +39,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: Syntax check
         run: |
           node --check html/assets/js/scenesync/physics/index.js
-          node --check html/assets/js/scenesync/physics/fixed.js
-          node --check html/assets/js/scenesync/physics/world.js
-          node --check html/assets/js/scenesync/physics/lockstep.js
+          node --check html/assets/js/scenesync/physics/rapier-world.js
+          node --check html/assets/js/scenesync/scene-physics.js
 
       - name: Run physics tests
         run: npm run test:physics

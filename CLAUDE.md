@@ -73,12 +73,13 @@ curl -s -X POST "http://localhost:8787/api/room/ai-test/broadcast?name=Claude" \
   -d '{"kind":"scene-env","envId":"outdoor_night"}'
 ```
 
-### 決定論的物理エンジン
+### Rapier 物理ランタイム
 
-物理演算をコマンド同期(lockstep + rollback)で共有するためのライブラリ。
+Scene Sync の ObjectAge / Player UI / Shared Playback 方針に沿って Rapier を固定 tick で評価する物理ランタイム。
 
-- 実装: `html/assets/js/scenesync/physics/`（`fixed.js` 固定小数点数学 / `world.js` 物理ワールド / `lockstep.js` コマンド同期）
-- 仕様: `docs/scene-sync-physics.md`（16.16 固定小数点の移植ルール、broadcast メッセージ案を含む）
+- 実装: `html/assets/js/scenesync/physics/rapier-world.js` / `html/assets/js/scenesync/scene-physics.js`
+- vendor: `html/assets/vendor/rapier/0.19.3/rapier.mjs`
+- 仕様: `docs/scene-sync-physics.md`
 - テスト: `npm run test:physics`
 
 ### テスト実行

@@ -101,7 +101,7 @@ test('applies scene physics settings and broadcasts scene-physics', async () => 
     worldOptions: {
       gravity: -9.81,
       ground: { y: 0, restitution: 0.2, friction: 0.5 },
-      timestepFp: 1092,
+      timestep: 1 / 60,
     },
   };
 

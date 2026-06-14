@@ -1,6 +1,3 @@
-// Scene Sync deterministic physics library entry point.
-// See docs/scene-sync-physics.md for the protocol and porting rules.
+// Scene Sync Rapier physics library entry point.
 
-export * from './fixed.js';
-export * from './world.js';
-export * from './lockstep.js';
+export * from './rapier-world.js';

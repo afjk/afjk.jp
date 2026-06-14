@@ -1,4 +1,11 @@
-import { createWorld, DEFAULT_TIMESTEP_FP } from './physics/index.js';
+import {
+  createWorld,
+  DEFAULT_TIMESTEP_SECONDS,
+  getRapierPhysicsInitError,
+  initRapierPhysics,
+  isRapierPhysicsReady,
+  normalizeRapierWorldOptions,
+} from './physics/index.js';
 
 export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
 export const DEFAULT_SCENE_PHYSICS = Object.freeze({
@@ -12,7 +19,7 @@ export const DEFAULT_SCENE_PHYSICS = Object.freeze({
       restitution: 0.2,
       friction: 0.5,
     },
-    timestepFp: DEFAULT_TIMESTEP_FP,
+    timestep: DEFAULT_TIMESTEP_SECONDS,
   },
 });
 
@@ -80,13 +87,12 @@ function normalizeWorldOptions(input = {}) {
   const gravity = Array.isArray(source.gravity)
     ? readVec3(source.gravity, [0, -9.81, 0])
     : finiteNumber(source.gravity, DEFAULT_SCENE_PHYSICS.worldOptions.gravity);
+  const timestep = positiveNumber(source.timestep, DEFAULT_SCENE_PHYSICS.worldOptions.timestep);
 
   return {
     gravity,
     ground: normalizeGround(source.ground),
-    timestepFp: Number.isInteger(source.timestepFp) && source.timestepFp > 0
-      ? source.timestepFp
-      : DEFAULT_TIMESTEP_FP,
+    timestep,
   };
 }
 
@@ -161,6 +167,15 @@ function getScaleArray(object) {
   return readVec3(object?.scale, [1, 1, 1]);
 }
 
+function getRotationArray(object) {
+  if (typeof object?.quaternion?.toArray === 'function') return object.quaternion.toArray();
+  const q = object?.quaternion;
+  if (q && ['x', 'y', 'z', 'w'].every((key) => Number.isFinite(Number(q[key])))) {
+    return [q.x, q.y, q.z, q.w];
+  }
+  return [0, 0, 0, 1];
+}
+
 function inferShape(physics, object) {
   if (physics?.shape === 'sphere') return 'sphere';
   if (physics?.shape === 'box') return 'box';
@@ -177,9 +192,13 @@ export function buildPhysicsBodyDef({ objectId, object, physics }) {
     id: objectId,
     shape,
     position: getPositionArray(object),
+    rotation: getRotationArray(object),
     velocity: normalized.bodyType === 'static'
       ? [0, 0, 0]
       : readVec3(normalized.velocity, [0, 0, 0]),
+    angularVelocity: normalized.bodyType === 'static'
+      ? [0, 0, 0]
+      : readVec3(normalized.angularVelocity, [0, 0, 0]),
     mass: normalized.bodyType === 'static' ? 0 : normalized.mass,
     static: normalized.bodyType === 'static',
     restitution: normalized.restitution,
@@ -205,7 +224,7 @@ export function buildPhysicsBodyDef({ objectId, object, physics }) {
   return body;
 }
 
-function applyBodyPosition(object, body) {
+function applyBodyTransform(object, body) {
   if (!object || !body?.position) return;
   if (typeof object.position?.fromArray === 'function') {
     object.position.fromArray(body.position);
@@ -213,6 +232,16 @@ function applyBodyPosition(object, body) {
     object.position.x = body.position[0];
     object.position.y = body.position[1];
     object.position.z = body.position[2];
+  }
+  if (body.rotation) {
+    if (typeof object.quaternion?.fromArray === 'function') {
+      object.quaternion.fromArray(body.rotation);
+    } else if (object.quaternion) {
+      object.quaternion.x = body.rotation[0];
+      object.quaternion.y = body.rotation[1];
+      object.quaternion.z = body.rotation[2];
+      object.quaternion.w = body.rotation[3];
+    }
   }
   object.updateMatrixWorld?.(true);
 }
@@ -241,14 +270,15 @@ export function createScenePhysicsRuntime({
   let initialSnapshot = null;
   let entryMap = new Map();
   let active = false;
-  let timestepSeconds = DEFAULT_TIMESTEP_FP / 65536;
+  let timestepSeconds = DEFAULT_TIMESTEP_SECONDS;
 
   function clear() {
+    world?.free?.();
     world = null;
     initialSnapshot = null;
     entryMap = new Map();
     active = false;
-    timestepSeconds = DEFAULT_TIMESTEP_FP / 65536;
+    timestepSeconds = DEFAULT_TIMESTEP_SECONDS;
   }
 
   function markDirty() {
@@ -261,11 +291,22 @@ export function createScenePhysicsRuntime({
     if (!scenePhysics.enabled || entries.length === 0) {
       clear();
       dirty = false;
-      return false;
+      return { ok: false, reason: 'no-bodies' };
     }
 
+    if (!isRapierPhysicsReady()) {
+      initRapierPhysics().catch((error) => {
+        console.warn('[scene-physics] Rapier initialization failed', error);
+      });
+      return {
+        ok: false,
+        reason: getRapierPhysicsInitError() ? 'rapier-error' : 'rapier-loading',
+      };
+    }
+
+    world?.free?.();
     world = createWorld(scenePhysics.worldOptions);
-    timestepSeconds = world.timestepFp / 65536;
+    timestepSeconds = world.timestep || normalizeRapierWorldOptions(scenePhysics.worldOptions).timestep;
     entryMap = new Map();
 
     for (const entry of entries) {
@@ -277,7 +318,9 @@ export function createScenePhysicsRuntime({
 
     initialSnapshot = world.snapshot();
     dirty = false;
-    return entryMap.size > 0;
+    return entryMap.size > 0
+      ? { ok: true }
+      : { ok: false, reason: 'no-bodies' };
   }
 
   function applyWorldToObjects(clockState = null) {
@@ -286,7 +329,7 @@ export function createScenePhysicsRuntime({
       const body = world.getBody(objectId);
       if (!body || body.static) continue;
       if (isObjectPaused?.(objectId, clockState) === true) continue;
-      applyBodyPosition(entry.object, body);
+      applyBodyTransform(entry.object, body);
     }
   }
 
@@ -335,8 +378,9 @@ export function createScenePhysicsRuntime({
     }
 
     if (dirty || !world) {
-      if (!rebuild()) {
-        return { active: false, reason: 'no-bodies' };
+      const rebuildResult = rebuild();
+      if (!rebuildResult.ok) {
+        return { active: false, reason: rebuildResult.reason };
       }
     }
 
@@ -345,10 +389,25 @@ export function createScenePhysicsRuntime({
     if (targetTick < world.tick && initialSnapshot) {
       world.restore(initialSnapshot);
     }
-    world.stepTo(targetTick);
+    const stepResult = world.stepTo(targetTick);
+    if (stepResult?.limited === true) {
+      active = false;
+      return {
+        active: false,
+        reason: stepResult.reason || 'step-limit',
+        tick: world.tick,
+        limited: true,
+        reached: false,
+      };
+    }
     applyWorldToObjects(clockState);
     active = true;
-    return { active: true, tick: world.tick };
+    return {
+      active: true,
+      tick: world.tick,
+      limited: stepResult?.limited === true,
+      reached: stepResult?.reached !== false,
+    };
   }
 
   return {
