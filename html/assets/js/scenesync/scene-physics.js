@@ -262,7 +262,6 @@ export function createScenePhysicsRuntime({
   getScenePhysics,
   getObjectEntries,
   isClockActive = (clockState) => clockState?.transportActive === true,
-  getObjectAge = null,
   isObjectPaused = null,
 } = {}) {
   let dirty = true;
@@ -271,6 +270,10 @@ export function createScenePhysicsRuntime({
   let entryMap = new Map();
   let active = false;
   let timestepSeconds = DEFAULT_TIMESTEP_SECONDS;
+  let worldEpochTime = 0;
+  let pendingWorldEpochTime = null;
+  let preserveMotionOnRebuild = true;
+  let resetMotionObjectIds = new Set();
 
   function clear() {
     world?.free?.();
@@ -279,13 +282,60 @@ export function createScenePhysicsRuntime({
     entryMap = new Map();
     active = false;
     timestepSeconds = DEFAULT_TIMESTEP_SECONDS;
+    worldEpochTime = 0;
+    pendingWorldEpochTime = null;
+    preserveMotionOnRebuild = true;
+    resetMotionObjectIds = new Set();
   }
 
-  function markDirty() {
+  function markDirty({
+    worldEpochTime: nextWorldEpochTime = null,
+    preserveMotion = true,
+    resetMotionObjectIds: resetIds = null,
+  } = {}) {
     dirty = true;
+    if (nextWorldEpochTime !== null && nextWorldEpochTime !== undefined) {
+      const epoch = Number(nextWorldEpochTime);
+      if (Number.isFinite(epoch)) pendingWorldEpochTime = Math.max(0, epoch);
+    }
+    if (preserveMotion === false) preserveMotionOnRebuild = false;
+    const ids = Array.isArray(resetIds) ? resetIds : (resetIds ? [resetIds] : []);
+    for (const id of ids) {
+      if (typeof id === 'string' && id.length > 0) {
+        resetMotionObjectIds.add(id);
+      }
+    }
   }
 
-  function rebuild() {
+  function getClockTime(clockState = null) {
+    const time = Number(clockState?.t);
+    return Number.isFinite(time) ? Math.max(0, time) : 0;
+  }
+
+  function captureWorldStateForRebuild(clockState = null) {
+    const motion = new Map();
+    if (!world) return motion;
+
+    for (const [objectId, entry] of entryMap) {
+      const body = world.getBody(objectId);
+      if (!body || body.static) continue;
+      const shouldResetMotion = resetMotionObjectIds.has(objectId);
+      const paused = isObjectPaused?.(objectId, clockState) === true;
+      if (!paused && !shouldResetMotion) {
+        applyBodyTransform(entry.object, body);
+      }
+      if (preserveMotionOnRebuild && !paused && !shouldResetMotion) {
+        motion.set(objectId, {
+          velocity: readVec3(body.velocity, [0, 0, 0]),
+          angularVelocity: readVec3(body.angularVelocity, [0, 0, 0]),
+        });
+      }
+    }
+
+    return motion;
+  }
+
+  function rebuild(clockState = null) {
     const scenePhysics = normalizeScenePhysics(getScenePhysics?.());
     const entries = collectRuntimeEntries(getObjectEntries?.());
     if (!scenePhysics.enabled || entries.length === 0) {
@@ -304,20 +354,32 @@ export function createScenePhysicsRuntime({
       };
     }
 
+    const previousMotion = captureWorldStateForRebuild(clockState);
     world?.free?.();
     world = createWorld(scenePhysics.worldOptions);
     timestepSeconds = world.timestep || normalizeRapierWorldOptions(scenePhysics.worldOptions).timestep;
     entryMap = new Map();
+    worldEpochTime = Number.isFinite(pendingWorldEpochTime)
+      ? pendingWorldEpochTime
+      : getClockTime(clockState);
+    pendingWorldEpochTime = null;
 
     for (const entry of entries) {
       const body = buildPhysicsBodyDef(entry);
       if (!body) continue;
+      const motion = previousMotion.get(entry.objectId);
+      if (motion && !body.static) {
+        body.velocity = motion.velocity;
+        body.angularVelocity = motion.angularVelocity;
+      }
       world.addBody(body);
       entryMap.set(entry.objectId, entry);
     }
 
     initialSnapshot = world.snapshot();
     dirty = false;
+    preserveMotionOnRebuild = true;
+    resetMotionObjectIds = new Set();
     return entryMap.size > 0
       ? { ok: true }
       : { ok: false, reason: 'no-bodies' };
@@ -336,6 +398,7 @@ export function createScenePhysicsRuntime({
   function resetToInitialPose(clockState = null) {
     if (!world || !initialSnapshot) return false;
     world.restore(initialSnapshot);
+    worldEpochTime = getClockTime(clockState);
     applyWorldToObjects(clockState);
     return true;
   }
@@ -347,22 +410,8 @@ export function createScenePhysicsRuntime({
     return reset;
   }
 
-  function getTargetTime(clockState) {
-    if (typeof getObjectAge !== 'function' || entryMap.size === 0) {
-      return Math.max(0, Number(clockState?.t) || 0);
-    }
-
-    const ages = [];
-    for (const objectId of entryMap.keys()) {
-      const age = Number(getObjectAge(objectId, clockState));
-      if (Number.isFinite(age)) ages.push(Math.max(0, age));
-    }
-
-    if (ages.length === 0) {
-      return Math.max(0, Number(clockState?.t) || 0);
-    }
-
-    return Math.min(...ages);
+  function getWorldAge(clockState) {
+    return Math.max(0, getClockTime(clockState) - worldEpochTime);
   }
 
   function update(clockState = null) {
@@ -378,14 +427,14 @@ export function createScenePhysicsRuntime({
     }
 
     if (dirty || !world) {
-      const rebuildResult = rebuild();
+      const rebuildResult = rebuild(clockState);
       if (!rebuildResult.ok) {
         return { active: false, reason: rebuildResult.reason };
       }
     }
 
-    const targetTime = getTargetTime(clockState);
-    const targetTick = Math.max(0, Math.floor(targetTime / timestepSeconds));
+    const worldAge = getWorldAge(clockState);
+    const targetTick = Math.max(0, Math.floor(worldAge / timestepSeconds));
     if (targetTick < world.tick && initialSnapshot) {
       world.restore(initialSnapshot);
     }

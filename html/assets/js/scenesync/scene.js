@@ -1403,7 +1403,6 @@ const scenePhysicsRuntime = createScenePhysicsRuntime({
     physics: object.userData?.physics,
   })),
   isClockActive: (clockState) => clockState?.active === true,
-  getObjectAge: (objectId, clockState) => getObjectAge(objectId, performance.now(), clockState),
   isObjectPaused: (objectId, clockState) => shouldFreezeRuntimeForEditor(objectId, clockState),
 });
 const removedObjectIds = new Set();
@@ -1611,7 +1610,8 @@ function updateTransformTweens(now = performance.now()) {
 const glbAnimationMixers = new Map();
 
 // ── Runtime Time Model / ObjectAge ───────────────────────
-// Runtime code evaluates ObjectAge, not raw host or room time.
+// Animation and Loomlet evaluate ObjectAge, not raw host or room time.
+// Rapier evaluates one coupled physics world age from the active clock.
 // Local Preview uses object.userData.clock.epochTime.
 // Shared Playback and Room Time use object.userData.clock.sharedEpochTime.
 
@@ -1730,7 +1730,11 @@ function rebaseObjectClock(obj, {
     resetObjectPhysicsMotion(obj);
   }
 
-  markScenePhysicsRuntimeDirty();
+  markScenePhysicsRuntimeDirty({
+    resetMotionObjectIds: resetPhysicsMotion === true && obj.userData?.objectId
+      ? [obj.userData.objectId]
+      : null,
+  });
   notifySceneSyncShellStateChanged?.(`object-clock:${reason}`);
   return clock;
 }
@@ -1787,8 +1791,9 @@ function getObjectAge(objectId, now = performance.now(), clockState = null) {
   });
 }
 
-// Runtime uses ObjectAge derived from ActiveClock. Editor Shell defaults to
-// local-preview; Shared Playback and Room Time use shared object epochs.
+// Animation and Loomlet use ObjectAge derived from ActiveClock. Editor Shell
+// defaults to local-preview; Shared Playback and Room Time use shared object
+// epochs.
 
 function resetObjectRuntimeOrigin(objectId, now = performance.now()) {
   const obj = managedObjects.get(objectId);
@@ -2844,8 +2849,8 @@ function getObjectPhysicsForSerialize(obj) {
   return serializeObjectPhysics(obj?.userData?.physics);
 }
 
-function markScenePhysicsRuntimeDirty() {
-  scenePhysicsRuntime.markDirty();
+function markScenePhysicsRuntimeDirty(options = {}) {
+  scenePhysicsRuntime.markDirty(options);
 }
 
 function resetScenePhysicsRuntimeBeforePersistence() {
@@ -2891,7 +2896,9 @@ function applyObjectPhysicsDelta(obj, physics) {
   } else {
     delete obj.userData.physics;
   }
-  markScenePhysicsRuntimeDirty();
+  markScenePhysicsRuntimeDirty({
+    resetMotionObjectIds: obj.userData?.objectId ? [obj.userData.objectId] : null,
+  });
   rebaseObjectClock(obj, { reason: 'object-physics' });
   return next;
 }
@@ -5037,7 +5044,11 @@ function applySharedObjectClockBaselines(objectClocks, {
     }) || applied;
   }
   if (applied) {
-    markScenePhysicsRuntimeDirty();
+    markScenePhysicsRuntimeDirty({
+      resetMotionObjectIds: resetPhysicsMotion === true
+        ? Object.keys(objectClocks)
+        : null,
+    });
   }
   return applied;
 }
@@ -5067,7 +5078,7 @@ function resetAllObjectClocksForSceneClock(now = performance.now(), {
   }
 
   scenePhysicsRuntime.resetToInitialPose();
-  markScenePhysicsRuntimeDirty();
+  markScenePhysicsRuntimeDirty({ preserveMotion: false });
 }
 
 function publishSharedObjectClockBaselines(reason = 'baseline') {

@@ -24,13 +24,14 @@ function vector(values) {
 }
 
 function makeObject({
+  objectId = 'ball',
   position = [0, 2, 0],
   scale = [1, 1, 1],
   physics = { enabled: true, shape: 'sphere', velocity: [0, 0, 0] },
 } = {}) {
   return {
     userData: {
-      objectId: 'ball',
+      objectId,
       physics,
       asset: { type: 'primitive', primitive: 'sphere' },
     },
@@ -40,6 +41,14 @@ function makeObject({
     updateMatrixWorld() {
       this.updateMatrixWorldCalled += 1;
     },
+  };
+}
+
+function makeEntry(object) {
+  return {
+    objectId: object.userData.objectId,
+    object,
+    physics: object.userData.physics,
   };
 }
 
@@ -91,7 +100,7 @@ test('scene physics runtime is a function of supplied clock time', () => {
   assert.ok(object.updateMatrixWorldCalled > 0);
 });
 
-test('scene physics runtime uses object age instead of raw active time when provided', () => {
+test('scene physics runtime treats rebuild time as the physics world epoch', () => {
   const object = makeObject();
   const scenePhysics = normalizeScenePhysics({
     enabled: true,
@@ -103,18 +112,59 @@ test('scene physics runtime uses object age instead of raw active time when prov
   });
   const runtime = createScenePhysicsRuntime({
     getScenePhysics: () => scenePhysics,
-    getObjectEntries: () => [{
-      objectId: 'ball',
-      object,
-      physics: object.userData.physics,
-    }],
+    getObjectEntries: () => [makeEntry(object)],
     isClockActive: () => true,
-    getObjectAge: () => 0,
   });
 
-  runtime.update({ t: 1_780_000_000, mode: 'room-time', active: true });
+  const roomTime = 1_780_000_000;
+  runtime.update({ t: roomTime, mode: 'room-time', active: true });
 
   assert.equal(object.position.toArray()[1], 2);
+
+  runtime.update({ t: roomTime + 0.5, mode: 'room-time', active: true });
+  assert.ok(object.position.toArray()[1] < 2);
+});
+
+test('scene physics runtime keeps existing body motion when a new body rebases the world', () => {
+  const objectA = makeObject({ objectId: 'a', position: [0, 20, 0] });
+  const objectB = makeObject({ objectId: 'b', position: [0, 20, 0] });
+  let entries = [makeEntry(objectA)];
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    duration: 4,
+    worldOptions: {
+      gravity: -9.81,
+      ground: null,
+    },
+  });
+  const runtime = createScenePhysicsRuntime({
+    getScenePhysics: () => scenePhysics,
+    getObjectEntries: () => entries,
+    isClockActive: () => true,
+    getObjectAge: (objectId, clockState) => {
+      if (objectId === 'b') return Math.max(0, Number(clockState?.t) - 3);
+      return Number(clockState?.t) || 0;
+    },
+  });
+
+  runtime.update({ t: 0, mode: 'local', transportActive: true });
+  runtime.update({ t: 3, mode: 'local', transportActive: true });
+  const yBeforeRebuild = objectA.position.toArray()[1];
+  assert.ok(yBeforeRebuild < 20);
+
+  entries = [makeEntry(objectA), makeEntry(objectB)];
+  runtime.markDirty();
+  runtime.update({ t: 3, mode: 'local', transportActive: true });
+  const yAfterRebuild = objectA.position.toArray()[1];
+  assert.equal(yAfterRebuild, yBeforeRebuild);
+
+  runtime.update({ t: 3.05, mode: 'local', transportActive: true });
+  const yNextFrame = objectA.position.toArray()[1];
+  assert.ok(yNextFrame < yAfterRebuild);
+  assert.ok(
+    yAfterRebuild - yNextFrame > 0.1,
+    'existing body should keep falling with its pre-rebuild velocity',
+  );
 });
 
 test('scene physics runtime resets to initial pose when the clock becomes inactive', () => {
@@ -137,6 +187,7 @@ test('scene physics runtime resets to initial pose when the clock becomes inacti
     isClockActive: () => clockActive,
   });
 
+  runtime.update({ t: 0, mode: 'local', transportActive: true });
   runtime.update({ t: 0.5, mode: 'local', transportActive: true });
   assert.ok(object.position.toArray()[1] < 2);
 
@@ -197,6 +248,7 @@ test('scene physics runtime does not reset inactive dirty authoring transforms',
     isClockActive: (clockState) => clockState?.transportActive === true,
   });
 
+  runtime.update({ t: 0, mode: 'local', transportActive: true });
   runtime.update({ t: 0.5, mode: 'local', transportActive: true });
   assert.ok(object.position.toArray()[1] < 2);
 

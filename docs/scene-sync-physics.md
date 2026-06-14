@@ -12,22 +12,27 @@ the old physics implementation is not a goal; the Scene Sync time policy is.
 
 ## Time Model
 
-Physics is evaluated from `ObjectAge`, not raw host time or raw room time.
+Physics is evaluated from a physics world/session age, not raw host time,
+raw room time, or the minimum `ObjectAge` across bodies. Rapier is one coupled
+world, so the runtime keeps one world epoch for the whole session.
 
 ```txt
-ObjectAge = ActiveTime - ObjectEpoch
-targetTick = floor(ObjectAge / timestep)
+PhysicsWorldAge = ActiveTime - PhysicsWorldEpoch
+targetTick = floor(PhysicsWorldAge / timestep)
 ```
 
 Editor Shell uses Local Preview by default, so each client simulates its own
-local physics preview. Shared Playback and Room Time use shared object epochs
-and a shared active clock baseline.
+local physics preview. Shared Playback and Room Time use the shared active
+clock baseline; animation and Loomlet still use shared object epochs for
+`ObjectAge`.
 
 Runtime rules:
 
 - placed physics objects start immediately
 - gravity changes apply immediately
-- transform editing rebases the physics body
+- transform editing rebases the physics body and world epoch
+- object add/remove and world setting changes rebuild the world from the
+  current simulated pose, then reset the world epoch
 - reload recreates physics from the restored transform
 - reset restores the initial Rapier snapshot
 - seek restores a snapshot and steps fixed ticks to the target
@@ -90,7 +95,9 @@ reset instead of long fast-forwarding from arbitrary old state.
 
 Shared Playback uses:
 
-- shared `clock.sharedEpochTime` for ObjectAge
+- shared `clock.sharedEpochTime` for animation and Loomlet `ObjectAge`
+- a shared physics world epoch or controller-published physics baseline for
+  Rapier playback
 - shared Scene Clock revision for play/pause/seek/reset/rate
 - Rapier snapshots for reset, seek, late join, and divergence recovery
 
@@ -122,7 +129,7 @@ Editor Shell remains shared editing, not shared playback.
 - changing gravity rebuilds/rebases the local physics preview immediately
 - grabbing or editing a transform may freeze that object locally
 - edit completion zeros velocity and angular velocity, then captures a new
-  initial transform and object epoch
+  initial transform, object epoch, and physics world epoch
 - physics velocity, angular velocity, and intermediate simulation state are not
   synchronized in Local Preview
 
