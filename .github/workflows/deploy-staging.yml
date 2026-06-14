@@ -37,4 +37,4 @@ jobs:
             docker compose up -d --build presence-server
             docker compose up -d mediamtx
             docker compose up -d --force-recreate https-portal
-            docker compose -p afjkjp-staging -f docker-compose.staging.yml up -d
+            docker compose -p afjkjp-staging -f docker-compose.staging.yml up -d --force-recreate
