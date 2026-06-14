@@ -7,6 +7,7 @@ const KNOWN_KINDS = new Set([
   'scene-bgm',
   'scene-state',
   'scene-request',
+  'scene-clock',
   'scene-avatar',
   'scene-lock',
   'scene-unlock',
@@ -30,6 +31,19 @@ function hasFiniteNumberArray(value, size) {
   return Array.isArray(value)
     && value.length === size
     && value.every(item => typeof item === 'number' && Number.isFinite(item));
+}
+
+function validateObjectClock(clock, path = 'clock') {
+  if (clock === undefined) return { ok: true };
+  if (!clock || typeof clock !== 'object' || Array.isArray(clock)) {
+    return { ok: false, reason: `${path} must be an object` };
+  }
+  for (const key of ['epochTime', 'sharedEpochTime', 'sharedEpoch']) {
+    if (clock[key] !== undefined && (typeof clock[key] !== 'number' || !Number.isFinite(clock[key]))) {
+      return { ok: false, reason: `${path}.${key} must be a finite number` };
+    }
+  }
+  return { ok: true };
 }
 
 // AudioSource component map（audioSources）のバリデーション。
@@ -109,8 +123,57 @@ export function validateSceneSyncPayload(payload, options = {}) {
     return { ok: false, reason: 'scale must be finite [x,y,z]' };
   }
 
+  const clockValidation = validateObjectClock(payload.clock, 'clock');
+  if (!clockValidation.ok) {
+    return clockValidation;
+  }
+
   if (payload.kind === 'scene-env' && !ENV_IDS.has(payload.envId)) {
     return { ok: false, reason: 'envId is invalid' };
+  }
+
+  if (payload.kind === 'scene-clock') {
+    const allowedModes = new Set(['local-preview', 'shared-playback', 'room-time']);
+    const allowedSources = new Set(['local', 'room']);
+    if (payload.mode !== undefined && !allowedModes.has(payload.mode)) {
+      return { ok: false, reason: 'scene-clock.mode is invalid' };
+    }
+    if (payload.source !== undefined && !allowedSources.has(payload.source)) {
+      return { ok: false, reason: 'scene-clock.source is invalid' };
+    }
+    for (const key of ['offset', 'pausedTime', 'rate', 'roomNow', 'sentAt', 'revision']) {
+      if (payload[key] !== undefined && (typeof payload[key] !== 'number' || !Number.isFinite(payload[key]))) {
+        return { ok: false, reason: `scene-clock.${key} must be a finite number` };
+      }
+    }
+    if (payload.paused !== undefined && typeof payload.paused !== 'boolean') {
+      return { ok: false, reason: 'scene-clock.paused must be a boolean' };
+    }
+    if (payload.controller !== undefined && payload.controller !== null) {
+      if (typeof payload.controller !== 'object' || Array.isArray(payload.controller)) {
+        return { ok: false, reason: 'scene-clock.controller must be an object or null' };
+      }
+      if (payload.controller.id !== undefined && !isReasonableString(payload.controller.id, maxStringLength)) {
+        return { ok: false, reason: 'scene-clock.controller.id must be a reasonable string' };
+      }
+      if (payload.controller.nickname !== undefined && !isReasonableString(payload.controller.nickname, maxStringLength)) {
+        return { ok: false, reason: 'scene-clock.controller.nickname must be a reasonable string' };
+      }
+    }
+    if (payload.objectClocks !== undefined) {
+      if (!payload.objectClocks || typeof payload.objectClocks !== 'object' || Array.isArray(payload.objectClocks)) {
+        return { ok: false, reason: 'scene-clock.objectClocks must be an object map' };
+      }
+      for (const [objectId, clock] of Object.entries(payload.objectClocks)) {
+        if (!isReasonableString(objectId, maxStringLength)) {
+          return { ok: false, reason: 'scene-clock.objectClocks keys must be reasonable strings' };
+        }
+        const objectClockValidation = validateObjectClock(clock, `scene-clock.objectClocks.${objectId}`);
+        if (!objectClockValidation.ok) {
+          return objectClockValidation;
+        }
+      }
+    }
   }
 
   // audioSources は scene-add / scene-delta などでオブジェクトに AudioSource を付与する。

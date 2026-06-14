@@ -48,6 +48,7 @@ test('normalizes object physics with practical defaults', () => {
     restitution: 0.2,
     friction: 0.5,
     velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
   });
 });
 
@@ -83,6 +84,32 @@ test('scene physics runtime is a function of supplied clock time', () => {
   assert.ok(yAfterSeekBack > yAtHalfSecond);
   assert.ok(yAfterSeekBack < 2);
   assert.ok(object.updateMatrixWorldCalled > 0);
+});
+
+test('scene physics runtime uses object age instead of raw active time when provided', () => {
+  const object = makeObject();
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    duration: 4,
+    worldOptions: {
+      gravity: -9.81,
+      ground: null,
+    },
+  });
+  const runtime = createScenePhysicsRuntime({
+    getScenePhysics: () => scenePhysics,
+    getObjectEntries: () => [{
+      objectId: 'ball',
+      object,
+      physics: object.userData.physics,
+    }],
+    isClockActive: () => true,
+    getObjectAge: () => 0,
+  });
+
+  runtime.update({ t: 1_780_000_000, mode: 'room-time', active: true });
+
+  assert.equal(object.position.toArray()[1], 2);
 });
 
 test('scene physics runtime resets to initial pose when the clock becomes inactive', () => {

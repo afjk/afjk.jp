@@ -15,5 +15,14 @@ export function createPlayerActions(core) {
     setRate(rate) {
       core?.commands?.setSceneClockRate?.(rate);
     },
+    setMode(mode) {
+      core?.commands?.setSceneClockMode?.(mode);
+    },
+    requestControl() {
+      core?.commands?.requestSceneClockControl?.();
+    },
+    releaseControl() {
+      core?.commands?.releaseSceneClockControl?.();
+    },
   };
 }

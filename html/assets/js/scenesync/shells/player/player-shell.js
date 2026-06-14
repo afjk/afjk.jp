@@ -25,6 +25,10 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
         activateOnMount: true,
       });
       await transport.mount({ core, root: root || document.body });
+      core?.commands?.activateSceneClockTransport?.({
+        mode: 'shared-playback',
+        requestControl: true,
+      });
     },
 
     unmount() {

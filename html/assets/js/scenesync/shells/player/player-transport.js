@@ -2,6 +2,14 @@ import { createPlayerActions } from './player-actions.js';
 
 const STYLE_ID = 'scene-sync-player-shell-style';
 const DEFAULT_DURATION = 60;
+const CLOCK_MODES = ['local-preview', 'shared-playback', 'room-time'];
+const CLOCK_MODE_LABELS = {
+  'local-preview': 'Local Preview',
+  'shared-playback': 'Shared Playback',
+  'room-time': 'Room Time',
+  local: 'Local Preview',
+  'host-follow': 'Room Time',
+};
 
 export async function ensurePlayerTransportStylesheet() {
   if (document.getElementById(STYLE_ID)) return;
@@ -24,6 +32,38 @@ function formatTime(seconds) {
   return `${String(mins).padStart(2, '0')}:${secs}`;
 }
 
+function normalizeUiClockMode(mode) {
+  if (mode === 'local') return 'local-preview';
+  if (mode === 'host-follow') return 'room-time';
+  return CLOCK_MODES.includes(mode) ? mode : 'local-preview';
+}
+
+function describeClockState(state = {}) {
+  const mode = normalizeUiClockMode(state.mode);
+  const controllerName = state.controller?.nickname || state.controller?.id || 'Unknown';
+  if (mode === 'shared-playback') {
+    return {
+      title: CLOCK_MODE_LABELS[mode],
+      detail: state.isController === false
+        ? `Following ${controllerName}`
+        : `Controller: ${controllerName}`,
+      scope: '全員に反映',
+    };
+  }
+  if (mode === 'room-time') {
+    return {
+      title: CLOCK_MODE_LABELS[mode],
+      detail: '現在時刻に同期',
+      scope: 'pause / seek 無効',
+    };
+  }
+  return {
+    title: CLOCK_MODE_LABELS[mode],
+    detail: '自分だけに反映',
+    scope: 'ローカル確認用',
+  };
+}
+
 function createPanelHtml({ title, closeable }) {
   return `
     <header class="player-header">
@@ -34,8 +74,21 @@ function createPanelHtml({ title, closeable }) {
         ${closeable ? '<button class="player-close-btn" data-player-close type="button" title="Close">x</button>' : ''}
       </div>
     </header>
+    <div class="player-mode-summary">
+      <div>
+        <div class="player-mode-title" data-player-mode-title>Local Preview</div>
+        <div class="player-mode-detail" data-player-mode-detail>自分だけに反映</div>
+      </div>
+      <button class="player-controller-btn" data-player-controller type="button" hidden>Control</button>
+    </div>
+    <div class="player-mode-switch" role="group" aria-label="Clock mode">
+      <button class="player-mode-btn" data-player-mode-switch="local-preview" type="button">Local Preview</button>
+      <button class="player-mode-btn" data-player-mode-switch="shared-playback" type="button">Shared Playback</button>
+      <button class="player-mode-btn" data-player-mode-switch="room-time" type="button">Room Time</button>
+    </div>
     <div class="player-time-display">
       <span class="player-current-time" data-player-current-time>00:00.00</span>
+      <span class="player-object-age" data-player-object-age>ObjectAge —</span>
     </div>
     <div class="player-seek-wrap">
       <input class="player-seek" data-player-seek type="range" min="0" max="60" step="0.01" value="0" />
@@ -92,18 +145,44 @@ export function createPlayerTransportPanel({
     const state = getClockState(core);
     const time = Number.isFinite(state.time) ? state.time : (state.t ?? 0);
     const isPaused = state.isPaused === true || state.playing === false;
-    const mode = state.mode ?? 'local';
+    const mode = normalizeUiClockMode(state.mode);
+    const modeInfo = describeClockState({ ...state, mode });
     const rate = state.rate ?? 1;
     const duration = resolvePlayerDuration(core, state);
+    const roomTimeMode = mode === 'room-time';
+    const sharedFollower = mode === 'shared-playback' && state.isController === false;
+    const controlsDisabled = roomTimeMode || sharedFollower;
 
     const timeEl = panel.querySelector('[data-player-current-time]');
     if (timeEl) timeEl.textContent = formatTime(time);
+
+    const objectAgeEl = panel.querySelector('[data-player-object-age]');
+    if (objectAgeEl) {
+      const objectAge = state.selectedObjectAge;
+      objectAgeEl.textContent = Number.isFinite(objectAge?.age)
+        ? `ObjectAge ${objectAge.objectId}: ${objectAge.age.toFixed(2)}s`
+        : 'ObjectAge —';
+    }
+
+    const modeTitleEl = panel.querySelector('[data-player-mode-title]');
+    if (modeTitleEl) modeTitleEl.textContent = modeInfo.title;
+
+    const modeDetailEl = panel.querySelector('[data-player-mode-detail]');
+    if (modeDetailEl) modeDetailEl.textContent = `${modeInfo.detail} · ${modeInfo.scope}`;
+
+    const controllerBtn = panel.querySelector('[data-player-controller]');
+    if (controllerBtn) {
+      controllerBtn.hidden = mode !== 'shared-playback';
+      controllerBtn.textContent = state.isController === false ? 'Control' : 'Release';
+      controllerBtn.disabled = mode !== 'shared-playback';
+    }
 
     if (!isSeeking) {
       const seekEl = panel.querySelector('[data-player-seek]');
       if (seekEl) {
         if (parseFloat(seekEl.max) !== duration) seekEl.max = duration;
         seekEl.value = Math.min(time, duration);
+        seekEl.disabled = controlsDisabled;
       }
     }
 
@@ -114,11 +193,15 @@ export function createPlayerTransportPanel({
         playPauseBtn.dataset.playerPlaying = playing ? '1' : '0';
         playPauseBtn.title = playing ? 'Pause' : 'Play';
       }
+      playPauseBtn.disabled = controlsDisabled;
     }
 
+    const stopBtn = panel.querySelector('[data-player-stop]');
+    if (stopBtn) stopBtn.disabled = controlsDisabled;
+
     const modeEl = panel.querySelector('[data-player-clock-mode]');
-    if (modeEl && modeEl.textContent !== mode) {
-      modeEl.textContent = mode;
+    if (modeEl && modeEl.textContent !== modeInfo.title) {
+      modeEl.textContent = modeInfo.title;
       modeEl.dataset.mode = mode;
     }
 
@@ -134,6 +217,12 @@ export function createPlayerTransportPanel({
     panel.querySelectorAll('[data-player-rate]').forEach(btn => {
       const active = String(parseFloat(btn.dataset.playerRate) === rate);
       if (btn.dataset.active !== active) btn.dataset.active = active;
+      btn.disabled = controlsDisabled;
+    });
+
+    panel.querySelectorAll('[data-player-mode-switch]').forEach(btn => {
+      const active = btn.dataset.playerModeSwitch === mode;
+      if (btn.dataset.active !== String(active)) btn.dataset.active = String(active);
     });
   }
 
@@ -197,6 +286,18 @@ export function createPlayerTransportPanel({
         }),
         addListener(panel.querySelector('[data-player-stop]'), 'click', () => actions.stop())
       );
+
+      panel.querySelectorAll('[data-player-mode-switch]').forEach(btn => {
+        disposers.push(addListener(btn, 'click', () => {
+          actions.setMode(btn.dataset.playerModeSwitch);
+        }));
+      });
+
+      disposers.push(addListener(panel.querySelector('[data-player-controller]'), 'click', () => {
+        const state = getClockState(core);
+        if (state.isController === false) actions.requestControl();
+        else actions.releaseControl();
+      }));
 
       panel.querySelectorAll('[data-player-rate]').forEach(btn => {
         disposers.push(addListener(btn, 'click', () => {
