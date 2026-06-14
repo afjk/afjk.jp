@@ -2,6 +2,11 @@ import { createSceneDocumentFromSceneSyncState } from './export-scene-document.j
 import { collectExportAssets } from './collect-export-assets.js';
 import { generateManifest } from './export-manifest.js';
 import { generateReadme, generateReadmeHtml } from './export-readme.js';
+import {
+  collectExportSceneStats,
+  generateExportThumbnail,
+  resolveExportThumbnailTitle,
+} from './export-thumbnail.js';
 
 // These viewer source files are fetched from the current origin and bundled into the ZIP
 export const VIEWER_SOURCES = [
@@ -184,6 +189,8 @@ export async function buildExportPackage({
     exportedAt,
     cdnDependent: true,
   });
+  const filename = `scene-sync-export-${formatTimestamp()}.zip`;
+  const filenameTitle = filename.replace(/\.zip$/i, '');
 
   // 5. Load JSZip
   const JSZip = await loadJSZip();
@@ -195,6 +202,20 @@ export async function buildExportPackage({
   zip.file('README.html', generateReadmeHtml());
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
   zip.file('scene.json', JSON.stringify(updatedDoc, null, 2));
+
+  try {
+    const thumbnail = await generateExportThumbnail({
+      title: resolveExportThumbnailTitle({
+        sceneDocument: updatedDoc,
+        manifest,
+        fallbackTitle: filenameTitle,
+      }),
+      stats: collectExportSceneStats(updatedDoc),
+    });
+    zip.file('thumbnail.png', thumbnail.blob);
+  } catch (error) {
+    console.warn('[Export] thumbnail generation failed:', error);
+  }
 
   // 7. Add viewer files
   for (const [dest, content] of Object.entries(viewerFiles)) {
@@ -215,7 +236,6 @@ export async function buildExportPackage({
   }
 
   // 10. Trigger download
-  const filename = `scene-sync-export-${formatTimestamp()}.zip`;
   const url = URL.createObjectURL(zipBlob);
   const a = document.createElement('a');
   a.href = url;
