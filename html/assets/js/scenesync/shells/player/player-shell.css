@@ -19,7 +19,7 @@
   transform: translateX(-50%);
   z-index: 220;
   width: clamp(320px, 70vw, 560px);
-  padding: 16px 20px 18px;
+  padding: 8px 10px;
   border-radius: 18px;
   background: rgba(8, 8, 20, 0.90);
   border: 1px solid rgba(99, 102, 241, 0.28);
@@ -34,7 +34,7 @@
     0 1px 0 rgba(255, 255, 255, 0.06) inset;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   pointer-events: auto;
   user-select: none;
   -webkit-user-select: none;
@@ -50,28 +50,30 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 4px;
 }
 
 .player-title {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.14em;
+  line-height: 1.1;
   color: rgba(129, 140, 248, 0.85);
 }
 
 .player-badges {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
 .player-badge {
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 100px;
   letter-spacing: 0.04em;
-  line-height: 1.4;
+  line-height: 1.2;
 }
 
 .player-badge-mode {
@@ -80,10 +82,16 @@
   border: 1px solid rgba(99, 102, 241, 0.22);
 }
 
-.player-badge-mode[data-mode="host-follow"] {
+.player-badge-mode[data-mode="shared-playback"] {
   background: rgba(16, 185, 129, 0.15);
   color: rgba(110, 231, 183, 0.9);
   border-color: rgba(16, 185, 129, 0.22);
+}
+
+.player-badge-mode[data-mode="room-time"] {
+  background: rgba(14, 165, 233, 0.15);
+  color: rgba(125, 211, 252, 0.9);
+  border-color: rgba(14, 165, 233, 0.24);
 }
 
 .player-badge-status {
@@ -117,31 +125,118 @@
   color: #fff;
 }
 
+/* ── Clock mode ─────────────────────────────────────── */
+.player-mode-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.player-mode-title {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: #f8fafc;
+}
+
+.player-mode-detail {
+  margin-top: 0;
+  font-size: 10px;
+  line-height: 1.15;
+  color: rgba(203, 213, 225, 0.72);
+}
+
+.player-controller-btn,
+.player-mode-btn {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 232, 240, 0.82);
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+
+.player-controller-btn {
+  flex: none;
+  min-width: 64px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.player-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.player-mode-btn {
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.1;
+}
+
+.player-mode-btn[data-active="true"] {
+  background: rgba(99, 102, 241, 0.24);
+  color: rgba(238, 242, 255, 0.96);
+  border-color: rgba(129, 140, 248, 0.46);
+}
+
+.player-controller-btn:hover,
+.player-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-controller-btn:disabled,
+.player-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ── Time display ────────────────────────────────────── */
 .player-time-display {
   text-align: center;
   line-height: 1;
-  padding: 4px 0 2px;
+  margin: 6px 0 4px;
 }
 
 .player-current-time {
-  font-size: 42px;
+  font-size: 24px;
   font-weight: 200;
   letter-spacing: 0.03em;
+  line-height: 1;
   color: #f1f5f9;
   font-variant-numeric: tabular-nums;
 }
 
+.player-object-age {
+  display: block;
+  margin-top: 3px;
+  min-height: 11px;
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 10px;
+  line-height: 1.1;
+}
+
 /* ── Seek bar ────────────────────────────────────────── */
 .player-seek-wrap {
-  padding: 0 4px;
+  padding: 2px 4px;
 }
 
 .player-seek {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 4px;
+  height: 18px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.1);
   outline: none;
@@ -186,13 +281,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .player-btn {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 34px;
+  height: 34px;
   border: none;
   border-radius: 50%;
   cursor: pointer;
@@ -209,9 +307,16 @@
   transform: scale(0.91);
 }
 
+.player-btn:disabled,
+.player-rate-btn:disabled,
+.player-seek:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .player-btn-stop {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(148, 163, 184, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -223,8 +328,8 @@
 }
 
 .player-btn-play-pause {
-  width: 54px;
-  height: 54px;
+  width: 42px;
+  height: 42px;
   background: linear-gradient(145deg, #6366f1, #4f46e5);
   color: #fff;
   box-shadow: 0 4px 16px rgba(99, 102, 241, 0.42);
@@ -246,7 +351,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
+  margin-top: 5px;
 }
 
 .player-rate-label {
@@ -257,17 +363,17 @@
 }
 
 .player-rate-btn {
-  padding: 4px 11px;
+  padding: 4px 7px;
   border-radius: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.48);
-  font-size: 12px;
+  font-size: 10px;
   font-family: inherit;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
   outline: none;
-  line-height: 1.5;
+  line-height: 1.1;
 }
 
 .player-rate-btn:hover {
@@ -291,7 +397,7 @@
   .scene-sync-player-shell {
     bottom: calc(18px + var(--mobile-safe-bottom, 0px));
     width: min(560px, calc(100vw - 24px));
-    padding: 14px 14px 16px;
+    padding: 8px 10px;
     border-radius: 14px;
   }
 
@@ -300,10 +406,46 @@
   }
 
   .player-current-time {
-    font-size: 34px;
+    font-size: 24px;
   }
 
   .player-rate-row {
     flex-wrap: wrap;
+  }
+
+  .player-mode-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .player-mode-summary {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .scene-sync-player-shell {
+    padding: 7px 8px;
+  }
+
+  .player-mode-summary {
+    padding: 5px 7px;
+  }
+
+  .player-current-time {
+    font-size: 22px;
+  }
+
+  .player-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .player-btn-play-pause {
+    width: 40px;
+    height: 40px;
+  }
+
+  .player-rate-row {
+    gap: 4px;
   }
 }

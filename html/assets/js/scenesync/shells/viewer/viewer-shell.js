@@ -74,6 +74,7 @@ export function createSceneSyncShell({ id = 'viewer', requestedId = 'viewer', av
 
       // 鑑賞は Play（interact）既定。クリックでオブジェクトを activate できる。
       core?.commands?.setInputRoutingMode?.('interact');
+      core?.commands?.activateSceneClockTransport?.({ mode: 'shared-playback' });
 
       root = document.createElement('div');
       root.className = 'viewer-shell';

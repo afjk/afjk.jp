@@ -1635,7 +1635,7 @@ function createPresenceServer() {
       roomOverride: Boolean(roomOverride)
     });
 
-    conn.send({ type: 'welcome', id: client.id, room: roomId });
+    conn.send({ type: 'welcome', id: client.id, room: roomId, serverTime: Date.now() });
     broadcastPeers(roomId);
 
     conn.onMessage = raw => {

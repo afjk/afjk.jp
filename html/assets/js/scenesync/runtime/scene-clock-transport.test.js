@@ -2,9 +2,79 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  CLOCK_MODES,
+  createClockState,
+  getActiveClockTime,
+  getObjectAge,
+  pauseClockState,
+  resumeClockState,
+  seekClockState,
+  setClockMode,
+  setClockRate,
   normalizeSceneClockDeactivateArgs,
   preserveLocalSceneClockTimeline,
 } from './scene-clock-transport.js';
+
+test('active clock defaults local preview to local source', () => {
+  const state = createClockState({ mode: CLOCK_MODES.LOCAL_PREVIEW, offset: -10 });
+
+  assert.equal(state.source, 'local');
+  assert.equal(getActiveClockTime(state, { localNow: 12, roomNow: 100 }), 2);
+});
+
+test('shared playback uses room source and offset for seek', () => {
+  const state = createClockState({ mode: CLOCK_MODES.SHARED_PLAYBACK });
+
+  assert.equal(state.source, 'room');
+  seekClockState(state, 15, { localNow: 1, roomNow: 100 });
+
+  assert.equal(state.offset, -85);
+  assert.equal(getActiveClockTime(state, { localNow: 2, roomNow: 101 }), 16);
+});
+
+test('pause and resume preserve room-based shared time without following controller local time', () => {
+  const state = createClockState({ mode: CLOCK_MODES.SHARED_PLAYBACK });
+  seekClockState(state, 20, { roomNow: 100 });
+
+  pauseClockState(state, { roomNow: 105 });
+  assert.equal(getActiveClockTime(state, { roomNow: 999 }), 25);
+
+  resumeClockState(state, { roomNow: 110 });
+  assert.equal(getActiveClockTime(state, { roomNow: 111 }), 26);
+});
+
+test('rate changes preserve current active time', () => {
+  const state = createClockState({ mode: CLOCK_MODES.LOCAL_PREVIEW, offset: 0 });
+  assert.equal(getActiveClockTime(state, { localNow: 4 }), 4);
+
+  setClockRate(state, 2, { localNow: 4 });
+
+  assert.equal(getActiveClockTime(state, { localNow: 4 }), 4);
+  assert.equal(getActiveClockTime(state, { localNow: 5 }), 6);
+});
+
+test('room time mode switches source and clears pause', () => {
+  const state = createClockState({ mode: CLOCK_MODES.LOCAL_PREVIEW, offset: -5, paused: true, pausedTime: 3 });
+
+  setClockMode(state, CLOCK_MODES.ROOM_TIME, { localNow: 10, roomNow: 100 });
+
+  assert.equal(state.mode, CLOCK_MODES.ROOM_TIME);
+  assert.equal(state.source, 'room');
+  assert.equal(state.paused, false);
+});
+
+test('object age is active time minus epoch and clamps at zero', () => {
+  assert.equal(getObjectAge(10, { epochTime: 4 }), 6);
+  assert.equal(getObjectAge(2, { epochTime: 4 }), 0);
+});
+
+test('shared object age uses shared epoch in shared modes', () => {
+  const clock = { epochTime: 90, sharedEpochTime: 4 };
+
+  assert.equal(getObjectAge(10, clock, { mode: CLOCK_MODES.LOCAL_PREVIEW }), 0);
+  assert.equal(getObjectAge(10, clock, { mode: CLOCK_MODES.SHARED_PLAYBACK }), 6);
+  assert.equal(getObjectAge(10, clock, { mode: CLOCK_MODES.ROOM_TIME }), 6);
+});
 
 test('deactivate scene clock args preserve existing numeric now calls', () => {
   const result = normalizeSceneClockDeactivateArgs(1234, undefined, () => 9999);

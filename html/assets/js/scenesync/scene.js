@@ -61,8 +61,19 @@ import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from
 import { shouldFreezeObjectForEditorRuntime } from './runtime/editing-state.js';
 import { calculateScenePlaybackDuration } from './runtime/playback-duration.js';
 import {
+  CLOCK_MODE_LABELS,
+  CLOCK_MODES,
+  createClockState,
+  getActiveClockTime,
+  getObjectAge as getObjectAgeFromClock,
+  normalizeClockMode,
   normalizeSceneClockDeactivateArgs,
   preserveLocalSceneClockTimeline,
+  pauseClockState,
+  resumeClockState,
+  seekClockState,
+  setClockMode as setActiveClockMode,
+  setClockRate as setActiveClockRate,
 } from './runtime/scene-clock-transport.js';
 import {
   createScenePhysicsRuntime,
@@ -980,9 +991,9 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
       lockMultiSelectedObjects();
       ensureMultiMoveBroadcastInterval();
     } else {
-      flushMultiMoveBroadcast();
       stopMultiMoveBroadcastInterval();
       endMultiTransformHistory();
+      flushMultiMoveBroadcast();
       unlockMultiSelectedObjects();
     }
     return;
@@ -1007,10 +1018,9 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
     dragIntervalId = null;
 
     // Text Panel scale bake (sendSelectedDelta と history 記録より前)
-    const wasBaked = transformCtrl.object &&
+    if (transformCtrl.object) {
       bakeTextPanelScaleToLayout(transformCtrl.object);
-
-    sendSelectedDelta();
+    }
 
     // ドラッグ終了時に履歴に追加
     if (dragStartState) {
@@ -1036,9 +1046,14 @@ transformCtrl.addEventListener('dragging-changed', (e) => {
           );
           presenceState.historyManager.push(historyEntry);
         }
+        rebaseObjectClock(obj, {
+          resetPhysicsMotion: true,
+          reason: 'transform-drag-end',
+        });
       }
       dragStartState = null;
     }
+    sendSelectedDelta({ includeClock: true });
   }
 });
 
@@ -1047,7 +1062,7 @@ function arraysEqual(a, b) {
   return a.every((v, i) => Math.abs(v - b[i]) < 0.0001);
 }
 
-function sendSelectedDelta() {
+function sendSelectedDelta({ includeClock = false } = {}) {
   const obj = transformCtrl.object;
   if (!obj || !obj.userData.objectId) return;
 
@@ -1064,6 +1079,9 @@ function sendSelectedDelta() {
     rotation: rot,
     scale: scl,
   };
+  if (includeClock) {
+    payload.clock = serializeObjectClockForSceneSync(obj);
+  }
 
   // Text Panel scale bake では asset.layout が本体なので、asset を含める
   if (obj.userData?.asset?.type === 'text') {
@@ -1336,6 +1354,12 @@ function endMultiTransformHistory() {
   }
 
   if (entries.length > 0) {
+    for (const { objectId } of entries) {
+      rebaseObjectClockById(objectId, {
+        resetPhysicsMotion: true,
+        reason: 'multi-transform-end',
+      });
+    }
     const modeLabel = multiTransformMode === 'rotate' ? 'Rotated' :
       multiTransformMode === 'scale' ? 'Scaled' : 'Moved';
     pushMultiTransformHistory(entries, modeLabel);
@@ -1378,7 +1402,9 @@ const scenePhysicsRuntime = createScenePhysicsRuntime({
     object,
     physics: object.userData?.physics,
   })),
-  isClockActive: (clockState) => clockState?.transportActive === true && clockState?.mode === 'local',
+  isClockActive: (clockState) => clockState?.active === true,
+  getObjectAge: (objectId, clockState) => getObjectAge(objectId, performance.now(), clockState),
+  isObjectPaused: (objectId, clockState) => shouldFreezeRuntimeForEditor(objectId, clockState),
 });
 const removedObjectIds = new Set();
 
@@ -1584,9 +1610,10 @@ function updateTransformTweens(now = performance.now()) {
 // objectId → { mixer, clips, action, clipIndex }
 const glbAnimationMixers = new Map();
 
-// ── Runtime Time Model ───────────────────────────────────
-// Selected objects evaluate at t=0 (edit mode).
-// Unselected objects advance runtime time from 0.
+// ── Runtime Time Model / ObjectAge ───────────────────────
+// Runtime code evaluates ObjectAge, not raw host or room time.
+// Local Preview uses object.userData.clock.epochTime.
+// Shared Playback and Room Time use object.userData.clock.sharedEpochTime.
 
 function ensureObjectRuntime(obj) {
   if (!obj) return null;
@@ -1601,6 +1628,116 @@ function ensureObjectRuntime(obj) {
   };
 
   return obj.userData.runtime;
+}
+
+function getLocalNowSeconds(now = performance.now()) {
+  return now / 1000;
+}
+
+function getRoomNowSeconds() {
+  return Date.now() / 1000 + (Number.isFinite(sceneClockState?.roomTimeOffset)
+    ? sceneClockState.roomTimeOffset
+    : 0);
+}
+
+function getActiveClockSources(now = performance.now()) {
+  return {
+    localNow: getLocalNowSeconds(now),
+    roomNow: getRoomNowSeconds(),
+  };
+}
+
+function getActiveClockNow(now = performance.now()) {
+  return getActiveClockTime(sceneClockState, getActiveClockSources(now));
+}
+
+function getSharedEpochTimeForCurrentState(now = performance.now()) {
+  return sceneClockState.mode === CLOCK_MODES.LOCAL_PREVIEW
+    ? getRoomNowSeconds()
+    : getSceneClockTime(now);
+}
+
+function readSharedEpochTime(clockLike) {
+  const sharedEpochTime = Number(clockLike?.sharedEpochTime ?? clockLike?.sharedEpoch);
+  return Number.isFinite(sharedEpochTime) ? sharedEpochTime : null;
+}
+
+function ensureObjectClock(obj, now = performance.now()) {
+  if (!obj) return null;
+  const activeTime = getActiveClockNow(now);
+  const current = obj.userData?.clock;
+  const existingSharedEpochTime = readSharedEpochTime(current);
+  obj.userData.clock = {
+    epochTime: Number.isFinite(current?.epochTime) ? current.epochTime : activeTime,
+    sharedEpochTime: existingSharedEpochTime ?? getSharedEpochTimeForCurrentState(now),
+  };
+  return obj.userData.clock;
+}
+
+function getObjectAgeMode(clockState = null) {
+  return normalizeClockMode(clockState?.mode || sceneClockState.mode, sceneClockState.mode);
+}
+
+function serializeObjectClockForSceneSync(obj, now = performance.now()) {
+  const clock = ensureObjectClock(obj, now);
+  if (!clock) return null;
+  return {
+    sharedEpochTime: Number.isFinite(clock.sharedEpochTime)
+      ? clock.sharedEpochTime
+      : getSharedEpochTimeForCurrentState(now),
+  };
+}
+
+function resetObjectPhysicsMotion(obj) {
+  const physics = normalizeObjectPhysics(obj?.userData?.physics);
+  if (!obj || !physics) return null;
+
+  obj.userData.physics = {
+    ...physics,
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    initialTransform: {
+      position: obj.position?.toArray?.() || [0, 0, 0],
+      rotation: obj.quaternion?.toArray?.() || [0, 0, 0, 1],
+      scale: obj.scale?.toArray?.() || [1, 1, 1],
+    },
+  };
+  return obj.userData.physics;
+}
+
+function rebaseObjectClock(obj, {
+  now = performance.now(),
+  resetPhysicsMotion = false,
+  sharedEpochTime = null,
+  reason = 'object-rebased',
+} = {}) {
+  if (!obj) return null;
+  const runtime = ensureObjectRuntime(obj);
+  runtime.startLocalTime = now;
+  runtime.startHostTime = null;
+  runtime.selectedTime = 0;
+  obj.userData.runtime = runtime;
+
+  const clock = {
+    epochTime: getActiveClockNow(now),
+    sharedEpochTime: Number.isFinite(sharedEpochTime)
+      ? sharedEpochTime
+      : getSharedEpochTimeForCurrentState(now),
+  };
+  obj.userData.clock = clock;
+
+  if (resetPhysicsMotion) {
+    resetObjectPhysicsMotion(obj);
+  }
+
+  markScenePhysicsRuntimeDirty();
+  notifySceneSyncShellStateChanged?.(`object-clock:${reason}`);
+  return clock;
+}
+
+function rebaseObjectClockById(objectId, options = {}) {
+  const obj = managedObjects.get(objectId);
+  return rebaseObjectClock(obj, options);
 }
 
 function shouldFreezeRuntimeForEditor(objectId, clockState = null) {
@@ -1619,51 +1756,45 @@ function getObjectRuntimeTime(objectId, now = performance.now(), clockState = nu
   if (!obj) return 0;
 
   const runtime = ensureObjectRuntime(obj);
+  const objectClock = ensureObjectClock(obj, now);
   if (!runtime?.enabled) return 0;
 
-  // Freeze selected/actively edited objects, except selection-only freeze is
-  // disabled while the Player transport explicitly owns scene time.
+  // Freeze actively edited objects. Local Preview is active by default, so
+  // selection alone no longer prevents placed objects from animating.
   if (shouldFreezeRuntimeForEditor(objectId, clockState)) {
     return runtime.selectedTime ?? 0;
   }
 
-  // normal object: use Scene Clock time if available, else object runtime time
-  if (clockState) {
-    return clockState.t;
-  }
-
+  const activeTime = Number.isFinite(clockState?.t)
+    ? clockState.t
+    : getActiveClockNow(now);
+  const objectAge = getObjectAgeFromClock(activeTime, objectClock, {
+    mode: getObjectAgeMode(clockState),
+  });
   const speed = Number.isFinite(runtime.speed) ? runtime.speed : 1;
-  const start = Number.isFinite(runtime.startLocalTime)
-    ? runtime.startLocalTime
-    : now;
-
-  return Math.max(0, ((now - start) / 1000) * speed);
+  return Math.max(0, objectAge * speed);
 }
 
-// The host owns the clock source used for shared runtime behavior.
-// Desired deterministic model when the host supplies a room clock:
-//
-// selected:
-//   t = 0
-//
-// unselected:
-//   t = ((hostNow - runtime.startHostTime) / 1000) * speed
-//
-// On deselect:
-//   runtime.startHostTime = hostNow
-//
-// This should make GLB animation and Loomlet object graphs deterministic
-// for late joiners and multi-client synchronization.
+function getObjectAge(objectId, now = performance.now(), clockState = null) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return 0;
+  const clock = ensureObjectClock(obj, now);
+  const activeTime = Number.isFinite(clockState?.t)
+    ? clockState.t
+    : getActiveClockNow(now);
+  return getObjectAgeFromClock(activeTime, clock, {
+    mode: getObjectAgeMode(clockState),
+  });
+}
+
+// Runtime uses ObjectAge derived from ActiveClock. Editor Shell defaults to
+// local-preview; Shared Playback and Room Time use shared object epochs.
 
 function resetObjectRuntimeOrigin(objectId, now = performance.now()) {
   const obj = managedObjects.get(objectId);
   if (!obj) return;
 
-  const runtime = ensureObjectRuntime(obj);
-  runtime.startLocalTime = now;
-  runtime.selectedTime = 0;
-
-  obj.userData.runtime = runtime;
+  rebaseObjectClock(obj, { now, reason: 'runtime-origin-reset' });
 }
 
 let previousSelectedRuntimeObjectIds = new Set();
@@ -2555,6 +2686,7 @@ function applyObjectAnimationDelta(obj, animationDelta) {
   };
 
   updateObjectGlbAnimationClip(obj.userData.objectId, next.clip);
+  rebaseObjectClock(obj, { reason: 'animation-delta' });
 }
 
 function serializeObjectAnimationState(obj) {
@@ -2585,6 +2717,7 @@ function registerLoadedGlbAnimation(objectId, model, reason = 'unknown') {
   model.userData.objectId = objectId;
   managedObjects.set(objectId, model);
   setupObjectGlbAnimation(objectId, model);
+  rebaseObjectClock(model, { reason: `glb-animation:${reason}` });
 
   const clips = model.userData?.scenesync?.animations;
   if (Array.isArray(clips) && clips.length > 0) {
@@ -2723,6 +2856,13 @@ function resetScenePhysicsRuntimeBeforePersistence() {
 
 function applyScenePhysics(physics, options = {}) {
   scenePhysicsState = normalizeScenePhysics(physics);
+  if (options.rebaseObjects !== false) {
+    for (const obj of managedObjects.values()) {
+      if (normalizeObjectPhysics(obj?.userData?.physics)) {
+        rebaseObjectClock(obj, { reason: 'scene-physics' });
+      }
+    }
+  }
   markScenePhysicsRuntimeDirty();
   if (options.broadcastChange) {
     const serialized = getScenePhysicsForSerialize({ enableWhenObjectsExist: false });
@@ -2752,6 +2892,7 @@ function applyObjectPhysicsDelta(obj, physics) {
     delete obj.userData.physics;
   }
   markScenePhysicsRuntimeDirty();
+  rebaseObjectClock(obj, { reason: 'object-physics' });
   return next;
 }
 
@@ -4654,73 +4795,128 @@ const sceneInspectorState = {
   },
 };
 
-// ── Scene Clock 状態 ────────────────────────────────
-// Host 所有のグローバル時刻制御システム
-// local-only: broadcast しない、room history に記録しない
-// 用途: Loomlet behavior の可制御なアニメーション
-// time.t = object graph の実評価時刻（選択中は 0、通常は Scene Clock time）
-// time.sceneT = Scene Clock のグローバル時刻（通常は time.t と同じ）
-// time.delta = object evaluation delta
-// time.sceneDelta = Scene Clock global delta
+// ── Active Clock 状態 ────────────────────────────────
+// Editor Shell default: local-preview. Time operations are local unless the
+// Player UI switches to shared-playback and broadcasts operation events.
 const sceneClockState = {
-  mode: 'host-follow',          // 'host-follow' | 'local'
-  paused: false,
-  localTime: 0,                 // local mode でのみ使用
-  pausedAt: null,               // 一時停止時の冷凍時刻
+  ...createClockState({
+    mode: CLOCK_MODES.LOCAL_PREVIEW,
+    offset: -getLocalNowSeconds(),
+    paused: false,
+    rate: 1,
+  }),
+  roomTimeOffset: 0,
+  localTime: 0,
+  pausedAt: null,
   seekOffset: 0,
   lastUpdateNow: performance.now(),
-  lastHostNow: Date.now() / 1000,    // host-follow mode の delta 計算用
-  rate: 1,                       // 再生速度倍率
-  transportActive: false,         // Player transport UI がScene Clockを明示制御中
+  lastHostNow: Date.now() / 1000,
+  lastTickTime: null,
+  transportActive: true,
+  active: true,
+  controller: null,
+  sharedRevision: 0,
+  sharedUpdatedAt: 0,
 };
 
+function getSceneClockSources(now = performance.now()) {
+  return getActiveClockSources(now);
+}
+
 function getSceneClockTime(now = performance.now()) {
-  if (sceneClockState.paused) {
-    return sceneClockState.pausedAt ?? 0;
-  }
+  return getActiveClockTime(sceneClockState, getSceneClockSources(now));
+}
 
-  if (sceneClockState.mode === 'local') {
-    const elapsed = (now - sceneClockState.lastUpdateNow) / 1000;
-    return Math.max(0, sceneClockState.localTime + elapsed * sceneClockState.rate);
-  }
-
-  // host-follow mode: host-provided wall-clock seconds
-  return Date.now() / 1000;
+function consumeSceneClockDelta(t) {
+  const previous = sceneClockState.lastTickTime;
+  sceneClockState.lastTickTime = t;
+  if (sceneClockState.paused || sceneClockState.rate === 0) return 0;
+  if (!Number.isFinite(previous)) return 0;
+  return Math.max(0, t - previous);
 }
 
 function getSceneClockDelta(now = performance.now()) {
-  if (sceneClockState.paused) {
-    return 0;
-  }
+  return consumeSceneClockDelta(getSceneClockTime(now));
+}
 
-  if (sceneClockState.mode === 'local') {
-    const elapsed = Math.max(0, (now - sceneClockState.lastUpdateNow) / 1000);
-    const delta = elapsed * sceneClockState.rate;
-    // Accumulate localTime so getSceneClockTime() sees continuous progression
-    sceneClockState.localTime = Math.max(0, sceneClockState.localTime + delta);
-    sceneClockState.lastUpdateNow = now;
-    return delta;
-  }
+function getSceneClockController() {
+  return sceneClockState.controller || null;
+}
 
-  // host-follow mode: delta from last host time sample
-  const currentHostNow = Date.now() / 1000;
-  const delta = currentHostNow - sceneClockState.lastHostNow;
-  sceneClockState.lastHostNow = currentHostNow;
-  return Math.max(0, delta);
+function isSceneClockControllerSelf() {
+  const controller = getSceneClockController();
+  return Boolean(controller?.id && presenceState.id && controller.id === presenceState.id);
+}
+
+function getLocalClockControllerInfo() {
+  return {
+    id: presenceState.id || 'local',
+    nickname: presenceState.nickname || 'Local',
+  };
+}
+
+function preserveObjectAgesAcrossActiveTimeChange(previousActiveTime, nextActiveTime, {
+  previousMode = sceneClockState.mode,
+  nextMode = sceneClockState.mode,
+  now = performance.now(),
+} = {}) {
+  if (!Number.isFinite(previousActiveTime) || !Number.isFinite(nextActiveTime)) return;
+  const previousClockMode = normalizeClockMode(previousMode, sceneClockState.mode);
+  const nextClockMode = normalizeClockMode(nextMode, sceneClockState.mode);
+  for (const obj of managedObjects.values()) {
+    const clock = ensureObjectClock(obj, now);
+    const age = getObjectAgeFromClock(previousActiveTime, clock, {
+      mode: previousClockMode,
+    });
+    const nextEpochTime = nextActiveTime - age;
+    obj.userData.clock = {
+      ...clock,
+      ...(nextClockMode === CLOCK_MODES.LOCAL_PREVIEW
+        ? { epochTime: nextEpochTime }
+        : { sharedEpochTime: nextEpochTime }),
+    };
+  }
+  markScenePhysicsRuntimeDirty();
+}
+
+function updateClockLegacyFields(now = performance.now()) {
+  const t = getSceneClockTime(now);
+  sceneClockState.localTime = t;
+  sceneClockState.pausedAt = sceneClockState.paused ? t : null;
+  sceneClockState.lastUpdateNow = now;
+  sceneClockState.lastHostNow = getRoomNowSeconds();
+}
+
+function setRoomTimeOffsetFromServer(serverTimeMs) {
+  if (!Number.isFinite(serverTimeMs)) return;
+  sceneClockState.roomTimeOffset = (serverTimeMs / 1000) - (Date.now() / 1000);
 }
 
 function getSceneClockStateForLoomlet(now = performance.now()) {
   const t = getSceneClockTime(now);
-  const delta = getSceneClockDelta(now);
+  const delta = consumeSceneClockDelta(t);
+  const localNow = getLocalNowSeconds(now);
+  const roomNow = getRoomNowSeconds();
+  const controller = getSceneClockController();
 
   return {
     t,
+    time: t,
+    activeTime: t,
     delta,
     isPaused: sceneClockState.paused,
     mode: sceneClockState.mode,
+    source: sceneClockState.source,
+    offset: sceneClockState.offset,
     rate: sceneClockState.rate,
-    hostNow: Date.now() / 1000,
+    hostNow: roomNow,
+    roomNow,
+    localNow,
+    active: sceneClockState.active,
     transportActive: sceneClockState.transportActive,
+    controller,
+    isController: sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf(),
+    modeLabel: CLOCK_MODE_LABELS[sceneClockState.mode] || sceneClockState.mode,
   };
 }
 
@@ -4731,6 +4927,9 @@ function applySceneGraphOperation(operation) {
     return false;
   }
   loomIntegration.handlePayload(operation);
+  if (operation.scope && typeof operation.scope === 'object' && typeof operation.scope.object === 'string') {
+    rebaseObjectClockById(operation.scope.object, { reason: 'loomlet-graph' });
+  }
   notifySceneStateChanged('scene-graph-operation-applied');
   return true;
 }
@@ -4787,84 +4986,305 @@ function tryHandleLoomletGraphPaste(text) {
   return true;
 }
 
-function setSceneClockMode(mode, now = performance.now()) {
-  if (mode === sceneClockState.mode) return;
+function canControlSceneClock() {
+  return sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf();
+}
 
-  if (mode === 'local') {
-    // host-follow -> local: 現在時刻を localTime として記録
-    const currentTime = getSceneClockTime(now);
-    sceneClockState.localTime = currentTime;
-    sceneClockState.lastUpdateNow = now;
-    sceneClockState.paused = false;
-    sceneClockState.pausedAt = null;
-  } else if (mode === 'host-follow') {
-    // local -> host-follow: ローカル状態をクリア
-    sceneClockState.localTime = 0;
-    sceneClockState.paused = false;
-    sceneClockState.pausedAt = null;
-    sceneClockState.lastHostNow = Date.now() / 1000;
-    sceneClockState.lastUpdateNow = now;
+function getSharedObjectClockPayload(now = performance.now()) {
+  const objectClocks = {};
+  for (const [objectId, obj] of managedObjects.entries()) {
+    const clock = serializeObjectClockForSceneSync(obj, now);
+    if (clock) objectClocks[objectId] = clock;
+  }
+  return objectClocks;
+}
+
+function applySharedObjectClockBaseline(objectId, clockLike, {
+  now = performance.now(),
+  resetLocalEpoch = false,
+  resetPhysicsMotion = false,
+} = {}) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) return false;
+  const sharedEpochTime = readSharedEpochTime(clockLike);
+  if (!Number.isFinite(sharedEpochTime)) return false;
+
+  const clock = ensureObjectClock(obj, now);
+  obj.userData.clock = {
+    ...clock,
+    ...(resetLocalEpoch ? { epochTime: getActiveClockNow(now) } : {}),
+    sharedEpochTime,
+  };
+
+  if (resetPhysicsMotion) {
+    resetObjectPhysicsMotion(obj);
+  }
+  return true;
+}
+
+function applySharedObjectClockBaselines(objectClocks, {
+  now = performance.now(),
+  resetLocalEpoch = false,
+  resetPhysicsMotion = false,
+} = {}) {
+  if (!objectClocks || typeof objectClocks !== 'object') return false;
+  let applied = false;
+  for (const [objectId, clockLike] of Object.entries(objectClocks)) {
+    applied = applySharedObjectClockBaseline(objectId, clockLike, {
+      now,
+      resetLocalEpoch,
+      resetPhysicsMotion,
+    }) || applied;
+  }
+  if (applied) {
+    markScenePhysicsRuntimeDirty();
+  }
+  return applied;
+}
+
+function resetAllObjectClocksForSceneClock(now = performance.now(), {
+  objectClocks = null,
+  reason = 'player-reset',
+  resetPhysicsMotion = true,
+} = {}) {
+  for (const [objectId, obj] of managedObjects.entries()) {
+    const baseline = objectClocks && Object.prototype.hasOwnProperty.call(objectClocks, objectId)
+      ? objectClocks[objectId]
+      : null;
+    const appliedBaseline = baseline
+      ? applySharedObjectClockBaseline(objectId, baseline, {
+          now,
+          resetLocalEpoch: true,
+          resetPhysicsMotion,
+        })
+      : false;
+    if (appliedBaseline) continue;
+    rebaseObjectClock(obj, {
+      now,
+      resetPhysicsMotion,
+      reason,
+    });
   }
 
-  sceneClockState.mode = mode;
+  scenePhysicsRuntime.resetToInitialPose();
+  markScenePhysicsRuntimeDirty();
+}
+
+function publishSharedObjectClockBaselines(reason = 'baseline') {
+  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (!isSceneClockControllerSelf()) return;
+
+  const now = performance.now();
+  const activeTime = getSceneClockTime(now);
+  preserveObjectAgesAcrossActiveTimeChange(activeTime, activeTime, {
+    previousMode: CLOCK_MODES.SHARED_PLAYBACK,
+    nextMode: CLOCK_MODES.SHARED_PLAYBACK,
+    now,
+  });
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent(reason, {
+    objectClocks: getSharedObjectClockPayload(now),
+  });
+}
+
+function broadcastSceneClockEvent(action, extra = {}) {
+  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
+  sceneClockState.sharedRevision += 1;
+  const shouldIncludeObjectClocks =
+    extra.objectClocks ||
+    action === 'mode' ||
+    action === 'reset' ||
+    action === 'controller';
+  broadcast({
+    kind: 'scene-clock',
+    action,
+    mode: sceneClockState.mode,
+    source: sceneClockState.source,
+    offset: sceneClockState.offset,
+    paused: sceneClockState.paused,
+    pausedTime: sceneClockState.paused ? getSceneClockTime() : undefined,
+    rate: sceneClockState.rate,
+    controller: getSceneClockController(),
+    revision: sceneClockState.sharedRevision,
+    roomNow: getRoomNowSeconds(),
+    sentAt: Date.now(),
+    ...(shouldIncludeObjectClocks ? {
+      objectClocks: extra.objectClocks || getSharedObjectClockPayload(),
+    } : {}),
+    ...extra,
+  });
+}
+
+function requestSceneClockControl(now = performance.now()) {
+  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) {
+    setSceneClockMode(CLOCK_MODES.SHARED_PLAYBACK, now, { requestControl: true });
+    return;
+  }
+  sceneClockState.controller = getLocalClockControllerInfo();
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent('controller');
+  notifySceneSyncShellStateChanged('scene-clock-controller-requested');
+}
+
+function releaseSceneClockControl(now = performance.now()) {
+  if (!isSceneClockControllerSelf()) return;
+  sceneClockState.controller = null;
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent('controller-release');
+  notifySceneSyncShellStateChanged('scene-clock-controller-released');
+}
+
+function applyRemoteSceneClock(payload, from = null) {
+  if (!payload || typeof payload !== 'object') return;
+  const nextMode = normalizeClockMode(payload.mode, CLOCK_MODES.SHARED_PLAYBACK);
+  if (nextMode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (
+    sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK &&
+    payload.action !== 'mode'
+  ) {
+    return;
+  }
+
+  const revision = Number(payload.revision);
+  if (Number.isFinite(revision) && revision <= sceneClockState.sharedRevision) {
+    return;
+  }
+
+  sceneClockState.mode = CLOCK_MODES.SHARED_PLAYBACK;
+  sceneClockState.source = 'room';
+  sceneClockState.offset = Number.isFinite(payload.offset) ? payload.offset : sceneClockState.offset;
+  sceneClockState.rate = Number.isFinite(payload.rate) && payload.rate >= 0 ? payload.rate : sceneClockState.rate;
+  sceneClockState.paused = payload.paused === true;
+  sceneClockState.pausedTime = Number.isFinite(payload.pausedTime) ? payload.pausedTime : undefined;
+  sceneClockState.controller = Object.prototype.hasOwnProperty.call(payload, 'controller')
+    ? payload.controller
+    : (from ? {
+        id: from.id,
+        nickname: from.nickname || 'Controller',
+      } : null);
+  if (Number.isFinite(revision)) {
+    sceneClockState.sharedRevision = revision;
+  }
+  sceneClockState.sharedUpdatedAt = Date.now();
+  sceneClockState.transportActive = true;
+  sceneClockState.active = true;
+  updateClockLegacyFields();
+
+  if (payload.action === 'reset') {
+    resetAllObjectClocksForSceneClock(performance.now(), {
+      objectClocks: payload.objectClocks,
+      reason: 'remote-player-reset',
+      resetPhysicsMotion: true,
+    });
+  } else if (payload.objectClocks) {
+    applySharedObjectClockBaselines(payload.objectClocks);
+  }
+
+  notifySceneSyncShellStateChanged(`scene-clock-remote-${payload.action || 'update'}`);
+}
+
+function setSceneClockMode(mode, now = performance.now(), options = {}) {
+  const nextMode = normalizeClockMode(mode, sceneClockState.mode);
+  const previousMode = sceneClockState.mode;
+  const previousActiveTime = getSceneClockTime(now);
+  const sources = getSceneClockSources(now);
+
+  if (nextMode === CLOCK_MODES.ROOM_TIME) {
+    sceneClockState.mode = CLOCK_MODES.ROOM_TIME;
+    sceneClockState.source = 'room';
+    sceneClockState.offset = Number.isFinite(options.offset) ? options.offset : 0;
+    sceneClockState.paused = false;
+    sceneClockState.pausedTime = undefined;
+    sceneClockState.rate = 1;
+  } else {
+    setActiveClockMode(sceneClockState, nextMode, sources, {
+      preserveTime: options.preserveTime !== false,
+      resetToZero: options.resetToZero === true,
+    });
+  }
+
+  if (nextMode !== CLOCK_MODES.SHARED_PLAYBACK) {
+    sceneClockState.controller = null;
+  } else if (options.requestControl === true || !sceneClockState.controller) {
+    sceneClockState.controller = getLocalClockControllerInfo();
+  }
+
+  const nextActiveTime = getSceneClockTime(now);
+  preserveObjectAgesAcrossActiveTimeChange(previousActiveTime, nextActiveTime, {
+    previousMode,
+    nextMode,
+    now,
+  });
+
+  sceneClockState.transportActive = true;
+  sceneClockState.active = true;
+  updateClockLegacyFields(now);
+  if (nextMode === CLOCK_MODES.SHARED_PLAYBACK && isSceneClockControllerSelf()) {
+    broadcastSceneClockEvent('mode');
+  }
+  notifySceneSyncShellStateChanged('scene-clock-mode-changed');
 }
 
 function pauseSceneClock(now = performance.now()) {
-  if (sceneClockState.paused) return;
-
-  const currentTime = getSceneClockTime(now);
-
-  sceneClockState.paused = true;
-  sceneClockState.pausedAt = currentTime;
-  sceneClockState.localTime = currentTime;
-  sceneClockState.lastUpdateNow = now;
+  if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
+  if (!canControlSceneClock()) return;
+  pauseClockState(sceneClockState, getSceneClockSources(now));
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent('pause');
+  notifySceneSyncShellStateChanged('scene-clock-paused');
 }
 
 function resumeSceneClock(now = performance.now()) {
-  if (!sceneClockState.paused) return;
-
-  const pausedAt = sceneClockState.pausedAt ?? getSceneClockTime(now);
-
-  sceneClockState.mode = 'local';
-  sceneClockState.localTime = pausedAt;
-  sceneClockState.lastUpdateNow = now;
-  sceneClockState.paused = false;
-  sceneClockState.pausedAt = null;
+  if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
+  if (!canControlSceneClock()) return;
+  resumeClockState(sceneClockState, getSceneClockSources(now));
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent('play');
+  notifySceneSyncShellStateChanged('scene-clock-playing');
 }
 
-function seekSceneClock(t, now = performance.now()) {
-  t = Math.max(0, t);
-
-  if (sceneClockState.mode !== 'local') {
-    setSceneClockMode('local', now);
+function seekSceneClock(t, now = performance.now(), options = {}) {
+  if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
+  if (!canControlSceneClock()) return;
+  seekClockState(sceneClockState, Math.max(0, Number(t) || 0), getSceneClockSources(now));
+  updateClockLegacyFields(now);
+  if (options.broadcast !== false) {
+    broadcastSceneClockEvent('seek');
   }
-
-  const wasPaused = sceneClockState.paused;
-
-  sceneClockState.localTime = t;
-  sceneClockState.lastUpdateNow = now;
-
-  if (wasPaused) {
-    sceneClockState.paused = true;
-    sceneClockState.pausedAt = t;
-  } else {
-    sceneClockState.paused = false;
-    sceneClockState.pausedAt = null;
-  }
+  notifySceneSyncShellStateChanged('scene-clock-seek');
 }
 
 function resetSceneClock(now = performance.now()) {
-  seekSceneClock(0, now);
+  if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
+  if (!canControlSceneClock()) return;
+  seekSceneClock(0, now, { broadcast: false });
+  resetAllObjectClocksForSceneClock(now, {
+    reason: 'player-reset',
+    resetPhysicsMotion: true,
+  });
+  broadcastSceneClockEvent('reset', {
+    objectClocks: getSharedObjectClockPayload(now),
+  });
 }
 
 function followHostClock(now = performance.now()) {
-  setSceneClockMode('host-follow', now);
+  setSceneClockMode(CLOCK_MODES.ROOM_TIME, now);
 }
 
-function activateSceneClockTransport(now = performance.now()) {
-  setSceneClockRate(1, now);
-  stopSceneClock(now);
+function activateSceneClockTransport(nowOrOptions = performance.now(), maybeOptions = {}) {
+  const options = typeof nowOrOptions === 'object' ? nowOrOptions : maybeOptions;
+  const now = typeof nowOrOptions === 'number' ? nowOrOptions : performance.now();
   sceneClockState.transportActive = true;
+  sceneClockState.active = true;
+  if (options?.mode) {
+    setSceneClockMode(options.mode, now, {
+      requestControl: options.requestControl === true,
+      preserveTime: options.preserveTime !== false,
+    });
+  } else {
+    updateClockLegacyFields(now);
+  }
   notifySceneSyncShellStateChanged('scene-clock-transport-activated');
 }
 
@@ -4873,62 +5293,69 @@ function deactivateSceneClockTransport(nowOrOptions = performance.now(), maybeOp
     normalizeSceneClockDeactivateArgs(nowOrOptions, maybeOptions);
 
   setSceneClockRate(1, now);
-  sceneClockState.transportActive = false;
+  sceneClockState.transportActive = true;
+  sceneClockState.active = true;
   if (preserveLocalTimeline) {
     preserveLocalSceneClockTimeline(sceneClockState, {
       now,
       getSceneClockTime,
       resume: resumeLocalTimeline,
     });
-  } else {
-    followHostClock(now);
   }
+  updateClockLegacyFields(now);
   notifySceneSyncShellStateChanged('scene-clock-transport-deactivated');
 }
 
 function setSceneClockRate(rate, now = performance.now()) {
-  const nextRate = Number(rate);
-  if (!Number.isFinite(nextRate) || nextRate < 0) return;
-  // rate 変更時に time jump を避けるため現在時刻を localTime に焼く
-  if (sceneClockState.mode === 'local') {
-    sceneClockState.localTime = getSceneClockTime(now);
-    sceneClockState.lastUpdateNow = now;
-  }
-  sceneClockState.rate = nextRate;
+  if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
+  if (!canControlSceneClock()) return;
+  if (!setActiveClockRate(sceneClockState, rate, getSceneClockSources(now))) return;
+  updateClockLegacyFields(now);
+  broadcastSceneClockEvent('rate');
+  notifySceneSyncShellStateChanged('scene-clock-rate');
 }
 
 function playSceneClock(now = performance.now()) {
-  // seekSceneClock(0) ensures we are in local mode starting from a sensible
-  // position rather than baking the host-follow wall-clock epoch into localTime.
-  if (sceneClockState.mode !== 'local') {
-    seekSceneClock(0, now);
-  }
-  if (sceneClockState.paused) {
-    resumeSceneClock(now);
-  }
+  resumeSceneClock(now);
 }
 
 function stopSceneClock(now = performance.now()) {
-  seekSceneClock(0, now); // seek clears pause; then we re-pause at t=0
+  resetSceneClock(now);
   pauseSceneClock(now);
 }
 
-// Side-effect-free getter for shell UI (does not update delta/lastUpdateNow).
-// In host-follow mode, raw time is wall-clock epoch (>1 billion seconds).
-// Player Shell transport always starts from 0, so display 0 until local mode.
-function getSceneClockStateForShell() {
-  const rawTime = getSceneClockTime();
-  const displayTime = sceneClockState.mode === 'host-follow' ? 0 : rawTime;
-  const duration = getScenePlaybackDuration();
+function getPrimarySelectedObjectAgeForShell(now = performance.now()) {
+  const objectId = transformCtrl.object?.userData?.objectId || getPrimarySelectedObjectId();
+  if (!objectId) return null;
   return {
-    time: displayTime,
-    t: displayTime,
+    objectId,
+    age: getObjectAge(objectId, now, { t: getSceneClockTime(now) }),
+  };
+}
+
+// Side-effect-free getter for shell UI.
+function getSceneClockStateForShell() {
+  const now = performance.now();
+  const time = getSceneClockTime(now);
+  const duration = getScenePlaybackDuration();
+  const controller = getSceneClockController();
+  const selectedObjectAge = getPrimarySelectedObjectAgeForShell(now);
+  return {
+    time,
+    t: time,
     isPaused: sceneClockState.paused,
-    playing: !sceneClockState.paused && sceneClockState.mode === 'local',
+    playing: !sceneClockState.paused && sceneClockState.rate > 0,
     mode: sceneClockState.mode,
+    modeLabel: CLOCK_MODE_LABELS[sceneClockState.mode] || sceneClockState.mode,
+    source: sceneClockState.source,
     rate: sceneClockState.rate,
     duration,
     transportActive: sceneClockState.transportActive,
+    active: sceneClockState.active,
+    controller,
+    isController: sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf(),
+    selectedObjectAge,
+    roomNow: getRoomNowSeconds(),
   };
 }
 
@@ -4962,6 +5389,7 @@ function applyObjectAudioSourcesPatch(objectId, patch) {
   const merged = mergeAudioSourcesPatch(obj.userData.audioSources, patch);
   obj.userData.audioSources = merged;
   audioSourceController.setObjectAudioSources(objectId, merged);
+  rebaseObjectClock(obj, { reason: 'object-audio-sources' });
   notifySceneStateChanged('object-audio-sources-updated');
   return merged;
 }
@@ -4987,6 +5415,7 @@ function setObjectAudioSourcesFull(objectId, map) {
   const normalized = normalizeAudioSourcesMap(map);
   obj.userData.audioSources = normalized;
   audioSourceController.setObjectAudioSources(objectId, normalized);
+  rebaseObjectClock(obj, { reason: 'object-audio-sources-full' });
   return normalized;
 }
 
@@ -5088,7 +5517,7 @@ sceneClockTogglePauseBtn?.addEventListener('click', () => {
 });
 
 sceneClockFollowBtn?.addEventListener('click', () => {
-  setSceneClockMode('host-follow');
+  setSceneClockMode(CLOCK_MODES.ROOM_TIME);
   updateSceneClockUI();
 });
 
@@ -5106,14 +5535,7 @@ sceneClockRateInput?.addEventListener('change', (e) => {
     return;
   }
 
-  // rate 変更時に time jump を避ける
-  // 現在時刻を localTime に焼いてから rate を変更
-  if (sceneClockState.mode === 'local') {
-    sceneClockState.localTime = getSceneClockTime(now);
-    sceneClockState.lastUpdateNow = now;
-  }
-
-  sceneClockState.rate = nextRate;
+  setSceneClockRate(nextRate, now);
   sceneClockRateInput.value = sceneClockState.rate;
   updateSceneClockUI();
 });
@@ -5128,7 +5550,7 @@ function updateSceneClockUI() {
 
   if (sceneClockModeEl) {
     sceneClockModeEl.textContent = sceneClockState.mode;
-    sceneClockModeEl.classList.toggle('local', sceneClockState.mode === 'local');
+    sceneClockModeEl.classList.toggle('local', sceneClockState.mode === CLOCK_MODES.LOCAL_PREVIEW);
   }
 
   if (sceneClockStatusEl) {
@@ -5425,6 +5847,7 @@ function connectPresence() {
       case 'welcome':
         presenceState.id = data.id;
         presenceState.room = data.room;
+        setRoomTimeOffsetFromServer(data.serverTime);
         updateStatus(true);
         updatePeersList();
         notifyConnectionStateChanged('presence-welcome');
@@ -5608,6 +6031,10 @@ async function respondToSceneRequest(from) {
       rotation: obj.quaternion.toArray(),
       scale: obj.scale.toArray(),
     };
+    const clock = serializeObjectClockForSceneSync(obj);
+    if (clock) {
+      entry.clock = clock;
+    }
 
     const bounds = computeWorldBoundsForExternalUse(obj);
     if (bounds) {
@@ -5745,6 +6172,11 @@ function handleHandoff(data) {
   }
 
   switch (payload.kind) {
+    case 'scene-clock': {
+      if (isOwn) break;
+      applyRemoteSceneClock(payload, data.from);
+      break;
+    }
     case 'scene-state': {
       sceneReceived = true;
       clearTimeout(sceneRequestTimer);
@@ -5763,7 +6195,7 @@ function handleHandoff(data) {
       const objects = payload.objects || {};
       removeSampleCube('scene-state-received');
       for (const [objectId, info] of Object.entries(objects)) {
-        addOrUpdateObject(objectId, info);
+        addOrUpdateObject(objectId, info, { resetPhysicsMotion: true });
       }
       ensureSampleCubeForEmptyRoom('scene-state-applied');
 
@@ -5786,6 +6218,7 @@ function handleHandoff(data) {
         }
       }
       notifySceneStateChanged('scene-state-handoff');
+      publishSharedObjectClockBaselines('scene-state-baseline');
       break;
     }
     case 'scene-request': {
@@ -5826,6 +6259,8 @@ function handleHandoff(data) {
       const targetScl = Array.isArray(payload.scale)
         ? payload.scale.slice()
         : beforeScl;
+      let shouldRebaseObjectClock = false;
+      let shouldResetPhysicsMotion = false;
 
       // Check if this should animate (AI/GPT-originated)
       const shouldAnimateTransform =
@@ -5833,8 +6268,14 @@ function handleHandoff(data) {
         Boolean(data.from?.id?.startsWith?.('api-'));
 
       // Apply non-transform updates immediately
-      if (typeof payload.name === 'string') applyObjectName(obj, payload.name);
-      if (typeof payload.visible === 'boolean') applyObjectVisibility(obj, payload.visible);
+      if (typeof payload.name === 'string') {
+        applyObjectName(obj, payload.name);
+        shouldRebaseObjectClock = true;
+      }
+      if (typeof payload.visible === 'boolean') {
+        applyObjectVisibility(obj, payload.visible);
+        shouldRebaseObjectClock = true;
+      }
       if (payload.asset) {
         const newAssetType = payload.asset.type;
         if (newAssetType === 'image' || newAssetType === 'video' || newAssetType === 'text') {
@@ -5847,6 +6288,7 @@ function handleHandoff(data) {
             position: Array.isArray(payload.position) ? payload.position : obj.position.toArray(),
             rotation: Array.isArray(payload.rotation) ? payload.rotation : obj.quaternion.toArray(),
             scale: Array.isArray(payload.scale) ? payload.scale : obj.scale.toArray(),
+            clock: payload.clock,
             asset: payload.asset,
             metadata: hasPayloadMetadata
               ? cloneJsonSafe(payload.metadata)
@@ -5884,12 +6326,15 @@ function handleHandoff(data) {
           }
 
           notifySceneStateChanged('scene-delta-content-replace');
+          publishSharedObjectClockBaselines('scene-delta-baseline');
           break;
         }
         applyAssetDelta(obj, payload.asset);
+        shouldRebaseObjectClock = true;
       }
       if (payload.animation && typeof payload.animation === 'object') {
         applyObjectAnimationDelta(obj, payload.animation);
+        shouldRebaseObjectClock = true;
         console.debug('[scene-delta] animation applied', {
           objectId: payload.objectId,
           animation: payload.animation,
@@ -5897,6 +6342,7 @@ function handleHandoff(data) {
       }
       if (payload.audioSources !== undefined) {
         applyIncomingAudioSources(payload.objectId, payload.audioSources);
+        shouldRebaseObjectClock = true;
         console.debug('[scene-delta] audioSources applied', {
           objectId: payload.objectId,
           audioSources: payload.audioSources,
@@ -5904,6 +6350,7 @@ function handleHandoff(data) {
       }
       if (Object.prototype.hasOwnProperty.call(payload, 'physics')) {
         applyObjectPhysicsDelta(obj, payload.physics);
+        shouldRebaseObjectClock = true;
         console.debug('[scene-delta] physics applied', {
           objectId: payload.objectId,
           physics: payload.physics,
@@ -5922,6 +6369,8 @@ function handleHandoff(data) {
         animateObjectTransform(payload.objectId, obj, payload, {
           delay: batchIndex * AI_TRANSFORM_TWEEN_STAGGER_MS,
         });
+        shouldRebaseObjectClock = true;
+        shouldResetPhysicsMotion = true;
         console.debug('[scene-delta] transform tween queued', {
           objectId: payload.objectId,
           targetPosition: payload.position || null,
@@ -5935,12 +6384,22 @@ function handleHandoff(data) {
         if (payload.scale) obj.scale.fromArray(payload.scale);
         if (payload.position || payload.rotation || payload.scale) {
           markScenePhysicsRuntimeDirty();
+          shouldRebaseObjectClock = true;
+          shouldResetPhysicsMotion = true;
         }
         console.debug('[scene-delta] applied', {
           objectId: payload.objectId,
           position: obj.position.toArray(),
           rotation: obj.quaternion.toArray(),
           scale: obj.scale.toArray(),
+        });
+      }
+
+      if (shouldRebaseObjectClock) {
+        rebaseObjectClock(obj, {
+          resetPhysicsMotion: shouldResetPhysicsMotion,
+          sharedEpochTime: readSharedEpochTime(payload.clock),
+          reason: 'scene-delta',
         });
       }
 
@@ -5959,6 +6418,7 @@ function handleHandoff(data) {
         presenceState.historyManager.push(historyEntry);
       }
       notifySceneStateChanged('scene-delta-handoff');
+      publishSharedObjectClockBaselines('scene-delta-baseline');
       break;
     }
     case 'scene-add': {
@@ -5977,6 +6437,7 @@ function handleHandoff(data) {
         presenceState.historyManager.push(historyEntry);
       }
       notifySceneStateChanged('scene-add-handoff');
+      publishSharedObjectClockBaselines('scene-add-baseline');
       break;
     }
     case 'scene-remove': {
@@ -6016,6 +6477,7 @@ function handleHandoff(data) {
         reason: 'scene-physics-handoff',
       });
       notifySceneStateChanged('scene-physics-handoff');
+      publishSharedObjectClockBaselines('scene-physics-baseline');
       break;
     }
     case 'scene-mesh': {
@@ -6154,6 +6616,7 @@ function handleHandoff(data) {
         handleHandoff({ ...data, payload: child, __batchIndex: index });
       }
       notifySceneStateChanged('scene-batch-handoff');
+      publishSharedObjectClockBaselines('scene-batch-baseline');
       break;
     }
     case 'ai-command': {
@@ -6462,6 +6925,7 @@ async function uploadGlbFromUrl(url, params = {}) {
   model.userData.name = file.name;
   managedObjects.set(model.userData.objectId, model);
   setupObjectGlbAnimation(objectId, model);
+  rebaseObjectClock(model, { reason: 'glb-url-upload' });
   selectManagedObject(model);
   notifySceneStateChanged('glb-uploaded-from-url');
 
@@ -6774,6 +7238,10 @@ function serializeSceneObjectForExternalUse(objectId, obj) {
     metadata: obj.userData?.metadata || null,
     meshPath: obj.userData?.meshPath || obj.userData?.asset?.meshPath || null,
   };
+  const clock = serializeObjectClockForSceneSync(obj);
+  if (clock) {
+    result.clock = clock;
+  }
 
   const bounds = computeWorldBoundsForExternalUse(obj);
   if (bounds) {
@@ -7249,6 +7717,10 @@ function cleanupPreviewForLoadedObject(options = {}) {
 
 function addOrUpdateObject(objectId, info, options = {}) {
   removedObjectIds.delete(objectId);
+  info = {
+    ...(info || {}),
+    resetPhysicsMotion: options.resetPhysicsMotion === true || info?.resetPhysicsMotion === true,
+  };
   const existing = managedObjects.get(objectId);
   if (!isSampleCubeObjectId(objectId)) {
     removeSampleCube('object-added');
@@ -7312,6 +7784,12 @@ function addOrUpdateObject(objectId, info, options = {}) {
   if (info.physics !== undefined) {
     applyObjectPhysicsDelta(existing, info.physics);
   }
+  rebaseObjectClock(existing, {
+    resetPhysicsMotion: info.resetPhysicsMotion === true ||
+      Boolean(info.position || info.rotation || info.scale),
+    sharedEpochTime: readSharedEpochTime(info.clock),
+    reason: 'managed-object-updated',
+  });
   notifySceneStateChanged('managed-object-updated');
 }
 
@@ -8362,6 +8840,12 @@ function replaceManagedObject(objectId, nextObject, info) {
   } else {
     delete nextObject.userData.physics;
   }
+
+  rebaseObjectClock(nextObject, {
+    resetPhysicsMotion: info?.resetPhysicsMotion === true,
+    sharedEpochTime: readSharedEpochTime(info?.clock),
+    reason: 'managed-object-replaced',
+  });
   markScenePhysicsRuntimeDirty();
 
   console.debug('[scene-add] applied transform', {
@@ -8536,6 +9020,7 @@ function applyAssetDelta(obj, asset) {
   if (textRoot?.userData?.asset?.type === 'text' || nextAsset.type === 'text') {
     textRoot.userData.asset = nextAsset;
     rerenderTextPanelObject(textRoot, nextAsset);
+    rebaseObjectClock(textRoot, { reason: 'text-asset-delta' });
     notifySceneStateChanged('asset-delta-applied');
     return;
   }
@@ -8543,6 +9028,7 @@ function applyAssetDelta(obj, asset) {
   if (asset.color) {
     applyObjectColor(obj, asset.color);
   }
+  rebaseObjectClock(obj, { reason: 'asset-delta' });
   notifySceneStateChanged('asset-delta-applied');
 }
 
@@ -8785,10 +9271,53 @@ function applyOperationToScene(operation) {
 
 // ── broadcast 送信ヘルパー（次 Step 以降で使用） ─────────
 
+function attachSharedClockToSceneMutationPayload(payload, now = performance.now()) {
+  if (!payload || typeof payload !== 'object') return payload;
+
+  if (payload.kind === 'scene-batch') {
+    if (Array.isArray(payload.actions)) {
+      payload.actions = payload.actions.map((action) =>
+        attachSharedClockToSceneMutationPayload(action, now));
+    }
+    if (Array.isArray(payload.ops)) {
+      payload.ops = payload.ops.map((op) =>
+        attachSharedClockToSceneMutationPayload(op, now));
+    }
+    return payload;
+  }
+
+  if (payload.kind !== 'scene-add' && payload.kind !== 'scene-delta') return payload;
+  if (typeof payload.objectId !== 'string' || !payload.objectId) return payload;
+
+  const existingClock = readSharedEpochTime(payload.clock);
+  if (Number.isFinite(existingClock)) {
+    payload.clock = {
+      ...(payload.clock || {}),
+      sharedEpochTime: existingClock,
+    };
+    return payload;
+  }
+
+  const obj = managedObjects.get(payload.objectId);
+  const clock = obj
+    ? serializeObjectClockForSceneSync(obj, now)
+    : { sharedEpochTime: getSharedEpochTimeForCurrentState(now) };
+  if (clock) {
+    payload.clock = {
+      ...(payload.clock || {}),
+      ...clock,
+    };
+  }
+  return payload;
+}
+
 function broadcast(payload) {
   const ws = presenceState.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: 'broadcast', payload }));
+  ws.send(JSON.stringify({
+    type: 'broadcast',
+    payload: attachSharedClockToSceneMutationPayload(payload),
+  }));
 }
 
 function sendHandoff({ targetId, payload }) {
@@ -8949,6 +9478,10 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
     if (preservedAudioSources !== undefined) {
       setObjectAudioSourcesFull(objectId, preservedAudioSources);
     }
+    rebaseObjectClock(wrapper, {
+      resetPhysicsMotion: info?.resetPhysicsMotion === true,
+      reason: 'glb-blob-loaded',
+    });
     markScenePhysicsRuntimeDirty();
     notifySceneStateChanged('glb-blob-loaded');
     markCrashProbe('glb-scene-attach-success', { objectId });
@@ -9857,6 +10390,7 @@ const dragDropManager = new DragDropManager({
   onLoaded: async (model, file) => {
     managedObjects.set(model.userData.objectId, model);
     setupObjectGlbAnimation(model.userData.objectId, model);
+    rebaseObjectClock(model, { reason: 'drag-drop-loaded' });
     selectManagedObject(model);
     notifySelectionChanged('drag-drop-object-selected');
 
@@ -12745,6 +13279,7 @@ function restoreSnapshotObject(entry, options = {}) {
   addOrUpdateObject(objectId, payload, {
     skipFallbackOnFailure: true,
     suppressSnapshotSaveOnFailure: true,
+    resetPhysicsMotion: true,
   });
 }
 
@@ -13321,8 +13856,11 @@ mountSceneSyncShellFromDom({
     stopSceneClock,
     seekSceneClock,
     setSceneClockRate,
+    setSceneClockMode,
     resetSceneClock,
     followSceneClock: followHostClock,
+    requestSceneClockControl,
+    releaseSceneClockControl,
     activateSceneClockTransport,
     deactivateSceneClockTransport,
   },
