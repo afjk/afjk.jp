@@ -5118,7 +5118,7 @@ function applyScenePhysicsResetBaseline(physicsBaseline = null, now = performanc
 function resetAllObjectClocksForSceneClock(now = performance.now(), {
   objectClocks = null,
   reason = 'player-reset',
-  resetPhysicsMotion = true,
+  resetPhysicsMotion = false,
   capturePhysicsInitialTransform = false,
   physicsBaseline = null,
 } = {}) {
@@ -5253,7 +5253,6 @@ function applyRemoteSceneClock(payload, from = null) {
     resetAllObjectClocksForSceneClock(now, {
       objectClocks: payload.objectClocks,
       reason: payload.action === 'seek' ? 'remote-player-seek-zero' : 'remote-player-reset',
-      resetPhysicsMotion: true,
       physicsBaseline: payload.physicsBaseline || createPhysicsResetBaseline({
         time: 0,
         worldEpochTime: activeTime,
@@ -5307,7 +5306,6 @@ function setSceneClockMode(mode, now = performance.now(), options = {}) {
     physicsBaseline = createSharedPlaybackPhysicsResetBaseline(now, 'player-mode-zero');
     resetAllObjectClocksForSceneClock(now, {
       reason: 'player-mode-zero',
-      resetPhysicsMotion: true,
       physicsBaseline,
     });
   } else {
@@ -5366,7 +5364,6 @@ function seekSceneClock(t, now = performance.now(), options = {}) {
     physicsBaseline = createSharedPlaybackPhysicsResetBaseline(now, 'player-seek-zero');
     resetAllObjectClocksForSceneClock(now, {
       reason: 'player-seek-zero',
-      resetPhysicsMotion: true,
       physicsBaseline,
     });
   }
@@ -5392,7 +5389,6 @@ function resetSceneClock(now = performance.now()) {
     : null;
   resetAllObjectClocksForSceneClock(now, {
     reason: 'player-reset',
-    resetPhysicsMotion: true,
     physicsBaseline,
   });
   broadcastSceneClockEvent('reset', {
