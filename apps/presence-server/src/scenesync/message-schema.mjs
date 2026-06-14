@@ -5,6 +5,7 @@ const KNOWN_KINDS = new Set([
   'scene-mesh',
   'scene-env',
   'scene-bgm',
+  'scene-physics',
   'scene-state',
   'scene-request',
   'scene-clock',
@@ -31,6 +32,62 @@ function hasFiniteNumberArray(value, size) {
   return Array.isArray(value)
     && value.length === size
     && value.every(item => typeof item === 'number' && Number.isFinite(item));
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function validateScenePhysicsPayload(physics) {
+  if (!physics || typeof physics !== 'object' || Array.isArray(physics)) {
+    return { ok: false, reason: 'physics must be an object' };
+  }
+
+  if (physics.version !== undefined && (!Number.isInteger(physics.version) || physics.version < 1)) {
+    return { ok: false, reason: 'physics.version must be a positive integer' };
+  }
+  if (physics.enabled !== undefined && typeof physics.enabled !== 'boolean') {
+    return { ok: false, reason: 'physics.enabled must be a boolean' };
+  }
+  if (physics.duration !== undefined && (!isFiniteNumber(physics.duration) || physics.duration <= 0)) {
+    return { ok: false, reason: 'physics.duration must be a positive finite number' };
+  }
+
+  const worldOptions = physics.worldOptions;
+  if (worldOptions !== undefined) {
+    if (!worldOptions || typeof worldOptions !== 'object' || Array.isArray(worldOptions)) {
+      return { ok: false, reason: 'physics.worldOptions must be an object' };
+    }
+
+    if (
+      worldOptions.gravity !== undefined
+      && !isFiniteNumber(worldOptions.gravity)
+      && !hasFiniteNumberArray(worldOptions.gravity, 3)
+    ) {
+      return { ok: false, reason: 'physics.worldOptions.gravity must be a finite number or [x,y,z]' };
+    }
+
+    if (
+      worldOptions.timestepFp !== undefined
+      && (!Number.isInteger(worldOptions.timestepFp) || worldOptions.timestepFp <= 0)
+    ) {
+      return { ok: false, reason: 'physics.worldOptions.timestepFp must be a positive integer' };
+    }
+
+    const ground = worldOptions.ground;
+    if (ground !== undefined && ground !== null && ground !== false) {
+      if (typeof ground !== 'object' || Array.isArray(ground)) {
+        return { ok: false, reason: 'physics.worldOptions.ground must be an object, null, or false' };
+      }
+      for (const field of ['y', 'restitution', 'friction']) {
+        if (ground[field] !== undefined && !isFiniteNumber(ground[field])) {
+          return { ok: false, reason: `physics.worldOptions.ground.${field} must be finite` };
+        }
+      }
+    }
+  }
+
+  return { ok: true };
 }
 
 function validateObjectClock(clock, path = 'clock') {
@@ -195,6 +252,10 @@ export function validateSceneSyncPayload(payload, options = {}) {
     if (!isReasonableString(payload.bgm.url)) {
       return { ok: false, reason: 'bgm.url must be a reasonable string' };
     }
+  }
+
+  if (payload.kind === 'scene-physics') {
+    return validateScenePhysicsPayload(payload.physics);
   }
 
   if (payload.kind === 'scene-batch') {

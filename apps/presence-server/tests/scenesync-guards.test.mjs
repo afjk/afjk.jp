@@ -223,6 +223,34 @@ describe('Scene Sync guard helpers', () => {
     assert.equal(result.ok, true);
   });
 
+  it('accepts valid scene-physics settings', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-physics',
+      physics: {
+        version: 1,
+        enabled: true,
+        duration: 10,
+        worldOptions: {
+          gravity: -9.81,
+          ground: { y: 0, restitution: 0.35, friction: 0.72 },
+          timestepFp: 1092,
+        },
+      },
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it('rejects scene-physics with invalid gravity', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-physics',
+      physics: {
+        enabled: true,
+        worldOptions: { gravity: [0, Infinity, 0] },
+      },
+    });
+    assert.equal(result.ok, false);
+  });
+
   it('rejects scene-bgm without url', () => {
     const result = validateSceneSyncPayload({
       kind: 'scene-bgm',
@@ -399,6 +427,26 @@ describe('Scene Sync server guards', () => {
     assert.equal(avatar.status, 200);
     assert.equal(lock.status, 200);
     assert.equal(unlock.status, 200);
+  });
+
+  it('accepts scene-physics broadcast payloads', async () => {
+    const response = await fetch(`${baseUrl}/api/room/physics-protocol/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'scene-physics',
+        physics: {
+          version: 1,
+          enabled: true,
+          duration: 10,
+          worldOptions: {
+            gravity: -9.81,
+            ground: { y: 0, restitution: 0.35, friction: 0.72 },
+          },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
   });
 
   it('enforces object count limit for scene-add', async () => {
