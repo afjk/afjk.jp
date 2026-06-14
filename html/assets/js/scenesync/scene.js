@@ -79,6 +79,7 @@ import {
   applyPhysicsResetBaseline,
   createPhysicsResetBaseline,
   createScenePhysicsRuntime,
+  isScenePhysicsZeroTime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
   serializeObjectPhysics,
@@ -5352,13 +5353,14 @@ function resumeSceneClock(now = performance.now()) {
 function seekSceneClock(t, now = performance.now(), options = {}) {
   if (sceneClockState.mode === CLOCK_MODES.ROOM_TIME) return;
   if (!canControlSceneClock()) return;
-  const targetTime = Math.max(0, Number(t) || 0);
+  const rawTargetTime = Math.max(0, Number(t) || 0);
+  const targetTime = isScenePhysicsZeroTime(rawTargetTime) ? 0 : rawTargetTime;
   seekClockState(sceneClockState, targetTime, getSceneClockSources(now));
   updateClockLegacyFields(now);
   let physicsBaseline = null;
   if (
     sceneClockState.mode === CLOCK_MODES.SHARED_PLAYBACK &&
-    targetTime === 0 &&
+    isScenePhysicsZeroTime(targetTime) &&
     options.resetPhysicsBaseline !== false
   ) {
     physicsBaseline = createSharedPlaybackPhysicsResetBaseline(now, 'player-seek-zero');

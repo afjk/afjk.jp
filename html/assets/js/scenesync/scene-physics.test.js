@@ -4,6 +4,7 @@ import {
   applyPhysicsResetBaseline,
   createPhysicsResetBaseline,
   createScenePhysicsRuntime,
+  isScenePhysicsZeroTime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
   shouldResetPhysicsForSceneClockPayload,
@@ -347,7 +348,10 @@ test('scene physics runtime applies remote reset payload as a zero baseline', ()
   };
   assert.equal(shouldResetPhysicsForSceneClockPayload(payload, 0), true);
   assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'seek', targetTime: 0 }, 0), true);
+  assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'seek', targetTime: 0.0000001 }, 0.0000001), true);
   assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'seek', targetTime: 2 }, 2), false);
+  assert.equal(isScenePhysicsZeroTime(0.0000001), true);
+  assert.equal(isScenePhysicsZeroTime(0.00001), false);
 
   applyPhysicsResetBaseline(controllerRuntime, { t: 0, mode: 'shared-playback', active: true }, payload.physicsBaseline);
   applyPhysicsResetBaseline(followerRuntime, { t: 0, mode: 'shared-playback', active: true }, payload.physicsBaseline);

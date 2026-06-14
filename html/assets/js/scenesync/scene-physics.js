@@ -322,7 +322,7 @@ function finiteNonNegativeNumber(value, fallback = 0) {
   return Number.isFinite(number) ? Math.max(0, number) : fallback;
 }
 
-function isZeroTime(value) {
+export function isScenePhysicsZeroTime(value) {
   const number = Number(value);
   return Number.isFinite(number) && Math.abs(number) <= ZERO_TIME_EPSILON;
 }
@@ -346,7 +346,7 @@ export function shouldResetPhysicsForSceneClockPayload(payload, activeTime = nul
   if (!payload || typeof payload !== 'object') return false;
   const baseline = payload.physicsBaseline;
   if (baseline?.kind === 'reset') {
-    return isZeroTime(baseline.time ?? payload.targetTime ?? payload.time ?? activeTime);
+    return isScenePhysicsZeroTime(baseline.time ?? payload.targetTime ?? payload.time ?? activeTime);
   }
   if (payload.action === 'reset') return true;
   if (payload.action !== 'seek') return false;
@@ -355,7 +355,7 @@ export function shouldResetPhysicsForSceneClockPayload(payload, activeTime = nul
     payload.time,
     payload.pausedTime,
     activeTime,
-  ].some(isZeroTime);
+  ].some(isScenePhysicsZeroTime);
 }
 
 export function applyPhysicsResetBaseline(runtime, clockState = null, baseline = null) {
