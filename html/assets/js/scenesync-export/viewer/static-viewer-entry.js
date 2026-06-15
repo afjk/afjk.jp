@@ -215,38 +215,7 @@ async function main() {
   const hasPlaybackTargets = viewerCore.hasObjectAudioPlaybackTargets?.()
     ?? (viewerCore.getObjectAudioPlaybackElements?.() || []).length > 0;
 
-  if (hasObjectAudioSources && hasPlaybackTargets && controlsEl) {
-    const audioBtn = document.createElement('button');
-    audioBtn.className = 'viewer-btn';
-    audioBtn.textContent = '▶ Play Audio';
-    let playing = false;
-    let pending = false;
-    audioBtn.addEventListener('click', async () => {
-      if (pending) return;
-      if (playing) {
-        viewerCore.pauseObjectAudioPlaybackTargets?.();
-        audioBtn.textContent = '▶ Play Audio';
-        playing = false;
-      } else {
-        const playbackElements = viewerCore.getObjectAudioPlaybackElements?.() || [];
-        if (playbackElements.length > 0) {
-          pending = true;
-          audioBtn.disabled = true;
-          await Promise.resolve(viewerCore.unlockObjectAudio?.()).catch(() => false);
-          const results = await Promise.resolve(viewerCore.playObjectAudioPlaybackTargets?.()).catch(() => []);
-          if (Array.isArray(results) && results.some((result) => (
-            result.status === 'fulfilled' && result.value === true
-          ))) {
-            audioBtn.textContent = '⏸ Pause Audio';
-            playing = true;
-          }
-          audioBtn.disabled = false;
-          pending = false;
-        }
-      }
-    });
-    controlsEl.appendChild(audioBtn);
-  } else if (hasObjectAudioSources && controlsEl) {
+  if (hasObjectAudioSources && !hasPlaybackTargets && controlsEl) {
     const enableBtn = document.createElement('button');
     enableBtn.className = 'viewer-btn';
     enableBtn.textContent = 'Enable Audio';
