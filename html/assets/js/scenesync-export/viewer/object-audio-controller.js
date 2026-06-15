@@ -71,6 +71,17 @@ function audioDuration(audio) {
   return Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : null;
 }
 
+function clockTime(clockState) {
+  if (Number.isFinite(clockState?.t)) return Math.max(0, clockState.t);
+  if (Number.isFinite(clockState?.time)) return Math.max(0, clockState.time);
+  return null;
+}
+
+function isTransportPaused(clockState) {
+  if (!clockState) return false;
+  return clockState.isPaused === true || clockState.playing === false || clockState.rate === 0;
+}
+
 function animationTargetTime(audio, sampleTime, offset, loop) {
   const duration = audioDuration(audio);
   let target = sampleTime + offset;
@@ -80,6 +91,35 @@ function animationTargetTime(audio, sampleTime, offset, loop) {
     target = 0;
   }
   return target;
+}
+
+function timelineTargetTime(entry, clockState, nowMs, startMs) {
+  const timelineTime = clockTime(clockState);
+  let target = timelineTime;
+
+  if (!Number.isFinite(target)) {
+    if (entry.started) return null;
+    target = Math.max(0, (nowMs - startMs) / 1000);
+  }
+
+  target += finiteNumber(entry.source.offset, 0);
+  const duration = audioDuration(entry.audio);
+  if (duration) {
+    target = entry.source.loop === true
+      ? ((target % duration) + duration) % duration
+      : Math.min(Math.max(0, target), duration);
+  }
+
+  return Math.max(0, target);
+}
+
+function applyTransportPlaybackRate(audio, source, clockState) {
+  if (!audio) return;
+  const sourceRate = positiveNumber(source.playbackRate, 1);
+  const transportRate = Number.isFinite(clockState?.rate) && clockState.rate > 0
+    ? clockState.rate
+    : 1;
+  try { audio.playbackRate = sourceRate * transportRate; } catch {}
 }
 
 function applyAudioElementConfig(audio, source) {
@@ -228,11 +268,23 @@ export function createObjectAudioController({
     return true;
   }
 
-  function tickEntry(entry, nowMs) {
+  function syncTimelineEntry(entry, nowMs, clockState, driftThreshold = 0.15) {
+    const target = timelineTargetTime(entry, clockState, nowMs, startMs);
+    if (!Number.isFinite(target)) return false;
+
+    const drift = Math.abs((entry.audio.currentTime || 0) - target);
+    if (drift > driftThreshold) {
+      safeSeek(entry.audio, target);
+    }
+    return true;
+  }
+
+  function tickEntry(entry, nowMs, clockState = null) {
     if (!entry.audio) return;
     if (entry.oneShotActive) return;
 
     applyAudioElementConfig(entry.audio, entry.source);
+    applyTransportPlaybackRate(entry.audio, entry.source, clockState);
 
     if (entry.desiredState === 'stopped') {
       if (entry.audio.paused === false) safePause(entry.audio);
@@ -242,16 +294,19 @@ export function createObjectAudioController({
       if (entry.audio.paused === false) safePause(entry.audio);
       return;
     }
-    if (entry.userPaused) return;
 
     const syncedToAnimation = syncAnimationEntry(entry);
-    if (!syncedToAnimation && !entry.started) {
-      const elapsed = Math.max(0, (nowMs - startMs) / 1000);
-      const target = (entry.source.offset || 0) + elapsed;
-      const duration = audioDuration(entry.audio);
-      safeSeek(entry.audio, duration && entry.source.loop
-        ? ((target % duration) + duration) % duration
-        : target);
+
+    if (isTransportPaused(clockState) || entry.userPaused) {
+      if (entry.audio.paused === false) safePause(entry.audio);
+      if (!syncedToAnimation) {
+        syncTimelineEntry(entry, nowMs, clockState, 0);
+      }
+      return;
+    }
+
+    if (!syncedToAnimation) {
+      syncTimelineEntry(entry, nowMs, clockState, entry.started ? 0.15 : 0);
     }
 
     entry.started = true;
@@ -406,9 +461,11 @@ export function createObjectAudioController({
       return getPlaybackTargetEntries().map((entry) => entry.audio);
     },
 
-    playPlaybackTargets() {
+    playPlaybackTargets(clockState = null, nowMs = now()) {
       return Promise.allSettled(getPlaybackTargetEntries().map((entry) => {
         entry.userPaused = false;
+        tickEntry(entry, nowMs, clockState);
+        if (isTransportPaused(clockState)) return Promise.resolve(true);
         return tryPlay(entry, { force: true });
       }));
     },
@@ -431,7 +488,6 @@ export function createObjectAudioController({
         cancelEntryOneShot(entry);
         entry.desiredState = 'playing';
         entry.userPaused = false;
-        tryPlay(entry, { force: true });
       } else if (effect.type === 'audioSource.pause') {
         cancelEntryOneShot(entry);
         entry.desiredState = 'paused';
@@ -492,8 +548,8 @@ export function createObjectAudioController({
       }
     },
 
-    tick(nowMs = now()) {
-      for (const entry of entries) tickEntry(entry, nowMs);
+    tick(nowMs = now(), clockState = null) {
+      for (const entry of entries) tickEntry(entry, nowMs, clockState);
     },
 
     dispose() {

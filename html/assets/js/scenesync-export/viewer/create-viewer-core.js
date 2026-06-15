@@ -637,31 +637,52 @@ export async function createViewerCore({
     physicsRuntime.update(clockState);
   }
 
+  function syncObjectAudioAtClock(clockState, now = performance.now()) {
+    objectAudioController.tick(now, clockState);
+  }
+
+  function evaluateAndSyncClock(clockState, now = performance.now()) {
+    evaluateSceneAtClock(clockState);
+    syncObjectAudioAtClock(clockState, now);
+  }
+
   const commands = {
     playSceneClock() {
-      sceneClock.play();
+      const now = performance.now();
+      sceneClock.play(now);
+      const clockState = sceneClock.getState();
+      evaluateAndSyncClock(clockState, now);
+      return objectAudioController.playPlaybackTargets(clockState, now);
     },
     pauseSceneClock() {
-      sceneClock.pause();
+      const now = performance.now();
+      sceneClock.pause(now);
+      evaluateAndSyncClock(sceneClock.getState(), now);
     },
     stopSceneClock() {
-      sceneClock.stop();
-      evaluateSceneAtClock(sceneClock.getState());
+      const now = performance.now();
+      sceneClock.stop(now);
+      evaluateAndSyncClock(sceneClock.getState(), now);
     },
     seekSceneClock(seconds) {
-      sceneClock.seek(seconds);
-      evaluateSceneAtClock(sceneClock.getState());
+      const now = performance.now();
+      sceneClock.seek(seconds, now);
+      evaluateAndSyncClock(sceneClock.getState(), now);
     },
     setSceneClockRate(rate) {
-      sceneClock.setRate(rate);
+      const now = performance.now();
+      sceneClock.setRate(rate, now);
+      evaluateAndSyncClock(sceneClock.getState(), now);
     },
     activateSceneClockTransport() {
-      sceneClock.activateTransport();
-      evaluateSceneAtClock(sceneClock.getState());
+      const now = performance.now();
+      sceneClock.activateTransport(now);
+      evaluateAndSyncClock(sceneClock.getState(), now);
     },
     deactivateSceneClockTransport() {
-      sceneClock.deactivateTransport();
-      evaluateSceneAtClock(sceneClock.getState());
+      const now = performance.now();
+      sceneClock.deactivateTransport(now);
+      evaluateAndSyncClock(sceneClock.getState(), now);
     },
   };
 
@@ -673,7 +694,7 @@ export async function createViewerCore({
       if (loomAdapter) {
         loomAdapter.tick(clockState, now);
       }
-      objectAudioController.tick(now);
+      syncObjectAudioAtClock(clockState, now);
     },
 
     getSceneClockState() {
@@ -740,7 +761,7 @@ export async function createViewerCore({
     },
 
     playObjectAudioPlaybackTargets() {
-      return objectAudioController.playPlaybackTargets();
+      return objectAudioController.playPlaybackTargets(sceneClock.getState(), performance.now());
     },
 
     pauseObjectAudioPlaybackTargets() {
