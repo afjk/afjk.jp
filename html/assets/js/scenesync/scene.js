@@ -86,7 +86,7 @@ import {
   serializeScenePhysics,
   shouldResetPhysicsForSceneClockPayload,
 } from './scene-physics.js';
-import { buildExportPackage } from '../scenesync-export/export/build-export-package.js';
+import { buildExportPackage, validateExportThumbnailFile } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
@@ -14034,7 +14034,157 @@ window.addEventListener('pageshow', (e) => {
 });
 // ── Export ────────────────────────────────────────────────
 
+const exportDialog = document.getElementById('export-dialog');
+const exportForm = document.getElementById('export-form');
+const exportDialogCloseBtn = document.getElementById('export-dialog-close');
+const exportCancelBtn = document.getElementById('export-cancel');
+const exportTitleInput = document.getElementById('export-title-input');
+const exportDescriptionInput = document.getElementById('export-description-input');
+const exportTagsInput = document.getElementById('export-tags-input');
+const exportAuthorInput = document.getElementById('export-author-input');
+const exportThumbnailSelectBtn = document.getElementById('export-thumbnail-select');
+const exportThumbnailClearBtn = document.getElementById('export-thumbnail-clear');
+const exportThumbnailInput = document.getElementById('export-thumbnail-input');
+const exportThumbnailName = document.getElementById('export-thumbnail-name');
+const exportThumbnailPreview = document.getElementById('export-thumbnail-preview');
+let exportDialogResolve = null;
+let exportThumbnailFile = null;
+let exportThumbnailPreviewUrl = null;
+
+function isExportDialogOpen() {
+  return Boolean(exportDialog && !exportDialog.hidden);
+}
+
+function revokeExportThumbnailPreviewUrl() {
+  if (!exportThumbnailPreviewUrl) return;
+  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(exportThumbnailPreviewUrl);
+  }
+  exportThumbnailPreviewUrl = null;
+}
+
+function setExportThumbnailFile(file) {
+  exportThumbnailFile = file || null;
+  revokeExportThumbnailPreviewUrl();
+
+  if (!exportThumbnailFile) {
+    if (exportThumbnailInput) exportThumbnailInput.value = '';
+    if (exportThumbnailName) exportThumbnailName.textContent = '未選択';
+    if (exportThumbnailClearBtn) exportThumbnailClearBtn.hidden = true;
+    if (exportThumbnailPreview) {
+      exportThumbnailPreview.removeAttribute('src');
+      exportThumbnailPreview.classList.remove('is-visible');
+    }
+    return;
+  }
+
+  if (exportThumbnailName) {
+    exportThumbnailName.textContent = exportThumbnailFile.name || '選択済み';
+  }
+  if (exportThumbnailClearBtn) exportThumbnailClearBtn.hidden = false;
+  if (
+    exportThumbnailPreview &&
+    typeof URL !== 'undefined' &&
+    typeof URL.createObjectURL === 'function'
+  ) {
+    exportThumbnailPreviewUrl = URL.createObjectURL(exportThumbnailFile);
+    exportThumbnailPreview.src = exportThumbnailPreviewUrl;
+    exportThumbnailPreview.classList.add('is-visible');
+  }
+}
+
+function resetExportDialogForm() {
+  exportForm?.reset?.();
+  setExportThumbnailFile(null);
+}
+
+function buildExportDialogResult() {
+  return {
+    title: exportTitleInput?.value || '',
+    description: exportDescriptionInput?.value || '',
+    tags: exportTagsInput?.value || '',
+    author: exportAuthorInput?.value || '',
+    thumbnailFile: exportThumbnailFile,
+  };
+}
+
+function closeExportMetadataDialog(result = null) {
+  if (exportDialog) exportDialog.hidden = true;
+  revokeExportThumbnailPreviewUrl();
+  const resolve = exportDialogResolve;
+  exportDialogResolve = null;
+  exportThumbnailFile = null;
+  if (exportThumbnailInput) exportThumbnailInput.value = '';
+  if (resolve) resolve(result);
+}
+
+function openExportMetadataDialog() {
+  if (!exportDialog || !exportForm) {
+    return Promise.resolve({});
+  }
+  if (exportDialogResolve) {
+    closeExportMetadataDialog(null);
+  }
+
+  resetExportDialogForm();
+  exportDialog.hidden = false;
+  requestAnimationFrame(() => {
+    focusTextInputIfSafe(exportTitleInput);
+  });
+
+  return new Promise((resolve) => {
+    exportDialogResolve = resolve;
+  });
+}
+
+exportThumbnailSelectBtn?.addEventListener('click', () => {
+  exportThumbnailInput?.click();
+});
+
+exportThumbnailClearBtn?.addEventListener('click', () => {
+  setExportThumbnailFile(null);
+});
+
+exportThumbnailInput?.addEventListener('change', () => {
+  const file = exportThumbnailInput.files?.[0] || null;
+  if (!file) {
+    setExportThumbnailFile(null);
+    return;
+  }
+  const validationError = validateExportThumbnailFile(file);
+  if (validationError) {
+    showToast(validationError);
+    setExportThumbnailFile(null);
+    return;
+  }
+  setExportThumbnailFile(file);
+});
+
+exportDialogCloseBtn?.addEventListener('click', () => closeExportMetadataDialog(null));
+exportCancelBtn?.addEventListener('click', () => closeExportMetadataDialog(null));
+
+exportDialog?.addEventListener('click', (event) => {
+  if (event.target === exportDialog) {
+    closeExportMetadataDialog(null);
+  }
+});
+
+exportForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  closeExportMetadataDialog(buildExportDialogResult());
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && isExportDialogOpen()) {
+    event.preventDefault();
+    closeExportMetadataDialog(null);
+  }
+});
+
 async function triggerExport() {
+  const exportMetadata = await openExportMetadataDialog();
+  if (!exportMetadata) return;
+
   showToast('Exporting...');
 
   try {
@@ -14049,6 +14199,7 @@ async function triggerExport() {
       assetCache,
       behaviorState,
       physicsState: getScenePhysicsForSerialize(),
+      exportMetadata,
     });
 
     if (missingAssets.length > 0) {

@@ -1,6 +1,7 @@
 import { SCENE_DOCUMENT_FORMAT, SCENE_DOCUMENT_VERSION } from '../viewer/scene-document.js';
 import { LOOMLET_RUNTIME_METADATA } from '../../scenesync/loomlet-runtime-integration.js';
 import { normalizeAudioSourcesMap } from '../../scenesync/audio/audio-source.js';
+import { applyExportMetadata } from './export-metadata.js';
 
 const SKIP_ROLES = new Set([
   'multi-transform-pivot',
@@ -16,6 +17,88 @@ function cloneJson(value) {
 function clonePlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return cloneJson(value);
+}
+
+export function isExportBehaviorGraph(value) {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Array.isArray(value.nodes) &&
+    Array.isArray(value.edges)
+  );
+}
+
+export function hasExportBehaviorGraph(value) {
+  return isExportBehaviorGraph(value) && value.nodes.length > 0;
+}
+
+export function countExportBehaviorGraphs(behaviorState) {
+  if (!behaviorState || typeof behaviorState !== 'object' || Array.isArray(behaviorState)) {
+    return 0;
+  }
+
+  let count = hasExportBehaviorGraph(behaviorState.scene) ? 1 : 0;
+
+  if (behaviorState.objects && typeof behaviorState.objects === 'object' && !Array.isArray(behaviorState.objects)) {
+    for (const graph of Object.values(behaviorState.objects)) {
+      if (hasExportBehaviorGraph(graph)) count += 1;
+    }
+  }
+
+  if (behaviorState.graphs && typeof behaviorState.graphs === 'object' && !Array.isArray(behaviorState.graphs)) {
+    for (const graph of Object.values(behaviorState.graphs)) {
+      if (hasExportBehaviorGraph(graph)) count += 1;
+    }
+  }
+
+  return count;
+}
+
+export function normalizeExportBehaviorState(behaviorState) {
+  if (!behaviorState || typeof behaviorState !== 'object' || Array.isArray(behaviorState)) {
+    return null;
+  }
+
+  const normalized = {
+    scene: null,
+    objects: {},
+  };
+
+  if (hasExportBehaviorGraph(behaviorState.scene)) {
+    normalized.scene = cloneJson(behaviorState.scene);
+  }
+
+  if (behaviorState.objects && typeof behaviorState.objects === 'object' && !Array.isArray(behaviorState.objects)) {
+    for (const [objectId, graph] of Object.entries(behaviorState.objects)) {
+      if (hasExportBehaviorGraph(graph)) {
+        normalized.objects[objectId] = cloneJson(graph);
+      }
+    }
+  }
+
+  if (behaviorState.graphs && typeof behaviorState.graphs === 'object' && !Array.isArray(behaviorState.graphs)) {
+    normalized.graphs = {};
+    for (const [graphId, graph] of Object.entries(behaviorState.graphs)) {
+      if (hasExportBehaviorGraph(graph)) {
+        normalized.graphs[graphId] = cloneJson(graph);
+      }
+    }
+    if (Object.keys(normalized.graphs).length === 0) {
+      delete normalized.graphs;
+    }
+  }
+
+  if (countExportBehaviorGraphs(normalized) === 0) {
+    return null;
+  }
+
+  const bases = clonePlainObject(behaviorState.bases);
+  if (bases) {
+    normalized.bases = bases;
+  }
+
+  return normalized;
 }
 
 function copyStringField(target, source, key) {
@@ -175,6 +258,7 @@ export function createSceneDocumentFromSceneSyncState({
   envId,
   behaviorState = null,
   physicsState = null,
+  exportMetadata = null,
 }) {
   if (!(managedObjects instanceof Map)) {
     throw new Error('managedObjects must be a Map');
@@ -237,8 +321,11 @@ export function createSceneDocumentFromSceneSyncState({
     bgm: buildBgmEntry(bgmState),
   };
 
-  if (behaviorState) {
-    doc.behaviors = JSON.parse(JSON.stringify(behaviorState));
+  applyExportMetadata(doc, exportMetadata);
+
+  const behaviors = normalizeExportBehaviorState(behaviorState);
+  if (behaviors) {
+    doc.behaviors = behaviors;
   }
 
   const physics = clonePlainObject(physicsState);

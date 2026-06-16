@@ -1,3 +1,5 @@
+import { countExportBehaviorGraphs } from './export-scene-document.js';
+
 export const EXPORT_THUMBNAIL_WIDTH = 1200;
 export const EXPORT_THUMBNAIL_HEIGHT = 630;
 
@@ -28,7 +30,7 @@ export function collectExportSceneStats(sceneDocument = {}) {
     audios: sceneDocument.bgm ? 1 : 0,
     texts: 0,
     glbs: 0,
-    loomlets: sceneDocument.behaviors ? 1 : 0,
+    loomlets: countExportBehaviorGraphs(sceneDocument.behaviors),
     physics: 0,
   };
 

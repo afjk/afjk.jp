@@ -19,7 +19,7 @@ function measureTextByChars(charWidth = 10) {
 test('collects scene stats for generated export thumbnails', () => {
   const stats = collectExportSceneStats({
     bgm: { url: 'assets/bgm.mp3' },
-    behaviors: { graphs: { box: {} } },
+    behaviors: { graphs: { box: { nodes: [{ id: 'n1', type: 'time' }], edges: [] } } },
     physics: { enabled: true },
     objects: [
       { asset: { type: 'image' } },
@@ -41,6 +41,16 @@ test('collects scene stats for generated export thumbnails', () => {
     loomlets: 1,
     physics: 1,
   });
+});
+
+test('does not count empty behavior export state as interactive', () => {
+  const stats = collectExportSceneStats({
+    behaviors: { scene: null, objects: {} },
+    objects: [],
+  });
+
+  assert.equal(stats.loomlets, 0);
+  assert.equal(buildExportThumbnailStatsLabel(stats).includes('interactive'), false);
 });
 
 test('builds compact stats labels for thumbnail cards', () => {

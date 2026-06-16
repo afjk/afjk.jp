@@ -54,3 +54,67 @@ test('exports scene and object physics state', () => {
   assert.equal(doc.objects.length, 1);
   assert.deepEqual(doc.objects[0].physics, managedObjects.get('ball').userData.physics);
 });
+
+test('omits empty exported behavior state', () => {
+  const doc = createSceneDocumentFromSceneSyncState({
+    managedObjects: new Map(),
+    behaviorState: {
+      scene: null,
+      objects: {},
+      bases: {
+        'scene:box': {
+          target: 'box',
+          position: { x: 0, y: 0, z: 0 },
+        },
+      },
+    },
+  });
+
+  assert.equal(Object.hasOwn(doc, 'behaviors'), false);
+});
+
+test('exports only behavior graphs with nodes', () => {
+  const sceneGraph = {
+    nodes: [{ id: 'time', type: 'time' }],
+    edges: [],
+  };
+  const objectGraph = {
+    nodes: [{ id: 'move', type: 'scene.setPosition' }],
+    edges: [],
+  };
+
+  const doc = createSceneDocumentFromSceneSyncState({
+    managedObjects: new Map(),
+    behaviorState: {
+      scene: sceneGraph,
+      objects: {
+        empty: { nodes: [], edges: [] },
+        box: objectGraph,
+      },
+    },
+  });
+
+  assert.deepEqual(doc.behaviors, {
+    scene: sceneGraph,
+    objects: {
+      box: objectGraph,
+    },
+  });
+});
+
+test('exports provided scene metadata', () => {
+  const doc = createSceneDocumentFromSceneSyncState({
+    managedObjects: new Map(),
+    exportMetadata: {
+      title: 'Candy Rock Star',
+      description: 'Unity-chan stage',
+      tags: 'unity-chan, music, scene-sync',
+      author: 'afjk',
+    },
+  });
+
+  assert.equal(doc.title, 'Candy Rock Star');
+  assert.equal(doc.description, 'Unity-chan stage');
+  assert.deepEqual(doc.tags, ['unity-chan', 'music', 'scene-sync']);
+  assert.equal(doc.author, 'afjk');
+});
