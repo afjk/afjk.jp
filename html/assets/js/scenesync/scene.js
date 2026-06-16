@@ -86,7 +86,7 @@ import {
   serializeScenePhysics,
   shouldResetPhysicsForSceneClockPayload,
 } from './scene-physics.js';
-import { buildExportPackage, getExportThumbnailExtension } from '../scenesync-export/export/build-export-package.js';
+import { buildExportPackage, validateExportThumbnailFile } from '../scenesync-export/export/build-export-package.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
@@ -14113,6 +14113,8 @@ function closeExportMetadataDialog(result = null) {
   revokeExportThumbnailPreviewUrl();
   const resolve = exportDialogResolve;
   exportDialogResolve = null;
+  exportThumbnailFile = null;
+  if (exportThumbnailInput) exportThumbnailInput.value = '';
   if (resolve) resolve(result);
 }
 
@@ -14149,8 +14151,9 @@ exportThumbnailInput?.addEventListener('change', () => {
     setExportThumbnailFile(null);
     return;
   }
-  if (!getExportThumbnailExtension(file)) {
-    showToast('PNG / JPEG / WebP の画像を選択してください');
+  const validationError = validateExportThumbnailFile(file);
+  if (validationError) {
+    showToast(validationError);
     setExportThumbnailFile(null);
     return;
   }

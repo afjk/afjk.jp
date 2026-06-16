@@ -127,6 +127,7 @@ const THUMBNAIL_EXTENSION_BY_MIME = new Map([
   ['image/webp', '.webp'],
 ]);
 
+export const EXPORT_THUMBNAIL_FILE_LIMIT_BYTES = 10 * 1024 * 1024;
 const SUPPORTED_THUMBNAIL_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
 export function getExportThumbnailExtension(file) {
@@ -139,6 +140,16 @@ export function getExportThumbnailExtension(file) {
   const dotIndex = name.lastIndexOf('.');
   const ext = dotIndex >= 0 ? name.slice(dotIndex) : '';
   return SUPPORTED_THUMBNAIL_EXTENSIONS.has(ext) ? ext : null;
+}
+
+export function validateExportThumbnailFile(file) {
+  if (!getExportThumbnailExtension(file)) {
+    return 'PNG / JPEG / WebP の画像を選択してください';
+  }
+  if (Number.isFinite(file?.size) && file.size > EXPORT_THUMBNAIL_FILE_LIMIT_BYTES) {
+    return 'Thumbnail画像は10MB以下にしてください';
+  }
+  return null;
 }
 
 function getCustomThumbnailFile(exportOptions) {
@@ -154,10 +165,11 @@ async function addExportThumbnail(zip, {
 }) {
   const customThumbnail = getCustomThumbnailFile(exportOptions);
   if (customThumbnail) {
-    const extension = getExportThumbnailExtension(customThumbnail);
-    if (!extension) {
-      throw new Error('Thumbnail image must be PNG, JPEG, or WebP');
+    const validationError = validateExportThumbnailFile(customThumbnail);
+    if (validationError) {
+      throw new Error(validationError);
     }
+    const extension = getExportThumbnailExtension(customThumbnail);
     const path = `thumbnail${extension}`;
     zip.file(path, customThumbnail);
     return { path, mode: 'custom' };
