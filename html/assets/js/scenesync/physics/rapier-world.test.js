@@ -1,10 +1,12 @@
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  RAPIER_BUILD_FLAVOR,
   createWorld,
   computeRapierWorldStateHash,
   initRapierPhysics,
   normalizeRapierWorldOptions,
+  stableIdHashHex,
 } from './rapier-world.js';
 
 before(async () => {
@@ -59,7 +61,11 @@ test('normalizes Rapier world options with seconds-based timestep', () => {
   });
 });
 
-test('same Rapier inputs produce the same state hash and networkStateHash', () => {
+test('uses the deterministic Rapier build flavor', () => {
+  assert.equal(RAPIER_BUILD_FLAVOR, 'deterministic-compat');
+});
+
+test('same Rapier inputs produce the same state hash, canonical hash, and networkStateHash', () => {
   const a = makeWorld();
   const b = makeWorld();
 
@@ -67,6 +73,7 @@ test('same Rapier inputs produce the same state hash and networkStateHash', () =
   b.stepTo(180);
 
   assert.equal(a.stateHash(), b.stateHash());
+  assert.equal(a.canonicalStateHash(), b.canonicalStateHash());
   assert.equal(a.networkStateHash(), b.networkStateHash());
   assert.equal(typeof a.networkStateHash(), 'string');
   assert.equal(a.networkStateHash().length, 8);
@@ -89,9 +96,130 @@ test('Rapier snapshot restore reproduces the same future', () => {
   a.stepTo(180);
   b.stepTo(180);
   assert.equal(a.stateHash(), b.stateHash());
+  assert.equal(a.canonicalStateHash(), b.canonicalStateHash());
 
   a.free();
   b.free();
+});
+
+test('snapshot restore replaces stale body metadata with snapshot stable ids', () => {
+  const a = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const b = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const box = {
+    id: 'box',
+    shape: 'box',
+    halfExtents: [0.5, 0.5, 0.5],
+    position: [0, 4, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0.25, 0, 0],
+    angularVelocity: [0, 0, 0],
+    mass: 1,
+  };
+  const ball = {
+    id: 'ball',
+    shape: 'sphere',
+    radius: 0.35,
+    position: [0, 6, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    mass: 1,
+  };
+
+  a.addBody(box);
+  a.addBody(ball);
+  b.addBody(ball);
+  b.addBody(box);
+  a.stepTo(30);
+
+  assert.equal(b.restore(a.snapshot()), true);
+  assert.deepEqual(b.getBody('box'), a.getBody('box'));
+  assert.deepEqual(b.getBody('ball'), a.getBody('ball'));
+  assert.equal(b.canonicalStateHash(), a.canonicalStateHash());
+
+  a.free();
+  b.free();
+});
+
+test('canonical hash is sorted by stable body id instead of creation order', () => {
+  const a = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const b = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const box = {
+    id: 'box',
+    shape: 'box',
+    halfExtents: [0.5, 0.5, 0.5],
+    position: [0, 4, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    mass: 1,
+  };
+  const ball = {
+    id: 'ball',
+    shape: 'sphere',
+    radius: 0.5,
+    position: [0, 8, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    mass: 1,
+  };
+
+  a.addBody(box);
+  a.addBody(ball);
+  b.addBody(ball);
+  b.addBody(box);
+
+  assert.equal(a.canonicalStateHash(), b.canonicalStateHash());
+  assert.match(stableIdHashHex('box'), /^[0-9a-f]{16}$/);
+
+  a.free();
+  b.free();
+});
+
+test('canonical hash includes body step settings and collider material fields', () => {
+  const base = {
+    id: 'box',
+    shape: 'box',
+    halfExtents: [0.5, 0.5, 0.5],
+    position: [0, 4, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    mass: 1,
+  };
+  const a = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const b = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const c = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+
+  a.addBody({ ...base, friction: 0.5, restitution: 0.2 });
+  b.addBody({ ...base, friction: 0.8, restitution: 0.2 });
+  c.addBody({
+    ...base,
+    friction: 0.5,
+    restitution: 0.2,
+    linearDamping: 0.25,
+    angularDamping: 0.5,
+    canSleep: false,
+    ccd: true,
+  });
+
+  assert.notEqual(a.canonicalStateHash(), b.canonicalStateHash());
+  assert.notEqual(a.canonicalStateHash(), c.canonicalStateHash());
+
+  a.free();
+  b.free();
+  c.free();
+});
+
+test('stateHash remains tick and snapshot sensitive', () => {
+  const world = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
+  const before = world.stateHash();
+
+  world.step();
+
+  assert.notEqual(world.stateHash(), before);
+  world.free();
 });
 
 test('computeRapierWorldStateHash returns same hex string for two identically-stepped RAPIER worlds (deterministic build)', async () => {
