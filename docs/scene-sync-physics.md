@@ -113,6 +113,41 @@ fields sorted by `stableIdHash(objectId)`, where `stableIdHash` is
 32-bit compatibility value over tick, timestep, and native Rapier snapshot
 bytes.
 
+### Cross-Host Parity Fixture
+
+The first Unity/Browser parity fixture lives at:
+
+```text
+fixtures/rapier/parity-basic-001.json
+```
+
+It defines the `SceneSyncRapierParity-0.30` profile, Rapier core `0.30.0`,
+fixed timestep, gravity, stable object ids, one fixed floor, one dynamic box,
+and sample ticks through tick 600. Browser-side fixture support is implemented
+by `html/assets/js/scenesync/physics/rapier-parity-fixture.js` and covered by
+`rapier-parity-fixture.test.js`.
+
+The Browser result schema is intended to match the Unity sample output:
+
+```json
+{
+  "host": "browser",
+  "profile": "SceneSyncRapierParity-0.30",
+  "hashes": {
+    "0": "..."
+  },
+  "dumps": {
+    "0": {
+      "bodies": [],
+      "colliders": []
+    }
+  }
+}
+```
+
+Use `hashes` for the parity comparison. Use `dumps` when a hash diverges; it
+contains the canonical body and collider fields used by the hash.
+
 Do not use non-deterministic local calculations to create physics inputs for
 Shared Playback. Authoring inputs must be normalized through scene state, scene
 deltas, or controller-published playback baselines.
@@ -136,6 +171,8 @@ state.
   sleeping/enabled state, collider shape, density, friction/combine rule,
   restitution/combine rule, sensor, and enabled state. Use this for cross-host
   parity detection.
+- `world.canonicalStateDump()` — object containing the canonical body and
+  collider fields used for parity debugging. This is not a snapshot format.
 - `world.stateHash()` — 32-bit local compatibility hash over engine/package,
   tick, timestep, and native Rapier snapshot bytes. It is useful for same-host
   replay/debug callers that expect a numeric hash; do not use it as the
