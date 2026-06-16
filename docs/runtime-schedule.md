@@ -57,9 +57,9 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 
 ### Loomlet pre-physics phase
 
-- 現時点では Loomlet（Behavior Runtime）は単一フェーズで評価される
-- Export Viewer: `loomAdapter.tick(clockState, now)` が animation/physics の後に呼ばれている
-- **将来の課題**: `prePhysics` / `postPhysics` に分割する
+- 未実装
+- 現時点では Loomlet は単一 phase で評価される
+- **将来の課題**: `prePhysics` phase を追加する
 
 ### Physics fixed step
 
@@ -76,8 +76,11 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 
 ### Loomlet post-physics phase
 
-- **将来の課題**: Physics 後の Loomlet 評価フェーズ
-- collision event を Loomlet graph が消費できるようになる設計にする
+- Export Viewer では `SceneSyncLoomletPlugin.update(clockState, scheduleContext)` 経由で評価する
+- 現在は既存の `loomAdapter.tick(clockState, now)` を薄く包んでいる
+- `scheduleContext.phase = 'postPhysics'` として渡す
+- collision event 消費は未実装
+- **将来の課題**: `prePhysics` / `postPhysics` に分割する
 
 ### Animation / Audio sampling
 
@@ -104,7 +107,7 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 | Clock update | フレーム先頭で `sceneClock.tick(now)` | `sceneClockStateForTick` を計算 | どちらも Clock が基準 |
 | Physics step | `clockState.transportActive` でアクティブ判定 | `clockState.active` でアクティブ判定 | isClockActive の実装が異なる |
 | Animation | Physics より先に評価（現実装） | 概念順序と同様 | 将来的に整合させる |
-| Loomlet | Physics の後に `loomAdapter.tick()` | 別の実装 | prePhysics/postPhysics 分割が将来の課題 |
+| Loomlet | Physics の後に `SceneSyncLoomletPlugin.update()` 経由 | 別の実装 | prePhysics/postPhysics 分割が将来の課題 |
 | Audio | `objectAudioController.tick()` | 独自実装 | Clock に従う点は共通 |
 
 これらの差分は現時点では意図した差分として記録する。
