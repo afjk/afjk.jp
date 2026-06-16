@@ -12,7 +12,7 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 
 - 完全なECS実装
 - rollback / replay の完全設計
-- collision event の実装（将来の課題）
+- collision impulse / normal / point など詳細 collision payload の実装
 - Loomlet phase分割の実装（将来の課題）
 - Plugin Managerの大規模導入
 
@@ -81,9 +81,12 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 - Export Viewer では `SceneSyncLoomletPlugin.update(clockState, scheduleContext)` 経由で評価する
 - 現在は既存の `loomAdapter.tick(clockState, now)` を薄く包んでいる
 - `scheduleContext.phase = 'postPhysics'` として渡す
-- `scheduleContext.collisionEvents` から physics collision event を参照できる
-- 現時点では、Loomlet runtime 本体がすべての event を直接消費する必要はない
-- まずは host API / adapter 経由で必要な event を渡す
+- Export Viewer では `scheduleContext.events` が Loomlet evaluation context の `events` として渡る
+- `scheduleContext.collisionEvents` も adapter 境界で渡る
+- collision enter/exit を Behavior Graph input として扱える
+- Object Behavior Graph では関連する collision event のみを受け取る
+- Scene Behavior Graph ではすべての Runtime Event を受け取る
+- `audioSource.playOneShot` effect により、collision reaction sound を表現できる
 - **将来の課題**: `prePhysics` / `postPhysics` に分割する
 
 ### Animation / Audio sampling

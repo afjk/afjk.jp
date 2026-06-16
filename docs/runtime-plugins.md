@@ -141,7 +141,9 @@ Physics Plugin wrapper が安定した後、段階的に移行する。
 - Loomlet / Behavior Graph adapter を保持する
 - ClockState に基づいて behavior graph を評価する
 - `scheduleContext.events` / `scheduleContext.collisionEvents` を受け取る
-- 将来、collision event を Behavior Graph の input として扱う
+- Export Viewer では `scheduleContext.events` を Loomlet evaluation context に渡す
+- Object scope では関連する Runtime Event のみを Behavior Graph input として渡す
+- `audioSource.playOneShot` effect を Host AudioSource API へ渡す
 - 将来、`prePhysics` / `postPhysics` phase に分割する入口になる
 
 ### やらないこと
@@ -156,6 +158,9 @@ Physics Plugin wrapper が安定した後、段階的に移行する。
 
 Export Viewer では、既存の `loomAdapter.tick(clockState, now)` を `SceneSyncLoomletPlugin.update(clockState, scheduleContext)` 経由に移行している。
 現時点では単一 phase のみで、実際の呼び出し位置は既存どおり Physics 後 / Audio 前。
+`loomAdapter.setScheduleContext(scheduleContext)` によって、`scheduleContext.events` / `scheduleContext.collisionEvents` が Export Viewer の Loomlet evaluation context に渡る。
+Object Behavior Graph は、自分に関係する collision event のみを受け取る。
+Scene Behavior Graph は、すべての Runtime Event を受け取る。
 将来 `prePhysics` / `postPhysics` に分割する。
 
 ### API
@@ -187,7 +192,7 @@ loomletPlugin.dispose();
 Loomlet は Scene Sync 本体の Audio 実装を直接所有しない。
 Host が提供する AudioSource operation API を呼ぶ。
 
-v0 では以下を目標にする。
+v0 で実装済み:
 
 ```js
 audioSource.play(objectId, name?)
@@ -199,6 +204,9 @@ audioSource.playOneShot(objectId, name?, options?)
 
 Host API は `objectAudioController.applyEffect()` をラップして提供する。
 Loomlet adapter の `setScheduleContext()` 経由で scheduleContext も渡す。
+Object Behavior Graph では、`objectId` 省略時に scope object を target として使う。
+Scene Behavior Graph で `objectId` が省略された場合は no-op。
+今回の Export Viewer v0 では、collision reaction 用に `audioSource.playOneShot` の trigger / options 経路をテスト対象にする。
 
 `scene.setAudio` は削除しない。非推奨（deprecated）扱いにする。
 `audioSource.*` を推奨に移行する。
