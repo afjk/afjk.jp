@@ -458,3 +458,125 @@ test('scene physics runtime does not reset inactive dirty authoring transforms',
   assert.equal(runtime.resetActiveToInitialPose(), false);
   assert.equal(object.position.toArray()[1], 5);
 });
+
+// ── Collision Event v0 tests ─────────────────────────────────────────────────
+
+function makeCollisionScene() {
+  // Static platform + dynamic ball that falls onto it.
+  // No ground plane (ground: null) so only these two bodies interact.
+  const platform = makeObject({
+    objectId: 'platform',
+    position: [0, 0, 0],
+    scale: [4, 1, 4],
+    physics: { enabled: true, bodyType: 'static', shape: 'box', halfExtents: [2, 0.5, 2] },
+  });
+  const ball = makeObject({
+    objectId: 'ball',
+    position: [0, 3, 0],
+    scale: [1, 1, 1],
+    physics: { enabled: true, shape: 'sphere', velocity: [0, 0, 0] },
+  });
+
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    duration: 10,
+    worldOptions: { gravity: -9.81, ground: null, timestep: 1 / 60 },
+  });
+
+  const runtime = createScenePhysicsRuntime({
+    getScenePhysics: () => scenePhysics,
+    getObjectEntries: () => [makeEntry(platform), makeEntry(ball)],
+    isClockActive: () => true,
+  });
+
+  return { runtime, platform, ball };
+}
+
+function stepUntilCollision(runtime, maxTime = 2.0, timestep = 1 / 60) {
+  let enterEvents = [];
+  let lastResult;
+  for (let t = timestep; t <= maxTime; t += timestep) {
+    lastResult = runtime.update({ t });
+    enterEvents.push(...(lastResult.events || []).filter((e) => e.type === 'physics.collision.enter'));
+    if (enterEvents.length > 0) return { enterEvents, t, result: lastResult };
+  }
+  return { enterEvents, t: maxTime, result: lastResult };
+}
+
+test('scene physics runtime emits collision enter event for colliding bodies', () => {
+  const { runtime } = makeCollisionScene();
+  const { enterEvents } = stepUntilCollision(runtime);
+
+  assert.ok(enterEvents.length > 0, 'should emit at least one physics.collision.enter');
+  const ev = enterEvents[0];
+  assert.equal(ev.type, 'physics.collision.enter');
+  // source/phase/time/frameId are added by SceneSyncPhysicsPlugin, not by scene-physics.js
+  assert.equal(ev.pairKey, 'ball|platform');
+  assert.equal(ev.objectIdA, 'ball');
+  assert.equal(ev.objectIdB, 'platform');
+  runtime.dispose();
+});
+
+test('scene physics collision event carries the physics tick', () => {
+  const { runtime } = makeCollisionScene();
+  const { enterEvents } = stepUntilCollision(runtime);
+
+  assert.ok(enterEvents.length > 0);
+  const ev = enterEvents[0];
+  assert.ok(Number.isFinite(ev.tick), 'tick should be a finite number');
+  assert.ok(ev.tick > 0, 'tick should be positive at collision time');
+  runtime.dispose();
+});
+
+test('scene physics runtime clears collision pairs after seek back (no stale exit)', () => {
+  const { runtime } = makeCollisionScene();
+
+  // Step until collision
+  const { enterEvents } = stepUntilCollision(runtime);
+  assert.ok(enterEvents.length > 0, 'precondition: collision should have occurred');
+
+  // Seek back to t=0 (before any collision)
+  const result = runtime.update({ t: 0 });
+
+  // After seek back, no exit event for the pair should appear
+  // (previousCollisionPairs was cleared, so the pair is unknown — not an "exit")
+  const exitEvents = (result.events || []).filter((e) => e.type === 'physics.collision.exit');
+  assert.deepEqual(exitEvents, [], 'seek back should not produce false exit events');
+  runtime.dispose();
+});
+
+test('scene physics runtime re-emits collision enter after seek back', () => {
+  const { runtime } = makeCollisionScene();
+
+  // First pass: step until collision, record the enter event
+  const { enterEvents: firstEnter, t: collisionTime } = stepUntilCollision(runtime);
+  assert.ok(firstEnter.length > 0, 'precondition: first collision should fire');
+
+  // Seek back to t=0
+  runtime.update({ t: 0 });
+
+  // Second pass: step to the same collision time again
+  const result = runtime.update({ t: collisionTime });
+  const secondEnter = (result.events || []).filter((e) => e.type === 'physics.collision.enter');
+
+  assert.ok(secondEnter.length > 0, 'after seek back, collision.enter should fire again');
+  assert.equal(secondEnter[0].pairKey, 'ball|platform');
+  runtime.dispose();
+});
+
+test('scene physics runtime clears collision pairs after rebuild (no stale exit)', () => {
+  const { runtime } = makeCollisionScene();
+
+  // Step until collision
+  const { enterEvents, t: collisionTime } = stepUntilCollision(runtime);
+  assert.ok(enterEvents.length > 0, 'precondition: collision should have occurred');
+
+  // Force rebuild (e.g. simulating a scene change)
+  runtime.markDirty();
+
+  // Re-run at the same time — rebuild creates a fresh world, previousCollisionPairs is cleared
+  const result = runtime.update({ t: collisionTime });
+  const exitEvents = (result.events || []).filter((e) => e.type === 'physics.collision.exit');
+  assert.deepEqual(exitEvents, [], 'rebuild should not produce false exit events');
+  runtime.dispose();
+});

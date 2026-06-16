@@ -73,7 +73,7 @@ test('createPhysicsCollisionEvent uses time=0 when clockState.t is not finite', 
   assert.equal(event.time, 0);
 });
 
-test('createPhysicsCollisionEvent omits tick when clockState.tick is not finite', () => {
+test('createPhysicsCollisionEvent omits tick when neither tick nor clockState.tick is finite', () => {
   const event = createPhysicsCollisionEvent({
     type: 'physics.collision.enter',
     clockState: { t: 1 },
@@ -81,6 +81,27 @@ test('createPhysicsCollisionEvent omits tick when clockState.tick is not finite'
     objectIdB: 'b',
   });
   assert.equal(event.tick, undefined);
+});
+
+test('createPhysicsCollisionEvent uses explicit tick over clockState.tick', () => {
+  const event = createPhysicsCollisionEvent({
+    type: 'physics.collision.enter',
+    clockState: { t: 1, tick: 999 },
+    tick: 75,
+    objectIdA: 'a',
+    objectIdB: 'b',
+  });
+  assert.equal(event.tick, 75);
+});
+
+test('createPhysicsCollisionEvent falls back to clockState.tick when tick not provided', () => {
+  const event = createPhysicsCollisionEvent({
+    type: 'physics.collision.enter',
+    clockState: { t: 1, tick: 42 },
+    objectIdA: 'a',
+    objectIdB: 'b',
+  });
+  assert.equal(event.tick, 42);
 });
 
 test('createPhysicsCollisionEvent accepts custom payload', () => {

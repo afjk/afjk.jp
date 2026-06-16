@@ -55,8 +55,10 @@ export function createSceneSyncPhysicsPlugin(options = {}) {
             type: raw.type,
             clockState,
             frameId: scheduleContext.frameId,
+            tick: raw.tick,
             objectIdA: raw.objectIdA,
             objectIdB: raw.objectIdB,
+            payload: raw.payload || {},
           });
           emitScheduleEvent(scheduleContext, event);
         }

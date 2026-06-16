@@ -392,6 +392,13 @@ export function createWorld(options = {}) {
       colliderDesc.setMass(positiveNumber(def.mass, 1));
     }
 
+    // Enable collision events so drainCollisionEvents() receives enter/exit signals
+    if (RAPIER.ActiveEvents?.COLLISION_EVENTS != null) {
+      try {
+        colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+      } catch {}
+    }
+
     const collider = world.createCollider(colliderDesc, body);
     if (collider?.handle != null) {
       colliderToObjectId.set(collider.handle, def.id);

@@ -24,6 +24,7 @@ export function createCollisionPairKey(objectIdA, objectIdB) {
  * @param {string} options.type - 'physics.collision.enter' | 'physics.collision.exit'
  * @param {Object|null} options.clockState
  * @param {number} [options.frameId]
+ * @param {number} [options.tick] - Physics tick (preferred over clockState.tick)
  * @param {string} options.objectIdA
  * @param {string} options.objectIdB
  * @param {Object} [options.payload]
@@ -33,6 +34,7 @@ export function createPhysicsCollisionEvent({
   type,
   clockState,
   frameId,
+  tick,
   objectIdA,
   objectIdB,
   payload = {},
@@ -48,8 +50,11 @@ export function createPhysicsCollisionEvent({
     pairKey: `${a}|${b}`,
     payload,
   };
-  if (Number.isFinite(clockState?.tick)) {
-    event.tick = clockState.tick;
+  // Prefer explicit tick (physics tick) over clockState.tick
+  const eventTick = Number.isFinite(tick) ? tick
+    : Number.isFinite(clockState?.tick) ? clockState.tick : undefined;
+  if (eventTick !== undefined) {
+    event.tick = eventTick;
   }
   if (frameId !== undefined && frameId !== null) {
     event.frameId = frameId;

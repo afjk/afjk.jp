@@ -505,6 +505,7 @@ export function createScenePhysicsRuntime({
     dirty = false;
     preserveMotionOnRebuild = true;
     resetMotionObjectIds = new Set();
+    previousCollisionPairs = new Set();
     return entryMap.size > 0
       ? { ok: true }
       : { ok: false, reason: 'no-bodies' };
@@ -523,6 +524,7 @@ export function createScenePhysicsRuntime({
   function resetToInitialPose(clockState = null) {
     if (!world || !initialSnapshot) return false;
     world.restore(initialSnapshot);
+    previousCollisionPairs = new Set();
     worldEpochTime = getClockTime(clockState);
     applyWorldToObjects(clockState);
     return true;
@@ -562,6 +564,7 @@ export function createScenePhysicsRuntime({
     const targetTick = Math.max(0, Math.floor(worldAge / timestepSeconds));
     if (targetTick < world.tick && initialSnapshot) {
       world.restore(initialSnapshot);
+      previousCollisionPairs = new Set();
     }
     const stepResult = world.stepTo(targetTick);
     if (stepResult?.limited === true) {
