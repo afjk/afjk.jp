@@ -10,6 +10,7 @@ import {
   createScenePhysicsRuntime,
   normalizeScenePhysics,
 } from './scene-physics.js';
+import { createSceneSyncPhysicsPlugin } from '../../scenesync/plugins/scene-sync-physics-plugin.js';
 import {
   calculateViewerPlaybackDuration,
   clipTimeForMode,
@@ -627,6 +628,8 @@ export async function createViewerCore({
     })),
     isClockActive: (clockState) => clockState?.transportActive === true,
   });
+  const physicsPlugin = createSceneSyncPhysicsPlugin({ physicsRuntime });
+  physicsPlugin.init({ clock: sceneClock });
 
   function evaluateSceneAtClock(clockState) {
     const time = Number.isFinite(clockState?.t) ? clockState.t : 0;
@@ -634,7 +637,8 @@ export async function createViewerCore({
       runtime.sampleAt(time);
     }
     if (!physicsState.enabled) return;
-    physicsRuntime.update(clockState);
+    const scheduleContext = { events: [], diagnostics: [] };
+    physicsPlugin.update(clockState, scheduleContext);
   }
 
   function syncObjectAudioAtClock(clockState, now = performance.now()) {
@@ -708,7 +712,7 @@ export async function createViewerCore({
     commands,
 
     hasPhysics() {
-      return physicsState.enabled && physicsRuntime.hasBodies();
+      return physicsState.enabled && physicsPlugin.hasBodies();
     },
 
     getPhysicsPlaybackState() {
@@ -773,7 +777,7 @@ export async function createViewerCore({
       bgmAudio?.pause();
       objectAudioController.dispose();
       loomAdapter?.dispose?.();
-      physicsRuntime.dispose();
+      physicsPlugin.dispose();
     },
   };
 
