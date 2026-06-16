@@ -2,6 +2,7 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createWorld,
+  computeRapierWorldStateHash,
   initRapierPhysics,
   normalizeRapierWorldOptions,
 } from './rapier-world.js';
@@ -58,7 +59,7 @@ test('normalizes Rapier world options with seconds-based timestep', () => {
   });
 });
 
-test('same Rapier inputs produce the same state hash', () => {
+test('same Rapier inputs produce the same state hash and networkStateHash', () => {
   const a = makeWorld();
   const b = makeWorld();
 
@@ -66,6 +67,9 @@ test('same Rapier inputs produce the same state hash', () => {
   b.stepTo(180);
 
   assert.equal(a.stateHash(), b.stateHash());
+  assert.equal(a.networkStateHash(), b.networkStateHash());
+  assert.equal(typeof a.networkStateHash(), 'string');
+  assert.equal(a.networkStateHash().length, 8);
   assert.deepEqual(a.getBodies(), b.getBodies());
 
   a.free();
@@ -88,6 +92,35 @@ test('Rapier snapshot restore reproduces the same future', () => {
 
   a.free();
   b.free();
+});
+
+test('computeRapierWorldStateHash returns same hex string for two identically-stepped RAPIER worlds (deterministic build)', async () => {
+  // Import the module-level RAPIER singleton, already initialized by before().
+  const mod = await import('@dimforge/rapier3d-deterministic-compat');
+  const RAPIER = mod.default ?? mod;
+
+  function makeRawWorld() {
+    const w = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(0.5, 5, -0.5);
+    const body = w.createRigidBody(bodyDesc);
+    const collider = RAPIER.ColliderDesc.ball(0.35).setRestitution(0.5).setFriction(0.5).setMass(1);
+    w.createCollider(collider, body);
+    for (let i = 0; i < 180; i++) w.step();
+    return w;
+  }
+
+  const wA = makeRawWorld();
+  const wB = makeRawWorld();
+
+  const hashA = computeRapierWorldStateHash(wA);
+  const hashB = computeRapierWorldStateHash(wB);
+
+  assert.equal(typeof hashA, 'string');
+  assert.equal(hashA.length, 8, 'hash should be 8-char hex');
+  assert.equal(hashA, hashB, 'deterministic build: same inputs must produce identical state hash');
+
+  wA.free();
+  wB.free();
 });
 
 test('stepTo caps very long fast-forward work', () => {

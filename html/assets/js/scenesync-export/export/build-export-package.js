@@ -24,7 +24,9 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync/physics/index.js', dest: 'viewer/physics/index.js' },
   { src: '/assets/js/scenesync/physics/rapier-world.js', dest: 'viewer/physics/rapier-world.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
-  { src: '/assets/vendor/rapier/0.19.3/rapier.mjs', dest: 'viewer/rapier/rapier.js' },
+  // deterministic-compat build — must match the build used by rapier-world.js
+  { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier.mjs', dest: 'viewer/rapier/rapier.js' },
+  { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier_wasm3d_bg.wasm', dest: 'viewer/rapier/rapier_wasm3d_bg.wasm' },
   // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
   {
     src: '/assets/vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js',
@@ -43,7 +45,7 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-      "@dimforge/rapier3d-compat": "./viewer/rapier/rapier.js"
+      "@dimforge/rapier3d-deterministic-compat": "./viewer/rapier/rapier.js"
     }
   }
   <\/script>

@@ -78,18 +78,43 @@ special-cased by the Rapier runtime.
 
 ## Determinism
 
-Rapier determinism depends on the same Rapier version, same timestep, same
-initial scene, same object creation order, and same operation order. Scene Sync
-therefore creates bodies sorted by `objectId` and never feeds frame delta into
-the simulation.
+Scene Sync uses `@dimforge/rapier3d-deterministic-compat` (the Rapier
+cross-platform deterministic build) so that identical initial state, identical
+input sequences, and identical fixed-tick counts reproduce the same physics
+result on every client.
+
+Determinism depends on: the same Rapier version, the same timestep, the same
+initial scene, the same object-creation order, and the same operation order.
+Scene Sync therefore creates bodies sorted by `objectId` and never feeds
+variable frame delta into the simulation.
 
 Do not use non-deterministic local calculations to create physics inputs for
 Shared Playback. Authoring inputs must be normalized through scene state, scene
 deltas, or controller-published playback baselines.
 
-Scene Sync treats Rapier deterministic replay as an optimization, not the only
-correctness mechanism. Shared Playback must be able to restore snapshots or
-reset instead of long fast-forwarding from arbitrary old state.
+Scene Sync treats deterministic replay as an optimization, not the only
+correctness mechanism. Divergence due to network reordering, late join,
+implementation drift, or version differences is expected. The future resync path
+detects divergence via state hash comparison and recovers by restoring a
+shared Rapier snapshot. Shared Playback must therefore be able to restore
+snapshots or reset instead of relying on long fast-forwarding from arbitrary old
+state.
+
+### State Hash
+
+`rapier-world.js` exposes three ways to hash physics state:
+
+- `world.stateHash()` — hashes the raw Rapier snapshot bytes; fast, used in
+  unit tests.
+- `world.networkStateHash()` — iterates bodies in Scene Sync objectId order
+  (same as `getBodies()`) and hashes translation/rotation/linvel/angvel per
+  body; returns an 8-char hex string. Stable across remove/recreate and
+  snapshot restore as long as scene composition is the same. Intended as the
+  future network-shareable divergence signal.
+- `computeRapierWorldStateHash(rapierWorld)` — raw Rapier World debug helper
+  ordered by rigid-body handle. Handles must match exactly across compared
+  worlds. Do not use for network divergence detection; prefer
+  `networkStateHash()` instead.
 
 ## Shared Playback
 

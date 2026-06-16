@@ -1,4 +1,6 @@
-import RAPIER from '@dimforge/rapier3d-compat';
+// Use the deterministic build so that identical initial state + tick + inputs
+// reproduce the same physics result across clients (cross-platform determinism).
+import RAPIER from '@dimforge/rapier3d-deterministic-compat';
 
 export const RAPIER_PHYSICS_ENGINE = 'rapier';
 export const RAPIER_PACKAGE_VERSION = '0.19.3';
@@ -108,6 +110,45 @@ function hashBytes(hash, bytes) {
   let next = hash;
   for (const byte of bytes || []) next = hashByte(next, byte);
   return next;
+}
+
+/**
+ * Raw Rapier world debug hash ordered by rigid-body handle.
+ * Handles must be identical across the compared worlds (same creation order,
+ * no remove/recreate, no snapshot restore with different body count).
+ * For network divergence detection across clients, prefer networkStateHash()
+ * on the createWorld() wrapper, which uses Scene Sync objectId order instead.
+ * Returns an 8-character hex string.
+ */
+export function computeRapierWorldStateHash(rapierWorld) {
+  let hash = hashInit();
+  const handles = [];
+  rapierWorld.forEachRigidBody((body) => handles.push(body.handle));
+  handles.sort((a, b) => a - b);
+  for (const handle of handles) {
+    const body = rapierWorld.getRigidBody(handle);
+    if (!body) continue;
+    hash = hashInt(hash, handle);
+    hash = hashInt(hash, body.bodyType());
+    const t = body.translation();
+    hash = hashNumber(hash, t.x);
+    hash = hashNumber(hash, t.y);
+    hash = hashNumber(hash, t.z);
+    const r = body.rotation();
+    hash = hashNumber(hash, r.x);
+    hash = hashNumber(hash, r.y);
+    hash = hashNumber(hash, r.z);
+    hash = hashNumber(hash, r.w);
+    const lv = body.linvel();
+    hash = hashNumber(hash, lv.x);
+    hash = hashNumber(hash, lv.y);
+    hash = hashNumber(hash, lv.z);
+    const av = body.angvel();
+    hash = hashNumber(hash, av.x);
+    hash = hashNumber(hash, av.y);
+    hash = hashNumber(hash, av.z);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function initRapierPhysics() {
@@ -418,6 +459,34 @@ export function createWorld(options = {}) {
     return hash >>> 0;
   }
 
+  // objectId-sorted hash intended for future network divergence detection.
+  // Uses Scene Sync objectId order (same as getBodies()) rather than raw
+  // Rapier handles, so it remains stable across remove/recreate and
+  // snapshot restore as long as the scene composition is the same.
+  function networkStateHash() {
+    let hash = hashInit();
+    hash = hashString(hash, RAPIER_PHYSICS_ENGINE);
+    hash = hashString(hash, RAPIER_PACKAGE_VERSION);
+    hash = hashInt(hash, tick);
+    for (const { id, position, rotation, velocity, angularVelocity } of getBodies()) {
+      hash = hashString(hash, id);
+      hash = hashNumber(hash, position[0]);
+      hash = hashNumber(hash, position[1]);
+      hash = hashNumber(hash, position[2]);
+      hash = hashNumber(hash, rotation[0]);
+      hash = hashNumber(hash, rotation[1]);
+      hash = hashNumber(hash, rotation[2]);
+      hash = hashNumber(hash, rotation[3]);
+      hash = hashNumber(hash, velocity[0]);
+      hash = hashNumber(hash, velocity[1]);
+      hash = hashNumber(hash, velocity[2]);
+      hash = hashNumber(hash, angularVelocity[0]);
+      hash = hashNumber(hash, angularVelocity[1]);
+      hash = hashNumber(hash, angularVelocity[2]);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
   function free() {
     checkpoints.clear();
     bodyRecords.clear();
@@ -443,6 +512,7 @@ export function createWorld(options = {}) {
     snapshot,
     restore,
     stateHash,
+    networkStateHash,
     free,
   };
 }
