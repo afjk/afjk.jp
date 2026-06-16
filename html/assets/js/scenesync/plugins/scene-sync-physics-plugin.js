@@ -1,3 +1,6 @@
+import { emitScheduleEvent } from '../runtime/schedule-context.js';
+import { createPhysicsCollisionEvent } from '../runtime/runtime-events.js';
+
 /**
  * Thin wrapper that exposes a ScenePhysicsRuntime as a SceneSyncRuntimePlugin.
  *
@@ -41,12 +44,25 @@ export function createSceneSyncPhysicsPlugin(options = {}) {
 
     /**
      * @param {Object} clockState
-     * @param {{ events: Array, diagnostics: Array }} scheduleContext
+     * @param {import('../runtime/schedule-context.js').SceneSyncScheduleContext} scheduleContext
      */
     update(clockState, scheduleContext) {
       if (!runtime || typeof runtime.update !== 'function') return;
-      runtime.update(clockState);
-      // Future: push collision/physics events into scheduleContext.events
+      const result = runtime.update(clockState);
+      if (scheduleContext && Array.isArray(result?.events) && result.events.length > 0) {
+        for (const raw of result.events) {
+          const event = createPhysicsCollisionEvent({
+            type: raw.type,
+            clockState,
+            frameId: scheduleContext.frameId,
+            tick: raw.tick,
+            objectIdA: raw.objectIdA,
+            objectIdB: raw.objectIdB,
+            payload: raw.payload || {},
+          });
+          emitScheduleEvent(scheduleContext, event);
+        }
+      }
     },
 
     hasBodies() {

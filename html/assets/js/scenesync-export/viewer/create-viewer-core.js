@@ -17,6 +17,7 @@ import {
   clipTimeForMode,
   createViewerSceneClock,
 } from './viewer-scene-clock.js';
+import { createSceneSyncScheduleContext } from '../../scenesync/runtime/schedule-context.js';
 
 const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
 
@@ -119,6 +120,27 @@ function graphForRuntime(graph, scopeObjectId) {
 function createExportBehaviorRuntime(behaviorState, objectMap, audioController = null) {
   const runtimes = [];
   const behaviorBases = new Map();
+  let currentScheduleContext = null;
+
+  // AudioSource Host API v0 — wraps objectAudioController.applyEffect()
+  // Loomlet uses this to play/pause/stop/seek audio without owning Audio system
+  const audioSource = {
+    play(objectId, name = 'default') {
+      audioController?.applyEffect({ type: 'audioSource.play', objectId, name });
+    },
+    pause(objectId, name = 'default') {
+      audioController?.applyEffect({ type: 'audioSource.pause', objectId, name });
+    },
+    stop(objectId, name = 'default') {
+      audioController?.applyEffect({ type: 'audioSource.stop', objectId, name });
+    },
+    seek(objectId, seconds, name = 'default') {
+      audioController?.applyEffect({ type: 'audioSource.seek', objectId, name, time: seconds });
+    },
+    playOneShot(objectId, name = 'default', options = {}) {
+      audioController?.applyEffect({ type: 'audioSource.playOneShot', objectId, name, options });
+    },
+  };
 
   function applySceneEffect(effect, scopeKey) {
     if (effect?.type && AUDIO_SOURCE_EFFECT_TYPES.has(effect.type)) {
@@ -201,9 +223,26 @@ function createExportBehaviorRuntime(behaviorState, objectMap, audioController =
         entry.runtime.evaluateAt({ time, scope: entry.scope, events: [] }, now);
       }
     },
+
+    setScheduleContext(scheduleContext) {
+      currentScheduleContext = scheduleContext || null;
+    },
+
+    getRuntimeEvents() {
+      return currentScheduleContext?.events || [];
+    },
+
+    getCollisionEvents() {
+      return currentScheduleContext?.collisionEvents || [];
+    },
+
+    // AudioSource Host API — exposed so Loomlet nodes can trigger audio
+    audioSource,
+
     dispose() {
       runtimes.length = 0;
       behaviorBases.clear();
+      currentScheduleContext = null;
     },
   };
 }
@@ -634,14 +673,19 @@ export async function createViewerCore({
   physicsPlugin.init({ clock: sceneClock });
   loomletPlugin.init({ clock: sceneClock });
 
-  function evaluateSceneAtClock(clockState) {
+  let runtimeFrameId = 0;
+
+  function evaluateSceneAtClock(clockState, scheduleContext = null) {
     const time = Number.isFinite(clockState?.t) ? clockState.t : 0;
     for (const runtime of animationRuntimes) {
       runtime.sampleAt(time);
     }
     if (!physicsState.enabled) return;
-    const scheduleContext = { events: [], diagnostics: [] };
-    physicsPlugin.update(clockState, scheduleContext);
+    physicsPlugin.update(clockState, scheduleContext || {
+      events: [],
+      collisionEvents: [],
+      diagnostics: [],
+    });
   }
 
   function syncObjectAudioAtClock(clockState, now = performance.now()) {
@@ -697,12 +741,15 @@ export async function createViewerCore({
     update() {
       const now = performance.now();
       const clockState = sceneClock.tick(now);
-      evaluateSceneAtClock(clockState);
-      loomletPlugin.update(clockState, {
-        phase: 'postPhysics',
-        events: [],
-        diagnostics: [],
+      const scheduleContext = createSceneSyncScheduleContext({
         now,
+        frameId: ++runtimeFrameId,
+        clockState,
+      });
+      evaluateSceneAtClock(clockState, scheduleContext);
+      loomletPlugin.update(clockState, {
+        ...scheduleContext,
+        phase: 'postPhysics',
       });
       syncObjectAudioAtClock(clockState, now);
     },

@@ -75,3 +75,34 @@ test('SceneSyncLoomletPlugin falls back to now() when scheduleContext.now is abs
   plugin.update({ t: 0 }, { events: [], diagnostics: [] });
   assert.equal(calls[0].now, 42);
 });
+
+test('SceneSyncLoomletPlugin calls adapter.setScheduleContext when available', () => {
+  const received = [];
+  const adapter = {
+    tick() {},
+    setScheduleContext(ctx) { received.push(ctx); },
+  };
+  const plugin = createSceneSyncLoomletPlugin({ loomAdapter: adapter });
+  const scheduleContext = { now: 100, frameId: 3, events: [], collisionEvents: [], diagnostics: [] };
+  plugin.update({ t: 0 }, scheduleContext);
+  assert.equal(received.length, 1);
+  assert.equal(received[0], scheduleContext);
+});
+
+test('SceneSyncLoomletPlugin does not fail when adapter has no setScheduleContext', () => {
+  const calls = [];
+  const adapter = {
+    tick(clockState, now) { calls.push({ clockState, now }); },
+  };
+  const plugin = createSceneSyncLoomletPlugin({ loomAdapter: adapter });
+  const scheduleContext = { now: 200, frameId: 4, events: [], collisionEvents: [], diagnostics: [] };
+  assert.doesNotThrow(() => plugin.update({ t: 0 }, scheduleContext));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].now, 200);
+});
+
+test('SceneSyncLoomletPlugin update is safe when adapter is null', () => {
+  const plugin = createSceneSyncLoomletPlugin();
+  const scheduleContext = { now: 0, frameId: 0, events: [], collisionEvents: [], diagnostics: [] };
+  assert.doesNotThrow(() => plugin.update({ t: 0 }, scheduleContext));
+});

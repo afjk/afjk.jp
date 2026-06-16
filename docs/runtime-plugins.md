@@ -55,8 +55,13 @@ Scene Sync Runtime Plugin の設計方針と責務境界を定義するドキュ
 
 /**
  * @typedef {Object} SceneSyncScheduleContext
- * @property {Array} events - Physics / collision event 等（将来用）
- * @property {Array} diagnostics - Runtime 診断情報（将来用）
+ * @property {number} now - フレーム開始時刻（ms）
+ * @property {number} frameId - フレームID（単調増加）
+ * @property {Object|null} clockState - Clock state
+ * @property {string} [phase] - 'postPhysics' 等
+ * @property {Array} events - 全 Runtime Event（collision も含む）
+ * @property {Array} collisionEvents - collision event の便利配列
+ * @property {Array} diagnostics - Runtime 診断情報
  */
 ```
 
@@ -91,7 +96,7 @@ runner.dispose();           // 全Plugin の dispose を逆順に呼ぶ
 - Rapier world を生成・更新・破棄する
 - ClockState に基づいて fixed step を進める
 - 結果 Transform を Three.js Object へ反映する
-- 将来: collision event を `scheduleContext.events` に積む
+- Physics fixed step 後に collision event v0 を `scheduleContext` に出す
 
 ### やらないこと
 
@@ -135,7 +140,8 @@ Physics Plugin wrapper が安定した後、段階的に移行する。
 
 - Loomlet / Behavior Graph adapter を保持する
 - ClockState に基づいて behavior graph を評価する
-- 将来、`scheduleContext.events` から input / collision event を受け取る
+- `scheduleContext.events` / `scheduleContext.collisionEvents` を受け取る
+- 将来、collision event を Behavior Graph の input として扱う
 - 将来、`prePhysics` / `postPhysics` phase に分割する入口になる
 
 ### やらないこと
@@ -176,6 +182,29 @@ loomletPlugin.dispose();
 
 ---
 
+## AudioSource operation from Loomlet
+
+Loomlet は Scene Sync 本体の Audio 実装を直接所有しない。
+Host が提供する AudioSource operation API を呼ぶ。
+
+v0 では以下を目標にする。
+
+```js
+audioSource.play(objectId, name?)
+audioSource.pause(objectId, name?)
+audioSource.stop(objectId, name?)
+audioSource.seek(objectId, seconds, name?)
+audioSource.playOneShot(objectId, name?, options?)
+```
+
+Host API は `objectAudioController.applyEffect()` をラップして提供する。
+Loomlet adapter の `setScheduleContext()` 経由で scheduleContext も渡す。
+
+`scene.setAudio` は削除しない。非推奨（deprecated）扱いにする。
+`audioSource.*` を推奨に移行する。
+
+---
+
 ## 将来の Plugin 追加ガイドライン
 
 新しい Plugin を追加する際は以下に従う。
@@ -191,4 +220,5 @@ loomletPlugin.dispose();
 ## 参照
 
 - [runtime-schedule.md](./runtime-schedule.md) - Runtime 実行順序
+- [runtime-events.md](./runtime-events.md) - Runtime Event / Collision Event スキーマ
 - [scene-sync-physics.md](./scene-sync-physics.md) - Physics仕様詳細

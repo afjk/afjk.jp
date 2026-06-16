@@ -71,15 +71,19 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 
 ### Collision / physics events collection
 
-- **未実装**（将来の課題）
-- 将来ここで生成された collision event を `scheduleContext.events` に積む
+- PhysicsPlugin が physics fixed step 後に collision event を `scheduleContext.events` に積む
+- v0 では `physics.collision.enter` / `physics.collision.exit` のみ
+- event schema は `docs/runtime-events.md` を参照
+- Loomlet post-physics phase はこの event を消費できる設計にする
 
 ### Loomlet post-physics phase
 
 - Export Viewer では `SceneSyncLoomletPlugin.update(clockState, scheduleContext)` 経由で評価する
 - 現在は既存の `loomAdapter.tick(clockState, now)` を薄く包んでいる
 - `scheduleContext.phase = 'postPhysics'` として渡す
-- collision event 消費は未実装
+- `scheduleContext.collisionEvents` から physics collision event を参照できる
+- 現時点では、Loomlet runtime 本体がすべての event を直接消費する必要はない
+- まずは host API / adapter 経由で必要な event を渡す
 - **将来の課題**: `prePhysics` / `postPhysics` に分割する
 
 ### Animation / Audio sampling
@@ -96,7 +100,7 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 ### Record / sync / diagnostics
 
 - `scheduleContext.diagnostics` に記録する設計（将来の課題）
-- 現時点は `scheduleContext = { events: [], diagnostics: [] }` を空で渡す
+- 現時点は `createSceneSyncScheduleContext()` で生成した context を渡す
 
 ---
 
@@ -120,17 +124,22 @@ Scene Sync Runtime の 1 frame / 1 tick 内の概念上の実行順序を定義�
 Runtime の各フェーズ間でデータを受け渡す軽量な context オブジェクト。
 
 ```js
-const scheduleContext = {
-  events: [],       // 将来: collision event / physics event を積む
-  diagnostics: [],  // 将来: runtime diagnostics を記録する
-  // 将来追加候補:
-  // physicsEvents: [],
-  // collisionEvents: [],
-  // commandQueue: [],
-};
+import { createSceneSyncScheduleContext } from './runtime/schedule-context.js';
+
+const scheduleContext = createSceneSyncScheduleContext({
+  now,
+  frameId: ++runtimeFrameId,
+  clockState,
+});
+// scheduleContext.events         - 全 Runtime Event
+// scheduleContext.collisionEvents - collision event の便利配列
+// scheduleContext.diagnostics    - runtime 診断情報
 ```
 
-現時点では空で渡すが、将来 Plugin 間のデータ受け渡しに使う。
+`emitScheduleEvent(scheduleContext, event)` でイベントを積む。
+type が `physics.collision.*` の場合は `collisionEvents` にも自動で積まれる。
+
+実装: `html/assets/js/scenesync/runtime/schedule-context.js`
 
 ---
 
@@ -139,3 +148,4 @@ const scheduleContext = {
 - [scene-sync-physics.md](./scene-sync-physics.md) - Physics仕様詳細
 - [scene-sync-runtime-time-model.md](./scene-sync-runtime-time-model.md) - Time Model詳細
 - [runtime-plugins.md](./runtime-plugins.md) - Plugin設計
+- [runtime-events.md](./runtime-events.md) - Runtime Event / Collision Event スキーマ

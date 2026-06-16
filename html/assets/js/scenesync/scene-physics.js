@@ -6,6 +6,7 @@ import {
   isRapierPhysicsReady,
   normalizeRapierWorldOptions,
 } from './physics/index.js';
+import { createCollisionPairKey } from './runtime/runtime-events.js';
 
 export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
 export const DEFAULT_SCENE_PHYSICS = Object.freeze({
@@ -392,6 +393,7 @@ export function createScenePhysicsRuntime({
   let pendingWorldEpochTime = null;
   let preserveMotionOnRebuild = true;
   let resetMotionObjectIds = new Set();
+  let previousCollisionPairs = new Set();
 
   function clear() {
     world?.free?.();
@@ -404,6 +406,7 @@ export function createScenePhysicsRuntime({
     pendingWorldEpochTime = null;
     preserveMotionOnRebuild = true;
     resetMotionObjectIds = new Set();
+    previousCollisionPairs = new Set();
   }
 
   function markDirty({
@@ -502,6 +505,7 @@ export function createScenePhysicsRuntime({
     dirty = false;
     preserveMotionOnRebuild = true;
     resetMotionObjectIds = new Set();
+    previousCollisionPairs = new Set();
     return entryMap.size > 0
       ? { ok: true }
       : { ok: false, reason: 'no-bodies' };
@@ -520,6 +524,7 @@ export function createScenePhysicsRuntime({
   function resetToInitialPose(clockState = null) {
     if (!world || !initialSnapshot) return false;
     world.restore(initialSnapshot);
+    previousCollisionPairs = new Set();
     worldEpochTime = getClockTime(clockState);
     applyWorldToObjects(clockState);
     return true;
@@ -559,25 +564,72 @@ export function createScenePhysicsRuntime({
     const targetTick = Math.max(0, Math.floor(worldAge / timestepSeconds));
     if (targetTick < world.tick && initialSnapshot) {
       world.restore(initialSnapshot);
+      previousCollisionPairs = new Set();
     }
     const stepResult = world.stepTo(targetTick);
     if (stepResult?.limited === true) {
       active = false;
+      previousCollisionPairs = new Set();
       return {
         active: false,
         reason: stepResult.reason || 'step-limit',
         tick: world.tick,
         limited: true,
         reached: false,
+        events: [],
       };
     }
     applyWorldToObjects(clockState);
     active = true;
+
+    // Collect collision events via EventQueue diff (enter / exit only, no stay)
+    const collisionEvents = [];
+    if (typeof world.drainCollisionEvents === 'function') {
+      const currentPairs = new Set(previousCollisionPairs);
+      world.drainCollisionEvents((objectIdA, objectIdB, started) => {
+        const pairKey = createCollisionPairKey(objectIdA, objectIdB);
+        if (!pairKey) return;
+        if (started) {
+          currentPairs.add(pairKey);
+        } else {
+          currentPairs.delete(pairKey);
+        }
+      });
+
+      const currentTick = world.tick;
+      for (const pairKey of currentPairs) {
+        if (!previousCollisionPairs.has(pairKey)) {
+          const [a, b] = pairKey.split('|');
+          collisionEvents.push({
+            type: 'physics.collision.enter',
+            objectIdA: a,
+            objectIdB: b,
+            pairKey,
+            tick: currentTick,
+          });
+        }
+      }
+      for (const pairKey of previousCollisionPairs) {
+        if (!currentPairs.has(pairKey)) {
+          const [a, b] = pairKey.split('|');
+          collisionEvents.push({
+            type: 'physics.collision.exit',
+            objectIdA: a,
+            objectIdB: b,
+            pairKey,
+            tick: currentTick,
+          });
+        }
+      }
+      previousCollisionPairs = currentPairs;
+    }
+
     return {
       active: true,
       tick: world.tick,
       limited: stepResult?.limited === true,
       reached: stepResult?.reached !== false,
+      events: collisionEvents,
     };
   }
 

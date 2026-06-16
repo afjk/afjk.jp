@@ -46,17 +46,22 @@ export function createSceneSyncLoomletPlugin(options = {}) {
      * Current behavior:
      * - Single phase only
      * - Called after evaluateSceneAtClock(), which currently includes animation + physics
-     * - Does not consume scheduleContext.events yet
+     * - scheduleContext.collisionEvents is available for future Behavior Graph consumption
      *
      * @param {Object} clockState
-     * @param {{ phase?: string, events: Array, diagnostics: Array, now?: number }} [scheduleContext]
+     * @param {import('../runtime/schedule-context.js').SceneSyncScheduleContext} [scheduleContext]
      */
     update(clockState, scheduleContext = {}) {
-      if (!adapter || typeof adapter.tick !== 'function') return;
+      if (!adapter) return;
       const currentNow = Number.isFinite(scheduleContext.now)
         ? scheduleContext.now
         : now();
-      adapter.tick(clockState, currentNow);
+      if (typeof adapter.setScheduleContext === 'function') {
+        adapter.setScheduleContext(scheduleContext);
+      }
+      if (typeof adapter.tick === 'function') {
+        adapter.tick(clockState, currentNow);
+      }
     },
 
     dispose() {
