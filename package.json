@@ -15,6 +15,7 @@
     "test:runtime-schedule": "node --test html/assets/js/scenesync/runtime/schedule-context.test.js html/assets/js/scenesync/runtime/runtime-events.test.js",
     "test:plugins": "node --test html/assets/js/scenesync/plugins/scene-sync-physics-plugin.test.js html/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.test.js",
     "test:export-behavior-runtime": "node --test html/assets/js/scenesync-export/viewer/export-behavior-runtime.test.js",
+    "test:scene-sync-export-behaviors": "node --test html/assets/js/scenesync/importers/scene-sync-export/apply-scene-behaviors.test.js",
     "test:scene-sync-export-import": "node --test html/assets/js/scenesync/importers/scene-sync-export/*.test.js html/assets/js/scenesync-export/export/*.test.js html/assets/js/scenesync-export/viewer/*.test.js",
     "test:e2e:install-browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "test:e2e:scene-sync-export-import": "node scripts/scenesync-export-import-browser-e2e.mjs"
