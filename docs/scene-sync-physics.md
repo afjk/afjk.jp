@@ -102,13 +102,19 @@ state.
 
 ### State Hash
 
-`rapier-world.js` exposes two ways to hash physics state:
+`rapier-world.js` exposes three ways to hash physics state:
 
-- `world.stateHash()` — hashes the raw Rapier snapshot bytes for the wrapper
-  world; fast and used in unit tests.
-- `computeRapierWorldStateHash(rapierWorld)` — iterates rigid bodies sorted by
-  handle and hashes position/rotation/linvel/angvel per body; returns an 8-char
-  hex string. Intended as the future network-shareable divergence signal.
+- `world.stateHash()` — hashes the raw Rapier snapshot bytes; fast, used in
+  unit tests.
+- `world.networkStateHash()` — iterates bodies in Scene Sync objectId order
+  (same as `getBodies()`) and hashes translation/rotation/linvel/angvel per
+  body; returns an 8-char hex string. Stable across remove/recreate and
+  snapshot restore as long as scene composition is the same. Intended as the
+  future network-shareable divergence signal.
+- `computeRapierWorldStateHash(rapierWorld)` — raw Rapier World debug helper
+  ordered by rigid-body handle. Handles must match exactly across compared
+  worlds. Do not use for network divergence detection; prefer
+  `networkStateHash()` instead.
 
 ## Shared Playback
 

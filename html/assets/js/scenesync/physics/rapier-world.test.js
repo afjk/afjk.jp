@@ -59,7 +59,7 @@ test('normalizes Rapier world options with seconds-based timestep', () => {
   });
 });
 
-test('same Rapier inputs produce the same state hash', () => {
+test('same Rapier inputs produce the same state hash and networkStateHash', () => {
   const a = makeWorld();
   const b = makeWorld();
 
@@ -67,6 +67,9 @@ test('same Rapier inputs produce the same state hash', () => {
   b.stepTo(180);
 
   assert.equal(a.stateHash(), b.stateHash());
+  assert.equal(a.networkStateHash(), b.networkStateHash());
+  assert.equal(typeof a.networkStateHash(), 'string');
+  assert.equal(a.networkStateHash().length, 8);
   assert.deepEqual(a.getBodies(), b.getBodies());
 
   a.free();

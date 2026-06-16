@@ -113,8 +113,11 @@ function hashBytes(hash, bytes) {
 }
 
 /**
- * Compute a stable hash of a RAPIER.World's dynamic body states, ordered by
- * handle. Suitable for detecting physics divergence across clients.
+ * Raw Rapier world debug hash ordered by rigid-body handle.
+ * Handles must be identical across the compared worlds (same creation order,
+ * no remove/recreate, no snapshot restore with different body count).
+ * For network divergence detection across clients, prefer networkStateHash()
+ * on the createWorld() wrapper, which uses Scene Sync objectId order instead.
  * Returns an 8-character hex string.
  */
 export function computeRapierWorldStateHash(rapierWorld) {
@@ -456,6 +459,34 @@ export function createWorld(options = {}) {
     return hash >>> 0;
   }
 
+  // objectId-sorted hash intended for future network divergence detection.
+  // Uses Scene Sync objectId order (same as getBodies()) rather than raw
+  // Rapier handles, so it remains stable across remove/recreate and
+  // snapshot restore as long as the scene composition is the same.
+  function networkStateHash() {
+    let hash = hashInit();
+    hash = hashString(hash, RAPIER_PHYSICS_ENGINE);
+    hash = hashString(hash, RAPIER_PACKAGE_VERSION);
+    hash = hashInt(hash, tick);
+    for (const { id, position, rotation, velocity, angularVelocity } of getBodies()) {
+      hash = hashString(hash, id);
+      hash = hashNumber(hash, position[0]);
+      hash = hashNumber(hash, position[1]);
+      hash = hashNumber(hash, position[2]);
+      hash = hashNumber(hash, rotation[0]);
+      hash = hashNumber(hash, rotation[1]);
+      hash = hashNumber(hash, rotation[2]);
+      hash = hashNumber(hash, rotation[3]);
+      hash = hashNumber(hash, velocity[0]);
+      hash = hashNumber(hash, velocity[1]);
+      hash = hashNumber(hash, velocity[2]);
+      hash = hashNumber(hash, angularVelocity[0]);
+      hash = hashNumber(hash, angularVelocity[1]);
+      hash = hashNumber(hash, angularVelocity[2]);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
   function free() {
     checkpoints.clear();
     bodyRecords.clear();
@@ -481,6 +512,7 @@ export function createWorld(options = {}) {
     snapshot,
     restore,
     stateHash,
+    networkStateHash,
     free,
   };
 }
