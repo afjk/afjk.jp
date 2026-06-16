@@ -87,8 +87,8 @@ result on every client.
 
 Rapier determinism depends on the same Rapier core version, deterministic build
 flavor, timestep, solver/integration settings, initial scene, object creation
-order, and operation order. Scene Sync therefore creates bodies sorted by
-`objectId` and never feeds frame delta into the simulation.
+order, and operation order. Scene Sync therefore creates bodies in stable scene
+order and never feeds frame delta into the simulation.
 
 Cross-host parity with Unity/Godot/Browser requires the full match set:
 
@@ -108,8 +108,10 @@ import RAPIER from '@dimforge/rapier3d-deterministic-compat';
 
 The runtime exposes `canonicalStateHash()` using
 `SceneSyncCanonicalPhysicsHashV1`, an exact FNV-1a-64 hash over raw `f32` state
-fields sorted by stable Scene Sync object id. The older `stateHash()` API
-remains as a 32-bit compatibility value derived from the canonical hash.
+fields sorted by `stableIdHash(objectId)`, where `stableIdHash` is
+`FNV-1a-64(UTF-8(objectId))`. The older `stateHash()` API remains a local
+32-bit compatibility value over tick, timestep, and native Rapier snapshot
+bytes.
 
 Do not use non-deterministic local calculations to create physics inputs for
 Shared Playback. Authoring inputs must be normalized through scene state, scene
@@ -128,10 +130,16 @@ state.
 `rapier-world.js` exposes three ways to hash physics state:
 
 - `world.canonicalStateHash()` — exact `SceneSyncCanonicalPhysicsHashV1`
-  FNV-1a-64 hash over raw `f32` state fields sorted by stable Scene Sync object
-  id. Use this for cross-host parity detection.
-- `world.stateHash()` — 32-bit number derived from the canonical hash, kept for
-  older local callers/tests that expect a numeric hash.
+  FNV-1a-64 hash over raw `f32` state fields sorted by
+  `stableIdHash(objectId)`. It includes gravity, timestep, body type, damping,
+  additional solver iterations, CCD/can-sleep settings, pose, velocities,
+  sleeping/enabled state, collider shape, density, friction/combine rule,
+  restitution/combine rule, sensor, and enabled state. Use this for cross-host
+  parity detection.
+- `world.stateHash()` — 32-bit local compatibility hash over engine/package,
+  tick, timestep, and native Rapier snapshot bytes. It is useful for same-host
+  replay/debug callers that expect a numeric hash; do not use it as the
+  cross-host canonical parity signal.
 - `world.networkStateHash()` — iterates bodies in Scene Sync objectId order
   (same as `getBodies()`) and hashes translation/rotation/linvel/angvel per
   body; returns an 8-char hex string. Stable across remove/recreate and
