@@ -127,6 +127,10 @@ and sample ticks through tick 600. Browser-side fixture support is implemented
 by `html/assets/js/scenesync/physics/rapier-parity-fixture.js` and covered by
 `rapier-parity-fixture.test.js`.
 
+The `bodies` array order is the fixture creation order. Hashes and dumps still
+compare bodies/colliders by `stableIdHash(objectId)` so handle order does not
+become part of the public parity result.
+
 The Browser result schema is intended to match the Unity sample output:
 
 ```json

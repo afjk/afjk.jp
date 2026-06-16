@@ -41,6 +41,7 @@ test('browser parity fixture records canonical hashes and dumps at sample ticks'
   assert.equal(result.profile, 'SceneSyncRapierParity-0.30');
   assert.equal(result.rapierCoreVersion, RAPIER_CORE_VERSION);
   assert.equal(result.hashVersion, CANONICAL_PHYSICS_HASH_VERSION);
+  assert.equal(result.fixture, 'fixtures/rapier/parity-basic-001.json');
   assert.deepEqual(Object.keys(result.hashes), sampleTickKeys);
   assert.deepEqual(Object.keys(result.dumps), sampleTickKeys);
   assert.deepEqual(result.hashes, {
@@ -48,10 +49,10 @@ test('browser parity fixture records canonical hashes and dumps at sample ticks'
     1: 'cb8f1992d35076c7',
     2: 'b2b7e98db862dabb',
     10: '1a77e988f4c3b903',
-    60: '54b5d4429144844f',
-    120: 'b38dff28213e6339',
-    300: 'b03edf2515fd1f60',
-    600: '3e489588ef74c93e',
+    60: '0f91006661518595',
+    120: '78f4dbb6435f7ccb',
+    300: '9a6399672d2eddd1',
+    600: '9a6399672d2eddd1',
   });
 
   for (const hash of Object.values(result.hashes)) {
@@ -73,4 +74,14 @@ test('browser parity fixture records canonical hashes and dumps at sample ticks'
   assert.equal(boxCollider.density, 1);
   assert.equal(boxCollider.friction, 0.5);
   assert.equal(Math.fround(boxCollider.restitution), Math.fround(0.2));
+});
+
+test('browser parity fixture result reports the supplied fixture path', () => {
+  const result = createRapierParityResult(fixture, {
+    fixturePath: 'fixtures/rapier/custom.json',
+    includeDumps: false,
+  });
+
+  assert.equal(result.fixture, 'fixtures/rapier/custom.json');
+  assert.equal(result.dumps, undefined);
 });

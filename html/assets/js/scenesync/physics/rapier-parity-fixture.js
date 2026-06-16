@@ -41,10 +41,9 @@ function readSampleTicks(value) {
     .sort((left, right) => left - right);
 }
 
-function sortedBodies(fixture) {
+function fixtureBodies(fixture) {
   return [...(Array.isArray(fixture?.bodies) ? fixture.bodies : [])]
-    .filter((body) => typeof body?.id === 'string' && body.id.length > 0)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .filter((body) => typeof body?.id === 'string' && body.id.length > 0);
 }
 
 function bodyDefFromFixture(body) {
@@ -86,7 +85,7 @@ export function createRapierParityWorldFromFixture(fixture) {
     ground: null,
   });
 
-  for (const body of sortedBodies(fixture)) {
+  for (const body of fixtureBodies(fixture)) {
     world.addBody(bodyDefFromFixture(body));
   }
 
@@ -96,6 +95,7 @@ export function createRapierParityWorldFromFixture(fixture) {
 export function createRapierParityResult(fixture, options = {}) {
   const host = options.host || 'browser';
   const includeDumps = options.includeDumps !== false;
+  const fixturePath = options.fixturePath || 'fixtures/rapier/parity-basic-001.json';
   const sampleTicks = readSampleTicks(fixture?.sampleTicks);
   const hashes = {};
   const dumps = {};
@@ -117,7 +117,7 @@ export function createRapierParityResult(fixture, options = {}) {
       rapierCoreVersion: RAPIER_CORE_VERSION,
       buildFlavor: RAPIER_BUILD_FLAVOR,
       hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
-      fixture: 'fixtures/rapier/parity-basic-001.json',
+      fixture: fixturePath,
       sampleTicks,
       hashes,
       ...(includeDumps ? { dumps } : {}),
