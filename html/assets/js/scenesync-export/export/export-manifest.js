@@ -1,8 +1,15 @@
+import { normalizeExportMetadata } from './export-metadata.js';
+
 export function generateManifest({
   assetManifest = [],
   missingAssets = [],
   exportedAt = new Date().toISOString(),
   cdnDependent = true,
+  title = '',
+  description = '',
+  tags = [],
+  author = '',
+  metadata = null,
 }) {
   const notes = [
     'This is a read-only exported scene.',
@@ -22,6 +29,7 @@ export function generateManifest({
     format: 'scene-sync-export',
     version: 1,
     exportedAt,
+    ...normalizeExportMetadata(metadata || { title, description, tags, author }),
     viewer: { entry: 'index.html' },
     assets: assetManifest,
     missingAssets,

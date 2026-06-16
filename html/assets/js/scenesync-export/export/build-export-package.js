@@ -7,6 +7,7 @@ import {
   generateExportThumbnail,
   resolveExportThumbnailTitle,
 } from './export-thumbnail.js';
+import { normalizeExportMetadata } from './export-metadata.js';
 
 // These viewer source files are fetched from the current origin and bundled into the ZIP
 export const VIEWER_SOURCES = [
@@ -120,6 +121,60 @@ function formatTimestamp(date = new Date()) {
   return `${y}${mo}${d}-${h}${mi}${s}`;
 }
 
+const THUMBNAIL_EXTENSION_BY_MIME = new Map([
+  ['image/png', '.png'],
+  ['image/jpeg', '.jpg'],
+  ['image/webp', '.webp'],
+]);
+
+const SUPPORTED_THUMBNAIL_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+
+export function getExportThumbnailExtension(file) {
+  const mime = String(file?.type || '').toLowerCase().split(';')[0].trim();
+  if (THUMBNAIL_EXTENSION_BY_MIME.has(mime)) {
+    return THUMBNAIL_EXTENSION_BY_MIME.get(mime);
+  }
+
+  const name = String(file?.name || '').toLowerCase();
+  const dotIndex = name.lastIndexOf('.');
+  const ext = dotIndex >= 0 ? name.slice(dotIndex) : '';
+  return SUPPORTED_THUMBNAIL_EXTENSIONS.has(ext) ? ext : null;
+}
+
+function getCustomThumbnailFile(exportOptions) {
+  const file = exportOptions?.thumbnailFile || exportOptions?.thumbnail || null;
+  return file && typeof file === 'object' ? file : null;
+}
+
+async function addExportThumbnail(zip, {
+  exportOptions,
+  sceneDocument,
+  manifest,
+  filenameTitle,
+}) {
+  const customThumbnail = getCustomThumbnailFile(exportOptions);
+  if (customThumbnail) {
+    const extension = getExportThumbnailExtension(customThumbnail);
+    if (!extension) {
+      throw new Error('Thumbnail image must be PNG, JPEG, or WebP');
+    }
+    const path = `thumbnail${extension}`;
+    zip.file(path, customThumbnail);
+    return { path, mode: 'custom' };
+  }
+
+  const thumbnail = await generateExportThumbnail({
+    title: resolveExportThumbnailTitle({
+      sceneDocument,
+      manifest,
+      fallbackTitle: filenameTitle,
+    }),
+    stats: collectExportSceneStats(sceneDocument),
+  });
+  zip.file('thumbnail.png', thumbnail.blob);
+  return { path: 'thumbnail.png', mode: thumbnail.mode };
+}
+
 async function fetchViewerSources() {
   const results = {};
   const failures = [];
@@ -149,7 +204,10 @@ export async function buildExportPackage({
   assetCache = null,
   behaviorState = null,
   physicsState = null,
+  exportMetadata = null,
 }) {
+  const metadata = normalizeExportMetadata(exportMetadata);
+
   // 1. Build SceneDocument from current state
   let sceneDocument;
   try {
@@ -159,6 +217,7 @@ export async function buildExportPackage({
       envId,
       behaviorState,
       physicsState,
+      exportMetadata: metadata,
     });
   } catch (err) {
     throw new Error(`SceneDocument generation failed: ${err.message}`);
@@ -188,6 +247,7 @@ export async function buildExportPackage({
     missingAssets,
     exportedAt,
     cdnDependent: true,
+    metadata,
   });
   const filename = `scene-sync-export-${formatTimestamp()}.zip`;
   const filenameTitle = filename.replace(/\.zip$/i, '');
@@ -203,17 +263,18 @@ export async function buildExportPackage({
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
   zip.file('scene.json', JSON.stringify(updatedDoc, null, 2));
 
+  const hasCustomThumbnail = Boolean(getCustomThumbnailFile(exportMetadata));
   try {
-    const thumbnail = await generateExportThumbnail({
-      title: resolveExportThumbnailTitle({
-        sceneDocument: updatedDoc,
-        manifest,
-        fallbackTitle: filenameTitle,
-      }),
-      stats: collectExportSceneStats(updatedDoc),
+    await addExportThumbnail(zip, {
+      exportOptions: exportMetadata,
+      sceneDocument: updatedDoc,
+      manifest,
+      filenameTitle,
     });
-    zip.file('thumbnail.png', thumbnail.blob);
   } catch (error) {
+    if (hasCustomThumbnail) {
+      throw error;
+    }
     console.warn('[Export] thumbnail generation failed:', error);
   }
 

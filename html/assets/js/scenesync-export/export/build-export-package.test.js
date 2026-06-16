@@ -53,7 +53,7 @@ function createMockCanvas() {
   };
 }
 
-test('builds export ZIP with generated root thumbnail', async () => {
+async function withMockExportEnvironment(run) {
   const original = {
     JSZip: globalThis.JSZip,
     fetch: globalThis.fetch,
@@ -108,6 +108,18 @@ test('builds export ZIP with generated root thumbnail', async () => {
       return 0;
     };
 
+    await run(zipFiles);
+  } finally {
+    globalThis.JSZip = original.JSZip;
+    globalThis.fetch = original.fetch;
+    globalThis.document = original.document;
+    globalThis.URL = original.URL;
+    globalThis.setTimeout = original.setTimeout;
+  }
+}
+
+test('builds export ZIP with generated root thumbnail', async () => {
+  await withMockExportEnvironment(async (zipFiles) => {
     await buildExportPackage({
       managedObjects: createManagedObjects(),
       bgmState: null,
@@ -122,11 +134,43 @@ test('builds export ZIP with generated root thumbnail', async () => {
     assert(zipFiles.has('manifest.json'));
     assert(zipFiles.has('thumbnail.png'));
     assert.equal(zipFiles.get('thumbnail.png').type, 'image/png');
-  } finally {
-    globalThis.JSZip = original.JSZip;
-    globalThis.fetch = original.fetch;
-    globalThis.document = original.document;
-    globalThis.URL = original.URL;
-    globalThis.setTimeout = original.setTimeout;
-  }
+  });
+});
+
+test('builds export ZIP with metadata and custom root thumbnail', async () => {
+  await withMockExportEnvironment(async (zipFiles) => {
+    const thumbnail = new Blob(['custom-thumbnail'], { type: 'image/webp' });
+    Object.defineProperty(thumbnail, 'name', { value: 'cover.webp' });
+
+    await buildExportPackage({
+      managedObjects: createManagedObjects(),
+      bgmState: null,
+      envId: null,
+      blobBase: '',
+      envOrigin: 'https://example.test',
+      behaviorState: null,
+      physicsState: null,
+      exportMetadata: {
+        title: 'Candy Rock Star',
+        description: 'Unity-chan stage',
+        tags: 'music, unity-chan, music',
+        author: 'afjk',
+        thumbnailFile: thumbnail,
+      },
+    });
+
+    const sceneDocument = JSON.parse(zipFiles.get('scene.json'));
+    const manifest = JSON.parse(zipFiles.get('manifest.json'));
+
+    assert.equal(sceneDocument.title, 'Candy Rock Star');
+    assert.equal(sceneDocument.description, 'Unity-chan stage');
+    assert.deepEqual(sceneDocument.tags, ['music', 'unity-chan']);
+    assert.equal(sceneDocument.author, 'afjk');
+    assert.equal(manifest.title, 'Candy Rock Star');
+    assert.equal(manifest.description, 'Unity-chan stage');
+    assert.deepEqual(manifest.tags, ['music', 'unity-chan']);
+    assert.equal(manifest.author, 'afjk');
+    assert.equal(zipFiles.get('thumbnail.webp'), thumbnail);
+    assert.equal(zipFiles.has('thumbnail.png'), false);
+  });
 });
