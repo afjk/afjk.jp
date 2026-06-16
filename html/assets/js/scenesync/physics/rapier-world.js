@@ -619,7 +619,9 @@ export function createWorld(options = {}) {
       .setFriction(clampNumber(def.friction, 0, 4, 0.5))
       .setFrictionCombineRule(combineRuleId(def.frictionCombineRule, 0));
 
-    if (!isStatic) {
+    if (Number.isFinite(Number(def.density)) && typeof colliderDesc.setDensity === 'function') {
+      colliderDesc.setDensity(Math.max(0, Number(def.density)));
+    } else if (!isStatic) {
       colliderDesc.setMass(positiveNumber(def.mass, 1));
     }
 
@@ -885,6 +887,68 @@ export function createWorld(options = {}) {
     return hash64Hex(canonicalStateHashBigInt());
   }
 
+  function canonicalStateDump() {
+    const records = getCanonicalRecords();
+    return {
+      hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
+      rapierCoreVersion: RAPIER_CORE_VERSION,
+      tick,
+      gravity: [...worldOptions.gravity],
+      timestep: world.timestep,
+      bodies: records.map(({ id, record, body }) => {
+        const position = body.translation();
+        const rotation = body.rotation();
+        const velocity = record.static ? { x: 0, y: 0, z: 0 } : body.linvel();
+        const angularVelocity = record.static ? { x: 0, y: 0, z: 0 } : body.angvel();
+        return {
+          id,
+          idHash: hash64Hex(stableIdHash(id)),
+          type: record.static ? 'fixed' : 'dynamic',
+          position: [position.x, position.y, position.z],
+          rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+          linvel: [velocity.x, velocity.y, velocity.z],
+          angvel: [angularVelocity.x, angularVelocity.y, angularVelocity.z],
+          linearDamping: typeof body.linearDamping === 'function' ? body.linearDamping() : record.linearDamping,
+          angularDamping: typeof body.angularDamping === 'function' ? body.angularDamping() : record.angularDamping,
+          additionalSolverIterations: typeof body.additionalSolverIterations === 'function'
+            ? body.additionalSolverIterations()
+            : record.additionalSolverIterations,
+          canSleep: record.canSleep !== false,
+          ccd: typeof body.isCcdEnabled === 'function' ? body.isCcdEnabled() : record.ccd,
+          sleeping: typeof body.isSleeping === 'function' ? body.isSleeping() : false,
+          enabled: typeof body.isEnabled === 'function' ? body.isEnabled() : true,
+        };
+      }),
+      colliders: records.map(({ id, record }) => {
+        const collider = getColliderByHandle(record.colliderHandle);
+        return {
+          id,
+          idHash: hash64Hex(stableIdHash(id)),
+          parentBodyId: id,
+          shape: record.shape,
+          localPosition: [0, 0, 0],
+          localRotation: [0, 0, 0, 1],
+          ...(record.shape === 'sphere'
+            ? { radius: positiveNumber(record.radius, 0.5) }
+            : { halfExtents: readPositiveVec3(record.halfExtents, [0.5, 0.5, 0.5]) }),
+          density: typeof collider?.density === 'function' ? collider.density() : positiveNumber(record.density, 1),
+          friction: typeof collider?.friction === 'function' ? collider.friction() : finiteNumber(record.friction, 0.5),
+          frictionCombineRule: typeof collider?.frictionCombineRule === 'function'
+            ? collider.frictionCombineRule()
+            : record.frictionCombineRule,
+          restitution: typeof collider?.restitution === 'function'
+            ? collider.restitution()
+            : finiteNumber(record.restitution, 0.2),
+          restitutionCombineRule: typeof collider?.restitutionCombineRule === 'function'
+            ? collider.restitutionCombineRule()
+            : record.restitutionCombineRule,
+          sensor: typeof collider?.isSensor === 'function' ? collider.isSensor() : record.sensor === true,
+          enabled: typeof collider?.isEnabled === 'function' ? collider.isEnabled() : true,
+        };
+      }),
+    };
+  }
+
   function stateHash() {
     let hash = hashInit();
     hash = hashString(hash, RAPIER_PHYSICS_ENGINE);
@@ -968,6 +1032,7 @@ export function createWorld(options = {}) {
     snapshot,
     restore,
     canonicalStateHash,
+    canonicalStateDump,
     stateHash,
     networkStateHash,
     drainCollisionEvents,
