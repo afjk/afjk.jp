@@ -1,0 +1,28 @@
+{
+  "profile": "SceneSyncRapierParity-0.30",
+  "rapierCoreVersion": "0.30.0",
+  "timestep": 0.016666666666666666,
+  "gravity": [0, -9.81, 0],
+  "bodies": [
+    {
+      "id": "box-1",
+      "type": "dynamic",
+      "shape": "box",
+      "position": [-0.75, 5, 0],
+      "rotation": [0, 0, 0, 1],
+      "halfExtents": [0.5, 0.5, 0.5],
+      "density": 1,
+      "linearVelocity": [0.75, 0, 0.15],
+      "angularVelocity": [0.35, 1.25, 0.55],
+      "linearDamping": 0.02,
+      "angularDamping": 0.02,
+      "canSleep": false,
+      "ccd": false,
+      "friction": 0.5,
+      "restitution": 0.2,
+      "frictionCombineRule": 0,
+      "restitutionCombineRule": 0
+    }
+  ],
+  "sampleTicks": [0, 1, 2, 10, 60, 120, 300, 600]
+}

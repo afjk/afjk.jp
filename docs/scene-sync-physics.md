@@ -115,17 +115,29 @@ bytes.
 
 ### Cross-Host Parity Fixture
 
-The first Unity/Browser parity fixture lives at:
+The Unity/Browser parity fixtures live under:
 
 ```text
-fixtures/rapier/parity-basic-001.json
+fixtures/rapier/
 ```
 
-It defines the `SceneSyncRapierParity-0.30` profile, Rapier core `0.30.0`,
-fixed timestep, gravity, stable object ids, one fixed floor, one dynamic box,
-and sample ticks through tick 600. Browser-side fixture support is implemented
-by `html/assets/js/scenesync/physics/rapier-parity-fixture.js` and covered by
+They define the `SceneSyncRapierParity-0.30` profile, Rapier core `0.30.0`,
+fixed timestep, gravity, stable object ids, body/collider material fields, and
+sample ticks through tick 600. Browser-side fixture support is implemented by
+`html/assets/js/scenesync/physics/rapier-parity-fixture.js` and covered by
 `rapier-parity-fixture.test.js`.
+
+The staged fixtures provide narrower parity coverage for regression isolation:
+
+- `parity-freefall-001.json` removes contacts through tick 600 and exercises
+  free rigid-body integration.
+- `parity-contact-basic-001.json` uses a fixed floor plus one vertically falling
+  dynamic box with zero friction, zero restitution, zero angular velocity, no
+  damping, and explicit combine rules.
+- `parity-basic-001.json` is the original floor + moving/rotating box case. It
+  has been manually validated in Unity 6000 and matches the Browser hashes
+  through tick 600. Keep the staged fixtures around to isolate future
+  contact/material/solver regressions from initial-state setup issues.
 
 The `bodies` array order is the fixture creation order. Hashes and dumps still
 compare bodies/colliders by `stableIdHash(objectId)` so handle order does not
