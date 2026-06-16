@@ -307,8 +307,16 @@ export function createWorld(options = {}) {
   world.timestep = worldOptions.timestep;
   createGround(world, worldOptions.ground);
 
+  let eventQueue = null;
+  try {
+    eventQueue = new RAPIER.EventQueue(true);
+  } catch {
+    // EventQueue not available in this build; collision events disabled
+  }
+
   let tick = 0;
   const bodyRecords = new Map();
+  const colliderToObjectId = new Map();
   const checkpoints = new Map();
 
   function getBodyHandle(id) {
@@ -346,6 +354,10 @@ export function createWorld(options = {}) {
   function restore(snap) {
     const source = cloneSnapshot(snap);
     if (!source?.data?.length) return false;
+    // Drain and discard stale events before restoring to a past state
+    if (eventQueue) {
+      try { eventQueue.drainCollisionEvents(() => {}); } catch {}
+    }
     const nextWorld = RAPIER.World.restoreSnapshot(source.data);
     nextWorld.timestep = source.timestep;
     const previousWorld = world;
@@ -380,7 +392,10 @@ export function createWorld(options = {}) {
       colliderDesc.setMass(positiveNumber(def.mass, 1));
     }
 
-    world.createCollider(colliderDesc, body);
+    const collider = world.createCollider(colliderDesc, body);
+    if (collider?.handle != null) {
+      colliderToObjectId.set(collider.handle, def.id);
+    }
     const record = {
       handle: body.handle,
       shape: def.shape === 'sphere' ? 'sphere' : 'box',
@@ -391,6 +406,24 @@ export function createWorld(options = {}) {
   }
 
   function removeBody(id) {
+    const record = bodyRecords.get(id);
+    if (record) {
+      // Remove all colliders associated with this body from the colliderToObjectId map
+      try {
+        const body = world.getRigidBody(record.handle);
+        if (body && typeof body.numColliders === 'function') {
+          for (let i = 0; i < body.numColliders(); i++) {
+            const col = body.collider(i);
+            if (col?.handle != null) colliderToObjectId.delete(col.handle);
+          }
+        }
+      } catch {
+        // If body is already removed or API differs, clean up by scanning
+        for (const [handle, oid] of colliderToObjectId) {
+          if (oid === id) colliderToObjectId.delete(handle);
+        }
+      }
+    }
     const body = getRigidBodyById(id);
     if (body) world.removeRigidBody(body);
     return bodyRecords.delete(id);
@@ -411,7 +444,11 @@ export function createWorld(options = {}) {
 
   function step() {
     recordCheckpointIfDue();
-    world.step();
+    if (eventQueue) {
+      world.step(eventQueue);
+    } else {
+      world.step();
+    }
     tick += 1;
     return tick;
   }
@@ -487,9 +524,29 @@ export function createWorld(options = {}) {
     return (hash >>> 0).toString(16).padStart(8, '0');
   }
 
+  function drainCollisionEvents(callback) {
+    if (!eventQueue || typeof callback !== 'function') return;
+    try {
+      eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+        const objectIdA = colliderToObjectId.get(handle1);
+        const objectIdB = colliderToObjectId.get(handle2);
+        if (objectIdA && objectIdB) {
+          callback(objectIdA, objectIdB, started);
+        }
+      });
+    } catch {
+      // Silently ignore if EventQueue API differs from expected
+    }
+  }
+
   function free() {
     checkpoints.clear();
     bodyRecords.clear();
+    colliderToObjectId.clear();
+    if (eventQueue) {
+      try { eventQueue.free?.(); } catch {}
+      eventQueue = null;
+    }
     world?.free?.();
     world = null;
   }
@@ -513,6 +570,7 @@ export function createWorld(options = {}) {
     restore,
     stateHash,
     networkStateHash,
+    drainCollisionEvents,
     free,
   };
 }

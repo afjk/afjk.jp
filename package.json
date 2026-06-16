@@ -12,6 +12,8 @@
     "test:playback-duration": "node --test html/assets/js/scenesync/runtime/playback-duration.test.js",
     "test:physics": "node --test html/assets/js/scenesync/physics/rapier-world.test.js html/assets/js/scenesync/scene-physics.test.js html/assets/js/scenesync/history/history-manager.test.js",
     "test:loomlet-plugin": "node --test html/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.test.js",
+    "test:runtime-schedule": "node --test html/assets/js/scenesync/runtime/schedule-context.test.js html/assets/js/scenesync/runtime/runtime-events.test.js",
+    "test:plugins": "node --test html/assets/js/scenesync/plugins/scene-sync-physics-plugin.test.js html/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.test.js",
     "test:scene-sync-export-import": "node --test html/assets/js/scenesync/importers/scene-sync-export/*.test.js html/assets/js/scenesync-export/export/*.test.js html/assets/js/scenesync-export/viewer/*.test.js",
     "test:e2e:install-browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "test:e2e:scene-sync-export-import": "node scripts/scenesync-export-import-browser-e2e.mjs"
