@@ -1,4 +1,6 @@
-import RAPIER from '@dimforge/rapier3d-compat';
+// Use the deterministic build so that identical initial state + tick + inputs
+// reproduce the same physics result across clients (cross-platform determinism).
+import RAPIER from '@dimforge/rapier3d-deterministic-compat';
 
 export const RAPIER_PHYSICS_ENGINE = 'rapier';
 export const RAPIER_PACKAGE_VERSION = '0.19.3';
@@ -108,6 +110,42 @@ function hashBytes(hash, bytes) {
   let next = hash;
   for (const byte of bytes || []) next = hashByte(next, byte);
   return next;
+}
+
+/**
+ * Compute a stable hash of a RAPIER.World's dynamic body states, ordered by
+ * handle. Suitable for detecting physics divergence across clients.
+ * Returns an 8-character hex string.
+ */
+export function computeRapierWorldStateHash(rapierWorld) {
+  let hash = hashInit();
+  const handles = [];
+  rapierWorld.forEachRigidBody((body) => handles.push(body.handle));
+  handles.sort((a, b) => a - b);
+  for (const handle of handles) {
+    const body = rapierWorld.getRigidBody(handle);
+    if (!body) continue;
+    hash = hashInt(hash, handle);
+    hash = hashInt(hash, body.bodyType());
+    const t = body.translation();
+    hash = hashNumber(hash, t.x);
+    hash = hashNumber(hash, t.y);
+    hash = hashNumber(hash, t.z);
+    const r = body.rotation();
+    hash = hashNumber(hash, r.x);
+    hash = hashNumber(hash, r.y);
+    hash = hashNumber(hash, r.z);
+    hash = hashNumber(hash, r.w);
+    const lv = body.linvel();
+    hash = hashNumber(hash, lv.x);
+    hash = hashNumber(hash, lv.y);
+    hash = hashNumber(hash, lv.z);
+    const av = body.angvel();
+    hash = hashNumber(hash, av.x);
+    hash = hashNumber(hash, av.y);
+    hash = hashNumber(hash, av.z);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function initRapierPhysics() {

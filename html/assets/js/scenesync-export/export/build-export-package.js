@@ -43,7 +43,7 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-      "@dimforge/rapier3d-compat": "./viewer/rapier/rapier.js"
+      "@dimforge/rapier3d-deterministic-compat": "./viewer/rapier/rapier.js"
     }
   }
   <\/script>
