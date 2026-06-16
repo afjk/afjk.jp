@@ -4,6 +4,8 @@ Scene Sync uses Rapier for browser-side rigid-body physics.
 
 - Runtime adapter: `html/assets/js/scenesync/physics/rapier-world.js`
 - Scene integration: `html/assets/js/scenesync/scene-physics.js`
+- Browser package: `@dimforge/rapier3d-deterministic-compat@0.19.3`
+- Target Rapier core for parity: `0.30.0`
 - Pinned browser asset: `html/assets/vendor/rapier/0.19.3/rapier.mjs`
 - Tests: `npm run test:physics`
 
@@ -68,7 +70,7 @@ world.addBody({
 world.stepTo(120);
 world.snapshot();
 world.restore(snapshot);
-world.stateHash();
+world.canonicalStateHash();
 world.free();
 ```
 
@@ -76,17 +78,38 @@ The serialized scene schema uses seconds for `worldOptions.timestep`. Legacy
 fixed-point physics content is not a compatibility target and is not
 special-cased by the Rapier runtime.
 
-## Determinism
+## Determinism And Parity
 
 Scene Sync uses `@dimforge/rapier3d-deterministic-compat` (the Rapier
 cross-platform deterministic build) so that identical initial state, identical
 input sequences, and identical fixed-tick counts reproduce the same physics
 result on every client.
 
-Determinism depends on: the same Rapier version, the same timestep, the same
-initial scene, the same object-creation order, and the same operation order.
-Scene Sync therefore creates bodies sorted by `objectId` and never feeds
-variable frame delta into the simulation.
+Rapier determinism depends on the same Rapier core version, deterministic build
+flavor, timestep, solver/integration settings, initial scene, object creation
+order, and operation order. Scene Sync therefore creates bodies sorted by
+`objectId` and never feeds frame delta into the simulation.
+
+Cross-host parity with Unity/Godot/Browser requires the full match set:
+
+- Rapier core version: `0.30.0`
+- deterministic build flavor
+- fixed timestep and gravity
+- solver/integration parameters that affect stepping
+- stable object id ordering
+- tick-level input event ordering
+- canonical hash and snapshot schema
+
+The browser runtime imports:
+
+```js
+import RAPIER from '@dimforge/rapier3d-deterministic-compat';
+```
+
+The runtime exposes `canonicalStateHash()` using
+`SceneSyncCanonicalPhysicsHashV1`, an exact FNV-1a-64 hash over raw `f32` state
+fields sorted by stable Scene Sync object id. The older `stateHash()` API
+remains as a 32-bit compatibility value derived from the canonical hash.
 
 Do not use non-deterministic local calculations to create physics inputs for
 Shared Playback. Authoring inputs must be normalized through scene state, scene
@@ -104,13 +127,16 @@ state.
 
 `rapier-world.js` exposes three ways to hash physics state:
 
-- `world.stateHash()` — hashes the raw Rapier snapshot bytes; fast, used in
-  unit tests.
+- `world.canonicalStateHash()` — exact `SceneSyncCanonicalPhysicsHashV1`
+  FNV-1a-64 hash over raw `f32` state fields sorted by stable Scene Sync object
+  id. Use this for cross-host parity detection.
+- `world.stateHash()` — 32-bit number derived from the canonical hash, kept for
+  older local callers/tests that expect a numeric hash.
 - `world.networkStateHash()` — iterates bodies in Scene Sync objectId order
   (same as `getBodies()`) and hashes translation/rotation/linvel/angvel per
   body; returns an 8-char hex string. Stable across remove/recreate and
-  snapshot restore as long as scene composition is the same. Intended as the
-  future network-shareable divergence signal.
+  snapshot restore as long as scene composition is the same. Kept as the older
+  network-shareable divergence signal; prefer `canonicalStateHash()` for parity.
 - `computeRapierWorldStateHash(rapierWorld)` — raw Rapier World debug helper
   ordered by rigid-body handle. Handles must match exactly across compared
   worlds. Do not use for network divergence detection; prefer
@@ -133,6 +159,11 @@ step fixed ticks from there.
 
 Do not stream every body transform as the normal shared playback mechanism.
 Use snapshots for baselines/resync and local fixed-step simulation for playback.
+
+Rapier native snapshots are useful for matching Rapier builds. A longer-term
+Scene Sync canonical physics snapshot should remain a separate versioned schema
+over body/collider/settings state so Browser, Unity, and Godot are not coupled
+to one serialization format.
 
 ## Seek And Fast-Forward
 

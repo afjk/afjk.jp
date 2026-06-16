@@ -4,12 +4,22 @@ import RAPIER from '@dimforge/rapier3d-deterministic-compat';
 
 export const RAPIER_PHYSICS_ENGINE = 'rapier';
 export const RAPIER_PACKAGE_VERSION = '0.19.3';
+export const RAPIER_CORE_VERSION = '0.30.0';
+export const RAPIER_BUILD_FLAVOR = 'deterministic-compat';
+export const CANONICAL_PHYSICS_HASH_VERSION = 'SceneSyncCanonicalPhysicsHashV1';
 export const DEFAULT_TIMESTEP_SECONDS = 1 / 60;
 export const DEFAULT_MAX_STEPS_PER_UPDATE = 900;
 export const DEFAULT_CHECKPOINT_INTERVAL_TICKS = 120;
 
 const MAX_GROUND_HALF_EXTENT = 4096;
 const GROUND_THICKNESS = 0.1;
+const GROUND_STABLE_ID = '__scenesync_ground__';
+const FNV64_OFFSET = 0xcbf29ce484222325n;
+const FNV64_PRIME = 0x100000001b3n;
+const FNV64_MASK = 0xffffffffffffffffn;
+const CANONICAL_TEXT_ENCODER = new TextEncoder();
+const FLOAT_SCRATCH = new ArrayBuffer(4);
+const FLOAT_SCRATCH_VIEW = new DataView(FLOAT_SCRATCH);
 
 let rapierInitPromise = null;
 let rapierReady = false;
@@ -75,6 +85,90 @@ function readRotationArray(rotation) {
     return readQuat([rotation.x, rotation.y, rotation.z, rotation.w]);
   }
   return [0, 0, 0, 1];
+}
+
+function fnv64Init() {
+  return FNV64_OFFSET;
+}
+
+function hash64Byte(hash, byte) {
+  return ((hash ^ BigInt(byte & 0xff)) * FNV64_PRIME) & FNV64_MASK;
+}
+
+function hash64Bytes(hash, bytes) {
+  let next = hash;
+  for (const byte of bytes || []) next = hash64Byte(next, byte);
+  return next;
+}
+
+function hash64Uint8(hash, value) {
+  return hash64Byte(hash, Number(value) || 0);
+}
+
+function hash64Uint32(hash, value) {
+  const int = Number(value) >>> 0;
+  let next = hash64Byte(hash, int);
+  next = hash64Byte(next, int >>> 8);
+  next = hash64Byte(next, int >>> 16);
+  return hash64Byte(next, int >>> 24);
+}
+
+function hash64Uint64(hash, value) {
+  let next = hash;
+  let int = BigInt.asUintN(64, BigInt(value));
+  for (let index = 0; index < 8; index += 1) {
+    next = hash64Byte(next, Number(int & 0xffn));
+    int >>= 8n;
+  }
+  return next;
+}
+
+function canonicalF32Bits(value) {
+  const number = Number(value);
+  if (number === 0) return 0;
+  if (Number.isNaN(number)) return 0x7fc00000;
+  FLOAT_SCRATCH_VIEW.setFloat32(0, Math.fround(number), true);
+  return FLOAT_SCRATCH_VIEW.getUint32(0, true);
+}
+
+function hash64Float32(hash, value) {
+  return hash64Uint32(hash, canonicalF32Bits(value));
+}
+
+function hash64String(hash, value) {
+  const bytes = CANONICAL_TEXT_ENCODER.encode(String(value));
+  return hash64Bytes(hash64Uint32(hash, bytes.length), bytes);
+}
+
+function hash64Vec3(hash, value, fallback = [0, 0, 0]) {
+  const vec = readVec3(value, fallback);
+  let next = hash64Float32(hash, vec[0]);
+  next = hash64Float32(next, vec[1]);
+  return hash64Float32(next, vec[2]);
+}
+
+function hash64Quat(hash, value, fallback = [0, 0, 0, 1]) {
+  const quat = readQuat(value, fallback);
+  let next = hash64Float32(hash, quat[0]);
+  next = hash64Float32(next, quat[1]);
+  next = hash64Float32(next, quat[2]);
+  return hash64Float32(next, quat[3]);
+}
+
+function hash64Pose(hash, position, rotation) {
+  return hash64Quat(hash64Vec3(hash, position), rotation);
+}
+
+function hash64Hex(hash) {
+  return BigInt.asUintN(64, hash).toString(16).padStart(16, '0');
+}
+
+export function stableIdHash(stableId) {
+  return hash64Bytes(fnv64Init(), CANONICAL_TEXT_ENCODER.encode(String(stableId || '')));
+}
+
+export function stableIdHashHex(stableId) {
+  return hash64Hex(stableIdHash(stableId));
 }
 
 function hashInit() {
@@ -225,8 +319,18 @@ function createGround(world, ground) {
     .cuboid(MAX_GROUND_HALF_EXTENT, GROUND_THICKNESS / 2, MAX_GROUND_HALF_EXTENT)
     .setRestitution(ground.restitution)
     .setFriction(ground.friction);
-  world.createCollider(collider, body);
-  return body;
+  const colliderObject = world.createCollider(collider, body);
+  return {
+    id: GROUND_STABLE_ID,
+    handle: body.handle,
+    colliderHandle: colliderObject.handle,
+    shape: 'box',
+    halfExtents: [MAX_GROUND_HALF_EXTENT, GROUND_THICKNESS / 2, MAX_GROUND_HALF_EXTENT],
+    radius: 0,
+    static: true,
+    density: typeof colliderObject.density === 'function' ? colliderObject.density() : 1,
+    sensor: typeof colliderObject.isSensor === 'function' ? colliderObject.isSensor() : false,
+  };
 }
 
 function createColliderDesc(def) {
@@ -305,7 +409,7 @@ export function createWorld(options = {}) {
     z: worldOptions.gravity[2],
   });
   world.timestep = worldOptions.timestep;
-  createGround(world, worldOptions.ground);
+  const groundRecord = createGround(world, worldOptions.ground);
 
   let tick = 0;
   const bodyRecords = new Map();
@@ -380,11 +484,18 @@ export function createWorld(options = {}) {
       colliderDesc.setMass(positiveNumber(def.mass, 1));
     }
 
-    world.createCollider(colliderDesc, body);
+    const collider = world.createCollider(colliderDesc, body);
     const record = {
       handle: body.handle,
+      colliderHandle: collider.handle,
       shape: def.shape === 'sphere' ? 'sphere' : 'box',
+      radius: positiveNumber(def.radius, 0.5),
+      halfExtents: readPositiveVec3(def.halfExtents, [0.5, 0.5, 0.5]),
       static: isStatic,
+      density: typeof collider.density === 'function'
+        ? collider.density()
+        : (isStatic ? 1 : positiveNumber(def.mass, 1)),
+      sensor: typeof collider.isSensor === 'function' ? collider.isSensor() : false,
     };
     bodyRecords.set(def.id, record);
     return exportRigidBody(def.id, record, body);
@@ -449,14 +560,102 @@ export function createWorld(options = {}) {
     };
   }
 
+  function getCanonicalRecords() {
+    const records = groundRecord ? [[groundRecord.id, groundRecord]] : [];
+    for (const entry of bodyRecords.entries()) records.push(entry);
+    return records
+      .map(([id, record]) => ({
+        id,
+        idHash: stableIdHash(id),
+        record,
+        body: getRigidBodyById(id) || (record.handle == null ? null : world.getRigidBody(record.handle)),
+      }))
+      .filter((entry) => entry.body)
+      .sort((left, right) => {
+        if (left.idHash < right.idHash) return -1;
+        if (left.idHash > right.idHash) return 1;
+        return left.id.localeCompare(right.id);
+      });
+  }
+
+  function hashStableIdentity(hash, stableId) {
+    return hash64Uint64(hash64Uint8(hash, 1), stableIdHash(stableId));
+  }
+
+  function hashCanonicalBody(hash, id, record, body) {
+    const position = body.translation();
+    const rotation = body.rotation();
+    const velocity = record.static ? { x: 0, y: 0, z: 0 } : body.linvel();
+    const angularVelocity = record.static ? { x: 0, y: 0, z: 0 } : body.angvel();
+
+    let next = hashStableIdentity(hash, id);
+    next = hash64Uint8(next, record.static ? 1 : 0);
+    next = hash64Pose(
+      next,
+      [position.x, position.y, position.z],
+      [rotation.x, rotation.y, rotation.z, rotation.w],
+    );
+    next = hash64Vec3(next, [velocity.x, velocity.y, velocity.z]);
+    next = hash64Vec3(next, [angularVelocity.x, angularVelocity.y, angularVelocity.z]);
+    next = hash64Uint8(next, typeof body.isSleeping === 'function' && body.isSleeping() ? 1 : 0);
+    next = hash64Uint8(next, typeof body.isEnabled === 'function' && !body.isEnabled() ? 0 : 1);
+    return next;
+  }
+
+  function hashCanonicalCollider(hash, id, record) {
+    const collider = record.colliderHandle == null ? null : world.getCollider(record.colliderHandle);
+    let next = hashStableIdentity(hash, id);
+    next = hashStableIdentity(next, id);
+    next = hash64Uint8(next, 1);
+    next = hash64Pose(next, [0, 0, 0], [0, 0, 0, 1]);
+
+    if (record.shape === 'sphere') {
+      next = hash64Uint8(next, 1);
+      next = hash64Float32(next, positiveNumber(record.radius, 0.5));
+    } else {
+      next = hash64Uint8(next, 2);
+      next = hash64Vec3(next, readPositiveVec3(record.halfExtents, [0.5, 0.5, 0.5]));
+    }
+
+    const density = typeof collider?.density === 'function'
+      ? collider.density()
+      : positiveNumber(record.density, 1);
+    const sensor = typeof collider?.isSensor === 'function' ? collider.isSensor() : record.sensor === true;
+    const enabled = typeof collider?.isEnabled === 'function' ? collider.isEnabled() : true;
+    next = hash64Float32(next, density);
+    next = hash64Uint8(next, sensor ? 1 : 0);
+    next = hash64Uint8(next, enabled ? 1 : 0);
+    return next;
+  }
+
+  function canonicalStateHashBigInt() {
+    const records = getCanonicalRecords();
+    let hash = fnv64Init();
+    hash = hash64String(hash, CANONICAL_PHYSICS_HASH_VERSION);
+    hash = hash64String(hash, RAPIER_PHYSICS_ENGINE);
+    hash = hash64String(hash, RAPIER_CORE_VERSION);
+    hash = hash64Vec3(hash, worldOptions.gravity);
+    hash = hash64Float32(hash, world.timestep);
+
+    hash = hash64Uint64(hash, records.length);
+    for (const { id, record, body } of records) {
+      hash = hashCanonicalBody(hash, id, record, body);
+    }
+
+    hash = hash64Uint64(hash, records.length);
+    for (const { id, record } of records) {
+      hash = hashCanonicalCollider(hash, id, record);
+    }
+
+    return hash;
+  }
+
+  function canonicalStateHash() {
+    return hash64Hex(canonicalStateHashBigInt());
+  }
+
   function stateHash() {
-    let hash = hashInit();
-    hash = hashString(hash, RAPIER_PHYSICS_ENGINE);
-    hash = hashString(hash, RAPIER_PACKAGE_VERSION);
-    hash = hashInt(hash, tick);
-    hash = hashNumber(hash, world.timestep);
-    hash = hashBytes(hash, world.takeSnapshot());
-    return hash >>> 0;
+    return Number(canonicalStateHashBigInt() & 0xffffffffn);
   }
 
   // objectId-sorted hash intended for future network divergence detection.
@@ -511,6 +710,7 @@ export function createWorld(options = {}) {
     stepTo,
     snapshot,
     restore,
+    canonicalStateHash,
     stateHash,
     networkStateHash,
     free,
