@@ -81,6 +81,25 @@ scheduleContext.collisionEvents  // collision event の便利配列（events の
 
 `emitScheduleEvent()` は type が `physics.collision.*` の場合に `collisionEvents` にも自動で積む。
 
+## Loomlet event input
+
+Export Viewer では、`scheduleContext.events` が Loomlet evaluation context の `events` として渡される。
+`scheduleContext.collisionEvents` も adapter 境界では `collisionEvents` として渡すが、v0 の Loomlet input node は `events` を主入力として扱う。
+
+Object Behavior Graph では、その object が `objectIdA` または `objectIdB` に含まれる collision event のみを受け取る。
+Scene Behavior Graph では、すべての Runtime Event を受け取る。
+
+v0 の最小 input node:
+
+- `event.exists(type)` - 該当 type の event が現在 frame に存在するか
+- `event.count(type)` - 該当 type の event 数
+- `event.first(type)` - 該当 type の最初の event、なければ `null`
+- `event.field(event, field)` - event field 参照
+- `event.otherObject(event)` - object scope で collision 相手 object id を返す
+
+正規の collision type は `physics.collision.enter` / `physics.collision.exit`。
+Export Viewer adapter では `collision.enter` / `collision.exit` も alias として扱う。
+
 ## 参照
 
 - [runtime-schedule.md](./runtime-schedule.md) - Runtime 実行順序
