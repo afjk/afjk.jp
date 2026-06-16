@@ -11,6 +11,7 @@ import {
   normalizeScenePhysics,
 } from './scene-physics.js';
 import { createSceneSyncPhysicsPlugin } from '../../scenesync/plugins/scene-sync-physics-plugin.js';
+import { createSceneSyncLoomletPlugin } from '../../scenesync/plugins/scene-sync-loomlet-plugin.js';
 import {
   calculateViewerPlaybackDuration,
   clipTimeForMode,
@@ -611,6 +612,7 @@ export async function createViewerCore({
   if (sceneDoc.behaviors) {
     loomAdapter = createExportBehaviorRuntime(sceneDoc.behaviors, objectMap, objectAudioController);
   }
+  const loomletPlugin = createSceneSyncLoomletPlugin({ loomAdapter });
 
   const physicsState = normalizeScenePhysics(sceneDoc.physics);
   const sceneClock = createViewerSceneClock({
@@ -630,6 +632,7 @@ export async function createViewerCore({
   });
   const physicsPlugin = createSceneSyncPhysicsPlugin({ physicsRuntime });
   physicsPlugin.init({ clock: sceneClock });
+  loomletPlugin.init({ clock: sceneClock });
 
   function evaluateSceneAtClock(clockState) {
     const time = Number.isFinite(clockState?.t) ? clockState.t : 0;
@@ -695,9 +698,12 @@ export async function createViewerCore({
       const now = performance.now();
       const clockState = sceneClock.tick(now);
       evaluateSceneAtClock(clockState);
-      if (loomAdapter) {
-        loomAdapter.tick(clockState, now);
-      }
+      loomletPlugin.update(clockState, {
+        phase: 'postPhysics',
+        events: [],
+        diagnostics: [],
+        now,
+      });
       syncObjectAudioAtClock(clockState, now);
     },
 
@@ -776,7 +782,7 @@ export async function createViewerCore({
       dracoLoader.dispose();
       bgmAudio?.pause();
       objectAudioController.dispose();
-      loomAdapter?.dispose?.();
+      loomletPlugin.dispose();
       physicsPlugin.dispose();
     },
   };

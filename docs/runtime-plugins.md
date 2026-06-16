@@ -22,7 +22,7 @@ Scene Sync Runtime Plugin の設計方針と責務境界を定義するドキュ
 | Plugin名 | 状態 | 説明 |
 |---|---|---|
 | `SceneSyncPhysicsPlugin` | **実装済み**（wrapper） | Rapier物理シミュレーション |
-| `SceneSyncLoomletPlugin` | 将来の課題 | Behavior Graph（Loomlet）評価 |
+| `SceneSyncLoomletPlugin` | **実装済み**（wrapper） | Behavior Graph（Loomlet）評価 |
 | `SceneSyncAudioPlugin` | 将来の課題 | 空間オーディオ・BGM管理 |
 | `SceneSyncAnimationPlugin` | 将来の課題 | Animation sampling |
 | `SceneSyncInteractionPlugin` | 将来の課題 | XR / pointer interaction |
@@ -126,6 +126,53 @@ physicsPlugin.dispose();
 
 Editor Shell はまだいくつかの箇所で Physics を直接参照している。
 Physics Plugin wrapper が安定した後、段階的に移行する。
+
+---
+
+## SceneSyncLoomletPlugin
+
+### 責務
+
+- Loomlet / Behavior Graph adapter を保持する
+- ClockState に基づいて behavior graph を評価する
+- 将来、`scheduleContext.events` から input / collision event を受け取る
+- 将来、`prePhysics` / `postPhysics` phase に分割する入口になる
+
+### やらないこと
+
+- Clock を進める
+- Physics step を進める
+- Audio system を直接所有する
+- Animation sampling を行う
+- Network 同期ポリシーを決める
+
+### 現在の扱い
+
+Export Viewer では、既存の `loomAdapter.tick(clockState, now)` を `SceneSyncLoomletPlugin.update(clockState, scheduleContext)` 経由に移行している。
+現時点では単一 phase のみで、実際の呼び出し位置は既存どおり Physics 後 / Audio 前。
+将来 `prePhysics` / `postPhysics` に分割する。
+
+### API
+
+```js
+const loomletPlugin = createSceneSyncLoomletPlugin({
+  loomAdapter,  // 既存の createExportBehaviorRuntime() の戻り値
+});
+
+loomletPlugin.init(context);
+loomletPlugin.update(clockState, scheduleContext);
+loomletPlugin.getAdapter();  // 内部の loomAdapter を返す（直接アクセスが必要な場合）
+loomletPlugin.dispose();
+```
+
+実装: `html/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.js`
+
+### 接続状況
+
+| 場所 | 状態 |
+|---|---|
+| Export Viewer (`create-viewer-core.js`) | Plugin 経由に移行済み |
+| Editor Shell | 直接呼び出しのまま（将来の課題） |
 
 ---
 
