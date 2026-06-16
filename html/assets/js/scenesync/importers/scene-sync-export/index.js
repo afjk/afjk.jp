@@ -6,6 +6,17 @@ import { resolveSceneDocumentAssetsFromUrl } from './resolve-url-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
 import { applySceneDocumentSettings } from './apply-scene-settings.js';
 
+async function applyImportedBehaviorsIfNeeded(resolvedDocument, context) {
+  if (!resolvedDocument.behaviors) return null;
+  if (typeof context.applySceneBehaviors !== 'function') return null;
+
+  return await context.applySceneBehaviors(resolvedDocument.behaviors, {
+    source: 'scene-sync-export-import',
+    notify: true,
+    broadcast: true,
+  });
+}
+
 export { isZipFile };
 
 function cloneJson(value) {
@@ -171,6 +182,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     uploadBlobToStore,
     applySceneBgm,
     applyScenePhysics,
+    applySceneBehaviors,
   } = context;
 
   const result = await loadExportPackageFromBlob(file);
@@ -219,6 +231,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
   let completed = false;
   let stats;
   let settingsResult;
+  let behaviorsResult = null;
   try {
     stats = await applySceneDocument(resolvedDocument, {
       managedObjects,
@@ -244,16 +257,20 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
       zip: result.zip,
       uploadBlobToStore,
     });
+
+    behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
     completed = true;
   } finally {
     if (completed) preview.dispose();
   }
 
+  const behaviorCount = behaviorsResult?.applied || 0;
+  const toastSuffix = behaviorCount > 0 ? ` / Behavior: ${behaviorCount}` : '';
   showToast?.(
-    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}）`
+    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}${toastSuffix}）`
   );
 
-  return { handled: true, stats, settings: settingsResult };
+  return { handled: true, stats, settings: settingsResult, behaviors: behaviorsResult };
 }
 
 export async function tryOpenSceneSyncExportUrl(url, context = {}) {
@@ -268,6 +285,7 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
     uploadBlobToStore,
     applySceneBgm,
     applyScenePhysics,
+    applySceneBehaviors,
     fetchImpl,
   } = context;
 
@@ -320,6 +338,7 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
   let completed = false;
   let stats;
   let settingsResult;
+  let behaviorsResult = null;
   try {
     stats = await applySceneDocument(resolvedDocument, {
       managedObjects,
@@ -345,19 +364,24 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
       zip: result.zip,
       uploadBlobToStore,
     });
+
+    behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
     completed = true;
   } finally {
     if (completed) preview.dispose();
   }
 
+  const behaviorCount = behaviorsResult?.applied || 0;
+  const toastSuffix = behaviorCount > 0 ? ` / Behavior: ${behaviorCount}` : '';
   showToast?.(
-    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}）`
+    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}${toastSuffix}）`
   );
 
   return {
     handled: true,
     stats,
     settings: settingsResult,
+    behaviors: behaviorsResult,
     sourceUrl: result.sourceUrl || url,
     kind: result.kind,
   };

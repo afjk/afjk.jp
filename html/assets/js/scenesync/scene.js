@@ -11,6 +11,7 @@ import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import { tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './importers/scene-sync-export/index.js';
+import { applySceneDocumentBehaviors } from './importers/scene-sync-export/apply-scene-behaviors.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
@@ -10380,6 +10381,12 @@ async function urlImporterCallback(url, position, context = {}) {
       uploadBlobToStore,
       applySceneBgm,
       applyScenePhysics,
+      applySceneBehaviors: (behaviors, options = {}) => applySceneDocumentBehaviors(behaviors, {
+        managedObjects,
+        applySceneGraphOperation,
+        broadcast,
+        source: options.source || 'scene-sync-export-import',
+      }),
     });
     if (sceneSyncExportResult?.handled) return;
   }
@@ -10482,6 +10489,12 @@ const dragDropManager = new DragDropManager({
     uploadBlobToStore,
     applySceneBgm,
     applyScenePhysics,
+    applySceneBehaviors: (behaviors, options = {}) => applySceneDocumentBehaviors(behaviors, {
+      managedObjects,
+      applySceneGraphOperation,
+      broadcast,
+      source: options.source || 'scene-sync-export-import',
+    }),
   }),
   onLoadStart: async ({
     objectId,
