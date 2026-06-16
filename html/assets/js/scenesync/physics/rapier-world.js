@@ -4,12 +4,22 @@ import RAPIER from '@dimforge/rapier3d-deterministic-compat';
 
 export const RAPIER_PHYSICS_ENGINE = 'rapier';
 export const RAPIER_PACKAGE_VERSION = '0.19.3';
+export const RAPIER_CORE_VERSION = '0.30.0';
+export const RAPIER_BUILD_FLAVOR = 'deterministic-compat';
+export const CANONICAL_PHYSICS_HASH_VERSION = 'SceneSyncCanonicalPhysicsHashV1';
 export const DEFAULT_TIMESTEP_SECONDS = 1 / 60;
 export const DEFAULT_MAX_STEPS_PER_UPDATE = 900;
 export const DEFAULT_CHECKPOINT_INTERVAL_TICKS = 120;
 
 const MAX_GROUND_HALF_EXTENT = 4096;
 const GROUND_THICKNESS = 0.1;
+const GROUND_STABLE_ID = '__scenesync_ground__';
+const FNV64_OFFSET = 0xcbf29ce484222325n;
+const FNV64_PRIME = 0x100000001b3n;
+const FNV64_MASK = 0xffffffffffffffffn;
+const CANONICAL_TEXT_ENCODER = new TextEncoder();
+const FLOAT_SCRATCH = new ArrayBuffer(4);
+const FLOAT_SCRATCH_VIEW = new DataView(FLOAT_SCRATCH);
 
 let rapierInitPromise = null;
 let rapierReady = false;
@@ -29,6 +39,16 @@ function clampNumber(value, min, max, fallback = min) {
   const number = Number(value);
   if (!Number.isFinite(number)) return Math.max(min, Math.min(max, fallback));
   return Math.max(min, Math.min(max, number));
+}
+
+function nonNegativeInteger(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function combineRuleId(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 && number <= 3 ? number : fallback;
 }
 
 function readVec3(value, fallback = [0, 0, 0]) {
@@ -75,6 +95,100 @@ function readRotationArray(rotation) {
     return readQuat([rotation.x, rotation.y, rotation.z, rotation.w]);
   }
   return [0, 0, 0, 1];
+}
+
+function readQuatComponents(value, fallback = [0, 0, 0, 1]) {
+  if (!Array.isArray(value) || value.length < 4) return [...fallback];
+  return [
+    finiteNumber(value[0], fallback[0] || 0),
+    finiteNumber(value[1], fallback[1] || 0),
+    finiteNumber(value[2], fallback[2] || 0),
+    finiteNumber(value[3], fallback[3] ?? 1),
+  ];
+}
+
+function fnv64Init() {
+  return FNV64_OFFSET;
+}
+
+function hash64Byte(hash, byte) {
+  return ((hash ^ BigInt(byte & 0xff)) * FNV64_PRIME) & FNV64_MASK;
+}
+
+function hash64Bytes(hash, bytes) {
+  let next = hash;
+  for (const byte of bytes || []) next = hash64Byte(next, byte);
+  return next;
+}
+
+function hash64Uint8(hash, value) {
+  return hash64Byte(hash, Number(value) || 0);
+}
+
+function hash64Uint32(hash, value) {
+  const int = Number(value) >>> 0;
+  let next = hash64Byte(hash, int);
+  next = hash64Byte(next, int >>> 8);
+  next = hash64Byte(next, int >>> 16);
+  return hash64Byte(next, int >>> 24);
+}
+
+function hash64Uint64(hash, value) {
+  let next = hash;
+  let int = BigInt.asUintN(64, BigInt(value));
+  for (let index = 0; index < 8; index += 1) {
+    next = hash64Byte(next, Number(int & 0xffn));
+    int >>= 8n;
+  }
+  return next;
+}
+
+function canonicalF32Bits(value) {
+  const number = Number(value);
+  if (number === 0) return 0;
+  if (Number.isNaN(number)) return 0x7fc00000;
+  FLOAT_SCRATCH_VIEW.setFloat32(0, Math.fround(number), true);
+  return FLOAT_SCRATCH_VIEW.getUint32(0, true);
+}
+
+function hash64Float32(hash, value) {
+  return hash64Uint32(hash, canonicalF32Bits(value));
+}
+
+function hash64String(hash, value) {
+  const bytes = CANONICAL_TEXT_ENCODER.encode(String(value));
+  return hash64Bytes(hash64Uint32(hash, bytes.length), bytes);
+}
+
+function hash64Vec3(hash, value, fallback = [0, 0, 0]) {
+  const vec = readVec3(value, fallback);
+  let next = hash64Float32(hash, vec[0]);
+  next = hash64Float32(next, vec[1]);
+  return hash64Float32(next, vec[2]);
+}
+
+function hash64Quat(hash, value, fallback = [0, 0, 0, 1]) {
+  const quat = readQuatComponents(value, fallback);
+  let next = hash64Float32(hash, quat[0]);
+  next = hash64Float32(next, quat[1]);
+  next = hash64Float32(next, quat[2]);
+  return hash64Float32(next, quat[3]);
+}
+
+function hash64Pose(hash, position, rotation) {
+  return hash64Quat(hash64Vec3(hash, position), rotation);
+}
+
+function hash64Hex(hash) {
+  return BigInt.asUintN(64, hash).toString(16).padStart(16, '0');
+}
+
+export function stableIdHash(stableId) {
+  return hash64Bytes(fnv64Init(), CANONICAL_TEXT_ENCODER.encode(String(stableId || '')));
+}
+
+export function stableIdHashHex(stableId) {
+  return hash64Hex(stableIdHash(stableId));
 }
 
 function hashInit() {
@@ -225,8 +339,35 @@ function createGround(world, ground) {
     .cuboid(MAX_GROUND_HALF_EXTENT, GROUND_THICKNESS / 2, MAX_GROUND_HALF_EXTENT)
     .setRestitution(ground.restitution)
     .setFriction(ground.friction);
-  world.createCollider(collider, body);
-  return body;
+  const colliderObject = world.createCollider(collider, body);
+  return {
+    id: GROUND_STABLE_ID,
+    handle: body.handle,
+    colliderHandle: colliderObject.handle,
+    shape: 'box',
+    halfExtents: [MAX_GROUND_HALF_EXTENT, GROUND_THICKNESS / 2, MAX_GROUND_HALF_EXTENT],
+    radius: 0,
+    static: true,
+    linearDamping: typeof body.linearDamping === 'function' ? body.linearDamping() : 0,
+    angularDamping: typeof body.angularDamping === 'function' ? body.angularDamping() : 0,
+    additionalSolverIterations: typeof body.additionalSolverIterations === 'function'
+      ? body.additionalSolverIterations()
+      : 0,
+    canSleep: true,
+    ccd: typeof body.isCcdEnabled === 'function' ? body.isCcdEnabled() : false,
+    density: typeof colliderObject.density === 'function' ? colliderObject.density() : 1,
+    friction: typeof colliderObject.friction === 'function' ? colliderObject.friction() : ground.friction,
+    frictionCombineRule: typeof colliderObject.frictionCombineRule === 'function'
+      ? colliderObject.frictionCombineRule()
+      : 0,
+    restitution: typeof colliderObject.restitution === 'function'
+      ? colliderObject.restitution()
+      : ground.restitution,
+    restitutionCombineRule: typeof colliderObject.restitutionCombineRule === 'function'
+      ? colliderObject.restitutionCombineRule()
+      : 0,
+    sensor: typeof colliderObject.isSensor === 'function' ? colliderObject.isSensor() : false,
+  };
 }
 
 function createColliderDesc(def) {
@@ -250,7 +391,10 @@ function createRigidBodyDesc(def) {
   desc
     .setTranslation(position[0], position[1], position[2])
     .setRotation(quaternionObject(rotation))
-    .setCanSleep(def.canSleep !== false);
+    .setLinearDamping(clampNumber(def.linearDamping, 0, 1024, 0))
+    .setAngularDamping(clampNumber(def.angularDamping, 0, 1024, 0))
+    .setCanSleep(def.canSleep !== false)
+    .setAdditionalSolverIterations(nonNegativeInteger(def.additionalSolverIterations, 0));
 
   if (!(def.static === true || def.mass <= 0)) {
     desc
@@ -262,8 +406,45 @@ function createRigidBodyDesc(def) {
   return desc;
 }
 
+function cloneBodyRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  const handle = Number(record.handle);
+  const colliderHandle = Number(record.colliderHandle);
+  return {
+    handle: Number.isFinite(handle) ? handle : null,
+    colliderHandle: Number.isFinite(colliderHandle) ? colliderHandle : null,
+    shape: record.shape === 'sphere' ? 'sphere' : 'box',
+    radius: positiveNumber(record.radius, 0.5),
+    halfExtents: readPositiveVec3(record.halfExtents, [0.5, 0.5, 0.5]),
+    static: record.static === true,
+    linearDamping: clampNumber(record.linearDamping, 0, 1024, 0),
+    angularDamping: clampNumber(record.angularDamping, 0, 1024, 0),
+    additionalSolverIterations: nonNegativeInteger(record.additionalSolverIterations, 0),
+    canSleep: record.canSleep !== false,
+    ccd: record.ccd === true,
+    density: finiteNumber(record.density, 1),
+    friction: finiteNumber(record.friction, 0.5),
+    frictionCombineRule: combineRuleId(record.frictionCombineRule, 0),
+    restitution: finiteNumber(record.restitution, 0.2),
+    restitutionCombineRule: combineRuleId(record.restitutionCombineRule, 0),
+    sensor: record.sensor === true,
+  };
+}
+
+function cloneSnapshotRecords(records) {
+  if (!Array.isArray(records)) return null;
+  return records
+    .map((entry) => {
+      if (!entry || typeof entry.id !== 'string') return null;
+      const record = cloneBodyRecord(entry);
+      return record ? { id: entry.id, ...record } : null;
+    })
+    .filter(Boolean);
+}
+
 function cloneSnapshot(snapshot) {
   if (!snapshot) return null;
+  const groundRecord = cloneBodyRecord(snapshot.groundRecord);
   return {
     engine: RAPIER_PHYSICS_ENGINE,
     version: RAPIER_PACKAGE_VERSION,
@@ -272,6 +453,8 @@ function cloneSnapshot(snapshot) {
     data: snapshot.data instanceof Uint8Array
       ? snapshot.data.slice()
       : new Uint8Array(snapshot.data || []),
+    records: cloneSnapshotRecords(snapshot.records),
+    groundRecord: groundRecord ? { id: GROUND_STABLE_ID, ...groundRecord } : null,
   };
 }
 
@@ -305,11 +488,29 @@ export function createWorld(options = {}) {
     z: worldOptions.gravity[2],
   });
   world.timestep = worldOptions.timestep;
-  createGround(world, worldOptions.ground);
+  let groundRecord = createGround(world, worldOptions.ground);
 
   let tick = 0;
   const bodyRecords = new Map();
   const checkpoints = new Map();
+
+  function getRigidBodyByHandle(handle) {
+    if (typeof handle !== 'number' || !Number.isFinite(handle)) return null;
+    try {
+      return world.getRigidBody(handle) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getColliderByHandle(handle) {
+    if (typeof handle !== 'number' || !Number.isFinite(handle)) return null;
+    try {
+      return world.getCollider(handle) || null;
+    } catch {
+      return null;
+    }
+  }
 
   function getBodyHandle(id) {
     const record = bodyRecords.get(id);
@@ -319,7 +520,7 @@ export function createWorld(options = {}) {
   function getRigidBodyById(id) {
     const handle = getBodyHandle(id);
     if (handle == null) return null;
-    return world.getRigidBody(handle);
+    return getRigidBodyByHandle(handle);
   }
 
   function recordCheckpointIfDue() {
@@ -340,6 +541,10 @@ export function createWorld(options = {}) {
       tick,
       timestep: world.timestep,
       data: world.takeSnapshot().slice(),
+      records: Array.from(bodyRecords.entries())
+        .map(([id, record]) => ({ id, ...cloneBodyRecord(record) }))
+        .filter((record) => record.handle != null),
+      groundRecord: groundRecord ? { id: GROUND_STABLE_ID, ...cloneBodyRecord(groundRecord) } : null,
     };
   }
 
@@ -352,6 +557,26 @@ export function createWorld(options = {}) {
     world = nextWorld;
     previousWorld?.free?.();
     tick = source.tick;
+
+    bodyRecords.clear();
+    if (source.records) {
+      for (const { id, ...record } of source.records) {
+        if (record.handle == null || !getRigidBodyByHandle(record.handle)) continue;
+        if (record.colliderHandle != null && !getColliderByHandle(record.colliderHandle)) {
+          record.colliderHandle = null;
+        }
+        bodyRecords.set(id, record);
+      }
+    }
+
+    groundRecord = null;
+    if (source.groundRecord) {
+      const { id: _id, ...record } = source.groundRecord;
+      groundRecord = record.handle != null && getRigidBodyByHandle(record.handle)
+        ? { id: GROUND_STABLE_ID, ...record }
+        : null;
+    }
+
     return true;
   }
 
@@ -374,17 +599,51 @@ export function createWorld(options = {}) {
     const body = world.createRigidBody(createRigidBodyDesc({ ...def, static: isStatic }));
     const colliderDesc = createColliderDesc(def)
       .setRestitution(clampNumber(def.restitution, 0, 1, 0.2))
-      .setFriction(clampNumber(def.friction, 0, 4, 0.5));
+      .setRestitutionCombineRule(combineRuleId(def.restitutionCombineRule, 0))
+      .setFriction(clampNumber(def.friction, 0, 4, 0.5))
+      .setFrictionCombineRule(combineRuleId(def.frictionCombineRule, 0));
 
     if (!isStatic) {
       colliderDesc.setMass(positiveNumber(def.mass, 1));
     }
 
-    world.createCollider(colliderDesc, body);
+    const collider = world.createCollider(colliderDesc, body);
     const record = {
       handle: body.handle,
+      colliderHandle: collider.handle,
       shape: def.shape === 'sphere' ? 'sphere' : 'box',
+      radius: positiveNumber(def.radius, 0.5),
+      halfExtents: readPositiveVec3(def.halfExtents, [0.5, 0.5, 0.5]),
       static: isStatic,
+      linearDamping: typeof body.linearDamping === 'function'
+        ? body.linearDamping()
+        : clampNumber(def.linearDamping, 0, 1024, 0),
+      angularDamping: typeof body.angularDamping === 'function'
+        ? body.angularDamping()
+        : clampNumber(def.angularDamping, 0, 1024, 0),
+      additionalSolverIterations: typeof body.additionalSolverIterations === 'function'
+        ? body.additionalSolverIterations()
+        : nonNegativeInteger(def.additionalSolverIterations, 0),
+      canSleep: def.canSleep !== false,
+      ccd: typeof body.isCcdEnabled === 'function'
+        ? body.isCcdEnabled()
+        : (!isStatic && def.ccd === true),
+      density: typeof collider.density === 'function'
+        ? collider.density()
+        : (isStatic ? 1 : positiveNumber(def.mass, 1)),
+      friction: typeof collider.friction === 'function'
+        ? collider.friction()
+        : clampNumber(def.friction, 0, 4, 0.5),
+      frictionCombineRule: typeof collider.frictionCombineRule === 'function'
+        ? collider.frictionCombineRule()
+        : 0,
+      restitution: typeof collider.restitution === 'function'
+        ? collider.restitution()
+        : clampNumber(def.restitution, 0, 1, 0.2),
+      restitutionCombineRule: typeof collider.restitutionCombineRule === 'function'
+        ? collider.restitutionCombineRule()
+        : 0,
+      sensor: typeof collider.isSensor === 'function' ? collider.isSensor() : false,
     };
     bodyRecords.set(def.id, record);
     return exportRigidBody(def.id, record, body);
@@ -399,7 +658,7 @@ export function createWorld(options = {}) {
   function getBody(id) {
     const record = bodyRecords.get(id);
     if (!record) return null;
-    return exportRigidBody(id, record, world.getRigidBody(record.handle));
+    return exportRigidBody(id, record, getRigidBodyByHandle(record.handle));
   }
 
   function getBodies() {
@@ -447,6 +706,135 @@ export function createWorld(options = {}) {
       steps,
       limited: tick !== targetTick,
     };
+  }
+
+  function getCanonicalRecords() {
+    const records = groundRecord ? [[groundRecord.id, groundRecord]] : [];
+    for (const entry of bodyRecords.entries()) records.push(entry);
+    return records
+      .map(([id, record]) => ({
+        id,
+        idHash: stableIdHash(id),
+        record,
+        body: getRigidBodyById(id) || getRigidBodyByHandle(record.handle),
+      }))
+      .filter((entry) => entry.body)
+      .sort((left, right) => {
+        if (left.idHash < right.idHash) return -1;
+        if (left.idHash > right.idHash) return 1;
+        return left.id.localeCompare(right.id);
+      });
+  }
+
+  function hashStableIdentity(hash, stableId) {
+    return hash64Uint64(hash64Uint8(hash, 1), stableIdHash(stableId));
+  }
+
+  function hashCanonicalBody(hash, id, record, body) {
+    const position = body.translation();
+    const rotation = body.rotation();
+    const velocity = record.static ? { x: 0, y: 0, z: 0 } : body.linvel();
+    const angularVelocity = record.static ? { x: 0, y: 0, z: 0 } : body.angvel();
+
+    let next = hashStableIdentity(hash, id);
+    next = hash64Uint8(next, record.static ? 1 : 0);
+    next = hash64Float32(
+      next,
+      typeof body.linearDamping === 'function' ? body.linearDamping() : record.linearDamping,
+    );
+    next = hash64Float32(
+      next,
+      typeof body.angularDamping === 'function' ? body.angularDamping() : record.angularDamping,
+    );
+    next = hash64Uint64(
+      next,
+      typeof body.additionalSolverIterations === 'function'
+        ? body.additionalSolverIterations()
+        : record.additionalSolverIterations,
+    );
+    next = hash64Uint8(
+      next,
+      typeof body.isCcdEnabled === 'function' ? (body.isCcdEnabled() ? 1 : 0) : (record.ccd ? 1 : 0),
+    );
+    next = hash64Uint8(next, record.canSleep !== false ? 1 : 0);
+    next = hash64Pose(
+      next,
+      [position.x, position.y, position.z],
+      [rotation.x, rotation.y, rotation.z, rotation.w],
+    );
+    next = hash64Vec3(next, [velocity.x, velocity.y, velocity.z]);
+    next = hash64Vec3(next, [angularVelocity.x, angularVelocity.y, angularVelocity.z]);
+    next = hash64Uint8(next, typeof body.isSleeping === 'function' && body.isSleeping() ? 1 : 0);
+    next = hash64Uint8(next, typeof body.isEnabled === 'function' && !body.isEnabled() ? 0 : 1);
+    return next;
+  }
+
+  function hashCanonicalCollider(hash, id, record) {
+    const collider = getColliderByHandle(record.colliderHandle);
+    let next = hashStableIdentity(hash, id);
+    next = hashStableIdentity(next, id);
+    next = hash64Uint8(next, 1);
+    next = hash64Pose(next, [0, 0, 0], [0, 0, 0, 1]);
+
+    if (record.shape === 'sphere') {
+      next = hash64Uint8(next, 1);
+      next = hash64Float32(next, positiveNumber(record.radius, 0.5));
+    } else {
+      next = hash64Uint8(next, 2);
+      next = hash64Vec3(next, readPositiveVec3(record.halfExtents, [0.5, 0.5, 0.5]));
+    }
+
+    const density = typeof collider?.density === 'function'
+      ? collider.density()
+      : positiveNumber(record.density, 1);
+    const friction = typeof collider?.friction === 'function'
+      ? collider.friction()
+      : finiteNumber(record.friction, 0.5);
+    const frictionCombineRule = typeof collider?.frictionCombineRule === 'function'
+      ? collider.frictionCombineRule()
+      : record.frictionCombineRule;
+    const restitution = typeof collider?.restitution === 'function'
+      ? collider.restitution()
+      : finiteNumber(record.restitution, 0.2);
+    const restitutionCombineRule = typeof collider?.restitutionCombineRule === 'function'
+      ? collider.restitutionCombineRule()
+      : record.restitutionCombineRule;
+    const sensor = typeof collider?.isSensor === 'function' ? collider.isSensor() : record.sensor === true;
+    const enabled = typeof collider?.isEnabled === 'function' ? collider.isEnabled() : true;
+    next = hash64Float32(next, density);
+    next = hash64Float32(next, friction);
+    next = hash64Uint8(next, combineRuleId(frictionCombineRule, 0));
+    next = hash64Float32(next, restitution);
+    next = hash64Uint8(next, combineRuleId(restitutionCombineRule, 0));
+    next = hash64Uint8(next, sensor ? 1 : 0);
+    next = hash64Uint8(next, enabled ? 1 : 0);
+    return next;
+  }
+
+  function canonicalStateHashBigInt() {
+    const records = getCanonicalRecords();
+    let hash = fnv64Init();
+    hash = hash64String(hash, CANONICAL_PHYSICS_HASH_VERSION);
+    hash = hash64String(hash, RAPIER_PHYSICS_ENGINE);
+    hash = hash64String(hash, RAPIER_CORE_VERSION);
+    hash = hash64Vec3(hash, worldOptions.gravity);
+    hash = hash64Float32(hash, world.timestep);
+
+    hash = hash64Uint64(hash, records.length);
+    for (const { id, record, body } of records) {
+      hash = hashCanonicalBody(hash, id, record, body);
+    }
+
+    hash = hash64Uint64(hash, records.length);
+    for (const { id, record } of records) {
+      hash = hashCanonicalCollider(hash, id, record);
+    }
+
+    return hash;
+  }
+
+  function canonicalStateHash() {
+    return hash64Hex(canonicalStateHashBigInt());
   }
 
   function stateHash() {
@@ -511,6 +899,7 @@ export function createWorld(options = {}) {
     stepTo,
     snapshot,
     restore,
+    canonicalStateHash,
     stateHash,
     networkStateHash,
     free,
