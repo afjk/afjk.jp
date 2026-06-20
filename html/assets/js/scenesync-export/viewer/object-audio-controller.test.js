@@ -89,6 +89,58 @@ test('plays object audio from the player timeline and applies transport rate', (
   assert.equal(audio.playbackRate, 2.5);
 });
 
+test('exposes playing timeline audio as the media clock', () => {
+  const { audio, controller } = createHarness({ source: { offset: 0.5 } });
+
+  controller.tick(1000, { t: 4, isPaused: false, playing: true, rate: 1, duration: 10 });
+  audio.currentTime = 4.25;
+
+  const clockState = controller.getMediaClockState({
+    t: 4.5,
+    time: 4.5,
+    isPaused: false,
+    playing: true,
+    rate: 1,
+    duration: 10,
+  });
+
+  assert.equal(clockState.mediaClockActive, true);
+  assert.deepEqual(clockState.mediaClockSource, { objectId: 'speaker', name: 'default' });
+  assert.equal(clockState.time, 3.75);
+  assert.equal(clockState.t, 3.75);
+
+  controller.tick(1100, clockState);
+  assert.equal(audio.currentTime, 4.25);
+});
+
+test('does not expose event-only or animation-synced audio as the media clock', () => {
+  const eventOnly = createHarness({ source: { state: 'stopped' } });
+  eventOnly.audio.paused = false;
+  eventOnly.audio.currentTime = 2;
+  assert.equal(eventOnly.controller.getMediaClockState({
+    t: 2,
+    isPaused: false,
+    playing: true,
+    rate: 1,
+  }), null);
+
+  const animationSynced = createHarness({
+    source: {
+      sync: { mode: 'animation', offset: 0 },
+    },
+    getAnimationSample: () => ({ time: 2, duration: 10 }),
+  });
+  animationSynced.controller.tick(1000, { t: 2, isPaused: false, playing: true, rate: 1 });
+  animationSynced.audio.currentTime = 2;
+
+  assert.equal(animationSynced.controller.getMediaClockState({
+    t: 2,
+    isPaused: false,
+    playing: true,
+    rate: 1,
+  }), null);
+});
+
 test('resyncs object audio when the player timeline seeks while playing', () => {
   const { audio, controller } = createHarness();
 

@@ -209,6 +209,39 @@ test('static object AudioSource controller', async (t) => {
     assert.ok(Math.abs(created[0].currentTime - 1.3) < 0.001);
   });
 
+  await t.test('uses playing timeline audio as a media clock source', () => {
+    const { controller, created } = makeController({
+      audioSources: {
+        default: {
+          name: 'default',
+          url: 'music.mp3',
+          state: 'playing',
+          loop: true,
+          offset: 0.5,
+        },
+      },
+    });
+
+    controller.tick(1000, { t: 4, isPaused: false, playing: true, rate: 1, duration: 10 });
+    created[0].currentTime = 4.25;
+
+    const clockState = controller.getMediaClockState({
+      t: 4.5,
+      time: 4.5,
+      isPaused: false,
+      playing: true,
+      rate: 1,
+      duration: 10,
+    });
+
+    assert.equal(clockState.mediaClockActive, true);
+    assert.deepEqual(clockState.mediaClockSource, { objectId: 'speaker-1', name: 'default' });
+    assert.equal(clockState.time, 3.75);
+
+    controller.tick(1100, clockState);
+    assert.equal(created[0].currentTime, 4.25);
+  });
+
   await t.test('routes syncToAnimation and unsync effects', () => {
     let sampleTime = 4;
     const { controller, created } = makeController({
