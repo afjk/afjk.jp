@@ -41,6 +41,60 @@ function safeSeek(audio, time) {
   try { audio.currentTime = time; } catch { /* noop */ }
 }
 
+function safeAutoSeek(entry, time, nowMs, { minIntervalMs = 250, force = false } = {}) {
+  const audio = entry?.audio;
+  if (!audio) return false;
+  if (!Number.isFinite(time) || time < 0) return false;
+  if (!force && audio.seeking === true) return false;
+  if (
+    !force
+    && Number.isFinite(entry.lastAutoSeekAtMs)
+    && Number.isFinite(nowMs)
+    && nowMs - entry.lastAutoSeekAtMs < minIntervalMs
+  ) {
+    return false;
+  }
+
+  try {
+    audio.currentTime = time;
+    entry.lastAutoSeekAtMs = Number.isFinite(nowMs) ? nowMs : defaultNow();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function wrappedDistance(a, b, duration) {
+  const direct = Math.abs(a - b);
+  return duration ? Math.min(direct, Math.max(0, duration - direct)) : direct;
+}
+
+function noteAutoSyncTarget(entry, target, nowMs, config, clockState) {
+  const previousTarget = entry.lastAutoTargetTime;
+  const previousNow = entry.lastAutoTargetAtMs;
+  let jumped = false;
+
+  if (Number.isFinite(previousTarget) && Number.isFinite(previousNow) && Number.isFinite(nowMs)) {
+    const elapsed = Math.max(0, (nowMs - previousNow) / 1000);
+    const transportRate = Number.isFinite(clockState?.rate) && clockState.rate > 0 ? clockState.rate : 1;
+    let expected = previousTarget + elapsed * transportRate;
+    const duration = Number.isFinite(entry.audio?.duration) && entry.audio.duration > 0 ? entry.audio.duration : null;
+    if (duration && config?.loop === true) {
+      expected = ((expected % duration) + duration) % duration;
+    }
+    const distance = duration && config?.loop === true
+      ? wrappedDistance(target, expected, duration)
+      : Math.abs(target - expected);
+    jumped = distance > 0.3;
+  } else {
+    jumped = false;
+  }
+
+  entry.lastAutoTargetTime = target;
+  entry.lastAutoTargetAtMs = Number.isFinite(nowMs) ? nowMs : defaultNow();
+  return jumped;
+}
+
 // アニメーション再生位置(sampleTime)を audio の再生時刻へ変換する。
 // offset を加算し、duration が判明していれば loop なら巻き戻し、非 loop ならクランプする。
 function animationTargetTime(audio, sampleTime, offset, loop) {
@@ -137,6 +191,9 @@ export function createAudioSourceController(deps = {}) {
           started: false,
           autoplayBlocked: false,
           lastSampleTime: null,
+          lastAutoSeekAtMs: null,
+          lastAutoTargetTime: null,
+          lastAutoTargetAtMs: null,
         };
         map.set(name, entry);
       } else {
@@ -374,9 +431,10 @@ export function createAudioSourceController(deps = {}) {
         const target = animationTargetTime(audio, sample.time, offset, config.loop);
         const looped = entry.lastSampleTime != null && sample.time < entry.lastSampleTime;
         entry.lastSampleTime = sample.time;
+        const targetJumped = noteAutoSyncTarget(entry, target, nowMs, config, clockState);
         const drift = Math.abs((audio.currentTime || 0) - target);
         if (drift > driftThreshold && (sync.resyncOnLoop !== false || !looped)) {
-          safeSeek(audio, target);
+          safeAutoSeek(entry, target, nowMs, { force: targetJumped });
         }
       }
     }
@@ -402,16 +460,18 @@ export function createAudioSourceController(deps = {}) {
             const animTarget = animationTargetTime(audio, sample.time, config.offset || 0, config.loop);
             const drift = Math.abs((audio.currentTime || 0) - animTarget);
             if (drift > driftThreshold) {
-              safeSeek(audio, animTarget);
+              const targetJumped = noteAutoSyncTarget(entry, animTarget, nowMs, config, clockState);
+              safeAutoSeek(entry, animTarget, nowMs, { force: targetJumped });
             }
           }
         }
         tryPlay(entry, objectId, name);
         return;
       }
+      const targetJumped = noteAutoSyncTarget(entry, target, nowMs, config, clockState);
       const drift = Math.abs((audio.currentTime || 0) - target);
       if (drift > driftThreshold) {
-        safeSeek(audio, target);
+        safeAutoSeek(entry, target, nowMs, { force: targetJumped });
       }
     }
 
