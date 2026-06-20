@@ -12,6 +12,7 @@ class FakeAudio {
     this.paused = true;
     this.playbackRate = 1;
     this.preload = '';
+    this.seeking = false;
     this.src = '';
     this.volume = 1;
     this.pauseCount = 0;
@@ -99,3 +100,16 @@ test('resyncs object audio when the player timeline seeks while playing', () => 
   assert.equal(audio.currentTime, 7);
 });
 
+test('does not restart an in-flight media seek during continuous auto sync', () => {
+  const { audio, controller } = createHarness({
+    audio: new FakeAudio({ duration: 10, currentTime: 1 }),
+  });
+
+  controller.tick(1000, { t: 1, isPaused: false, playing: true, rate: 1 });
+  audio.currentTime = 0.8;
+  audio.seeking = true;
+
+  controller.tick(1100, { t: 1.1, isPaused: false, playing: true, rate: 1 });
+
+  assert.equal(audio.currentTime, 0.8);
+});
