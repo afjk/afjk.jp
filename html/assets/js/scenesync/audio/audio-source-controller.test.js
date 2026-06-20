@@ -31,7 +31,14 @@ class FakeAudio {
   load() {}
 }
 
-function createHarness({ audio = new FakeAudio(), offset = 0, loop = true, getAnimationSample = null, isObjectBeingEdited = () => false } = {}) {
+function createHarness({
+  audio = new FakeAudio(),
+  offset = 0,
+  loop = true,
+  playbackRate = 1,
+  getAnimationSample = null,
+  isObjectBeingEdited = () => false,
+} = {}) {
   const controller = createAudioSourceController({
     createAudio: () => audio,
     getObjectRuntimeTime: (_objectId, _nowMs, clockState) => clockState?.t ?? 0,
@@ -45,6 +52,7 @@ function createHarness({ audio = new FakeAudio(), offset = 0, loop = true, getAn
       state: 'playing',
       loop,
       offset,
+      playbackRate,
     },
   });
 
@@ -162,4 +170,29 @@ test('does not restart an in-flight media seek during continuous auto sync', () 
   controller.tick(1100, { mode: 'local', t: 1.1, isPaused: false, rate: 1 });
 
   assert.equal(audio.currentTime, 0.8);
+});
+
+test('does not treat playbackRate progression as repeated timeline jumps', () => {
+  const audio = new FakeAudio({ duration: 10, currentTime: 1 });
+  const { controller } = createHarness({ audio, playbackRate: 2 });
+
+  controller.tick(1000, { mode: 'local', t: 1, isPaused: false, rate: 1 });
+  audio.currentTime = 0.8;
+  audio.seeking = true;
+
+  controller.tick(1100, { mode: 'local', t: 1.1, isPaused: false, rate: 1 });
+
+  assert.equal(audio.currentTime, 0.8);
+});
+
+test('forces auto seek when the player timeline jumps shortly after a resync', () => {
+  const audio = new FakeAudio({ duration: 10, currentTime: 0 });
+  const { controller } = createHarness({ audio });
+
+  controller.tick(1000, { mode: 'local', t: 1, isPaused: false, rate: 1 });
+  assert.equal(audio.currentTime, 1);
+
+  controller.tick(1100, { mode: 'local', t: 7, isPaused: false, rate: 1 });
+
+  assert.equal(audio.currentTime, 7);
 });
