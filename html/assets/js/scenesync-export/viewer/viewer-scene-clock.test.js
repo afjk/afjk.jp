@@ -57,6 +57,26 @@ test('viewer scene clock clamps to duration and restarts when played from the en
   assert.equal(clock.getState().playing, true);
 });
 
+test('viewer scene clock can be aligned to media time without emitting transport events', () => {
+  let now = 0;
+  let changeCount = 0;
+  const clock = createViewerSceneClock({ duration: 10, now: () => now });
+  clock.onChange(() => { changeCount += 1; });
+
+  clock.play();
+  assert.equal(changeCount, 1);
+
+  now = 1000;
+  clock.syncPlaybackTime(4, now);
+
+  assert.equal(clock.getState().time, 4);
+  assert.equal(clock.getState().playing, true);
+  assert.equal(changeCount, 1);
+
+  now = 1500;
+  assert.equal(clock.tick().time, 4.5);
+});
+
 test('viewer playback duration includes animation and physics durations', () => {
   const duration = calculateViewerPlaybackDuration({
     defaultDuration: 1,
