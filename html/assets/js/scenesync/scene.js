@@ -5613,6 +5613,7 @@ function getSceneClockStateForShell() {
     duration,
     transportActive: sceneClockState.transportActive,
     active: sceneClockState.active,
+    sharedRevision: sceneClockState.sharedRevision,
     controller,
     isController: sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf(),
     selectedObjectAge,
