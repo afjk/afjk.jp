@@ -2,6 +2,7 @@ import { loadSceneSyncShell, listSceneSyncShellIds } from './shell-registry.js';
 import { createPointerInputAdapter } from './editor/inputs/pointer-input-adapter.js';
 import { createTouchInputAdapter } from './editor/inputs/touch-input-adapter.js';
 import { createEditorKeyboardAdapter } from './editor/inputs/editor-keyboard-adapter.js';
+import { createPlayerPhysicsDragInputAdapter } from './player/player-physics-drag-input.js';
 
 function clickElement(id) {
   document.getElementById(id)?.click();
@@ -106,6 +107,7 @@ const INPUT_ADAPTER_FACTORIES = {
   pointer: createPointerInputAdapter,
   touch: createTouchInputAdapter,
   keyboard: createEditorKeyboardAdapter,
+  'player-physics-drag': createPlayerPhysicsDragInputAdapter,
 };
 
 function mountInputAdaptersForShell(shell, core) {

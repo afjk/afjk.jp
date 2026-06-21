@@ -145,6 +145,12 @@ test('queues scene physics input and applies it at the requested tick', () => {
   });
 
   runtime.update({ t: 0, transportActive: true });
+  assert.equal(runtime.getTick(), 0);
+  assert.equal(runtime.hasDynamicBody('ball'), true);
+  const bodyState = runtime.getDynamicBodyState('ball');
+  assert.equal(bodyState.id, 'ball');
+  assert.equal(bodyState.static, false);
+  assert.deepEqual(bodyState.velocity, [0, 0, 0]);
   assert.equal(runtime.queueInput({
     kind: 'scene-physics-input',
     inputType: 'set-body-state',

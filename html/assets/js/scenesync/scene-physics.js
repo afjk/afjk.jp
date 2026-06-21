@@ -1039,6 +1039,15 @@ export function createScenePhysicsRuntime({
       }
       return entryMap.size > 0;
     },
+    hasDynamicBody,
+    getTick() {
+      return world?.tick ?? 0;
+    },
+    getDynamicBodyState(objectId) {
+      if (!hasDynamicBody(objectId)) return null;
+      const body = world?.getBody?.(objectId);
+      return body ? cloneJson(body) : null;
+    },
     dispose() {
       clear();
     },
