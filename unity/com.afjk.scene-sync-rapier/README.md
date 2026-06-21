@@ -100,6 +100,11 @@ physics tick before stepping. For picking, the sample uses Unity raycasts; when 
 dynamic Scene Sync object has no Collider, it can add a lightweight BoxCollider
 from renderer bounds for Play Mode interaction.
 
+By default the sample disables automatic remote physics snapshot correction while
+it is active. Shared Playback Player UI still drives the shared clock, but its
+periodic `scene-physics-snapshot` messages should not overwrite the local
+drag/release authority immediately after an interaction input.
+
 ## PlayerUI Parity Sample
 
 `SceneSyncRapierParitySampleBootstrap` builds a small floor + falling box scene

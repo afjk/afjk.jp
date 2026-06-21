@@ -127,6 +127,16 @@ namespace Afjk.SceneSync.Rapier
             get => preserveMotionOnRebuild;
             set => preserveMotionOnRebuild = value;
         }
+        public bool AutoApplyRemoteSnapshots
+        {
+            get => autoApplyRemoteSnapshots;
+            set => autoApplyRemoteSnapshots = value;
+        }
+        public bool RequestSnapshotOnHashMismatch
+        {
+            get => requestSnapshotOnHashMismatch;
+            set => requestSnapshotOnHashMismatch = value;
+        }
 
         private void OnEnable()
         {
