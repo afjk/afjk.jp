@@ -17,6 +17,8 @@ namespace Afjk.SceneSync.Rapier
         private const double ZeroTimeEpsilon = 0.000001d;
         private const string GroundStableId = "__scenesync_ground__";
         private const string CanonicalStateHashVersion = "SceneSyncCanonicalPhysicsHashV1";
+        private const string PhysicsProfile = "SceneSyncRapierParity-0.30";
+        private const string SnapshotVersion = "SceneSyncPhysicsSnapshotV1";
 
         [SerializeField] private bool autoRun = true;
         [SerializeField] private bool useSceneClock = true;
@@ -26,6 +28,7 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private float maxFrameStepSeconds = 0.25f;
         [SerializeField] private int maxClockStepsPerUpdate = 600;
         [SerializeField] private int maxCollisionEventsPerDrain = 256;
+        [SerializeField] private bool autoApplyRemoteSnapshots = true;
         [SerializeField] private bool logStateHash;
 
         private readonly Dictionary<string, string> objectPhysicsJson = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -53,9 +56,12 @@ namespace Afjk.SceneSync.Rapier
         private string lastStateHash;
         private bool hasRemoteHashReport;
         private SceneSyncRapierHashReport lastRemoteHashReport;
+        private bool hasRemoteSnapshotReport;
+        private SceneSyncRapierSnapshotReport lastRemoteSnapshotReport;
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
         public event Action<SceneSyncRapierHashReport> HashReportReceived;
+        public event Action<SceneSyncRapierSnapshotReport> SnapshotReceived;
 
         public string StateHashVersion => CanonicalStateHashVersion;
         public int Tick => tick;
@@ -66,6 +72,9 @@ namespace Afjk.SceneSync.Rapier
         public bool HasRemoteHashReport => hasRemoteHashReport;
         public SceneSyncRapierHashReport LastRemoteHashReport => lastRemoteHashReport;
         public bool LastRemoteHashMatched => hasRemoteHashReport && lastRemoteHashReport.Matched;
+        public bool HasRemoteSnapshotReport => hasRemoteSnapshotReport;
+        public SceneSyncRapierSnapshotReport LastRemoteSnapshotReport => lastRemoteSnapshotReport;
+        public bool LastRemoteSnapshotApplied => hasRemoteSnapshotReport && lastRemoteSnapshotReport.Applied;
 
         private void OnEnable()
         {
@@ -344,6 +353,12 @@ namespace Afjk.SceneSync.Rapier
                 return;
             }
 
+            if (raw.Contains("\"kind\":\"scene-physics-snapshot\""))
+            {
+                ApplyScenePhysicsSnapshot(raw, message.FromPeerId);
+                return;
+            }
+
             if (raw.Contains("\"kind\":\"scene-physics-hash\""))
             {
                 ApplyScenePhysicsHash(raw, message.FromPeerId);
@@ -372,6 +387,118 @@ namespace Afjk.SceneSync.Rapier
             if (string.IsNullOrWhiteSpace(id)) return;
             if (ApplyObjectPhysicsJson(id, raw))
                 dirty = true;
+        }
+
+        private void ApplyScenePhysicsSnapshot(string raw, string fromPeerId)
+        {
+            var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload") ?? raw;
+            ScenePhysicsSnapshotPayload payload = null;
+            try
+            {
+                payload = JsonUtility.FromJson<ScenePhysicsSnapshotPayload>(payloadJson);
+            }
+            catch (Exception error)
+            {
+                Debug.LogWarning("[SceneSyncRapier] Failed to parse scene-physics-snapshot: " + error.Message);
+            }
+
+            var remoteHash = NormalizeHash(payload?.hash);
+            var localTickBeforeApply = tick;
+            var bodyCount = payload?.bodies != null ? payload.bodies.Length : 0;
+            var dynamicBodyCount = 0;
+            var appliedBodyCount = 0;
+            var missingBodyCount = 0;
+            var applied = false;
+
+            var canApply = autoApplyRemoteSnapshots
+                && payload != null
+                && world != null
+                && world.IsCreated
+                && string.Equals(payload.snapshotVersion, SnapshotVersion, StringComparison.Ordinal)
+                && string.Equals(payload.hashVersion, CanonicalStateHashVersion, StringComparison.Ordinal)
+                && string.Equals(payload.profile, PhysicsProfile, StringComparison.Ordinal)
+                && payload.tick >= 0
+                && payload.bodies != null;
+
+            var bodyStates = new List<SnapshotBodyState>();
+            if (canApply)
+            {
+                foreach (var body in payload.bodies)
+                {
+                    if (body == null || !IsDynamicSnapshotBody(body))
+                        continue;
+
+                    dynamicBodyCount++;
+                    if (string.IsNullOrWhiteSpace(body.id) ||
+                        !bindings.TryGetValue(body.id, out var binding) ||
+                        binding.IsStatic ||
+                        !TryCreateSnapshotBodyState(body, binding.Body, out var state))
+                    {
+                        missingBodyCount++;
+                        continue;
+                    }
+
+                    bodyStates.Add(state);
+                }
+
+                if (missingBodyCount == 0)
+                {
+                    foreach (var state in bodyStates)
+                    {
+                        var ok = world.SetTransform(state.Body, new RapierTransform(state.Position, state.Rotation));
+                        ok = world.SetLinearVelocity(state.Body, state.LinearVelocity, true) && ok;
+                        ok = world.SetAngularVelocity(state.Body, state.AngularVelocity, true) && ok;
+                        if (ok) appliedBodyCount++;
+                    }
+
+                    applied = appliedBodyCount == dynamicBodyCount;
+                    if (applied)
+                    {
+                        tick = payload.tick;
+                        worldEpochTime = IsFinite(payload.worldEpochTime)
+                            ? Mathf.Max(0f, payload.worldEpochTime)
+                            : Mathf.Max(0f, sceneClock.GetTime() - tick * Mathf.Max(0.000001f, scenePhysics.Timestep));
+                        hasPendingWorldEpochTime = false;
+                        pendingWorldEpochTime = 0f;
+                        accumulator = 0f;
+                        lastStepLimited = false;
+                        currentCollisionPairs.Clear();
+                        previousCollisionPairs.Clear();
+                        lastCollisionEvents.Clear();
+                        ApplyWorldTransforms();
+                        UpdateLastStateHash("snapshot");
+                    }
+                }
+            }
+
+            var localHash = NormalizeHash(ComputeStateHashHex());
+            var hashMatched = applied
+                && !string.IsNullOrWhiteSpace(remoteHash)
+                && !string.IsNullOrWhiteSpace(localHash)
+                && string.Equals(remoteHash, localHash, StringComparison.Ordinal);
+            lastRemoteSnapshotReport = new SceneSyncRapierSnapshotReport(
+                payload?.snapshotVersion,
+                remoteHash,
+                localHash,
+                payload?.hashVersion,
+                payload?.profile,
+                payload?.rapierCoreVersion,
+                payload?.tick ?? -1,
+                localTickBeforeApply,
+                payload?.timestep ?? 0f,
+                payload?.activeTime ?? float.NaN,
+                payload?.worldAge ?? float.NaN,
+                payload?.worldEpochTime ?? float.NaN,
+                payload?.sceneClockRevision ?? int.MinValue,
+                fromPeerId,
+                bodyCount,
+                dynamicBodyCount,
+                appliedBodyCount,
+                missingBodyCount,
+                applied,
+                hashMatched);
+            hasRemoteSnapshotReport = true;
+            SnapshotReceived?.Invoke(lastRemoteSnapshotReport);
         }
 
         private void ApplyScenePhysicsHash(string raw, string fromPeerId)
@@ -850,6 +977,61 @@ namespace Afjk.SceneSync.Rapier
                 : value.Trim().ToLowerInvariant();
         }
 
+        private static bool IsDynamicSnapshotBody(ScenePhysicsSnapshotBody body)
+        {
+            return body != null &&
+                !string.Equals(body.type, "fixed", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(body.type, "static", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryCreateSnapshotBodyState(
+            ScenePhysicsSnapshotBody body,
+            RapierRigidBodyHandle handle,
+            out SnapshotBodyState state)
+        {
+            state = default;
+            if (!TryReadVector3(body.position, out var position) ||
+                !TryReadQuaternion(body.rotation, out var rotation))
+            {
+                return false;
+            }
+
+            var linearVelocity = Vector3.zero;
+            var angularVelocity = Vector3.zero;
+            TryReadVector3(body.velocity, out linearVelocity);
+            if (body.angularVelocity != null)
+                TryReadVector3(body.angularVelocity, out angularVelocity);
+            else
+                TryReadVector3(body.angvel, out angularVelocity);
+            if (body.velocity == null && body.linvel != null)
+                TryReadVector3(body.linvel, out linearVelocity);
+
+            state = new SnapshotBodyState(handle, position, rotation, linearVelocity, angularVelocity);
+            return true;
+        }
+
+        private static bool TryReadVector3(float[] values, out Vector3 vector)
+        {
+            vector = Vector3.zero;
+            if (values == null || values.Length < 3) return false;
+            if (!IsFinite(values[0]) || !IsFinite(values[1]) || !IsFinite(values[2])) return false;
+            vector = new Vector3(values[0], values[1], values[2]);
+            return true;
+        }
+
+        private static bool TryReadQuaternion(float[] values, out Quaternion rotation)
+        {
+            rotation = Quaternion.identity;
+            if (values == null || values.Length < 4) return false;
+            if (!IsFinite(values[0]) || !IsFinite(values[1]) || !IsFinite(values[2]) || !IsFinite(values[3]))
+            {
+                return false;
+            }
+
+            rotation = Normalize(new Quaternion(values[0], values[1], values[2], values[3]));
+            return true;
+        }
+
         private static bool IsFinite(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);
@@ -858,6 +1040,59 @@ namespace Afjk.SceneSync.Rapier
         private static bool IsFinite(double value)
         {
             return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        [Serializable]
+        private sealed class ScenePhysicsSnapshotPayload
+        {
+            public string snapshotVersion;
+            public string profile;
+            public string hashVersion;
+            public string rapierCoreVersion;
+            public int tick;
+            public string hash;
+            public float timestep;
+            public float activeTime;
+            public float worldAge;
+            public float worldEpochTime;
+            public int sceneClockRevision;
+            public ScenePhysicsSnapshotBody[] bodies;
+        }
+
+        [Serializable]
+        private sealed class ScenePhysicsSnapshotBody
+        {
+            public string id;
+            public string type;
+            public float[] position;
+            public float[] rotation;
+            public float[] velocity;
+            public float[] angularVelocity;
+            public float[] linvel;
+            public float[] angvel;
+        }
+
+        private readonly struct SnapshotBodyState
+        {
+            public SnapshotBodyState(
+                RapierRigidBodyHandle body,
+                Vector3 position,
+                Quaternion rotation,
+                Vector3 linearVelocity,
+                Vector3 angularVelocity)
+            {
+                Body = body;
+                Position = position;
+                Rotation = rotation;
+                LinearVelocity = linearVelocity;
+                AngularVelocity = angularVelocity;
+            }
+
+            public RapierRigidBodyHandle Body { get; }
+            public Vector3 Position { get; }
+            public Quaternion Rotation { get; }
+            public Vector3 LinearVelocity { get; }
+            public Vector3 AngularVelocity { get; }
         }
 
         private readonly struct SceneClockState

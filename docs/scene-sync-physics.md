@@ -234,6 +234,48 @@ Followers should compare the hash only when the fixed tick and hash version
 match their local world. A mismatch is a divergence signal for diagnostics and
 future snapshot resync; it is not a request to stream or apply body transforms.
 
+### Scene Physics Snapshot Messages
+
+The Shared Playback controller also publishes low-frequency
+`scene-physics-snapshot` baselines at tick `0` and every 120 fixed ticks. These
+messages are coarse resync checkpoints, not the normal playback transport:
+
+```json
+{
+  "kind": "scene-physics-snapshot",
+  "source": "physics",
+  "phase": "postPhysics",
+  "snapshotVersion": "SceneSyncPhysicsSnapshotV1",
+  "profile": "SceneSyncRapierParity-0.30",
+  "hashVersion": "SceneSyncCanonicalPhysicsHashV1",
+  "rapierCoreVersion": "0.30.0",
+  "tick": 120,
+  "hash": "0123456789abcdef",
+  "timestep": 0.016666666666666666,
+  "activeTime": 2,
+  "worldAge": 2,
+  "worldEpochTime": 0,
+  "bodyCount": 1,
+  "bodies": [
+    {
+      "id": "box-1",
+      "type": "dynamic",
+      "position": [0, 1, 0],
+      "rotation": [0, 0, 0, 1],
+      "velocity": [0, 0, 0],
+      "angularVelocity": [0, 0, 0]
+    }
+  ],
+  "sceneClockRevision": 8,
+  "controller": { "id": "peer-id", "nickname": "Host" },
+  "sentAt": 1782010000000
+}
+```
+
+Snapshot bodies use Scene Sync wire coordinates. Followers should only apply a
+snapshot when the snapshot version, hash version, physics profile, and dynamic
+body set match the local world.
+
 ## Shared Playback
 
 Shared Playback uses:
@@ -339,6 +381,12 @@ The bridge also consumes Web `scene-physics-hash` messages. The latest report is
 available through `LastRemoteHashReport`, `LastRemoteHashMatched`, and the
 `HashReportReceived` event. Reports compare tick, hash version, and canonical
 hash, but they intentionally do not perform resync yet.
+
+Unity bridge snapshot support consumes `SceneSyncPhysicsSnapshotV1` messages and
+applies dynamic body pose, linear velocity, angular velocity, tick, and world
+epoch when every dynamic body id in the snapshot exists locally. The latest
+snapshot result is exposed through `LastRemoteSnapshotReport`,
+`LastRemoteSnapshotApplied`, and `SnapshotReceived`.
 
 ## Supported Shapes
 

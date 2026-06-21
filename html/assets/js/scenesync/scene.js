@@ -83,6 +83,7 @@ import {
   isScenePhysicsZeroTime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
+  SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
   SCENE_SYNC_RAPIER_PROFILE,
   serializeObjectPhysics,
   serializeScenePhysics,
@@ -1378,6 +1379,7 @@ function endMultiTransformHistory() {
 const SAMPLE_CUBE_OBJECT_ID = 'sample-cube';
 const SAMPLE_CUBE_COLOR = '#4488ff';
 const SCENE_PHYSICS_HASH_BROADCAST_TICK_INTERVAL = 30;
+const SCENE_PHYSICS_SNAPSHOT_BROADCAST_TICK_INTERVAL = 120;
 
 function createSampleCube() {
   const sampleGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -1405,6 +1407,9 @@ let scenePhysicsState = normalizeScenePhysics();
 let lastScenePhysicsHashBroadcastTick = null;
 let lastScenePhysicsHashBroadcastHash = null;
 let lastScenePhysicsHashBroadcastRevision = null;
+let lastScenePhysicsSnapshotBroadcastTick = null;
+let lastScenePhysicsSnapshotBroadcastHash = null;
+let lastScenePhysicsSnapshotBroadcastRevision = null;
 const scenePhysicsRuntime = createScenePhysicsRuntime({
   getScenePhysics: () => scenePhysicsState,
   getObjectEntries: () => Array.from(managedObjects.entries()).map(([objectId, object]) => ({
@@ -4568,6 +4573,7 @@ renderer.setAnimationLoop((time, frame) => {
   const sceneClockStateForTick = getSceneClockStateForLoomlet(now);
   const physicsTick = scenePhysicsRuntime.update(sceneClockStateForTick);
   maybeBroadcastScenePhysicsHash(physicsTick, sceneClockStateForTick);
+  maybeBroadcastScenePhysicsSnapshot(physicsTick, sceneClockStateForTick);
   if ((physicsTick.active || physicsTick.reset) && selectedObjectIds.size > 0) {
     updateSelectionHelpers();
   }
@@ -5213,6 +5219,47 @@ function maybeBroadcastScenePhysicsHash(physicsTick, clockState = null) {
     activeTime: physicsTick.activeTime ?? clockState?.activeTime ?? clockState?.t,
     worldAge: physicsTick.worldAge,
     worldEpochTime: physicsTick.worldEpochTime,
+    sceneClockRevision: revision,
+    controller: getSceneClockController(),
+    sentAt: Date.now(),
+  });
+}
+
+function maybeBroadcastScenePhysicsSnapshot(physicsTick, clockState = null) {
+  if (!physicsTick?.active) return;
+  if (clockState?.mode !== CLOCK_MODES.SHARED_PLAYBACK) return;
+  if (!isSceneClockControllerSelf()) return;
+
+  const tick = Number(physicsTick.tick);
+  const hash = typeof physicsTick.hash === 'string'
+    ? physicsTick.hash
+    : physicsTick.stateHash;
+  if (!Number.isInteger(tick) || tick < 0 || typeof hash !== 'string' || hash.length === 0) {
+    return;
+  }
+  if (tick !== 0 && tick % SCENE_PHYSICS_SNAPSHOT_BROADCAST_TICK_INTERVAL !== 0) {
+    return;
+  }
+
+  const revision = Number.isFinite(sceneClockState.sharedRevision)
+    ? sceneClockState.sharedRevision
+    : null;
+  if (
+    lastScenePhysicsSnapshotBroadcastTick === tick &&
+    lastScenePhysicsSnapshotBroadcastHash === hash &&
+    lastScenePhysicsSnapshotBroadcastRevision === revision
+  ) {
+    return;
+  }
+
+  const snapshot = scenePhysicsRuntime.createSnapshotReport(clockState);
+  if (!snapshot || snapshot.snapshotVersion !== SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION) return;
+
+  lastScenePhysicsSnapshotBroadcastTick = tick;
+  lastScenePhysicsSnapshotBroadcastHash = hash;
+  lastScenePhysicsSnapshotBroadcastRevision = revision;
+  broadcast({
+    ...snapshot,
     sceneClockRevision: revision,
     controller: getSceneClockController(),
     sentAt: Date.now(),

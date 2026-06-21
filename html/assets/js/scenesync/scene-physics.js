@@ -12,6 +12,7 @@ import { createCollisionPairKey } from './runtime/runtime-events.js';
 
 export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
 export const SCENE_SYNC_RAPIER_PROFILE = 'SceneSyncRapierParity-0.30';
+export const SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION = 'SceneSyncPhysicsSnapshotV1';
 export const DEFAULT_SCENE_PHYSICS = Object.freeze({
   version: 1,
   enabled: false,
@@ -647,10 +648,48 @@ export function createScenePhysicsRuntime({
     };
   }
 
+  function createSnapshotReport(clockState = null) {
+    if (!world) return null;
+
+    const dump = world.canonicalStateDump();
+    const clockTime = getClockTime(clockState);
+    const worldAge = getWorldAge(clockState);
+    const stateHash = world.canonicalStateHash();
+    const bodies = Array.isArray(dump.bodies)
+      ? dump.bodies.map((body) => ({
+          id: body.id,
+          type: body.type,
+          position: body.position,
+          rotation: body.rotation,
+          velocity: body.linvel,
+          angularVelocity: body.angvel,
+        }))
+      : [];
+
+    return {
+      kind: 'scene-physics-snapshot',
+      source: 'physics',
+      phase: 'postPhysics',
+      snapshotVersion: SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
+      profile: SCENE_SYNC_RAPIER_PROFILE,
+      hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
+      rapierCoreVersion: RAPIER_CORE_VERSION,
+      tick: world.tick,
+      hash: stateHash,
+      timestep: world.timestep || timestepSeconds,
+      activeTime: clockTime,
+      worldAge,
+      worldEpochTime,
+      bodyCount: bodies.length,
+      bodies,
+    };
+  }
+
   return {
     markDirty,
     rebuild,
     update,
+    createSnapshotReport,
     resetToInitialPose,
     resetActiveToInitialPose,
     hasBodies() {
