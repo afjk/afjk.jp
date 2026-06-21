@@ -1,14 +1,17 @@
 import {
+  CANONICAL_PHYSICS_HASH_VERSION,
   createWorld,
   DEFAULT_TIMESTEP_SECONDS,
   getRapierPhysicsInitError,
   initRapierPhysics,
   isRapierPhysicsReady,
   normalizeRapierWorldOptions,
+  RAPIER_CORE_VERSION,
 } from './physics/index.js';
 import { createCollisionPairKey } from './runtime/runtime-events.js';
 
 export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
+export const SCENE_SYNC_RAPIER_PROFILE = 'SceneSyncRapierParity-0.30';
 export const DEFAULT_SCENE_PHYSICS = Object.freeze({
   version: 1,
   enabled: false,
@@ -560,6 +563,7 @@ export function createScenePhysicsRuntime({
       }
     }
 
+    const clockTime = getClockTime(clockState);
     const worldAge = getWorldAge(clockState);
     const targetTick = Math.max(0, Math.floor(worldAge / timestepSeconds));
     if (targetTick < world.tick && initialSnapshot) {
@@ -624,9 +628,19 @@ export function createScenePhysicsRuntime({
       previousCollisionPairs = currentPairs;
     }
 
+    const stateHash = world.canonicalStateHash();
     return {
       active: true,
       tick: world.tick,
+      timestep: world.timestep || timestepSeconds,
+      activeTime: clockTime,
+      worldAge,
+      worldEpochTime,
+      profile: SCENE_SYNC_RAPIER_PROFILE,
+      hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
+      rapierCoreVersion: RAPIER_CORE_VERSION,
+      stateHash,
+      hash: stateHash,
       limited: stepResult?.limited === true,
       reached: stepResult?.reached !== false,
       events: collisionEvents,

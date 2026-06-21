@@ -7,9 +7,14 @@ import {
   isScenePhysicsZeroTime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
+  SCENE_SYNC_RAPIER_PROFILE,
   shouldResetPhysicsForSceneClockPayload,
 } from './scene-physics.js';
-import { initRapierPhysics } from './physics/index.js';
+import {
+  CANONICAL_PHYSICS_HASH_VERSION,
+  initRapierPhysics,
+  RAPIER_CORE_VERSION,
+} from './physics/index.js';
 
 before(async () => {
   await initRapierPhysics();
@@ -168,6 +173,41 @@ test('scene physics runtime treats rebuild time as the physics world epoch', () 
 
   runtime.update({ t: roomTime + 0.5, mode: 'room-time', active: true });
   assert.ok(object.position.toArray()[1] < 2);
+});
+
+test('scene physics runtime reports canonical hash metadata for wire diagnostics', () => {
+  const object = makeObject({
+    objectId: 'hash-box',
+    position: [0, 0.5, 0],
+    physics: {
+      enabled: true,
+      shape: 'box',
+      halfExtents: [0.5, 0.5, 0.5],
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    worldOptions: {
+      gravity: -9.81,
+      ground: null,
+      timestep: 1 / 60,
+    },
+  });
+  const runtime = makeRuntime({ scenePhysics, entries: [makeEntry(object)] });
+
+  const result = runtime.update({ t: 0, mode: 'shared-playback', active: true });
+
+  assert.equal(result.active, true);
+  assert.equal(result.tick, 0);
+  assert.ok(Math.abs(result.timestep - 1 / 60) < 1e-8);
+  assert.equal(result.worldEpochTime, 0);
+  assert.equal(result.profile, SCENE_SYNC_RAPIER_PROFILE);
+  assert.equal(result.hashVersion, CANONICAL_PHYSICS_HASH_VERSION);
+  assert.equal(result.rapierCoreVersion, RAPIER_CORE_VERSION);
+  assert.match(result.hash, /^[0-9a-f]{16}$/);
+  assert.equal(result.stateHash, result.hash);
 });
 
 test('scene physics runtime keeps existing body motion when a new body rebases the world', () => {
