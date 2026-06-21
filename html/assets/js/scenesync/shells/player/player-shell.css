@@ -362,11 +362,10 @@
   color: #e2e8f0;
 }
 
-.player-stop-symbol {
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-}
+.player-btn-stop .icon-stop { display: none; }
+
+.player-btn-stop[data-player-at-start="1"] .icon-back-start { display: none; }
+.player-btn-stop[data-player-at-start="1"] .icon-stop { display: block; }
 
 .player-btn-play-pause {
   width: 36px;

@@ -96,8 +96,14 @@ function createPanelHtml({ title, closeable }) {
         <span class="player-object-age" data-player-object-age>ObjectAge —</span>
       </div>
       <div class="player-controls">
-        <button class="player-btn player-btn-stop" data-player-stop type="button" title="Stop">
-          <span class="player-stop-symbol" data-player-stop-symbol aria-hidden="true">|&lt;</span>
+        <button class="player-btn player-btn-stop" data-player-stop data-player-at-start="0" type="button" title="Back to Start">
+          <svg class="icon-back-start" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+            <rect x="3" y="3" width="2.5" height="12" rx="1"/>
+            <polygon points="14.5,3.25 6.5,9 14.5,14.75"/>
+          </svg>
+          <svg class="icon-stop" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+            <rect x="4.25" y="4.25" width="9.5" height="9.5" rx="1.75"/>
+          </svg>
         </button>
         <button class="player-btn player-btn-play-pause" data-player-play-pause data-player-playing="0" type="button" title="Play">
           <svg class="icon-play" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
@@ -203,8 +209,7 @@ export function createPlayerTransportPanel({
       stopBtn.disabled = controlsDisabled;
       stopBtn.title = atStart ? 'Clear Physics Event History' : 'Back to Start';
       stopBtn.setAttribute('aria-label', stopBtn.title);
-      const symbolEl = stopBtn.querySelector('[data-player-stop-symbol]');
-      if (symbolEl) symbolEl.textContent = atStart ? '🔳' : '|<';
+      stopBtn.dataset.playerAtStart = atStart ? '1' : '0';
     }
 
     const modeEl = panel.querySelector('[data-player-clock-mode]');
