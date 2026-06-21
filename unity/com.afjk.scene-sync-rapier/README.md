@@ -36,3 +36,8 @@ For monorepo development you can replace the Rapier Git URL with a local
 
 The bridge uses Scene Sync wire coordinates as the physics basis, then converts
 body poses back to Unity coordinates when applying transforms.
+
+When the Web client publishes Shared Playback `scene-clock` messages, the bridge
+uses the shared clock time to step Rapier to the matching fixed tick. Reset and
+seek-to-zero payloads with `physicsBaseline` restore the initial Rapier snapshot
+before stepping again.
