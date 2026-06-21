@@ -357,9 +357,16 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.player-btn-stop:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: #e2e8f0;
+.player-btn-stop:not(:disabled) {
+  background: linear-gradient(145deg, #6366f1, #4f46e5);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.42);
+}
+
+.player-btn-stop:not(:disabled):hover {
+  background: linear-gradient(145deg, #818cf8, #6366f1);
+  box-shadow: 0 6px 22px rgba(99, 102, 241, 0.55);
 }
 
 .player-btn-stop .icon-stop { display: none; }
