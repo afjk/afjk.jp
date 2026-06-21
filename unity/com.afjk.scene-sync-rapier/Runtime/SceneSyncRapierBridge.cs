@@ -51,8 +51,11 @@ namespace Afjk.SceneSync.Rapier
         private int latestSceneClockRevision = int.MinValue;
         private float nextMetadataScanAt;
         private string lastStateHash;
+        private bool hasRemoteHashReport;
+        private SceneSyncRapierHashReport lastRemoteHashReport;
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
+        public event Action<SceneSyncRapierHashReport> HashReportReceived;
 
         public string StateHashVersion => CanonicalStateHashVersion;
         public int Tick => tick;
@@ -60,6 +63,9 @@ namespace Afjk.SceneSync.Rapier
         public bool HasWorld => world != null && world.IsCreated;
         public bool LastStepLimited => lastStepLimited;
         public IReadOnlyList<SceneSyncRapierCollisionEvent> LastCollisionEvents => lastCollisionEvents;
+        public bool HasRemoteHashReport => hasRemoteHashReport;
+        public SceneSyncRapierHashReport LastRemoteHashReport => lastRemoteHashReport;
+        public bool LastRemoteHashMatched => hasRemoteHashReport && lastRemoteHashReport.Matched;
 
         private void OnEnable()
         {
@@ -338,6 +344,12 @@ namespace Afjk.SceneSync.Rapier
                 return;
             }
 
+            if (raw.Contains("\"kind\":\"scene-physics-hash\""))
+            {
+                ApplyScenePhysicsHash(raw, message.FromPeerId);
+                return;
+            }
+
             if (raw.Contains("\"kind\":\"scene-physics\""))
             {
                 scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics"));
@@ -360,6 +372,64 @@ namespace Afjk.SceneSync.Rapier
             if (string.IsNullOrWhiteSpace(id)) return;
             if (ApplyObjectPhysicsJson(id, raw))
                 dirty = true;
+        }
+
+        private void ApplyScenePhysicsHash(string raw, string fromPeerId)
+        {
+            var remoteHash = NormalizeHash(SceneSyncWireJson.ExtractString(raw, "hash"));
+            var hashVersion = SceneSyncWireJson.ExtractString(raw, "hashVersion");
+            var profile = SceneSyncWireJson.ExtractString(raw, "profile");
+            var rapierCoreVersion = SceneSyncWireJson.ExtractString(raw, "rapierCoreVersion");
+            var remoteTick = ReadInt(raw, "tick", -1);
+            var timestep = ReadFloat(raw, "timestep", scenePhysics.Timestep);
+            var activeTime = ReadFloat(raw, "activeTime", float.NaN);
+            var worldAge = ReadFloat(raw, "worldAge", float.NaN);
+            var reportedWorldEpochTime = ReadFloat(raw, "worldEpochTime", float.NaN);
+            var sceneClockRevision = ReadInt(raw, "sceneClockRevision", int.MinValue);
+
+            var localHash = NormalizeHash(ComputeStateHashHex());
+            var tickMatched = remoteTick == tick;
+            var hashVersionMatched = string.Equals(hashVersion, CanonicalStateHashVersion, StringComparison.Ordinal);
+            var matched = tickMatched
+                && hashVersionMatched
+                && !string.IsNullOrWhiteSpace(remoteHash)
+                && !string.IsNullOrWhiteSpace(localHash)
+                && string.Equals(remoteHash, localHash, StringComparison.Ordinal);
+
+            lastRemoteHashReport = new SceneSyncRapierHashReport(
+                remoteHash,
+                localHash,
+                hashVersion,
+                profile,
+                rapierCoreVersion,
+                remoteTick,
+                tick,
+                timestep,
+                activeTime,
+                worldAge,
+                reportedWorldEpochTime,
+                sceneClockRevision,
+                fromPeerId,
+                tickMatched,
+                hashVersionMatched,
+                matched);
+            hasRemoteHashReport = true;
+            HashReportReceived?.Invoke(lastRemoteHashReport);
+
+            if (logStateHash && !matched)
+            {
+                Debug.LogWarning(
+                    "[SceneSyncRapier] scene-physics-hash mismatch remoteTick="
+                    + remoteTick.ToString(CultureInfo.InvariantCulture)
+                    + " localTick="
+                    + tick.ToString(CultureInfo.InvariantCulture)
+                    + " remoteHash="
+                    + (remoteHash ?? "null")
+                    + " localHash="
+                    + (localHash ?? "null")
+                    + " hashVersion="
+                    + (hashVersion ?? "null"));
+            }
         }
 
         private void ApplySceneClock(string raw)
@@ -744,6 +814,12 @@ namespace Afjk.SceneSync.Rapier
             return value.HasValue && IsFinite(value.Value) ? value.Value : fallback;
         }
 
+        private static int ReadInt(string json, string field, int fallback)
+        {
+            var value = ReadDouble(json, field, double.NaN);
+            return IsFinite(value) ? Mathf.FloorToInt((float)value) : fallback;
+        }
+
         private static double ReadDouble(string json, string field, double fallback)
         {
             var raw = SceneSyncWireJson.ExtractTopLevelRawValue(json, field);
@@ -765,6 +841,13 @@ namespace Afjk.SceneSync.Rapier
         {
             var value = SceneSyncWireJson.ExtractBoolean(json, field);
             return value ?? fallback;
+        }
+
+        private static string NormalizeHash(string value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? null
+                : value.Trim().ToLowerInvariant();
         }
 
         private static bool IsFinite(float value)

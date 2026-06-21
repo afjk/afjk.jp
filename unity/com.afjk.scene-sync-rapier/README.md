@@ -58,3 +58,11 @@ steps. Events include sorted `objectIdA` / `objectIdB`, `pairKey`, physics
 requiring `logStateHash`; enable `logStateHash` only when console output is
 useful. Compare this value with the browser runtime's `world.canonicalStateHash()`
 only when both hosts use the same Scene Sync Rapier parity profile.
+
+During Shared Playback, the Web clock controller periodically broadcasts
+`scene-physics-hash` messages with `SceneSyncCanonicalPhysicsHashV1`, Rapier core
+version, physics profile, fixed `tick`, and canonical hash. The bridge stores
+the latest report in `LastRemoteHashReport`, exposes `LastRemoteHashMatched`,
+and raises `HashReportReceived` after comparing the remote hash with the local
+world at the same tick. This is diagnostic only; it does not resync or stream
+body transforms.

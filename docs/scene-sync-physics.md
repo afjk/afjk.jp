@@ -204,6 +204,36 @@ state.
   worlds. Do not use for network divergence detection; prefer
   `networkStateHash()` instead.
 
+### Scene Physics Hash Messages
+
+During Shared Playback, only the current Web Scene Clock controller broadcasts
+low-frequency `scene-physics-hash` messages. The browser sends them after fixed
+physics updates at tick `0` and every 30 ticks thereafter:
+
+```json
+{
+  "kind": "scene-physics-hash",
+  "source": "physics",
+  "phase": "postPhysics",
+  "profile": "SceneSyncRapierParity-0.30",
+  "hashVersion": "SceneSyncCanonicalPhysicsHashV1",
+  "rapierCoreVersion": "0.30.0",
+  "tick": 120,
+  "hash": "0123456789abcdef",
+  "timestep": 0.016666666666666666,
+  "activeTime": 2,
+  "worldAge": 2,
+  "worldEpochTime": 0,
+  "sceneClockRevision": 8,
+  "controller": { "id": "peer-id", "nickname": "Host" },
+  "sentAt": 1782010000000
+}
+```
+
+Followers should compare the hash only when the fixed tick and hash version
+match their local world. A mismatch is a divergence signal for diagnostics and
+future snapshot resync; it is not a request to stream or apply body transforms.
+
 ## Shared Playback
 
 Shared Playback uses:
@@ -304,6 +334,11 @@ keeps `LastStateHash` updated after rebuilds, resets, and physics steps without
 requiring log output. Use it as the Unity-side value to compare with the Web
 runtime's `world.canonicalStateHash()` when both hosts are on the same
 `SceneSyncRapierParity-0.30` profile.
+
+The bridge also consumes Web `scene-physics-hash` messages. The latest report is
+available through `LastRemoteHashReport`, `LastRemoteHashMatched`, and the
+`HashReportReceived` event. Reports compare tick, hash version, and canonical
+hash, but they intentionally do not perform resync yet.
 
 ## Supported Shapes
 
