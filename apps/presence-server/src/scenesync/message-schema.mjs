@@ -14,6 +14,7 @@ const KNOWN_KINDS = new Set([
   'scene-unlock',
   'scene-physics-hash',
   'scene-physics-input',
+  'scene-physics-input-log-request',
   'scene-physics-snapshot',
   'scene-physics-snapshot-request',
   'scene-asset-request',

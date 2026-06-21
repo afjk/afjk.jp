@@ -34,9 +34,17 @@ const SCENE_GRAPH_MAX_SIZE = 64 * 1024; // 64 KB for graph payloads
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 const roomObjectIds = new Map(); // roomId -> Set<objectId>
+const roomPhysicsTimelines = new Map(); // roomId -> Map<timelineId, PhysicsTimeline>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
 const clientsByIpHash = new Map(); // ipHash -> Set<clientId>
+
+const SCENE_SYNC_PHYSICS_TIMELINE_VERSION = 'SceneSyncPhysicsTimelineV1';
+const DEFAULT_SCENE_PHYSICS_TIMELINE_ID = 'default';
+const MAX_SCENE_PHYSICS_TIMELINE_EVENTS = Math.max(
+  1,
+  Math.floor(Number(process.env.SCENE_SYNC_PHYSICS_TIMELINE_EVENT_LIMIT) || 1024),
+);
 
 // ── Blob Store ────────────────────────────────────────────────────────────────
 const BLOB_MAX_SIZE = sceneSyncConfig.maxUploadBytes;
@@ -462,6 +470,7 @@ function removeClient(client) {
   if (!room.size) {
     rooms.delete(client.roomId);
     roomObjectIds.delete(client.roomId);
+    roomPhysicsTimelines.delete(client.roomId);
   }
 
   if (client.ipHash) {
@@ -512,37 +521,220 @@ function safeSend(conn, message) {
   }
 }
 
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function normalizePhysicsTimelineId(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
+}
+
+function cloneRoomPhysicsTimelines(roomId) {
+  const source = roomPhysicsTimelines.get(roomId);
+  const draft = new Map();
+  if (!source) return draft;
+  for (const [timelineId, timeline] of source.entries()) {
+    draft.set(timelineId, {
+      timelineId: timeline.timelineId,
+      timelineRevision: timeline.timelineRevision,
+      timelineForkTick: timeline.timelineForkTick,
+      lastEventRevision: timeline.lastEventRevision,
+      events: cloneJson(timeline.events) || [],
+    });
+  }
+  return draft;
+}
+
+function commitRoomPhysicsTimelines(roomId, timelines) {
+  if (!timelines || timelines.size === 0) {
+    roomPhysicsTimelines.delete(roomId);
+    return;
+  }
+  roomPhysicsTimelines.set(roomId, timelines);
+}
+
+function getPhysicsTimeline(timelines, timelineId) {
+  const normalizedTimelineId = normalizePhysicsTimelineId(timelineId);
+  const existing = timelines.get(normalizedTimelineId);
+  if (existing) return existing;
+
+  const timeline = {
+    timelineId: normalizedTimelineId,
+    timelineRevision: 0,
+    timelineForkTick: 0,
+    lastEventRevision: 0,
+    events: [],
+  };
+  timelines.set(normalizedTimelineId, timeline);
+  return timeline;
+}
+
+function resetRoomPhysicsTimelines(timelines) {
+  timelines.clear();
+}
+
+function getLatestPhysicsEventTick(timeline) {
+  return timeline.events.reduce((max, event) => Math.max(max, Number(event.applyTick) || 0), 0);
+}
+
+function branchPhysicsTimeline(timeline, branchTick) {
+  const normalizedBranchTick = Math.max(0, Math.floor(Number(branchTick) || 0));
+  timeline.timelineRevision += 1;
+  timeline.timelineForkTick = normalizedBranchTick;
+  timeline.events = timeline.events.filter(event => Number(event.applyTick) <= normalizedBranchTick);
+}
+
+function findPhysicsTimelineEventByInputId(timeline, inputId) {
+  if (typeof inputId !== 'string' || !inputId.trim()) return null;
+  return timeline.events.find(event => event.inputId === inputId.trim()) || null;
+}
+
+function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
+  if (payload?.kind === 'scene-batch') {
+    const nextPayload = { ...payload };
+    for (const key of ['ops', 'actions']) {
+      if (!Array.isArray(payload[key])) continue;
+      const operations = [];
+      for (const operation of payload[key]) {
+        const result = canonicalizeScenePhysicsPayloadInTimelines(timelines, operation);
+        if (!result.ok) return result;
+        operations.push(result.payload);
+      }
+      nextPayload[key] = operations;
+    }
+    return { ok: true, payload: nextPayload };
+  }
+
+  if (payload?.kind !== 'scene-physics-input') {
+    if (payload?.kind === 'scene-state') {
+      resetRoomPhysicsTimelines(timelines);
+    }
+    if (payload?.kind === 'scene-physics' && payload?.physics?.enabled !== true) {
+      resetRoomPhysicsTimelines(timelines);
+    }
+    return { ok: true, payload };
+  }
+
+  const timelineId = normalizePhysicsTimelineId(payload.timelineId);
+  const timeline = getPhysicsTimeline(timelines, timelineId);
+  const applyTick = Math.max(0, Math.floor(Number(payload.applyTick) || 0));
+  const requestedBranchTick = Math.max(0, Math.floor(Number(payload.branchTick ?? applyTick) || 0));
+  const branchTick = Math.min(requestedBranchTick, applyTick);
+  const payloadTimelineRevision = Math.max(0, Math.floor(Number(payload.timelineRevision) || 0));
+  const latestTick = getLatestPhysicsEventTick(timeline);
+  const existingEvent = findPhysicsTimelineEventByInputId(timeline, payload.inputId);
+  if (existingEvent) {
+    return { ok: true, payload: cloneJson(existingEvent), duplicate: true };
+  }
+
+  if (payloadTimelineRevision < timeline.timelineRevision) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'stale_physics_timeline',
+      message: '古い物理タイムラインの入力は破棄されました。',
+    };
+  }
+
+  const shouldBranch = payloadTimelineRevision > timeline.timelineRevision || applyTick < latestTick;
+
+  if (shouldBranch) {
+    branchPhysicsTimeline(timeline, branchTick);
+  }
+
+  timeline.lastEventRevision += 1;
+  const eventRevision = timeline.lastEventRevision;
+  const inputId = typeof payload.inputId === 'string' && payload.inputId.trim()
+    ? payload.inputId.trim()
+    : `${timelineId}:${timeline.timelineRevision}:${eventRevision}`;
+  const event = {
+    ...payload,
+    inputId,
+    timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+    timelineId,
+    timelineRevision: timeline.timelineRevision,
+    timelineForkTick: timeline.timelineForkTick,
+    branchTick,
+    eventRevision,
+  };
+
+  timeline.events.push(cloneJson(event));
+  while (timeline.events.length > MAX_SCENE_PHYSICS_TIMELINE_EVENTS) {
+    timeline.events.shift();
+  }
+
+  return { ok: true, payload: event };
+}
+
+function canonicalizeScenePhysicsPayload(roomId, payload) {
+  const draft = cloneRoomPhysicsTimelines(roomId);
+  const result = canonicalizeScenePhysicsPayloadInTimelines(draft, payload);
+  if (result.ok) {
+    commitRoomPhysicsTimelines(roomId, draft);
+  }
+  return result;
+}
+
+function payloadIncludesScenePhysicsInput(payload) {
+  if (payload?.kind === 'scene-physics-input') return true;
+  if (payload?.kind !== 'scene-batch') return false;
+  const operations = [
+    ...(Array.isArray(payload.ops) ? payload.ops : []),
+    ...(Array.isArray(payload.actions) ? payload.actions : []),
+  ];
+  return operations.some(payloadIncludesScenePhysicsInput);
+}
+
+function sendRoomPhysicsTimeline(client, timelineId = null) {
+  const roomTimelines = roomPhysicsTimelines.get(client.roomId);
+  if (!roomTimelines) return;
+  const sender = {
+    id: 'server',
+    nickname: 'SceneSync',
+    device: 'server',
+  };
+
+  const normalizedTimelineId = timelineId ? normalizePhysicsTimelineId(timelineId) : null;
+  for (const timeline of roomTimelines.values()) {
+    if (normalizedTimelineId && timeline.timelineId !== normalizedTimelineId) continue;
+    for (const event of timeline.events) {
+      safeSend(client.conn, {
+        type: 'handoff',
+        from: sender,
+        payload: cloneJson(event),
+      });
+    }
+  }
+}
+
+function createHandoffMessage(sender, payload) {
+  return {
+    type: 'handoff',
+    from: {
+      id: sender.id,
+      nickname: sender.nickname,
+      device: sender.device
+    },
+    payload: payload || {}
+  };
+}
+
 function deliverHandoff(sender, msg) {
   const room = rooms.get(sender.roomId);
   if (!room) return;
   const target = room.get(msg.targetId);
   if (!target) return;
-  const payload = {
-    type: 'handoff',
-    from: {
-      id: sender.id,
-      nickname: sender.nickname,
-      device: sender.device
-    },
-    payload: msg.payload || {}
-  };
-  safeSend(target.conn, payload);
+  safeSend(target.conn, createHandoffMessage(sender, msg.payload));
 }
 
-function broadcastHandoff(sender, msg) {
+function broadcastHandoff(sender, msg, { includeSender = false } = {}) {
   const room = rooms.get(sender.roomId);
   if (!room) return;
-  const payload = {
-    type: 'handoff',
-    from: {
-      id: sender.id,
-      nickname: sender.nickname,
-      device: sender.device
-    },
-    payload: msg.payload || {}
-  };
+  const payload = createHandoffMessage(sender, msg.payload);
   room.forEach(client => {
-    if (client.id !== sender.id) {
+    if (includeSender || client.id !== sender.id) {
       safeSend(client.conn, payload);
     }
   });
@@ -667,9 +859,10 @@ function simulateObjectLimitUpdate(objectIds, payload, roomId, actorId) {
   }
 
   if (payload.kind === 'scene-batch') {
-    const operations = Array.isArray(payload.ops)
-      ? payload.ops
-      : (Array.isArray(payload.actions) ? payload.actions : []);
+    const operations = [
+      ...(Array.isArray(payload.ops) ? payload.ops : []),
+      ...(Array.isArray(payload.actions) ? payload.actions : []),
+    ];
     for (const op of operations) {
       const result = simulateObjectLimitUpdate(nextObjectIds, op, roomId, actorId);
       if (!result.ok) return result;
@@ -864,6 +1057,13 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     });
   }
 
+  if (nextPayload?.kind === 'scene-physics-input-log-request') {
+    return {
+      status: 400,
+      body: { error: 'scene-physics-input-log-request requires a websocket client' },
+    };
+  }
+
   if (nextPayload?.type && SCENE_GRAPH_MESSAGE_TYPES.has(nextPayload.type)) {
     const validation = validateSceneGraphMessage(nextPayload);
     if (!validation.ok) {
@@ -922,6 +1122,20 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
       status: objectLimit.status,
       body: { error: objectLimit.error, message: objectLimit.message },
     };
+  }
+
+  if (peers.length > 0) {
+  const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, nextPayload);
+    if (!physicsTimelinePayload.ok) {
+      return {
+        status: physicsTimelinePayload.status || 409,
+        body: {
+          error: physicsTimelinePayload.error || 'physics timeline rejected',
+          message: physicsTimelinePayload.message,
+        },
+      };
+    }
+    nextPayload = physicsTimelinePayload.payload;
   }
 
   const message = {
@@ -1720,6 +1934,11 @@ function createPresenceServer() {
                 return;
               }
 
+              if (data.payload.kind === 'scene-physics-input-log-request') {
+                sendRoomPhysicsTimeline(client, data.payload.timelineId);
+                return;
+              }
+
               const objectLimit = applySceneObjectLimits(roomId, data.payload, actorId);
               if (!objectLimit.ok) {
                 safeSend(conn, {
@@ -1729,9 +1948,22 @@ function createPresenceServer() {
                 });
                 return;
               }
+
+              const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, data.payload);
+              if (!physicsTimelinePayload.ok) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: physicsTimelinePayload.error || 'physics_timeline_rejected',
+                  message: physicsTimelinePayload.message,
+                });
+                return;
+              }
+              data.payload = physicsTimelinePayload.payload;
             }
 
-            broadcastHandoff(client, data);
+            broadcastHandoff(client, data, {
+              includeSender: payloadIncludesScenePhysicsInput(data.payload),
+            });
           }
           break;
         case 'ping':
@@ -1818,6 +2050,7 @@ function createPresenceServer() {
     if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
     rooms.clear();
     roomObjectIds.clear();
+    roomPhysicsTimelines.clear();
     clientsByIpHash.clear();
     pendingSceneRequests.forEach(({ timer, resolve }) => {
       clearTimeout(timer);

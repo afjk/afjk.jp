@@ -377,6 +377,9 @@ namespace Afjk.SceneSync.Rapier
             if (input.TimelineRevision > timelineRevision)
                 AdvancePhysicsTimeline(input.TimelineRevision, input.BranchTick);
 
+            if (UpdateExistingBodyStateInput(input))
+                return true;
+
             if (HasBodyStateInput(input.InputId))
                 return false;
 
@@ -394,6 +397,44 @@ namespace Afjk.SceneSync.Rapier
             }
 
             AddPendingBodyStateInput(input);
+            return true;
+        }
+
+        private bool UpdateExistingBodyStateInput(BodyStateInput input)
+        {
+            var wasApplied = appliedBodyStateInputIds.Contains(input.InputId);
+            var historyIndex = bodyStateInputHistory.FindIndex(item => string.Equals(item.InputId, input.InputId, StringComparison.Ordinal));
+            var pendingIndex = pendingBodyStateInputs.FindIndex(item => string.Equals(item.InputId, input.InputId, StringComparison.Ordinal));
+            if (!wasApplied && historyIndex < 0 && pendingIndex < 0)
+                return false;
+
+            var previous = historyIndex >= 0
+                ? bodyStateInputHistory[historyIndex]
+                : (pendingIndex >= 0 ? pendingBodyStateInputs[pendingIndex] : default);
+            var changed = historyIndex < 0 && pendingIndex < 0 || !previous.Equals(input);
+
+            if (historyIndex >= 0)
+            {
+                bodyStateInputHistory[historyIndex] = input;
+                bodyStateInputHistory.Sort(CompareBodyStateInputs);
+            }
+            else
+            {
+                AddBodyStateInputHistory(input);
+            }
+
+            if (pendingIndex >= 0)
+            {
+                pendingBodyStateInputs[pendingIndex] = input;
+                pendingBodyStateInputs.Sort(CompareBodyStateInputs);
+            }
+
+            if (input.EventRevision > lastPhysicsEventRevision)
+                lastPhysicsEventRevision = input.EventRevision;
+
+            if (changed && world != null && (wasApplied || input.ApplyTick <= tick))
+                RewindBodyStateInputsToInitialSnapshot();
+
             return true;
         }
 
@@ -823,6 +864,7 @@ namespace Afjk.SceneSync.Rapier
                 }
 
                 dirty = true;
+                RequestPhysicsInputLog();
                 return;
             }
 
@@ -1225,6 +1267,16 @@ namespace Afjk.SceneSync.Rapier
                 ",\"localHash\":\"" + SceneSyncWireJson.JsonEscape(report.LocalHash) + "\"" +
                 ",\"sceneClockRevision\":" + report.SceneClockRevision.ToString(CultureInfo.InvariantCulture) +
                 "}";
+            SceneSyncMessageBus.PublishOutgoing(payload, null, this);
+        }
+
+        private void RequestPhysicsInputLog()
+        {
+            var payload =
+                "{\"kind\":\"scene-physics-input-log-request\"" +
+                ",\"timelineVersion\":\"" + TimelineVersion + "\"" +
+                ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(timelineId) + "\"" +
+                ",\"sentAt\":" + CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) + "}";
             SceneSyncMessageBus.PublishOutgoing(payload, null, this);
         }
 
