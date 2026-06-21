@@ -922,8 +922,6 @@ namespace Afjk.SceneSync.Rapier
             var bodyStates = new List<SnapshotBodyState>();
             if (canApply)
             {
-                if (payloadTimelineRevision > timelineRevision)
-                    AdvancePhysicsTimeline(payloadTimelineRevision, payload.timelineForkTick);
                 foreach (var body in payload.bodies)
                 {
                     if (body == null || !IsDynamicSnapshotBody(body))
@@ -944,6 +942,9 @@ namespace Afjk.SceneSync.Rapier
 
                 if (missingBodyCount == 0)
                 {
+                    if (payloadTimelineRevision > timelineRevision)
+                        AdvancePhysicsTimeline(payloadTimelineRevision, payload.timelineForkTick);
+
                     foreach (var state in bodyStates)
                     {
                         var ok = world.SetTransform(state.Body, new RapierTransform(state.Position, state.Rotation));
