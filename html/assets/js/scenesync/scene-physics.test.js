@@ -7,6 +7,7 @@ import {
   isScenePhysicsZeroTime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
+  SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
   SCENE_SYNC_RAPIER_PROFILE,
   shouldResetPhysicsForSceneClockPayload,
 } from './scene-physics.js';
@@ -208,6 +209,49 @@ test('scene physics runtime reports canonical hash metadata for wire diagnostics
   assert.equal(result.rapierCoreVersion, RAPIER_CORE_VERSION);
   assert.match(result.hash, /^[0-9a-f]{16}$/);
   assert.equal(result.stateHash, result.hash);
+});
+
+test('scene physics runtime creates canonical snapshot reports on demand', () => {
+  const object = makeObject({
+    objectId: 'snapshot-box',
+    position: [0, 0.5, 0],
+    physics: {
+      enabled: true,
+      shape: 'box',
+      halfExtents: [0.5, 0.5, 0.5],
+      velocity: [0.25, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    worldOptions: {
+      gravity: -9.81,
+      ground: null,
+      timestep: 1 / 60,
+    },
+  });
+  const runtime = makeRuntime({ scenePhysics, entries: [makeEntry(object)] });
+
+  const result = runtime.update({ t: 0, mode: 'shared-playback', active: true });
+  const snapshot = runtime.createSnapshotReport({ t: 0, mode: 'shared-playback', active: true });
+
+  assert.equal(snapshot.kind, 'scene-physics-snapshot');
+  assert.equal(snapshot.snapshotVersion, SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION);
+  assert.equal(snapshot.profile, SCENE_SYNC_RAPIER_PROFILE);
+  assert.equal(snapshot.hashVersion, CANONICAL_PHYSICS_HASH_VERSION);
+  assert.equal(snapshot.rapierCoreVersion, RAPIER_CORE_VERSION);
+  assert.equal(snapshot.tick, result.tick);
+  assert.equal(snapshot.hash, result.hash);
+  assert.equal(snapshot.bodyCount, 1);
+  assert.deepEqual(snapshot.bodies[0], {
+    id: 'snapshot-box',
+    type: 'dynamic',
+    position: [0, 0.5, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0.25, 0, 0],
+    angularVelocity: [0, 0, 0],
+  });
 });
 
 test('scene physics runtime keeps existing body motion when a new body rebases the world', () => {

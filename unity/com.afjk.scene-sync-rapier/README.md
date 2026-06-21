@@ -66,3 +66,10 @@ the latest report in `LastRemoteHashReport`, exposes `LastRemoteHashMatched`,
 and raises `HashReportReceived` after comparing the remote hash with the local
 world at the same tick. This is diagnostic only; it does not resync or stream
 body transforms.
+
+The bridge also accepts `scene-physics-snapshot` messages using
+`SceneSyncPhysicsSnapshotV1`. When `autoApplyRemoteSnapshots` is enabled and all
+dynamic body ids exist locally, the bridge applies the remote body pose, linear
+velocity, angular velocity, fixed tick, and world epoch. Snapshot results are
+available through `LastRemoteSnapshotReport`, `LastRemoteSnapshotApplied`, and
+`SnapshotReceived`.
