@@ -6416,7 +6416,8 @@ function handleHandoff(data) {
     payload.kind === 'scene-delta' ||
     payload.kind === 'scene-add' ||
     payload.kind === 'scene-remove' ||
-    payload.kind === 'scene-physics'
+    payload.kind === 'scene-physics' ||
+    payload.kind === 'scene-physics-input'
   ) {
     console.debug('[handoff] scene mutation received', {
       kind: payload.kind,
@@ -6738,6 +6739,12 @@ function handleHandoff(data) {
       });
       notifySceneStateChanged('scene-physics-handoff');
       publishSharedObjectClockBaselines('scene-physics-baseline');
+      break;
+    }
+    case 'scene-physics-input': {
+      if (isOwn) break;
+      scenePhysicsRuntime.queueInput(payload);
+      notifySceneStateChanged('scene-physics-input');
       break;
     }
     case 'scene-physics-snapshot-request': {

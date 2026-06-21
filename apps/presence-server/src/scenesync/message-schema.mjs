@@ -13,6 +13,7 @@ const KNOWN_KINDS = new Set([
   'scene-lock',
   'scene-unlock',
   'scene-physics-hash',
+  'scene-physics-input',
   'scene-physics-snapshot',
   'scene-physics-snapshot-request',
   'scene-asset-request',
@@ -150,6 +151,34 @@ function validatePhysicsSnapshotBody(body, maxStringLength) {
   if (body.angularVelocity !== undefined && !hasFiniteNumberArray(body.angularVelocity, 3)) {
     return { ok: false, reason: 'snapshot body.angularVelocity must be finite [x,y,z]' };
   }
+  return { ok: true };
+}
+
+function validateScenePhysicsInputPayload(payload, maxStringLength) {
+  if (payload.inputType !== 'set-body-state') {
+    return { ok: false, reason: 'scene-physics-input.inputType is invalid' };
+  }
+  if (!isReasonableString(payload.objectId, maxStringLength)) {
+    return { ok: false, reason: 'scene-physics-input.objectId must be a reasonable string' };
+  }
+  const inputIdResult = validateOptionalReasonableString(payload, 'inputId', maxStringLength);
+  if (!inputIdResult.ok) return inputIdResult;
+  if (!Number.isInteger(payload.applyTick) || payload.applyTick < 0) {
+    return { ok: false, reason: 'scene-physics-input.applyTick must be a non-negative integer' };
+  }
+  if (!hasFiniteNumberArray(payload.position, 3)) {
+    return { ok: false, reason: 'scene-physics-input.position must be finite [x,y,z]' };
+  }
+  if (!hasFiniteNumberArray(payload.rotation, 4)) {
+    return { ok: false, reason: 'scene-physics-input.rotation must be finite quaternion [x,y,z,w]' };
+  }
+  for (const key of ['velocity', 'linearVelocity', 'angularVelocity', 'angvel']) {
+    if (payload[key] !== undefined && !hasFiniteNumberArray(payload[key], 3)) {
+      return { ok: false, reason: `scene-physics-input.${key} must be finite [x,y,z]` };
+    }
+  }
+  const sentAtResult = validateOptionalFiniteNumber(payload, 'sentAt');
+  if (!sentAtResult.ok) return sentAtResult;
   return { ok: true };
 }
 
@@ -383,6 +412,10 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-physics') {
     return validateScenePhysicsPayload(payload.physics);
+  }
+
+  if (payload.kind === 'scene-physics-input') {
+    return validateScenePhysicsInputPayload(payload, maxStringLength);
   }
 
   if (

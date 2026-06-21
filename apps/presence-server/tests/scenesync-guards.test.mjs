@@ -260,6 +260,19 @@ describe('Scene Sync guard helpers', () => {
     }).ok, true);
 
     assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-input',
+      inputType: 'set-body-state',
+      inputId: 'grab-1',
+      objectId: 'live-box',
+      applyTick: 90,
+      position: [1, 2, 3],
+      rotation: [0, 0, 0, 1],
+      velocity: [4, 0, 0],
+      angularVelocity: [0, 1, 0],
+      sentAt: Date.now(),
+    }).ok, true);
+
+    assert.equal(validateSceneSyncPayload({
       kind: 'scene-physics-snapshot-request',
       source: 'physics',
       phase: 'postPhysics',
@@ -309,6 +322,18 @@ describe('Scene Sync guard helpers', () => {
         id: 'live-box',
         position: [0, Infinity, 0],
       }],
+    });
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects invalid scene-physics input', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-physics-input',
+      inputType: 'set-body-state',
+      objectId: 'live-box',
+      applyTick: 90,
+      position: [1, Infinity, 3],
+      rotation: [0, 0, 0, 1],
     });
     assert.equal(result.ok, false);
   });

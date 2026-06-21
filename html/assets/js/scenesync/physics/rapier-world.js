@@ -720,6 +720,29 @@ export function createWorld(options = {}) {
     return exportRigidBody(id, record, getRigidBodyByHandle(record.handle));
   }
 
+  function setBodyState(id, state = {}) {
+    const record = bodyRecords.get(id);
+    if (!record || record.static) return false;
+
+    const body = getRigidBodyByHandle(record.handle);
+    if (!body) return false;
+
+    const current = exportRigidBody(id, record, body);
+    const position = readVec3(state.position, current?.position || [0, 0, 0]);
+    const rotation = readQuat(state.rotation, current?.rotation || [0, 0, 0, 1]);
+    const velocity = readVec3(state.velocity || state.linearVelocity, current?.velocity || [0, 0, 0]);
+    const angularVelocity = readVec3(
+      state.angularVelocity || state.angvel,
+      current?.angularVelocity || [0, 0, 0],
+    );
+
+    body.setTranslation(vectorObject(position), true);
+    body.setRotation(quaternionObject(rotation), true);
+    body.setLinvel(vectorObject(velocity), true);
+    body.setAngvel(vectorObject(angularVelocity), true);
+    return true;
+  }
+
   function getBodies() {
     return Array.from(bodyRecords.keys())
       .sort((left, right) => left.localeCompare(right))
@@ -738,7 +761,7 @@ export function createWorld(options = {}) {
     return tick;
   }
 
-  function stepTo(targetTick) {
+  function stepTo(targetTick, options = {}) {
     if (!Number.isInteger(targetTick) || targetTick < 0) {
       return { tick, reached: false, reason: 'invalid-target' };
     }
@@ -747,20 +770,15 @@ export function createWorld(options = {}) {
       return { tick, reached: false, reason: 'restore-required' };
     }
 
-    if (targetTick - tick > worldOptions.maxStepsPerUpdate) {
-      return {
-        tick,
-        reached: false,
-        steps: 0,
-        limited: true,
-        reason: 'step-limit',
-      };
-    }
-
+    const beforeStep = typeof options.beforeStep === 'function' ? options.beforeStep : null;
+    beforeStep?.(tick);
+    const stepLimit = Math.max(1, worldOptions.maxStepsPerUpdate);
+    const stepTarget = Math.min(targetTick, tick + stepLimit);
     let steps = 0;
-    while (tick < targetTick) {
+    while (tick < stepTarget) {
       step();
       steps += 1;
+      if (tick < stepTarget) beforeStep?.(tick);
     }
 
     return {
@@ -768,6 +786,7 @@ export function createWorld(options = {}) {
       reached: tick === targetTick,
       steps,
       limited: tick !== targetTick,
+      reason: tick === targetTick ? undefined : 'step-limit',
     };
   }
 
@@ -1054,6 +1073,7 @@ export function createWorld(options = {}) {
     removeBody,
     getBody,
     getBodies,
+    setBodyState,
     step,
     stepTo,
     snapshot,
