@@ -22,6 +22,7 @@
     "test:e2e:scene-sync-physics-live-room": "node scripts/scenesync-physics-live-room-smoke.mjs",
     "test:e2e:scene-sync-unity-physics-presence": "node scripts/scenesync-unity-physics-presence-smoke.mjs",
     "test:e2e:scene-sync-rapier-playerui-sample": "node scripts/scenesync-rapier-playerui-sample.mjs --verify",
+    "test:e2e:scene-sync-rapier-playerui-browser": "node scripts/scenesync-rapier-playerui-sample.mjs --verify-playerui",
     "sample:scene-sync-rapier": "node scripts/scenesync-rapier-playerui-sample.mjs --unity"
   },
   "devDependencies": {

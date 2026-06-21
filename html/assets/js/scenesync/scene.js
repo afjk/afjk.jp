@@ -10736,6 +10736,10 @@ if (isDevUiEnabled()) {
         requestSceneClockControl();
         return getSceneClockStateForShell();
       },
+      reset: () => {
+        resetSceneClock();
+        return getSceneClockStateForShell();
+      },
       play: () => {
         playSceneClock();
         return getSceneClockStateForShell();
