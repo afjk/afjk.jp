@@ -110,6 +110,91 @@ namespace Afjk.SceneSync
             return json.Substring(objectStart, objectEnd - objectStart + 1);
         }
 
+        public static bool HasField(string json, string fieldName)
+        {
+            return FindFieldValueStart(json, fieldName) >= 0;
+        }
+
+        public static bool HasTopLevelField(string json, string fieldName)
+        {
+            return FindFieldValueStart(json, fieldName, topLevelOnly: true) >= 0;
+        }
+
+        public static string ExtractRawValue(string json, string fieldName)
+        {
+            var valueStart = FindFieldValueStart(json, fieldName);
+            return ExtractRawValueAt(json, valueStart);
+        }
+
+        public static string ExtractTopLevelRawValue(string json, string fieldName)
+        {
+            var valueStart = FindFieldValueStart(json, fieldName, topLevelOnly: true);
+            return ExtractRawValueAt(json, valueStart);
+        }
+
+        public static string ExtractTopLevelRawObject(string json, string fieldName)
+        {
+            var raw = ExtractTopLevelRawValue(json, fieldName);
+            return !string.IsNullOrWhiteSpace(raw) && raw.TrimStart().StartsWith("{", StringComparison.Ordinal)
+                ? raw
+                : null;
+        }
+
+        private static string ExtractRawValueAt(string json, int valueStart)
+        {
+            if (valueStart < 0) return null;
+
+            var ch = json[valueStart];
+            if (ch == '{')
+            {
+                var end = FindMatching(json, valueStart, '{', '}');
+                return end >= 0 ? json.Substring(valueStart, end - valueStart + 1) : null;
+            }
+
+            if (ch == '[')
+            {
+                var end = FindMatching(json, valueStart, '[', ']');
+                return end >= 0 ? json.Substring(valueStart, end - valueStart + 1) : null;
+            }
+
+            if (ch == '"')
+            {
+                var end = FindStringEnd(json, valueStart);
+                return end >= 0 ? json.Substring(valueStart, end - valueStart + 1) : null;
+            }
+
+            var i = valueStart;
+            var inString = false;
+            var escape = false;
+            while (i < json.Length)
+            {
+                ch = json[i];
+                if (escape)
+                {
+                    escape = false;
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    escape = true;
+                    i++;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    inString = !inString;
+                    i++;
+                    continue;
+                }
+                if (!inString && (ch == ',' || ch == '}'))
+                    break;
+                i++;
+            }
+
+            return json.Substring(valueStart, i - valueStart).Trim();
+        }
+
         public static List<KeyValuePair<string, string>> ExtractObjectMapEntries(string json, string fieldName)
         {
             var result = new List<KeyValuePair<string, string>>();
@@ -196,7 +281,8 @@ namespace Afjk.SceneSync
             string assetJson,
             string metadataJson,
             string origin = null,
-            string unityHierarchyPath = null)
+            string unityHierarchyPath = null,
+            string physicsJson = null)
         {
             var builder = new StringBuilder();
             builder.Append("\"").Append(JsonEscape(objectId)).Append("\":{");
@@ -227,6 +313,8 @@ namespace Afjk.SceneSync
                 builder.Append(",\"asset\":").Append(assetJson);
             if (!string.IsNullOrWhiteSpace(metadataJson))
                 builder.Append(",\"metadata\":").Append(metadataJson);
+            if (!string.IsNullOrWhiteSpace(physicsJson))
+                builder.Append(",\"physics\":").Append(physicsJson);
             builder.Append("}");
             return builder.ToString();
         }
@@ -269,6 +357,74 @@ namespace Afjk.SceneSync
         public static string GetAssetColor(string assetJson)
         {
             return ExtractString(assetJson, "color");
+        }
+
+        private static int FindFieldValueStart(string json, string fieldName, bool topLevelOnly = false)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(fieldName)) return -1;
+
+            var depth = 0;
+            var inString = false;
+            var escape = false;
+
+            for (var i = 0; i < json.Length; i++)
+            {
+                var ch = json[i];
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        escape = true;
+                    }
+                    else if (ch == '"')
+                    {
+                        inString = false;
+                    }
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    var keyStart = i;
+                    var keyEnd = FindStringEnd(json, keyStart);
+                    if (keyEnd < 0) return -1;
+
+                    if (!topLevelOnly || depth == 1)
+                    {
+                        var key = UnescapeJsonString(json.Substring(keyStart + 1, keyEnd - keyStart - 1));
+                        if (string.Equals(key, fieldName, StringComparison.Ordinal))
+                        {
+                            var colon = keyEnd + 1;
+                            SkipWhitespace(json, ref colon);
+                            if (colon >= json.Length || json[colon] != ':')
+                            {
+                                i = keyEnd;
+                                continue;
+                            }
+
+                            var valueStart = colon + 1;
+                            SkipWhitespace(json, ref valueStart);
+                            return valueStart < json.Length ? valueStart : -1;
+                        }
+                    }
+
+                    i = keyEnd;
+                    continue;
+                }
+
+                if (ch == '{' || ch == '[')
+                    depth++;
+                else if (ch == '}' || ch == ']')
+                    depth = Math.Max(0, depth - 1);
+            }
+
+            return -1;
         }
 
         private static int FindMatching(string text, int start, char open, char close)

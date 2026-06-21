@@ -253,6 +253,36 @@ Editor Shell remains shared editing, not shared playback.
 XR does not change physics time. Entering or exiting XR must not change Clock
 Mode and must not reset ObjectAge.
 
+## Unity Rapier Bridge
+
+Unity support is implemented as an optional downstream package:
+
+```text
+unity/com.afjk.scene-sync-rapier
+```
+
+`com.afjk.scene-sync` stays free of a hard Rapier dependency. The base package
+only exposes incoming raw scene messages and preserves scene/object `physics`
+JSON through `SceneSyncPhysicsMetadata`, so Unity can round-trip `scene-state`
+without dropping physics fields. `com.afjk.scene-sync-rapier` depends on both
+`com.afjk.scene-sync` and `com.afjk.rapier` and maps those preserved physics
+fields into a Rapier world.
+
+While `com.afjk.rapier` is not yet published to `upm.afjk.jp`, sample projects
+should add it directly by Git URL:
+
+```json
+{
+  "dependencies": {
+    "com.afjk.rapier": "https://github.com/afjk/rapier-unity.git?path=Packages/com.afjk.rapier#v0.3.0"
+  }
+}
+```
+
+The Unity bridge uses Scene Sync wire coordinates as the canonical physics
+basis and converts poses only when applying them back to Unity `Transform`s.
+This keeps Web/Unity parity hashes meaningful within the same physics profile.
+
 ## Supported Shapes
 
 The current Scene Sync UI maps to Rapier sphere and cuboid colliders:

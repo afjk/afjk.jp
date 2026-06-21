@@ -982,6 +982,7 @@ namespace Afjk.SceneSync
         private void DispatchSceneMessage(string raw, string fromId = null)
         {
             if (string.IsNullOrEmpty(raw)) return;
+            SceneSyncMessageBus.PublishReceived(raw, fromId, this);
 
             if (raw.Contains("\"type\":\"scene-graph-set\""))
             {
@@ -1009,6 +1010,10 @@ namespace Afjk.SceneSync
             else if (raw.Contains("\"kind\":\"scene-env\""))
             {
                 HandleSceneEnv(raw);
+            }
+            else if (raw.Contains("\"kind\":\"scene-physics\""))
+            {
+                HandleScenePhysics(raw);
             }
             else if (raw.Contains("\"kind\":\"scene-batch\""))
             {
@@ -1313,6 +1318,8 @@ namespace Afjk.SceneSync
             _sceneReceived = true;
             Debug.Log("[SceneSync] Received scene-state");
 
+            ApplyScenePhysicsMetadata(raw);
+
             var envId = SceneSyncWireJson.ExtractString(raw, "envId");
             if (!string.IsNullOrWhiteSpace(envId))
                 _envId = envId;
@@ -1464,6 +1471,51 @@ namespace Afjk.SceneSync
             Debug.Log("[SceneSync] scene-env received: envId=" + envId);
         }
 
+        private void HandleScenePhysics(string raw)
+        {
+            ApplyScenePhysicsMetadata(raw);
+        }
+
+        private void ApplyScenePhysicsMetadata(string raw)
+        {
+            if (!SceneSyncWireJson.HasTopLevelField(raw, "physics")) return;
+
+            var physicsJson = SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics");
+            var metadata = GetComponent<SceneSyncPhysicsMetadata>();
+            if (metadata == null) metadata = gameObject.AddComponent<SceneSyncPhysicsMetadata>();
+            metadata.ConfigureScenePhysics(physicsJson);
+        }
+
+        private static string ExtractObjectPhysicsJson(string raw)
+        {
+            return SceneSyncWireJson.HasTopLevelField(raw, "physics")
+                ? SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics")
+                : null;
+        }
+
+        private static void ApplyObjectPhysicsMetadata(GameObject go, string physicsJson)
+        {
+            if (go == null) return;
+
+            var metadata = go.GetComponent<SceneSyncPhysicsMetadata>();
+            if (string.IsNullOrWhiteSpace(physicsJson) || physicsJson.Trim() == "null")
+            {
+                if (metadata != null) metadata.ClearObjectPhysics();
+                return;
+            }
+
+            if (metadata == null) metadata = go.AddComponent<SceneSyncPhysicsMetadata>();
+            metadata.ConfigureObjectPhysics(physicsJson);
+        }
+
+        private static string GetObjectPhysicsJson(GameObject go)
+        {
+            var metadata = go != null ? go.GetComponent<SceneSyncPhysicsMetadata>() : null;
+            return metadata != null && !string.IsNullOrWhiteSpace(metadata.ObjectPhysicsJson)
+                ? metadata.ObjectPhysicsJson
+                : null;
+        }
+
         private void HandleSceneDelta(string raw)
         {
             // 簡易 JSON パース（scene-delta 専用）
@@ -1478,9 +1530,14 @@ namespace Afjk.SceneSync
             float[] scale = ExtractArray(raw, "\"scale\":");
             var assetJson = SceneSyncWireJson.ExtractRawObject(raw, "asset");
             var metadataJson = SceneSyncWireJson.ExtractRawObject(raw, "metadata");
+            var hasPhysics = SceneSyncWireJson.HasTopLevelField(raw, "physics");
+            var physicsJson = hasPhysics ? ExtractObjectPhysicsJson(raw) : null;
 
             var go = FindManagedObject(objectId);
             if (go == null) return;
+
+            if (hasPhysics)
+                ApplyObjectPhysicsMetadata(go, physicsJson);
 
             if (!string.IsNullOrWhiteSpace(name))
                 go.name = name;
@@ -1614,7 +1671,8 @@ namespace Afjk.SceneSync
             bool? visible,
             float[] position,
             float[] rotation,
-            float[] scale)
+            float[] scale,
+            string physicsJson = null)
         {
             if (go == null) return;
 
@@ -1630,6 +1688,8 @@ namespace Afjk.SceneSync
             if (!string.IsNullOrEmpty(meshPath))
                 _meshPaths[objectId] = meshPath;
             SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson, preserveMissing: true);
+            if (physicsJson != null)
+                ApplyObjectPhysicsMetadata(go, physicsJson);
             ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
             if (visible.HasValue) go.SetActive(visible.Value);
             ApplyTransform(go, position, rotation, scale);
@@ -1670,11 +1730,15 @@ namespace Afjk.SceneSync
                 raw, "\"objectId\":\"([^\"]+)\"");
             if (!objectIdMatch.Success) return;
             var objectId = objectIdMatch.Groups[1].Value;
+            var hasPhysics = SceneSyncWireJson.HasTopLevelField(raw, "physics");
+            var physicsJson = hasPhysics ? ExtractObjectPhysicsJson(raw) : null;
 
             // 既に存在する場合はスキップ
             if (_managedObjects.ContainsKey(objectId))
             {
                 var existing = _managedObjects[objectId];
+                if (hasPhysics)
+                    ApplyObjectPhysicsMetadata(existing, physicsJson);
                 Debug.Log("[SceneSync] scene-add received: objectId=" + objectId
                     + " → already managed (name=" + (existing != null ? existing.name : "null")
                     + ", unityAuthored=" + (existing != null && IsUnityAuthoredObject(existing, objectId))
@@ -1746,7 +1810,8 @@ namespace Afjk.SceneSync
                         visible,
                         position,
                         rotation,
-                        scale);
+                        scale,
+                        physicsJson);
                     Debug.Log("[SceneSync] scene-add resolved origin=unity to existing GameObject: objectId=" + objectId + ", name=" + unityObject.name);
                     return;
                 }
@@ -1766,6 +1831,8 @@ namespace Afjk.SceneSync
                     {
                         _managedObjects[objectId] = candidate;
                         _knownObjectIds.Add(objectId);
+                        if (hasPhysics)
+                            ApplyObjectPhysicsMetadata(candidate, physicsJson);
                         ApplyPendingObjectLoomGraph(objectId, candidate);
                         Debug.Log("[SceneSync] scene-add received for own Unity-authored object; skipping remote creation: " + objectId);
                         return;
@@ -1788,6 +1855,7 @@ namespace Afjk.SceneSync
                 placeholder.hideFlags = HideFlags.NotEditable;
                 ConfigureRemoteTemporaryIdentity(placeholder, objectId, meshPath, assetId);
                 SceneSyncPanelFactory.ConfigureWireMetadata(placeholder, assetJson, metadataJson);
+                ApplyObjectPhysicsMetadata(placeholder, physicsJson);
                 ApplyMetadataBehaviorGraph(placeholder, objectId, metadataJson);
                 if (visible.HasValue) placeholder.SetActive(visible.Value);
                 placeholder.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
@@ -1797,7 +1865,7 @@ namespace Afjk.SceneSync
                 _instanceToObjectId[placeholder.GetInstanceID()] = objectId;
 
                 // 非同期でダウンロード・インポート開始
-                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis, assetJson, metadataJson, visible);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, position, rotation, scale, assetId, visualBasis, assetJson, metadataJson, visible, physicsJson);
             }
             else
             {
@@ -1805,6 +1873,7 @@ namespace Afjk.SceneSync
 
                 var go = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                 ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
+                ApplyObjectPhysicsMetadata(go, physicsJson);
                 ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
                 if (visible.HasValue) go.SetActive(visible.Value);
                 go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
@@ -1911,6 +1980,8 @@ namespace Afjk.SceneSync
 
             var assetJson = SceneSyncWireJson.ExtractRawObject(raw, "asset");
             var metadataJson = SceneSyncWireJson.ExtractRawObject(raw, "metadata");
+            var hasPhysics = SceneSyncWireJson.HasTopLevelField(raw, "physics");
+            var physicsJson = hasPhysics ? ExtractObjectPhysicsJson(raw) : null;
             if (string.IsNullOrEmpty(assetId) && !string.IsNullOrEmpty(assetJson))
                 assetId = SceneSyncWireJson.ExtractString(assetJson, "assetId");
 
@@ -1929,7 +2000,7 @@ namespace Afjk.SceneSync
                 go = ResolveUnityOriginObject(objectId, name, unityHierarchyPath);
                 if (go != null)
                 {
-                    BindUnityOriginObject(go, objectId, meshPath, assetId, assetJson, metadataJson, null, null, null, null);
+                    BindUnityOriginObject(go, objectId, meshPath, assetId, assetJson, metadataJson, null, null, null, null, physicsJson);
                     Debug.Log("[SceneSync] scene-mesh resolved origin=unity to existing GameObject: objectId=" + objectId + ", name=" + go.name);
                     return;
                 }
@@ -1958,6 +2029,8 @@ namespace Afjk.SceneSync
                     identity.AssetId = assetId;
                 }
                 SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                if (hasPhysics)
+                    ApplyObjectPhysicsMetadata(go, physicsJson);
                 ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
 
                 _managedObjects[objectId] = go;
@@ -1981,11 +2054,11 @@ namespace Afjk.SceneSync
                     new float[] { pos.x, pos.y, -pos.z },
                     new float[] { rot.x, rot.y, -rot.z, -rot.w },
                     new float[] { scl.x, scl.y, scl.z },
-                    assetId, visualBasis, assetJson, metadataJson);
+                    assetId, visualBasis, assetJson, metadataJson, null, physicsJson);
             }
             else
             {
-                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId, visualBasis, assetJson, metadataJson);
+                _ = DownloadAndCreateObject(objectId, name, meshPath, null, null, null, assetId, visualBasis, assetJson, metadataJson, null, physicsJson);
             }
         }
 
@@ -2117,6 +2190,8 @@ namespace Afjk.SceneSync
                 var wireMetadata = go.GetComponent<SceneSyncWireMetadata>();
                 var rawAssetJson = wireMetadata != null ? wireMetadata.AssetJson : null;
                 var rawMetadataJson = wireMetadata != null ? wireMetadata.MetadataJson : null;
+                var physicsMetadata = go.GetComponent<SceneSyncPhysicsMetadata>();
+                var rawPhysicsJson = physicsMetadata != null ? physicsMetadata.ObjectPhysicsJson : null;
                 if (string.IsNullOrWhiteSpace(rawAssetJson) && path != null)
                 {
                     rawAssetJson = SceneSyncWireJson.BuildMeshAssetJson(
@@ -2136,7 +2211,8 @@ namespace Afjk.SceneSync
                     rawAssetJson,
                     rawMetadataJson,
                     identity != null && identity.Origin == SceneSyncOrigin.Unity ? "unity" : null,
-                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? SceneSyncWireJson.GetUnityHierarchyPath(go) : null));
+                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? SceneSyncWireJson.GetUnityHierarchyPath(go) : null,
+                    rawPhysicsJson));
                 sceneStateObjectCount++;
             }
 
@@ -2179,6 +2255,8 @@ namespace Afjk.SceneSync
                 var wireMetadata = go.GetComponent<SceneSyncWireMetadata>();
                 var rawAssetJson = wireMetadata != null ? wireMetadata.AssetJson : null;
                 var rawMetadataJson = wireMetadata != null ? wireMetadata.MetadataJson : null;
+                var physicsMetadata = go.GetComponent<SceneSyncPhysicsMetadata>();
+                var rawPhysicsJson = physicsMetadata != null ? physicsMetadata.ObjectPhysicsJson : null;
                 if (string.IsNullOrWhiteSpace(rawAssetJson) && path != null)
                 {
                     rawAssetJson = SceneSyncWireJson.BuildMeshAssetJson(
@@ -2198,7 +2276,8 @@ namespace Afjk.SceneSync
                     rawAssetJson,
                     rawMetadataJson,
                     identity != null && identity.Origin == SceneSyncOrigin.Unity ? "unity" : null,
-                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? SceneSyncWireJson.GetUnityHierarchyPath(go) : null));
+                    identity != null && identity.Origin == SceneSyncOrigin.Unity ? SceneSyncWireJson.GetUnityHierarchyPath(go) : null,
+                    rawPhysicsJson));
                 sceneStateObjectCount++;
             }
 
@@ -2210,8 +2289,12 @@ namespace Afjk.SceneSync
             var envJson = !string.IsNullOrWhiteSpace(_envId)
                 ? ",\"envId\":\"" + SceneSyncWireJson.JsonEscape(_envId) + "\""
                 : "";
+            var scenePhysics = GetComponent<SceneSyncPhysicsMetadata>();
+            var physicsJson = scenePhysics != null && !string.IsNullOrWhiteSpace(scenePhysics.ScenePhysicsJson)
+                ? ",\"physics\":" + scenePhysics.ScenePhysicsJson
+                : "";
             var loomGraphsJson = BuildLoomGraphsStateJson();
-            var payload = "{\"kind\":\"scene-state\"" + envJson + ",\"objects\":" + objectsJson
+            var payload = "{\"kind\":\"scene-state\"" + envJson + physicsJson + ",\"objects\":" + objectsJson
                 + (!string.IsNullOrWhiteSpace(loomGraphsJson) ? ",\"loomGraphs\":" + loomGraphsJson : "")
                 + "}";
             await _client.SendHandoff(fromId, payload);
@@ -2406,16 +2489,20 @@ namespace Afjk.SceneSync
             string assetId = null,
             string assetJson = null,
             string metadataJson = null,
-            bool? visible = null)
+            bool? visible = null,
+            string physicsJson = null)
         {
             var placeholder = _managedObjects[objectId];
             var placeholderInstanceId = placeholder.GetInstanceID();
             var placeholderGraphJson = GetObjectLoomGraphJson(placeholder);
+            var effectivePhysicsJson = physicsJson ?? GetObjectPhysicsJson(placeholder);
             if (!string.IsNullOrWhiteSpace(placeholderGraphJson))
                 _pendingObjectLoomGraphs[objectId] = placeholderGraphJson;
 
             var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
             ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+            if (effectivePhysicsJson != null)
+                ApplyObjectPhysicsMetadata(fallback, effectivePhysicsJson);
             ApplyMetadataBehaviorGraph(fallback, objectId, metadataJson);
             if (visible.HasValue) fallback.SetActive(visible.Value);
             fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
@@ -2439,7 +2526,7 @@ namespace Afjk.SceneSync
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null,
-            string assetJson = null, string metadataJson = null, bool? visible = null)
+            string assetJson = null, string metadataJson = null, bool? visible = null, string physicsJson = null)
         {
             _knownObjectIds.Add(objectId);
 
@@ -2511,7 +2598,7 @@ namespace Afjk.SceneSync
                         HandleMissingGlb(objectId, meshPath, null, assetId);
                     }
 
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible, physicsJson);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }
@@ -2571,12 +2658,15 @@ namespace Afjk.SceneSync
                     var placeholder = _managedObjects[objectId];
                     var placeholderInstanceId = placeholder.GetInstanceID();
                     var placeholderGraphJson = GetObjectLoomGraphJson(placeholder);
+                    var effectivePhysicsJson = physicsJson ?? GetObjectPhysicsJson(placeholder);
                     if (!string.IsNullOrWhiteSpace(placeholderGraphJson))
                         _pendingObjectLoomGraphs[objectId] = placeholderGraphJson;
 
                     var go = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
                     SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                    if (effectivePhysicsJson != null)
+                        ApplyObjectPhysicsMetadata(go, effectivePhysicsJson);
                     ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
                     if (visible.HasValue) go.SetActive(visible.Value);
                     go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
@@ -2636,7 +2726,7 @@ namespace Afjk.SceneSync
                         + ", loadingError=" + gltf.LoadingError
                         + ", sceneCount=" + gltf.SceneCount
                         + ", defaultScene=" + (gltf.DefaultSceneIndex.HasValue ? gltf.DefaultSceneIndex.Value.ToString() : "null"));
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible, physicsJson);
                     OnObjectAdded?.Invoke(objectId, fallback);
                 }
 
@@ -2666,6 +2756,8 @@ namespace Afjk.SceneSync
                     if (replacements > 0)
                     {
                         currentObject.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+                        if (physicsJson != null)
+                            ApplyObjectPhysicsMetadata(currentObject, physicsJson);
                         ApplyTransform(currentObject, position, rotation, scale);
 
                         OnObjectAdded?.Invoke(objectId, currentObject);
@@ -2675,7 +2767,7 @@ namespace Afjk.SceneSync
 
                 if (_managedObjects.ContainsKey(objectId))
                 {
-                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible);
+                    var fallback = ReplaceWithFallbackPrimitive(objectId, name, meshPath, position, rotation, scale, assetId, assetJson, metadataJson, visible, physicsJson);
                     OnObjectAdded?.Invoke(objectId, fallback);
                     return;
                 }

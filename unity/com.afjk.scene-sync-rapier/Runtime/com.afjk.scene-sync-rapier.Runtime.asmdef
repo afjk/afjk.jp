@@ -1,0 +1,17 @@
+{
+  "name": "com.afjk.scene-sync-rapier.Runtime",
+  "rootNamespace": "Afjk.SceneSync.Rapier",
+  "references": [
+    "com.afjk.scene-sync.Runtime",
+    "AFJK.Rapier.Runtime"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
