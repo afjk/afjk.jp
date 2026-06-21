@@ -110,6 +110,13 @@ namespace Afjk.SceneSync.Rapier
         public int LastBodyStateInputTick => bodyStateInputHistory.Count == 0
             ? -1
             : bodyStateInputHistory.Max(item => item.ApplyTick);
+        public int PreparePhysicsTimelineBranch(int branchTick)
+        {
+            var normalizedBranchTick = Mathf.Max(0, branchTick);
+            if (HasFutureBodyStateInputs(normalizedBranchTick))
+                AdvancePhysicsTimeline(timelineRevision + 1, normalizedBranchTick);
+            return timelineRevision;
+        }
         public bool AutoRun
         {
             get => autoRun;
@@ -481,6 +488,32 @@ namespace Afjk.SceneSync.Rapier
             string inputId,
             string objectId,
             int applyTick,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 linearVelocity,
+            Vector3 angularVelocity)
+        {
+            return BuildBodyStateInputJson(
+                inputId,
+                objectId,
+                applyTick,
+                DefaultTimelineId,
+                0,
+                0L,
+                null,
+                0,
+                null,
+                applyTick,
+                position,
+                rotation,
+                linearVelocity,
+                angularVelocity);
+        }
+
+        public static string BuildBodyStateInputJson(
+            string inputId,
+            string objectId,
+            int applyTick,
             string timelineId,
             int timelineRevision,
             long eventRevision,
@@ -596,6 +629,12 @@ namespace Afjk.SceneSync.Rapier
         private bool ShouldDropForCurrentTimelineBranch(BodyStateInput input)
         {
             return input.TimelineRevision != timelineRevision && input.ApplyTick > timelineForkTick;
+        }
+
+        private bool HasFutureBodyStateInputs(int branchTick)
+        {
+            return bodyStateInputHistory.Any(input => input.ApplyTick > branchTick) ||
+                pendingBodyStateInputs.Any(input => input.ApplyTick > branchTick);
         }
 
         public void RebuildWorld()
@@ -841,10 +880,7 @@ namespace Afjk.SceneSync.Rapier
             var payloadTimelineId = NormalizeTimelineId(payload?.timelineId);
             var payloadTimelineRevision = payload != null ? Mathf.Max(0, payload.timelineRevision) : 0;
             var payloadLastEventRevision = payload != null ? Math.Max(0L, payload.lastEventRevision) : 0L;
-            var timelineMatched = payload != null
-                && string.Equals(payloadTimelineId, timelineId, StringComparison.Ordinal)
-                && payloadTimelineRevision >= timelineRevision
-                && payloadLastEventRevision >= lastPhysicsEventRevision;
+            var payloadSceneClockRevision = ReadInt(payloadJson, "sceneClockRevision", int.MinValue);
 
             var canApply = autoApplyRemoteSnapshots
                 && payload != null
@@ -855,7 +891,11 @@ namespace Afjk.SceneSync.Rapier
                 && string.Equals(payload.profile, PhysicsProfile, StringComparison.Ordinal)
                 && payload.tick >= 0
                 && payload.bodies != null
-                && timelineMatched;
+                && string.Equals(payloadTimelineId, timelineId, StringComparison.Ordinal)
+                && payloadTimelineRevision >= timelineRevision
+                && (payloadSceneClockRevision == int.MinValue ||
+                    latestSceneClockRevision == int.MinValue ||
+                    payloadSceneClockRevision >= latestSceneClockRevision);
 
             var bodyStates = new List<SnapshotBodyState>();
             if (canApply)
@@ -863,6 +903,15 @@ namespace Afjk.SceneSync.Rapier
                 if (payloadTimelineRevision > timelineRevision)
                     AdvancePhysicsTimeline(payloadTimelineRevision, payload.timelineForkTick);
 
+                if (payloadLastEventRevision < lastPhysicsEventRevision ||
+                    payload.tick < tick)
+                {
+                    canApply = false;
+                }
+            }
+
+            if (canApply)
+            {
                 foreach (var body in payload.bodies)
                 {
                     if (body == null || !IsDynamicSnapshotBody(body))
@@ -929,7 +978,7 @@ namespace Afjk.SceneSync.Rapier
                 payload?.activeTime ?? float.NaN,
                 payload?.worldAge ?? float.NaN,
                 payload?.worldEpochTime ?? float.NaN,
-                payload?.sceneClockRevision ?? int.MinValue,
+                payloadSceneClockRevision,
                 fromPeerId,
                 bodyCount,
                 dynamicBodyCount,
@@ -953,11 +1002,18 @@ namespace Afjk.SceneSync.Rapier
             var worldAge = ReadFloat(raw, "worldAge", float.NaN);
             var reportedWorldEpochTime = ReadFloat(raw, "worldEpochTime", float.NaN);
             var sceneClockRevision = ReadInt(raw, "sceneClockRevision", int.MinValue);
+            var remoteTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
+            var remoteTimelineRevision = ReadInt(raw, "timelineRevision", 0);
+            var remoteLastEventRevision = ReadLong(raw, "lastEventRevision", 0L);
 
             var localHash = NormalizeHash(ComputeStateHashHex());
             var tickMatched = remoteTick == tick;
             var hashVersionMatched = string.Equals(hashVersion, CanonicalStateHashVersion, StringComparison.Ordinal);
-            var matched = tickMatched
+            var timelineComparable = string.Equals(remoteTimelineId, timelineId, StringComparison.Ordinal)
+                && remoteTimelineRevision == timelineRevision
+                && remoteLastEventRevision >= lastPhysicsEventRevision;
+            var matched = timelineComparable
+                && tickMatched
                 && hashVersionMatched
                 && !string.IsNullOrWhiteSpace(remoteHash)
                 && !string.IsNullOrWhiteSpace(localHash)
@@ -982,7 +1038,8 @@ namespace Afjk.SceneSync.Rapier
                 matched);
             hasRemoteHashReport = true;
             HashReportReceived?.Invoke(lastRemoteHashReport);
-            MaybeRequestSnapshotForHashMismatch(lastRemoteHashReport);
+            if (timelineComparable)
+                MaybeRequestSnapshotForHashMismatch(lastRemoteHashReport);
 
             if (logStateHash && !matched)
             {

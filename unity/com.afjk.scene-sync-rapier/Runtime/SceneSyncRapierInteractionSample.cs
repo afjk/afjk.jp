@@ -30,6 +30,8 @@ namespace Afjk.SceneSync.Rapier
         private Vector3 dragVelocity;
         private float previousDragTargetTime;
         private int dragSequence;
+        private int dragTimelineRevision;
+        private int dragBranchTick;
         private int lastDragApplyTick = -1;
         private float nextInputPublishAt;
         private float nextColliderRefreshAt;
@@ -201,6 +203,8 @@ namespace Afjk.SceneSync.Rapier
             dragVelocity = linearVelocity;
             previousDragTargetTime = Time.unscaledTime;
             dragSequence = 0;
+            dragBranchTick = bridge.Tick;
+            dragTimelineRevision = bridge.PreparePhysicsTimelineBranch(dragBranchTick);
             lastDragApplyTick = -1;
             hasDragTarget = true;
             PublishDragState(position, linearVelocity, "grab-start");
@@ -233,6 +237,8 @@ namespace Afjk.SceneSync.Rapier
             dragVelocity = Vector3.zero;
             previousDragTargetTime = 0f;
             dragSequence = 0;
+            dragTimelineRevision = 0;
+            dragBranchTick = 0;
             lastDragApplyTick = -1;
             nextInputPublishAt = 0f;
             hasDragTarget = false;
@@ -367,9 +373,9 @@ namespace Afjk.SceneSync.Rapier
                 interactionId,
                 sequence,
                 phase,
-                bridge.TimelineRevision,
+                dragTimelineRevision,
                 0L,
-                applyTick);
+                dragBranchTick);
             nextInputPublishAt = Time.unscaledTime + Mathf.Max(0.005f, inputIntervalSeconds);
         }
 
