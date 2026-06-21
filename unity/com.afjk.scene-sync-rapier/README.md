@@ -100,6 +100,15 @@ physics tick before stepping. For picking, the sample uses Unity raycasts; when 
 dynamic Scene Sync object has no Collider, it can add a lightweight BoxCollider
 from renderer bounds for Play Mode interaction.
 
+Each drag is published as a timeline interaction with a stable
+`interactionId`, monotonic `sequence`, `phase` (`grab-start`, `grab-move`,
+`grab-release`), `eventRevision`, and `applyTick`. The Rapier bridge keeps those
+events as the primary synchronization source; snapshots are checkpoints for
+late join/recovery and are ignored when their timeline revision or event
+watermark is older than the local event history. When a newer
+`timelineRevision` arrives, future inputs after the branch tick are discarded so
+rewinding and creating a new interaction can fork the playback history.
+
 By default the sample disables automatic remote physics snapshot correction while
 it is active. Shared Playback Player UI still drives the shared clock, but its
 periodic `scene-physics-snapshot` messages should not overwrite the local

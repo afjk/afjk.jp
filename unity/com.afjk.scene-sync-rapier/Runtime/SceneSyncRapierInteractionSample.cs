@@ -23,11 +23,14 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private bool disableRemoteSnapshotCorrection = true;
 
         private string draggingObjectId;
+        private string draggingInteractionId;
         private Quaternion draggingRotation = Quaternion.identity;
         private Vector3 dragGrabOffset;
         private Vector3 previousDragTarget;
         private Vector3 dragVelocity;
         private float previousDragTargetTime;
+        private int dragSequence;
+        private int lastDragApplyTick = -1;
         private float nextInputPublishAt;
         private float nextColliderRefreshAt;
         private bool hasDragTarget;
@@ -171,7 +174,7 @@ namespace Afjk.SceneSync.Rapier
             {
                 UpdateDragVelocity(targetPosition);
                 if (Time.unscaledTime >= nextInputPublishAt)
-                    PublishDragState(targetPosition, dragVelocity);
+                    PublishDragState(targetPosition, dragVelocity, "grab-move");
             }
         }
 
@@ -191,13 +194,17 @@ namespace Afjk.SceneSync.Rapier
             }
 
             draggingObjectId = identity.ObjectId;
+            draggingInteractionId = System.Guid.NewGuid().ToString("N");
             draggingRotation = rotation;
             dragGrabOffset = position - hitPoint;
             previousDragTarget = position;
             dragVelocity = linearVelocity;
             previousDragTargetTime = Time.unscaledTime;
-            nextInputPublishAt = 0f;
+            dragSequence = 0;
+            lastDragApplyTick = -1;
             hasDragTarget = true;
+            PublishDragState(position, linearVelocity, "grab-start");
+            nextInputPublishAt = Time.unscaledTime + Mathf.Max(0.005f, inputIntervalSeconds);
         }
 
         private void ReleaseDrag()
@@ -212,18 +219,21 @@ namespace Afjk.SceneSync.Rapier
                 UpdateDragVelocity(targetPosition);
 
             var throwVelocity = Vector3.ClampMagnitude(dragVelocity * Mathf.Max(0f, throwVelocityScale), maxThrowSpeed);
-            PublishDragState(previousDragTarget, throwVelocity);
+            PublishDragState(previousDragTarget, throwVelocity, "grab-release");
             ClearDrag();
         }
 
         private void ClearDrag()
         {
             draggingObjectId = null;
+            draggingInteractionId = null;
             draggingRotation = Quaternion.identity;
             dragGrabOffset = Vector3.zero;
             previousDragTarget = Vector3.zero;
             dragVelocity = Vector3.zero;
             previousDragTargetTime = 0f;
+            dragSequence = 0;
+            lastDragApplyTick = -1;
             nextInputPublishAt = 0f;
             hasDragTarget = false;
         }
@@ -332,19 +342,34 @@ namespace Afjk.SceneSync.Rapier
             hasDragTarget = true;
         }
 
-        private void PublishDragState(Vector3 position, Vector3 linearVelocity)
+        private void PublishDragState(Vector3 position, Vector3 linearVelocity, string phase)
         {
             if (!IsDragging || bridge == null) return;
             var applyTick = bridge.Tick + Mathf.Max(0, inputLeadTicks);
-            bridge.PublishBodyStateInput(
+            if (lastDragApplyTick >= 0 && applyTick <= lastDragApplyTick)
+                applyTick = lastDragApplyTick + 1;
+
+            lastDragApplyTick = applyTick;
+            var sequence = dragSequence++;
+            var interactionId = string.IsNullOrWhiteSpace(draggingInteractionId)
+                ? draggingObjectId + ":" + applyTick.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : draggingInteractionId;
+            var inputId = interactionId + ":" + sequence.ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+            bridge.PublishTimelineBodyStateInput(
                 draggingObjectId,
                 applyTick,
                 position,
                 draggingRotation,
                 linearVelocity,
                 Vector3.zero,
-                null,
-                this);
+                inputId,
+                this,
+                interactionId,
+                sequence,
+                phase,
+                bridge.TimelineRevision,
+                0L,
+                applyTick);
             nextInputPublishAt = Time.unscaledTime + Mathf.Max(0.005f, inputIntervalSeconds);
         }
 

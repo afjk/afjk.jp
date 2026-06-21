@@ -19,6 +19,8 @@ namespace Afjk.SceneSync.Rapier
         private const string CanonicalStateHashVersion = "SceneSyncCanonicalPhysicsHashV1";
         private const string PhysicsProfile = "SceneSyncRapierParity-0.30";
         private const string SnapshotVersion = "SceneSyncPhysicsSnapshotV1";
+        private const string TimelineVersion = "SceneSyncPhysicsTimelineV1";
+        private const string DefaultTimelineId = "default";
         private const string RapierCoreVersion = "0.30.0";
         private const int MaxPendingBodyStateInputs = 256;
         private const int MaxBodyStateInputHistory = 512;
@@ -76,6 +78,11 @@ namespace Afjk.SceneSync.Rapier
         private int lastStateHashBroadcastTick = int.MinValue;
         private int lastStateHashBroadcastRevision = int.MinValue;
         private string lastStateHashBroadcastHash;
+        private string timelineId = DefaultTimelineId;
+        private int timelineRevision;
+        private int timelineForkTick;
+        private long lastPhysicsEventRevision;
+        private long localPhysicsEventRevisionCounter;
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
         public event Action<SceneSyncRapierHashReport> HashReportReceived;
@@ -95,6 +102,14 @@ namespace Afjk.SceneSync.Rapier
         public bool LastRemoteSnapshotApplied => hasRemoteSnapshotReport && lastRemoteSnapshotReport.Applied;
         public int LastStateHashBroadcastTick => lastStateHashBroadcastTick;
         public string LastStateHashBroadcastHash => lastStateHashBroadcastHash;
+        public string TimelineVersionId => TimelineVersion;
+        public string TimelineId => timelineId;
+        public int TimelineRevision => timelineRevision;
+        public int TimelineForkTick => timelineForkTick;
+        public long LastPhysicsEventRevision => lastPhysicsEventRevision;
+        public int LastBodyStateInputTick => bodyStateInputHistory.Count == 0
+            ? -1
+            : bodyStateInputHistory.Max(item => item.ApplyTick);
         public bool AutoRun
         {
             get => autoRun;
@@ -321,27 +336,46 @@ namespace Afjk.SceneSync.Rapier
             Vector3 linearVelocity,
             Vector3 angularVelocity)
         {
-            if (string.IsNullOrWhiteSpace(objectId))
-                return false;
-
             var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
                 ? Guid.NewGuid().ToString("N")
                 : inputId.Trim();
-            if (HasBodyStateInput(normalizedInputId))
-            {
-                return false;
-            }
-
-            var input = new BodyStateInput(
+            return QueueBodyStateInput(new BodyStateInput(
                 normalizedInputId,
                 objectId,
+                Mathf.Max(0, applyTick),
+                timelineId,
+                timelineRevision,
+                0L,
+                null,
+                0,
+                null,
                 Mathf.Max(0, applyTick),
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity);
+                angularVelocity));
+        }
+
+        private bool QueueBodyStateInput(BodyStateInput input)
+        {
+            if (string.IsNullOrWhiteSpace(input.ObjectId))
+                return false;
+
+            if (!string.Equals(input.TimelineId, timelineId, StringComparison.Ordinal))
+                return false;
+
+            if (input.TimelineRevision < timelineRevision && input.ApplyTick > timelineForkTick)
+                return false;
+
+            if (input.TimelineRevision > timelineRevision)
+                AdvancePhysicsTimeline(input.TimelineRevision, input.BranchTick);
+
+            if (HasBodyStateInput(input.InputId))
+                return false;
 
             AddBodyStateInputHistory(input);
+            if (input.EventRevision > lastPhysicsEventRevision)
+                lastPhysicsEventRevision = input.EventRevision;
 
             if (world != null && input.ApplyTick <= tick)
             {
@@ -366,17 +400,61 @@ namespace Afjk.SceneSync.Rapier
             string inputId = null,
             object source = null)
         {
-            var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
-                ? Guid.NewGuid().ToString("N")
-                : inputId.Trim();
-            if (!QueueBodyStateInput(
-                normalizedInputId,
+            return PublishTimelineBodyStateInput(
                 objectId,
                 applyTick,
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity))
+                angularVelocity,
+                inputId,
+                source);
+        }
+
+        public bool PublishTimelineBodyStateInput(
+            string objectId,
+            int applyTick,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 linearVelocity,
+            Vector3 angularVelocity,
+            string inputId = null,
+            object source = null,
+            string interactionId = null,
+            int sequence = 0,
+            string phase = null,
+            int timelineRevision = -1,
+            long eventRevision = 0L,
+            int branchTick = -1)
+        {
+            var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
+                ? Guid.NewGuid().ToString("N")
+                : inputId.Trim();
+            var normalizedTimelineRevision = timelineRevision < 0
+                ? this.timelineRevision
+                : Mathf.Max(0, timelineRevision);
+            var normalizedEventRevision = eventRevision > 0L
+                ? eventRevision
+                : CreateLocalPhysicsEventRevision();
+            var normalizedBranchTick = branchTick < 0
+                ? Mathf.Max(0, applyTick)
+                : Mathf.Max(0, branchTick);
+            var input = new BodyStateInput(
+                normalizedInputId,
+                objectId,
+                applyTick,
+                timelineId,
+                normalizedTimelineRevision,
+                normalizedEventRevision,
+                interactionId,
+                sequence,
+                phase,
+                normalizedBranchTick,
+                position,
+                rotation,
+                linearVelocity,
+                angularVelocity);
+            if (!QueueBodyStateInput(input))
             {
                 return false;
             }
@@ -385,6 +463,13 @@ namespace Afjk.SceneSync.Rapier
                 normalizedInputId,
                 objectId,
                 applyTick,
+                timelineId,
+                normalizedTimelineRevision,
+                normalizedEventRevision,
+                interactionId,
+                sequence,
+                phase,
+                normalizedBranchTick,
                 position,
                 rotation,
                 linearVelocity,
@@ -396,6 +481,13 @@ namespace Afjk.SceneSync.Rapier
             string inputId,
             string objectId,
             int applyTick,
+            string timelineId,
+            int timelineRevision,
+            long eventRevision,
+            string interactionId,
+            int sequence,
+            string phase,
+            int branchTick,
             Vector3 position,
             Quaternion rotation,
             Vector3 linearVelocity,
@@ -408,6 +500,18 @@ namespace Afjk.SceneSync.Rapier
             return "{\"kind\":\"scene-physics-input\"" +
                 ",\"inputType\":\"set-body-state\"" +
                 ",\"inputId\":\"" + SceneSyncWireJson.JsonEscape(inputId) + "\"" +
+                ",\"timelineVersion\":\"" + TimelineVersion + "\"" +
+                ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(NormalizeTimelineId(timelineId)) + "\"" +
+                ",\"timelineRevision\":" + Mathf.Max(0, timelineRevision).ToString(CultureInfo.InvariantCulture) +
+                ",\"eventRevision\":" + Math.Max(0L, eventRevision).ToString(CultureInfo.InvariantCulture) +
+                (!string.IsNullOrWhiteSpace(interactionId)
+                    ? ",\"interactionId\":\"" + SceneSyncWireJson.JsonEscape(interactionId.Trim()) + "\""
+                    : string.Empty) +
+                ",\"sequence\":" + Mathf.Max(0, sequence).ToString(CultureInfo.InvariantCulture) +
+                (!string.IsNullOrWhiteSpace(phase)
+                    ? ",\"phase\":\"" + SceneSyncWireJson.JsonEscape(phase.Trim()) + "\""
+                    : string.Empty) +
+                ",\"branchTick\":" + Mathf.Max(0, branchTick).ToString(CultureInfo.InvariantCulture) +
                 ",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\"" +
                 ",\"applyTick\":" + Mathf.Max(0, applyTick).ToString(CultureInfo.InvariantCulture) +
                 ",\"position\":" + FormatVector3Json(wirePosition) +
@@ -447,9 +551,51 @@ namespace Afjk.SceneSync.Rapier
         private static int CompareBodyStateInputs(BodyStateInput left, BodyStateInput right)
         {
             var tickCompare = left.ApplyTick.CompareTo(right.ApplyTick);
-            return tickCompare != 0
-                ? tickCompare
+            if (tickCompare != 0) return tickCompare;
+            var revisionCompare = left.TimelineRevision.CompareTo(right.TimelineRevision);
+            if (revisionCompare != 0) return revisionCompare;
+            var eventCompare = left.EventRevision.CompareTo(right.EventRevision);
+            if (eventCompare != 0) return eventCompare;
+            var interactionCompare = string.CompareOrdinal(left.InteractionId ?? string.Empty, right.InteractionId ?? string.Empty);
+            if (interactionCompare != 0) return interactionCompare;
+            var sequenceCompare = left.Sequence.CompareTo(right.Sequence);
+            if (sequenceCompare != 0) return sequenceCompare;
+            var phaseCompare = string.CompareOrdinal(left.Phase ?? string.Empty, right.Phase ?? string.Empty);
+            return phaseCompare != 0
+                ? phaseCompare
                 : string.CompareOrdinal(left.InputId, right.InputId);
+        }
+
+        private long CreateLocalPhysicsEventRevision()
+        {
+            localPhysicsEventRevisionCounter = Math.Max(localPhysicsEventRevisionCounter, lastPhysicsEventRevision) + 1L;
+            return localPhysicsEventRevisionCounter;
+        }
+
+        private bool AdvancePhysicsTimeline(int nextRevision, int branchTick)
+        {
+            if (nextRevision <= timelineRevision)
+                return false;
+
+            timelineRevision = nextRevision;
+            timelineForkTick = Mathf.Max(0, branchTick);
+            bodyStateInputHistory.RemoveAll(ShouldDropForCurrentTimelineBranch);
+            pendingBodyStateInputs.RemoveAll(ShouldDropForCurrentTimelineBranch);
+            appliedBodyStateInputIds.Clear();
+            lastPhysicsEventRevision = bodyStateInputHistory.Count == 0
+                ? 0L
+                : bodyStateInputHistory.Max(item => item.EventRevision);
+            localPhysicsEventRevisionCounter = Math.Max(localPhysicsEventRevisionCounter, lastPhysicsEventRevision);
+
+            if (world != null && tick > timelineForkTick)
+                RewindBodyStateInputsToInitialSnapshot();
+
+            return true;
+        }
+
+        private bool ShouldDropForCurrentTimelineBranch(BodyStateInput input)
+        {
+            return input.TimelineRevision != timelineRevision && input.ApplyTick > timelineForkTick;
         }
 
         public void RebuildWorld()
@@ -692,6 +838,13 @@ namespace Afjk.SceneSync.Rapier
             var appliedBodyCount = 0;
             var missingBodyCount = 0;
             var applied = false;
+            var payloadTimelineId = NormalizeTimelineId(payload?.timelineId);
+            var payloadTimelineRevision = payload != null ? Mathf.Max(0, payload.timelineRevision) : 0;
+            var payloadLastEventRevision = payload != null ? Math.Max(0L, payload.lastEventRevision) : 0L;
+            var timelineMatched = payload != null
+                && string.Equals(payloadTimelineId, timelineId, StringComparison.Ordinal)
+                && payloadTimelineRevision >= timelineRevision
+                && payloadLastEventRevision >= lastPhysicsEventRevision;
 
             var canApply = autoApplyRemoteSnapshots
                 && payload != null
@@ -701,11 +854,15 @@ namespace Afjk.SceneSync.Rapier
                 && string.Equals(payload.hashVersion, CanonicalStateHashVersion, StringComparison.Ordinal)
                 && string.Equals(payload.profile, PhysicsProfile, StringComparison.Ordinal)
                 && payload.tick >= 0
-                && payload.bodies != null;
+                && payload.bodies != null
+                && timelineMatched;
 
             var bodyStates = new List<SnapshotBodyState>();
             if (canApply)
             {
+                if (payloadTimelineRevision > timelineRevision)
+                    AdvancePhysicsTimeline(payloadTimelineRevision, payload.timelineForkTick);
+
                 foreach (var body in payload.bodies)
                 {
                     if (body == null || !IsDynamicSnapshotBody(body))
@@ -872,14 +1029,30 @@ namespace Afjk.SceneSync.Rapier
             if (!TryReadVector3(SceneSyncWireJson.ExtractArray(raw, "angularVelocity"), out wireAngularVelocity))
                 TryReadVector3(SceneSyncWireJson.ExtractArray(raw, "angvel"), out wireAngularVelocity);
 
-            QueueBodyStateInput(
+            var applyTick = ReadInt(raw, "applyTick", tick);
+            var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
+            var inputTimelineRevision = ReadInt(raw, "timelineRevision", timelineRevision);
+            var inputEventRevision = ReadLong(raw, "eventRevision", 0L);
+            var interactionId = SceneSyncWireJson.ExtractString(raw, "interactionId");
+            var sequence = ReadInt(raw, "sequence", 0);
+            var phase = SceneSyncWireJson.ExtractString(raw, "phase");
+            var branchTick = ReadInt(raw, "branchTick", applyTick);
+
+            QueueBodyStateInput(new BodyStateInput(
                 inputId,
                 objectId,
-                ReadInt(raw, "applyTick", tick),
+                applyTick,
+                inputTimelineId,
+                inputTimelineRevision,
+                inputEventRevision,
+                interactionId,
+                sequence,
+                phase,
+                branchTick,
                 WireToUnityPosition(wirePosition),
                 WireToUnityRotation(wireRotation),
                 WireToUnityVector(wireLinearVelocity),
-                WireToUnityVector(wireAngularVelocity));
+                WireToUnityVector(wireAngularVelocity)));
         }
 
         private bool ApplyDueBodyStateInputs()
@@ -969,6 +1142,11 @@ namespace Afjk.SceneSync.Rapier
                 ",\"snapshotVersion\":\"" + SnapshotVersion + "\"" +
                 ",\"profile\":\"" + PhysicsProfile + "\"" +
                 ",\"hashVersion\":\"" + CanonicalStateHashVersion + "\"" +
+                ",\"timelineVersion\":\"" + TimelineVersion + "\"" +
+                ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(timelineId) + "\"" +
+                ",\"timelineRevision\":" + timelineRevision.ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineForkTick\":" + timelineForkTick.ToString(CultureInfo.InvariantCulture) +
+                ",\"lastEventRevision\":" + lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"requestId\":\"" + SceneSyncWireJson.JsonEscape(requestId) + "\"" +
                 ",\"reason\":\"hash-mismatch\"" +
                 ",\"tick\":" + report.Tick.ToString(CultureInfo.InvariantCulture) +
@@ -1336,6 +1514,11 @@ namespace Afjk.SceneSync.Rapier
                 ",\"profile\":\"" + PhysicsProfile + "\"" +
                 ",\"hashVersion\":\"" + CanonicalStateHashVersion + "\"" +
                 ",\"rapierCoreVersion\":\"" + RapierCoreVersion + "\"" +
+                ",\"timelineVersion\":\"" + TimelineVersion + "\"" +
+                ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(timelineId) + "\"" +
+                ",\"timelineRevision\":" + timelineRevision.ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineForkTick\":" + timelineForkTick.ToString(CultureInfo.InvariantCulture) +
+                ",\"lastEventRevision\":" + lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"tick\":" + tick.ToString(CultureInfo.InvariantCulture) +
                 ",\"hash\":\"" + SceneSyncWireJson.JsonEscape(lastStateHash) + "\"" +
                 ",\"timestep\":" + timestep.ToString(CultureInfo.InvariantCulture) +
@@ -1484,6 +1667,23 @@ namespace Afjk.SceneSync.Rapier
             return IsFinite(value) ? Mathf.FloorToInt((float)value) : fallback;
         }
 
+        private static long ReadLong(string json, string field, long fallback)
+        {
+            var raw = SceneSyncWireJson.ExtractTopLevelRawValue(json, field);
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = SceneSyncWireJson.ExtractRawValue(json, field);
+            if (string.IsNullOrWhiteSpace(raw))
+                return fallback;
+
+            return long.TryParse(
+                raw.Trim(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var value) && value >= 0L
+                ? value
+                : fallback;
+        }
+
         private static double ReadDouble(string json, string field, double fallback)
         {
             var raw = SceneSyncWireJson.ExtractTopLevelRawValue(json, field);
@@ -1512,6 +1712,13 @@ namespace Afjk.SceneSync.Rapier
             return string.IsNullOrWhiteSpace(value)
                 ? null
                 : value.Trim().ToLowerInvariant();
+        }
+
+        private static string NormalizeTimelineId(string value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? DefaultTimelineId
+                : value.Trim();
         }
 
         private static bool IsDynamicSnapshotBody(ScenePhysicsSnapshotBody body)
@@ -1583,6 +1790,11 @@ namespace Afjk.SceneSync.Rapier
         private sealed class ScenePhysicsSnapshotPayload
         {
             public string snapshotVersion;
+            public string timelineVersion;
+            public string timelineId;
+            public int timelineRevision;
+            public int timelineForkTick;
+            public long lastEventRevision;
             public string profile;
             public string hashVersion;
             public string rapierCoreVersion;
@@ -1638,6 +1850,13 @@ namespace Afjk.SceneSync.Rapier
                 string inputId,
                 string objectId,
                 int applyTick,
+                string timelineId,
+                int timelineRevision,
+                long eventRevision,
+                string interactionId,
+                int sequence,
+                string phase,
+                int branchTick,
                 Vector3 position,
                 Quaternion rotation,
                 Vector3 linearVelocity,
@@ -1646,6 +1865,13 @@ namespace Afjk.SceneSync.Rapier
                 InputId = inputId;
                 ObjectId = objectId;
                 ApplyTick = applyTick;
+                TimelineId = NormalizeTimelineId(timelineId);
+                TimelineRevision = Mathf.Max(0, timelineRevision);
+                EventRevision = Math.Max(0L, eventRevision);
+                InteractionId = string.IsNullOrWhiteSpace(interactionId) ? null : interactionId.Trim();
+                Sequence = Mathf.Max(0, sequence);
+                Phase = string.IsNullOrWhiteSpace(phase) ? null : phase.Trim();
+                BranchTick = Mathf.Max(0, branchTick);
                 Position = position;
                 Rotation = rotation;
                 LinearVelocity = linearVelocity;
@@ -1655,6 +1881,13 @@ namespace Afjk.SceneSync.Rapier
             public string InputId { get; }
             public string ObjectId { get; }
             public int ApplyTick { get; }
+            public string TimelineId { get; }
+            public int TimelineRevision { get; }
+            public long EventRevision { get; }
+            public string InteractionId { get; }
+            public int Sequence { get; }
+            public string Phase { get; }
+            public int BranchTick { get; }
             public Vector3 Position { get; }
             public Quaternion Rotation { get; }
             public Vector3 LinearVelocity { get; }
