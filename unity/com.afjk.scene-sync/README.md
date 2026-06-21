@@ -199,6 +199,28 @@ https://github.com/KhronosGroup/UnityGLTF.git#release/2.19.5
 
 `Window > Scene Sync > Details & Advanced > Export Settings` の UnityGLTF セクションで状態を確認できます。
 
+## Rapier Physics（オプション）
+
+Scene Sync 本体は Rapier に hard dependency しません。Web 側の Rapier
+物理シーンを Unity 側でも動かす場合は、別 package
+`com.afjk.scene-sync-rapier` を追加します。
+
+開発中は `com.afjk.rapier` が registry 未登録のため、サンプル project では
+Rapier package を Git URL で明示的に追加してください。
+
+```json
+{
+  "dependencies": {
+    "com.afjk.scene-sync-rapier": "file:/Users/afjk/github/SceneSyncWork/afjk.jp/unity/com.afjk.scene-sync-rapier",
+    "com.afjk.rapier": "https://github.com/afjk/rapier-unity.git?path=Packages/com.afjk.rapier#v0.3.0"
+  }
+}
+```
+
+`SceneSyncRapierBridge` を `SceneSyncManager` と同じ GameObject に追加すると、
+Scene Sync の `physics` JSON を Rapier world に変換し、dynamic body の pose を
+Unity `Transform` に反映します。
+
 - `Install UnityGLTF`
   - UnityGLTF package を追加します
 - `Enable UnityGLTF Support`
