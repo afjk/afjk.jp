@@ -14,29 +14,41 @@ namespace Afjk.SceneSync.Rapier
         private const float DefaultTimestep = 1f / 60f;
         private const float GroundHalfExtent = 4096f;
         private const float GroundThickness = 0.1f;
+        private const double ZeroTimeEpsilon = 0.000001d;
         private const string GroundStableId = "__scenesync_ground__";
 
         [SerializeField] private bool autoRun = true;
+        [SerializeField] private bool useSceneClock = true;
         [SerializeField] private bool applyDynamicTransforms = true;
         [SerializeField] private bool includeGround = true;
         [SerializeField] private float metadataScanInterval = 0.5f;
         [SerializeField] private float maxFrameStepSeconds = 0.25f;
+        [SerializeField] private int maxClockStepsPerUpdate = 600;
         [SerializeField] private bool logStateHash;
 
         private readonly Dictionary<string, string> objectPhysicsJson = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, BodyBinding> bindings = new Dictionary<string, BodyBinding>(StringComparer.Ordinal);
 
         private RapierWorld world;
+        private RapierSnapshot initialSnapshot;
         private ScenePhysicsDefinition scenePhysics = ScenePhysicsDefinition.Disabled;
+        private SceneClockState sceneClock = SceneClockState.Inactive;
         private bool dirty = true;
+        private bool hasInitialSnapshot;
+        private bool hasPendingWorldEpochTime;
+        private bool lastStepLimited;
         private float accumulator;
+        private float worldEpochTime;
+        private float pendingWorldEpochTime;
         private int tick;
+        private int latestSceneClockRevision = int.MinValue;
         private float nextMetadataScanAt;
         private string lastStateHash;
 
         public int Tick => tick;
         public string LastStateHash => lastStateHash;
         public bool HasWorld => world != null && world.IsCreated;
+        public bool LastStepLimited => lastStepLimited;
 
         private void OnEnable()
         {
@@ -65,6 +77,17 @@ namespace Afjk.SceneSync.Rapier
 
             if (!autoRun || world == null) return;
 
+            if (useSceneClock && sceneClock.Active)
+            {
+                UpdateFromSceneClock();
+                return;
+            }
+
+            StepLocalFrame();
+        }
+
+        private void StepLocalFrame()
+        {
             var frameTime = Mathf.Min(Mathf.Max(0f, Time.unscaledDeltaTime), Mathf.Max(0f, maxFrameStepSeconds));
             accumulator += frameTime;
             var timestep = Mathf.Max(0.000001f, scenePhysics.Timestep);
@@ -90,6 +113,45 @@ namespace Afjk.SceneSync.Rapier
             }
         }
 
+        private void UpdateFromSceneClock()
+        {
+            var clockTime = sceneClock.GetTime();
+            var timestep = Mathf.Max(0.000001f, scenePhysics.Timestep);
+            var targetTick = Mathf.Max(0, Mathf.FloorToInt(Mathf.Max(0f, clockTime - worldEpochTime) / timestep));
+            lastStepLimited = false;
+
+            if (targetTick < tick && hasInitialSnapshot)
+            {
+                if (world.TryReadSnapshot(initialSnapshot))
+                {
+                    tick = 0;
+                    accumulator = 0f;
+                }
+            }
+
+            var maxSteps = Mathf.Max(1, maxClockStepsPerUpdate);
+            var steps = 0;
+            while (tick < targetTick && steps < maxSteps)
+            {
+                if (!world.Step()) break;
+                tick++;
+                steps++;
+            }
+
+            if (tick < targetTick)
+                lastStepLimited = true;
+
+            if (steps > 0 || targetTick == 0)
+            {
+                ApplyWorldTransforms();
+                if (logStateHash)
+                {
+                    lastStateHash = world.StateHash().ToString("x16", CultureInfo.InvariantCulture);
+                    Debug.Log("[SceneSyncRapier] tick=" + tick + " targetTick=" + targetTick + " stateHash=" + lastStateHash);
+                }
+            }
+        }
+
         public void MarkDirty()
         {
             dirty = true;
@@ -101,6 +163,9 @@ namespace Afjk.SceneSync.Rapier
             accumulator = 0f;
             tick = 0;
             lastStateHash = null;
+            lastStepLimited = false;
+            hasInitialSnapshot = false;
+            initialSnapshot = default;
             bindings.Clear();
             DisposeWorld();
 
@@ -125,6 +190,12 @@ namespace Afjk.SceneSync.Rapier
                     CreateBody(candidate);
                 }
 
+                worldEpochTime = hasPendingWorldEpochTime
+                    ? pendingWorldEpochTime
+                    : (useSceneClock && sceneClock.Active ? sceneClock.GetTime() : 0f);
+                hasPendingWorldEpochTime = false;
+                pendingWorldEpochTime = 0f;
+                hasInitialSnapshot = world.TryCreateSnapshot(out initialSnapshot);
                 ApplyWorldTransforms();
             }
             catch (Exception error)
@@ -132,6 +203,7 @@ namespace Afjk.SceneSync.Rapier
                 Debug.LogWarning("[SceneSyncRapier] Failed to rebuild Rapier world: " + error.Message);
                 DisposeWorld();
                 bindings.Clear();
+                hasInitialSnapshot = false;
             }
         }
 
@@ -214,6 +286,7 @@ namespace Afjk.SceneSync.Rapier
 
             if (raw.Contains("\"kind\":\"scene-state\""))
             {
+                latestSceneClockRevision = int.MinValue;
                 if (SceneSyncWireJson.HasTopLevelField(raw, "physics"))
                     scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics"));
 
@@ -223,6 +296,12 @@ namespace Afjk.SceneSync.Rapier
                 }
 
                 dirty = true;
+                return;
+            }
+
+            if (raw.Contains("\"kind\":\"scene-clock\""))
+            {
+                ApplySceneClock(raw);
                 return;
             }
 
@@ -248,6 +327,86 @@ namespace Afjk.SceneSync.Rapier
             if (string.IsNullOrWhiteSpace(id)) return;
             if (ApplyObjectPhysicsJson(id, raw))
                 dirty = true;
+        }
+
+        private void ApplySceneClock(string raw)
+        {
+            var mode = SceneSyncWireJson.ExtractString(raw, "mode") ?? "shared-playback";
+            if (!string.Equals(mode, "shared-playback", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var revisionValue = ReadDouble(raw, "revision", double.NaN);
+            if (IsFinite(revisionValue))
+            {
+                var revision = Mathf.FloorToInt((float)revisionValue);
+                if (revision <= latestSceneClockRevision)
+                    return;
+                latestSceneClockRevision = revision;
+            }
+
+            sceneClock = SceneClockState.Parse(raw, sceneClock);
+            var activeTime = sceneClock.GetTime();
+            if (ShouldResetPhysicsForSceneClockPayload(raw, activeTime))
+            {
+                ApplyPhysicsResetBaseline(raw, activeTime);
+            }
+        }
+
+        private void ApplyPhysicsResetBaseline(string raw, double activeTime)
+        {
+            var baselineJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "physicsBaseline");
+            var worldEpoch = !string.IsNullOrWhiteSpace(baselineJson)
+                ? ReadDouble(baselineJson, "worldEpochTime", activeTime)
+                : activeTime;
+            if (!IsFinite(worldEpoch)) worldEpoch = activeTime;
+
+            pendingWorldEpochTime = Mathf.Max(0f, (float)worldEpoch);
+            hasPendingWorldEpochTime = true;
+            accumulator = 0f;
+            lastStepLimited = false;
+
+            if (world != null && hasInitialSnapshot && world.TryReadSnapshot(initialSnapshot))
+            {
+                worldEpochTime = pendingWorldEpochTime;
+                hasPendingWorldEpochTime = false;
+                pendingWorldEpochTime = 0f;
+                tick = 0;
+                ApplyWorldTransforms();
+                return;
+            }
+
+            dirty = true;
+        }
+
+        private static bool ShouldResetPhysicsForSceneClockPayload(string raw, double activeTime)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+
+            var baselineJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "physicsBaseline");
+            if (!string.IsNullOrWhiteSpace(baselineJson) &&
+                string.Equals(SceneSyncWireJson.ExtractString(baselineJson, "kind"), "reset", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsZeroTime(
+                    ReadDouble(baselineJson, "time",
+                        ReadDouble(raw, "targetTime",
+                            ReadDouble(raw, "time", activeTime))));
+            }
+
+            var action = SceneSyncWireJson.ExtractString(raw, "action");
+            if (string.Equals(action, "reset", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!string.Equals(action, "seek", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return IsZeroTime(ReadDouble(raw, "targetTime", double.NaN))
+                || IsZeroTime(ReadDouble(raw, "time", double.NaN))
+                || IsZeroTime(ReadDouble(raw, "pausedTime", double.NaN))
+                || IsZeroTime(activeTime);
+        }
+
+        private static bool IsZeroTime(double value)
+        {
+            return IsFinite(value) && Math.Abs(value) <= ZeroTimeEpsilon;
         }
 
         private bool ApplyObjectPhysicsJson(string objectId, string rawObjectJson)
@@ -357,9 +516,11 @@ namespace Afjk.SceneSync.Rapier
 
         private void DisposeWorld()
         {
-            if (world == null) return;
-            world.Dispose();
+            if (world != null)
+                world.Dispose();
             world = null;
+            initialSnapshot = default;
+            hasInitialSnapshot = false;
         }
 
         private static Vector3 UnityToWirePosition(Vector3 value)
@@ -410,6 +571,23 @@ namespace Afjk.SceneSync.Rapier
             return value.HasValue && IsFinite(value.Value) ? value.Value : fallback;
         }
 
+        private static double ReadDouble(string json, string field, double fallback)
+        {
+            var raw = SceneSyncWireJson.ExtractTopLevelRawValue(json, field);
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = SceneSyncWireJson.ExtractRawValue(json, field);
+            if (string.IsNullOrWhiteSpace(raw))
+                return fallback;
+
+            return double.TryParse(
+                raw.Trim(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var value) && IsFinite(value)
+                ? value
+                : fallback;
+        }
+
         private static bool ReadBool(string json, string field, bool fallback)
         {
             var value = SceneSyncWireJson.ExtractBoolean(json, field);
@@ -419,6 +597,82 @@ namespace Afjk.SceneSync.Rapier
         private static bool IsFinite(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        private readonly struct SceneClockState
+        {
+            private SceneClockState(
+                bool active,
+                string source,
+                double offset,
+                bool paused,
+                double pausedTime,
+                double rate,
+                double roomNow,
+                double sentAtMilliseconds)
+            {
+                Active = active;
+                Source = string.IsNullOrWhiteSpace(source) ? "room" : source;
+                Offset = IsFinite(offset) ? offset : 0d;
+                Paused = paused;
+                PausedTime = IsFinite(pausedTime) ? pausedTime : double.NaN;
+                Rate = IsFinite(rate) && rate >= 0d ? rate : 1d;
+                RoomNow = IsFinite(roomNow) ? roomNow : 0d;
+                SentAtMilliseconds = IsFinite(sentAtMilliseconds) ? sentAtMilliseconds : 0d;
+            }
+
+            public static SceneClockState Inactive => new SceneClockState(false, "room", 0d, false, double.NaN, 1d, 0d, 0d);
+
+            public bool Active { get; }
+            private string Source { get; }
+            private double Offset { get; }
+            private bool Paused { get; }
+            private double PausedTime { get; }
+            private double Rate { get; }
+            private double RoomNow { get; }
+            private double SentAtMilliseconds { get; }
+
+            public static SceneClockState Parse(string raw, SceneClockState previous)
+            {
+                return new SceneClockState(
+                    true,
+                    SceneSyncWireJson.ExtractString(raw, "source") ?? previous.Source ?? "room",
+                    ReadDouble(raw, "offset", previous.Offset),
+                    ReadBool(raw, "paused", previous.Paused),
+                    ReadDouble(raw, "pausedTime", double.NaN),
+                    ReadDouble(raw, "rate", previous.Rate),
+                    ReadDouble(raw, "roomNow", previous.RoomNow),
+                    ReadDouble(raw, "sentAt", previous.SentAtMilliseconds));
+            }
+
+            public float GetTime()
+            {
+                if (Paused && IsFinite(PausedTime))
+                    return Mathf.Max(0f, (float)PausedTime);
+
+                var sourceNow = string.Equals(Source, "room", StringComparison.OrdinalIgnoreCase)
+                    ? GetRoomNow()
+                    : Time.realtimeSinceStartupAsDouble;
+                var time = sourceNow * Rate + Offset;
+                return Mathf.Max(0f, (float)(IsFinite(time) ? time : 0d));
+            }
+
+            private double GetRoomNow()
+            {
+                if (!IsFinite(RoomNow) || RoomNow <= 0d)
+                    return 0d;
+                if (!IsFinite(SentAtMilliseconds) || SentAtMilliseconds <= 0d)
+                    return RoomNow;
+
+                var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var elapsedSeconds = Math.Max(0d, (nowMs - SentAtMilliseconds) / 1000d);
+                return RoomNow + elapsedSeconds;
+            }
         }
 
         private readonly struct BodyCandidate

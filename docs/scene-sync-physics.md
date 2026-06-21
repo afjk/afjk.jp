@@ -283,6 +283,10 @@ The Unity bridge uses Scene Sync wire coordinates as the canonical physics
 basis and converts poses only when applying them back to Unity `Transform`s.
 This keeps Web/Unity parity hashes meaningful within the same physics profile.
 
+The bridge also follows Shared Playback `scene-clock` messages. It derives the
+target Rapier tick from the shared clock time and restores the initial Rapier
+snapshot when a reset or seek-to-zero payload carries a `physicsBaseline`.
+
 ## Supported Shapes
 
 The current Scene Sync UI maps to Rapier sphere and cuboid colliders:
