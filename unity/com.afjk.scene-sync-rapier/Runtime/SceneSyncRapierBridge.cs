@@ -637,6 +637,23 @@ namespace Afjk.SceneSync.Rapier
                 pendingBodyStateInputs.Any(input => input.ApplyTick > branchTick);
         }
 
+        private long GetLastPhysicsEventRevisionAfterTimelineBranch(int nextRevision, int branchTick)
+        {
+            var normalizedBranchTick = Mathf.Max(0, branchTick);
+            var lastRevision = 0L;
+            foreach (var input in bodyStateInputHistory)
+            {
+                if (input.TimelineRevision == nextRevision || input.ApplyTick <= normalizedBranchTick)
+                    lastRevision = Math.Max(lastRevision, input.EventRevision);
+            }
+            foreach (var input in pendingBodyStateInputs)
+            {
+                if (input.TimelineRevision == nextRevision || input.ApplyTick <= normalizedBranchTick)
+                    lastRevision = Math.Max(lastRevision, input.EventRevision);
+            }
+            return lastRevision;
+        }
+
         public void RebuildWorld()
         {
             RefreshMetadataFromScene();
@@ -881,6 +898,9 @@ namespace Afjk.SceneSync.Rapier
             var payloadTimelineRevision = payload != null ? Mathf.Max(0, payload.timelineRevision) : 0;
             var payloadLastEventRevision = payload != null ? Math.Max(0L, payload.lastEventRevision) : 0L;
             var payloadSceneClockRevision = ReadInt(payloadJson, "sceneClockRevision", int.MinValue);
+            var expectedLastEventRevision = payloadTimelineRevision > timelineRevision
+                ? GetLastPhysicsEventRevisionAfterTimelineBranch(payloadTimelineRevision, payload?.timelineForkTick ?? 0)
+                : lastPhysicsEventRevision;
 
             var canApply = autoApplyRemoteSnapshots
                 && payload != null
@@ -895,23 +915,15 @@ namespace Afjk.SceneSync.Rapier
                 && payloadTimelineRevision >= timelineRevision
                 && (payloadSceneClockRevision == int.MinValue ||
                     latestSceneClockRevision == int.MinValue ||
-                    payloadSceneClockRevision >= latestSceneClockRevision);
+                    payloadSceneClockRevision >= latestSceneClockRevision)
+                && payloadLastEventRevision >= expectedLastEventRevision
+                && payload.tick >= localTickBeforeApply;
 
             var bodyStates = new List<SnapshotBodyState>();
             if (canApply)
             {
                 if (payloadTimelineRevision > timelineRevision)
                     AdvancePhysicsTimeline(payloadTimelineRevision, payload.timelineForkTick);
-
-                if (payloadLastEventRevision < lastPhysicsEventRevision ||
-                    payload.tick < tick)
-                {
-                    canApply = false;
-                }
-            }
-
-            if (canApply)
-            {
                 foreach (var body in payload.bodies)
                 {
                     if (body == null || !IsDynamicSnapshotBody(body))
