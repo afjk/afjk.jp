@@ -36,9 +36,32 @@ function mockFetch(responses) {
   globalThis.fetch = async (url) => {
     const entry = responses[url];
     if (!entry) return { ok: false, status: 404 };
-    return { ok: true, status: 200, arrayBuffer: async () => entry };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      arrayBuffer: async () => entry,
+    };
   };
   return () => { globalThis.fetch = original; };
+}
+
+function readViewerSource(source) {
+  const sourcePath = path.join(repoRoot, 'html', source.src.replace(/^\//, ''));
+  const content = source.binary
+    ? fs.readFileSync(sourcePath)
+    : fs.readFileSync(sourcePath, 'utf8');
+  if (source.binary) return content;
+  return typeof source.transform === 'function' ? source.transform(content) : content;
+}
+
+function collectModuleImports(source) {
+  const imports = [];
+  const re = /(?:import|export)\s+(?:[^'";]+?\s+from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
+  for (const match of source.matchAll(re)) {
+    imports.push(match[1] || match[2]);
+  }
+  return imports;
 }
 
 test('export package construction', async (t) => {
@@ -71,23 +94,23 @@ test('export package construction', async (t) => {
     assert.ok(generateExportIndexHtml().includes('index.html'));
   });
 
-  await t.test('viewer/ directory files are defined in VIEWER_SOURCES', () => {
-    // Verify the viewer file paths are consistent with what we expect in the ZIP
-    const expectedViewerFiles = [
+  await t.test('viewer runtime files are defined in VIEWER_SOURCES', () => {
+    const expectedPackageFiles = [
       'viewer/viewer.js',
       'viewer/create-viewer-core.js',
       'viewer/object-audio-controller.js',
       'viewer/static-asset-resolver.js',
       'viewer/scene-document.js',
+      'viewer/export-behavior-runtime.js',
+      'scenesync/plugins/scene-sync-physics-plugin.js',
+      'scenesync/plugins/scene-sync-loomlet-plugin.js',
+      'scenesync/runtime/schedule-context.js',
+      'scenesync/runtime/runtime-events.js',
       'viewer/viewer.css',
     ];
     const destPaths = VIEWER_SOURCES.map(s => s.dest);
-    for (const f of expectedViewerFiles) {
+    for (const f of expectedPackageFiles) {
       assert.ok(destPaths.includes(f), `VIEWER_SOURCES should contain ${f}`);
-    }
-    // All expected paths start with viewer/
-    for (const f of expectedViewerFiles) {
-      assert.ok(f.startsWith('viewer/'));
     }
   });
 
@@ -115,6 +138,33 @@ test('export package construction', async (t) => {
     const destPaths = VIEWER_SOURCES.map(s => s.dest);
     assert.equal(destPaths.some(path => path.startsWith('viewer/loom/')), false,
       `VIEWER_SOURCES should not contain old viewer/loom files (got: ${destPaths.join(', ')})`);
+  });
+
+  await t.test('VIEWER_SOURCES module imports resolve inside the ZIP', () => {
+    const sourceByDest = new Map(VIEWER_SOURCES.map(source => [source.dest, source]));
+    const includedPaths = new Set(sourceByDest.keys());
+    const externalImports = new Set([
+      'three',
+      '@dimforge/rapier3d-deterministic-compat',
+    ]);
+    const failures = [];
+
+    for (const source of VIEWER_SOURCES) {
+      if (source.binary || !/\.(?:m?js)$/.test(source.dest)) continue;
+      const transformedSource = readViewerSource(source);
+      for (const specifier of collectModuleImports(transformedSource)) {
+        if (!specifier || externalImports.has(specifier) || specifier.startsWith('three/')) continue;
+        if (!specifier.startsWith('.')) continue;
+
+        const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(source.dest), specifier));
+        const resolvedPath = path.posix.extname(resolved) ? resolved : `${resolved}.js`;
+        if (!includedPaths.has(resolvedPath)) {
+          failures.push(`${source.dest} imports ${specifier} -> ${resolvedPath}`);
+        }
+      }
+    }
+
+    assert.deepEqual(failures, []);
   });
 
   await t.test('scene.json includes behaviors when behaviorState provided', async () => {
