@@ -292,6 +292,13 @@ using the same v0 event shape as Web runtime events: `physics.collision.enter`
 and `physics.collision.exit`, sorted `objectIdA` / `objectIdB`, `pairKey`,
 physics `tick`, `source: "physics"`, and `phase: "postPhysics"`.
 
+`SceneSyncRapierBridge.ComputeStateHashHex()` exposes Unity Rapier's current
+`SceneSyncCanonicalPhysicsHashV1` as 16-character lowercase hex. The bridge also
+keeps `LastStateHash` updated after rebuilds, resets, and physics steps without
+requiring log output. Use it as the Unity-side value to compare with the Web
+runtime's `world.canonicalStateHash()` when both hosts are on the same
+`SceneSyncRapierParity-0.30` profile.
+
 ## Supported Shapes
 
 The current Scene Sync UI maps to Rapier sphere and cuboid colliders:
