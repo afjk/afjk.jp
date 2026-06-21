@@ -6485,6 +6485,10 @@ function handleHandoff(data) {
       }
       notifySceneStateChanged('scene-state-handoff');
       publishSharedObjectClockBaselines('scene-state-baseline');
+      broadcast({
+        kind: 'scene-physics-input-log-request',
+        timelineId: 'default',
+      });
       break;
     }
     case 'scene-request': {

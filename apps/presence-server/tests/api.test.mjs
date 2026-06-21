@@ -332,6 +332,8 @@ describe('presence REST broadcast API', () => {
     const sender = await connectClient(roomId, 'Physics Sender');
     const receiver = await connectClient(roomId, 'Physics Receiver');
     try {
+      const firstEcho = waitForMessage(sender, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
       const firstInput = waitForMessage(receiver, message =>
         message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
       sender.send(JSON.stringify({
@@ -355,11 +357,13 @@ describe('presence REST broadcast API', () => {
         },
       }));
 
-      const first = await firstInput;
+      const [first, firstSender] = await Promise.all([firstInput, firstEcho]);
       assert.equal(first.payload.eventRevision, 1);
       assert.equal(first.payload.timelineRevision, 0);
       assert.equal(first.payload.timelineForkTick, 0);
       assert.equal(first.payload.timelineVersion, 'SceneSyncPhysicsTimelineV1');
+      assert.equal(firstSender.payload.eventRevision, 1);
+      assert.equal(firstSender.payload.inputId, 'drag-a:000001');
 
       const branchInput = waitForMessage(receiver, message =>
         message.type === 'handoff' && message.payload?.inputId === 'drag-b:000001');
@@ -375,7 +379,7 @@ describe('presence REST broadcast API', () => {
           interactionId: 'drag-b',
           sequence: 1,
           phase: 'grab-release',
-          branchTick: 10,
+          branchTick: 999,
           objectId: 'box',
           applyTick: 10,
           position: [2, 2, 3],
@@ -439,8 +443,6 @@ describe('presence REST broadcast API', () => {
 
       lateJoiner = new WebSocket(`${wsBaseUrl}?room=${roomId}`);
       const welcomePromise = waitForMessage(lateJoiner, message => message.type === 'welcome');
-      const replayPromise = waitForMessage(lateJoiner, message =>
-        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
       await waitForEvent(lateJoiner, 'open');
       lateJoiner.send(JSON.stringify({
         type: 'hello',
@@ -448,6 +450,16 @@ describe('presence REST broadcast API', () => {
         device: 'Node Test',
       }));
       await welcomePromise;
+
+      const replayPromise = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      lateJoiner.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input-log-request',
+          timelineId: 'default',
+        },
+      }));
 
       const replay = await replayPromise;
       assert.equal(replay.from.id, 'server');

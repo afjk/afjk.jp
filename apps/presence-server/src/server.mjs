@@ -564,6 +564,11 @@ function branchPhysicsTimeline(timeline, branchTick) {
   timeline.events = timeline.events.filter(event => Number(event.applyTick) <= normalizedBranchTick);
 }
 
+function findPhysicsTimelineEventByInputId(timeline, inputId) {
+  if (typeof inputId !== 'string' || !inputId.trim()) return null;
+  return timeline.events.find(event => event.inputId === inputId.trim()) || null;
+}
+
 function canonicalizeScenePhysicsInput(roomId, payload) {
   if (payload?.kind !== 'scene-physics-input') {
     if (payload?.kind === 'scene-state') {
@@ -578,9 +583,15 @@ function canonicalizeScenePhysicsInput(roomId, payload) {
   const timelineId = normalizePhysicsTimelineId(payload.timelineId);
   const timeline = getRoomPhysicsTimeline(roomId, timelineId);
   const applyTick = Math.max(0, Math.floor(Number(payload.applyTick) || 0));
-  const branchTick = Math.max(0, Math.floor(Number(payload.branchTick ?? applyTick) || 0));
+  const requestedBranchTick = Math.max(0, Math.floor(Number(payload.branchTick ?? applyTick) || 0));
+  const branchTick = Math.min(requestedBranchTick, applyTick);
   const payloadTimelineRevision = Math.max(0, Math.floor(Number(payload.timelineRevision) || 0));
   const latestTick = getLatestPhysicsEventTick(timeline);
+  const existingEvent = findPhysicsTimelineEventByInputId(timeline, payload.inputId);
+  if (existingEvent) {
+    return { ok: true, payload: cloneJson(existingEvent), duplicate: true };
+  }
+
   if (payloadTimelineRevision < timeline.timelineRevision) {
     return {
       ok: false,
@@ -620,7 +631,7 @@ function canonicalizeScenePhysicsInput(roomId, payload) {
   return { ok: true, payload: event };
 }
 
-function replayRoomPhysicsTimeline(client) {
+function sendRoomPhysicsTimeline(client, timelineId = null) {
   const roomTimelines = roomPhysicsTimelines.get(client.roomId);
   if (!roomTimelines) return;
   const sender = {
@@ -629,7 +640,9 @@ function replayRoomPhysicsTimeline(client) {
     device: 'server',
   };
 
+  const normalizedTimelineId = timelineId ? normalizePhysicsTimelineId(timelineId) : null;
   for (const timeline of roomTimelines.values()) {
+    if (normalizedTimelineId && timeline.timelineId !== normalizedTimelineId) continue;
     for (const event of timeline.events) {
       safeSend(client.conn, {
         type: 'handoff',
@@ -640,37 +653,32 @@ function replayRoomPhysicsTimeline(client) {
   }
 }
 
+function createHandoffMessage(sender, payload) {
+  return {
+    type: 'handoff',
+    from: {
+      id: sender.id,
+      nickname: sender.nickname,
+      device: sender.device
+    },
+    payload: payload || {}
+  };
+}
+
 function deliverHandoff(sender, msg) {
   const room = rooms.get(sender.roomId);
   if (!room) return;
   const target = room.get(msg.targetId);
   if (!target) return;
-  const payload = {
-    type: 'handoff',
-    from: {
-      id: sender.id,
-      nickname: sender.nickname,
-      device: sender.device
-    },
-    payload: msg.payload || {}
-  };
-  safeSend(target.conn, payload);
+  safeSend(target.conn, createHandoffMessage(sender, msg.payload));
 }
 
-function broadcastHandoff(sender, msg) {
+function broadcastHandoff(sender, msg, { includeSender = false } = {}) {
   const room = rooms.get(sender.roomId);
   if (!room) return;
-  const payload = {
-    type: 'handoff',
-    from: {
-      id: sender.id,
-      nickname: sender.nickname,
-      device: sender.device
-    },
-    payload: msg.payload || {}
-  };
+  const payload = createHandoffMessage(sender, msg.payload);
   room.forEach(client => {
-    if (client.id !== sender.id) {
+    if (includeSender || client.id !== sender.id) {
       safeSend(client.conn, payload);
     }
   });
@@ -992,6 +1000,13 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     });
   }
 
+  if (nextPayload?.kind === 'scene-physics-input-log-request') {
+    return {
+      status: 400,
+      body: { error: 'scene-physics-input-log-request requires a websocket client' },
+    };
+  }
+
   if (nextPayload?.type && SCENE_GRAPH_MESSAGE_TYPES.has(nextPayload.type)) {
     const validation = validateSceneGraphMessage(nextPayload);
     if (!validation.ok) {
@@ -1052,17 +1067,19 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     };
   }
 
-  const physicsTimelinePayload = canonicalizeScenePhysicsInput(roomId, nextPayload);
-  if (!physicsTimelinePayload.ok) {
-    return {
-      status: physicsTimelinePayload.status || 409,
-      body: {
-        error: physicsTimelinePayload.error || 'physics timeline rejected',
-        message: physicsTimelinePayload.message,
-      },
-    };
+  if (peers.length > 0) {
+    const physicsTimelinePayload = canonicalizeScenePhysicsInput(roomId, nextPayload);
+    if (!physicsTimelinePayload.ok) {
+      return {
+        status: physicsTimelinePayload.status || 409,
+        body: {
+          error: physicsTimelinePayload.error || 'physics timeline rejected',
+          message: physicsTimelinePayload.message,
+        },
+      };
+    }
+    nextPayload = physicsTimelinePayload.payload;
   }
-  nextPayload = physicsTimelinePayload.payload;
 
   const message = {
     type: 'handoff',
@@ -1810,7 +1827,6 @@ function createPresenceServer() {
             client.userId = String(data.userId);
           }
           broadcastPeers(roomId);
-          replayRoomPhysicsTimeline(client);
           break;
         case 'handoff':
           if (data.targetId && data.payload) {
@@ -1861,6 +1877,11 @@ function createPresenceServer() {
                 return;
               }
 
+              if (data.payload.kind === 'scene-physics-input-log-request') {
+                sendRoomPhysicsTimeline(client, data.payload.timelineId);
+                return;
+              }
+
               const objectLimit = applySceneObjectLimits(roomId, data.payload, actorId);
               if (!objectLimit.ok) {
                 safeSend(conn, {
@@ -1883,7 +1904,9 @@ function createPresenceServer() {
               data.payload = physicsTimelinePayload.payload;
             }
 
-            broadcastHandoff(client, data);
+            broadcastHandoff(client, data, {
+              includeSender: data.payload?.kind === 'scene-physics-input',
+            });
           }
           break;
         case 'ping':
@@ -1970,6 +1993,7 @@ function createPresenceServer() {
     if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
     rooms.clear();
     roomObjectIds.clear();
+    roomPhysicsTimelines.clear();
     clientsByIpHash.clear();
     pendingSceneRequests.forEach(({ timer, resolve }) => {
       clearTimeout(timer);

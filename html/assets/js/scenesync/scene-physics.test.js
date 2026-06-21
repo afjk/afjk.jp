@@ -323,6 +323,63 @@ test('orders same-tick interaction inputs by event revision and sequence', () =>
   runtime.dispose();
 });
 
+test('updates existing scene physics input metadata from canonical server echo', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  const localInput = {
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'drag-echo:000001',
+    timelineId: 'default',
+    timelineRevision: 0,
+    eventRevision: 1,
+    interactionId: 'drag-echo',
+    sequence: 1,
+    phase: 'grab-release',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  };
+  assert.equal(runtime.queueInput(localInput), true);
+  assert.equal(runtime.queueInput({
+    ...localInput,
+    eventRevision: 7,
+    timelineForkTick: 0,
+  }), true);
+
+  const result = runtime.update({ t: 3 / 60, transportActive: true });
+  assert.equal(result.lastEventRevision, 7);
+  assert.ok(object.position.toArray()[0] > 3);
+
+  runtime.dispose();
+});
+
 test('branches the physics event timeline and drops old future inputs', () => {
   const object = makeObject({
     objectId: 'ball',

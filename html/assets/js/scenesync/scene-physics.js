@@ -642,14 +642,6 @@ export function createScenePhysicsRuntime({
       ? payload.inputId.trim()
       : (interactionId ? `${interactionId}:${sequence}` : `${objectId}:${applyTick}`);
 
-    if (
-      appliedBodyStateInputIds.has(inputId) ||
-      pendingBodyStateInputs.some((input) => input.inputId === inputId) ||
-      bodyStateInputHistory.some((input) => input.inputId === inputId)
-    ) {
-      return false;
-    }
-
     if (!Array.isArray(payload.position) || !Array.isArray(payload.rotation)) {
       return false;
     }
@@ -671,6 +663,10 @@ export function createScenePhysicsRuntime({
       angularVelocity: readVec3(payload.angularVelocity || payload.angvel, [0, 0, 0]),
     };
 
+    if (updateExistingBodyStateInput(input)) {
+      return true;
+    }
+
     lastEventRevision = Math.max(lastEventRevision, input.eventRevision);
     addBodyStateInputHistory(input);
     if (world && input.applyTick <= world.tick) {
@@ -683,6 +679,45 @@ export function createScenePhysicsRuntime({
     }
 
     addPendingBodyStateInput(input);
+    return true;
+  }
+
+  function bodyStateInputEquals(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function replaceBodyStateInput(list, input) {
+    const index = list.findIndex((item) => item.inputId === input.inputId);
+    if (index < 0) return false;
+    if (bodyStateInputEquals(list[index], input)) return true;
+    list[index] = input;
+    list.sort(compareBodyStateInputs);
+    return true;
+  }
+
+  function updateExistingBodyStateInput(input) {
+    const hasApplied = appliedBodyStateInputIds.has(input.inputId);
+    const hasHistory = bodyStateInputHistory.some((item) => item.inputId === input.inputId);
+    const hasPending = pendingBodyStateInputs.some((item) => item.inputId === input.inputId);
+    if (!hasApplied && !hasHistory && !hasPending) return false;
+
+    const previous = bodyStateInputHistory.find((item) => item.inputId === input.inputId)
+      || pendingBodyStateInputs.find((item) => item.inputId === input.inputId)
+      || null;
+    const changed = !previous || !bodyStateInputEquals(previous, input);
+    if (hasHistory) {
+      replaceBodyStateInput(bodyStateInputHistory, input);
+    } else {
+      addBodyStateInputHistory(input);
+    }
+    if (hasPending) {
+      replaceBodyStateInput(pendingBodyStateInputs, input);
+    }
+    lastEventRevision = Math.max(lastEventRevision, input.eventRevision);
+
+    if (changed && world && (hasApplied || input.applyTick <= world.tick)) {
+      rewindBodyStateInputsToInitialSnapshot();
+    }
     return true;
   }
 
