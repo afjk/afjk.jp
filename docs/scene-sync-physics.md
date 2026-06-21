@@ -287,6 +287,11 @@ The bridge also follows Shared Playback `scene-clock` messages. It derives the
 target Rapier tick from the shared clock time and restores the initial Rapier
 snapshot when a reset or seek-to-zero payload carries a `physicsBaseline`.
 
+Unity collision events are exposed through `SceneSyncRapierBridge.CollisionEvent`
+using the same v0 event shape as Web runtime events: `physics.collision.enter`
+and `physics.collision.exit`, sorted `objectIdA` / `objectIdB`, `pairKey`,
+physics `tick`, `source: "physics"`, and `phase: "postPhysics"`.
+
 ## Supported Shapes
 
 The current Scene Sync UI maps to Rapier sphere and cuboid colliders:

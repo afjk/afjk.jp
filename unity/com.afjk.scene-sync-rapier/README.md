@@ -41,3 +41,8 @@ When the Web client publishes Shared Playback `scene-clock` messages, the bridge
 uses the shared clock time to step Rapier to the matching fixed tick. Reset and
 seek-to-zero payloads with `physicsBaseline` restore the initial Rapier snapshot
 before stepping again.
+
+`SceneSyncRapierBridge.CollisionEvent` raises Web-compatible
+`physics.collision.enter` and `physics.collision.exit` events after fixed physics
+steps. Events include sorted `objectIdA` / `objectIdB`, `pairKey`, physics
+`tick`, `time`, `source: "physics"`, and `phase: "postPhysics"`.
