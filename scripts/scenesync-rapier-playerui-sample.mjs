@@ -19,14 +19,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const htmlRoot = path.join(repoRoot, 'html');
+const browserPath = path.join(repoRoot, '.playwright-browsers');
 const require = createRequire(import.meta.url);
 const WebSocket = require(path.join(repoRoot, 'apps/presence-server/node_modules/ws'));
 
 process.env.GPT_SESSION_SECRET ||= 'scene-sync-rapier-playerui-sample-secret';
+process.env.PLAYWRIGHT_BROWSERS_PATH ||= browserPath;
 
 const DEFAULT_FIXTURE = path.join(repoRoot, 'fixtures/rapier/parity-basic-001.json');
 const DEFAULT_TICKS = [0, 30, 60];
 const DEFAULT_ROOT_NAME = '__SceneSyncRapierPlayerUiSample';
+const PLAYER_UI_NICKNAME = 'PlayerUI Rapier Sample';
 const TEST_TIMEOUT_MS = 90000;
 
 const mimeTypes = new Map([
@@ -51,6 +54,7 @@ function parseArgs(argv) {
     roomId: `rapier-sample-${Date.now().toString(36)}`,
     withUnity: false,
     verify: false,
+    verifyPlayerUi: false,
     hold: true,
     uloopBin: process.env.ULOOP_BIN || 'uloop',
     unityProject: process.env.SCENESYNC_UNITY_PROJECT || path.resolve(repoRoot, '..', 'SceneSyncClient'),
@@ -69,6 +73,13 @@ function parseArgs(argv) {
       options.verify = true;
       options.withUnity = true;
       options.hold = false;
+    } else if (arg === '--verify-playerui') {
+      options.verify = true;
+      options.verifyPlayerUi = true;
+      options.withUnity = true;
+      options.hold = false;
+    } else if (arg === '--no-verify-playerui') {
+      options.verifyPlayerUi = false;
     } else if (arg === '--no-hold') {
       options.hold = false;
     } else if (arg === '--hold') {
@@ -603,6 +614,66 @@ Debug.Log("ok:scenesync-rapier-playerui-sample-cleanup");
   });
 }
 
+async function launchPlayerUiBrowser(playerUrl) {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+    });
+
+    await context.addInitScript((nickname) => {
+      localStorage.setItem('sceneSync.welcomeSeen', 'true');
+      localStorage.setItem('sceneSync.displayName', nickname);
+    }, PLAYER_UI_NICKNAME);
+
+    const page = await context.newPage();
+    const consoleMessages = [];
+    const pageErrors = [];
+    page.on('console', (msg) => {
+      const type = msg.type();
+      if (type === 'error' || type === 'warning') {
+        consoleMessages.push({ type, text: msg.text() });
+      }
+    });
+    page.on('pageerror', (error) => {
+      pageErrors.push(error.message || String(error));
+    });
+
+    await page.goto(playerUrl, { waitUntil: 'domcontentloaded', timeout: TEST_TIMEOUT_MS });
+    await page.waitForFunction(() => document.body.dataset.sceneSyncShell === 'player', null, {
+      timeout: TEST_TIMEOUT_MS,
+    });
+    await page.waitForFunction(() => window.__sceneSyncDebug?.presence?.().connected, null, {
+      timeout: TEST_TIMEOUT_MS,
+    });
+    await page.waitForFunction(() => {
+      const physics = window.__sceneSyncDebug?.physics?.state?.();
+      return physics?.scenePhysics?.enabled === true
+        && physics?.objectIds?.includes('box-1')
+        && physics?.objectIds?.includes('floor')
+        && physics?.hasBodies === true;
+    }, null, { timeout: TEST_TIMEOUT_MS });
+
+    const presence = await page.evaluate(() => window.__sceneSyncDebug.presence());
+    assert.ok(presence.id, 'PlayerUI peer must have a presence id');
+
+    return { browser, page, consoleMessages, pageErrors, presence };
+  } catch (error) {
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function resetPlayerUiClock(page) {
+  return page.evaluate(() => {
+    window.__sceneSyncDebug.sceneClock.requestControl();
+    window.__sceneSyncDebug.sceneClock.reset();
+    window.__sceneSyncDebug.sceneClock.play();
+    return window.__sceneSyncDebug.sceneClock.state();
+  });
+}
+
 function sendBroadcast(ws, payload) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: 'broadcast', payload }));
@@ -663,7 +734,7 @@ function installLoaderHandlers(ws, sceneState, expectedHashes) {
     if (!Number.isInteger(tick) || typeof hash !== 'string') return;
 
     const expected = expectedHashes[String(tick)];
-    const record = { message, peer, tick, hash };
+    const record = { message, peer, tick, hash, sceneClockRevision: payload.sceneClockRevision };
     observedPhysicsHashes.push(record);
     while (observedPhysicsHashes.length > 32) observedPhysicsHashes.shift();
 
@@ -681,10 +752,11 @@ function installLoaderHandlers(ws, sceneState, expectedHashes) {
     console.log(`[physics-hash] tick=${tick} hash=${hash} peers=${peers.join(',')} ${status}`);
   });
 
-  const waitForPhysicsHash = ({ peer, tick, timeoutMs = TEST_TIMEOUT_MS }) => {
+  const waitForPhysicsHash = ({ peer, tick, sceneClockRevision = null, timeoutMs = TEST_TIMEOUT_MS }) => {
     const predicate = record => (
       record.tick === tick
       && (!peer || record.peer === peer)
+      && (sceneClockRevision == null || record.sceneClockRevision === sceneClockRevision)
     );
     const existing = observedPhysicsHashes.find(predicate);
     if (existing) return Promise.resolve(existing);
@@ -703,6 +775,7 @@ function installLoaderHandlers(ws, sceneState, expectedHashes) {
           tick: record.tick,
           hash: record.hash,
           peer: record.peer,
+          sceneClockRevision: record.sceneClockRevision,
         })))}`));
       }, timeoutMs);
       physicsHashWaiters.add(waiter);
@@ -722,19 +795,22 @@ async function run() {
   await listenServer(presenceServer);
   const staticServer = await createStaticServer();
   const wsBaseUrl = `${serverUrl(presenceServer, 'ws')}/ws`;
-  const playerUrl = `${serverUrl(staticServer)}/scenesync/?room=${encodeURIComponent(options.roomId)}&presence=${encodeURIComponent(wsBaseUrl)}&dev=1`;
+  const playerUrl = `${serverUrl(staticServer)}/scenesync/?room=${encodeURIComponent(options.roomId)}&presence=${encodeURIComponent(wsBaseUrl)}&dev=1&shell=player&name=${encodeURIComponent(PLAYER_UI_NICKNAME)}`;
   const loaderWs = await connectPresenceClient(wsBaseUrl, options.roomId, 'Rapier Sample Loader');
   const loader = installLoaderHandlers(loaderWs, sceneState, expectedHashes);
   const targetTick = Math.max(...options.ticks);
-  const unityHashPromise = options.verify
+  let unityHashPromise = options.verify
     ? loader.waitForPhysicsHash({ peer: 'Unity Rapier Sample', tick: targetTick })
     : null;
+  let playerUiHashPromise = null;
   let rebroadcastTimer = null;
   let unityStarted = false;
+  let playerUiBrowser = null;
 
   const cleanup = async () => {
     if (rebroadcastTimer) clearInterval(rebroadcastTimer);
     if (unityStarted) await cleanupUnitySample(options);
+    if (playerUiBrowser?.browser) await playerUiBrowser.browser.close().catch(() => {});
     await closeWebSocket(loaderWs);
     await closeHttpServer(staticServer);
     await stopPresenceServer(presenceServer);
@@ -761,10 +837,30 @@ async function run() {
       ), { label: 'Unity Rapier Sample peer or message' });
     }
 
+    if (options.verifyPlayerUi) {
+      playerUiBrowser = await launchPlayerUiBrowser(playerUrl);
+    }
+
     if (!options.withUnity) {
       loader.publishScene();
     }
     loader.publishClock();
+    if (options.verifyPlayerUi) {
+      const clockState = await resetPlayerUiClock(playerUiBrowser.page);
+      assert.ok(Number.isFinite(clockState?.sharedRevision), 'PlayerUI reset must expose a scene clock revision');
+      const sceneClockRevision = clockState.sharedRevision;
+      unityHashPromise = loader.waitForPhysicsHash({
+        peer: 'Unity Rapier Sample',
+        tick: targetTick,
+        sceneClockRevision,
+      });
+      playerUiHashPromise = loader.waitForPhysicsHash({
+        peer: PLAYER_UI_NICKNAME,
+        tick: targetTick,
+        sceneClockRevision,
+      });
+    }
+
     if (options.rebroadcastMs > 0 && options.hold) {
       rebroadcastTimer = setInterval(() => {
         loader.publishScene();
@@ -773,14 +869,34 @@ async function run() {
     }
 
     if (options.verify) {
-      const record = await unityHashPromise;
-      assert.equal(record.hash, expectedHashes[String(targetTick)]);
+      const [unityRecord, playerUiRecord] = await Promise.all([
+        unityHashPromise,
+        playerUiHashPromise,
+      ]);
+      assert.equal(unityRecord.hash, expectedHashes[String(targetTick)]);
+      if (playerUiRecord) {
+        assert.equal(playerUiRecord.hash, expectedHashes[String(targetTick)]);
+        assert.equal(playerUiRecord.hash, unityRecord.hash);
+        assert.equal(playerUiRecord.sceneClockRevision, unityRecord.sceneClockRevision);
+        assert.deepEqual(playerUiBrowser.pageErrors, [], 'PlayerUI page errors should be empty');
+        assert.deepEqual(
+          playerUiBrowser.consoleMessages.filter(entry => entry.type === 'error'),
+          [],
+          `unexpected PlayerUI console errors: ${JSON.stringify(playerUiBrowser.consoleMessages)}`,
+        );
+      }
       console.log(JSON.stringify({
         ok: true,
-        verified: 'unity-web-rapier-parity',
+        verified: options.verifyPlayerUi
+          ? 'unity-playerui-rapier-parity'
+          : 'unity-web-rapier-parity',
         roomId: options.roomId,
         tick: targetTick,
-        hash: record.hash,
+        hash: unityRecord.hash,
+        playerUi: playerUiRecord ? {
+          peerId: playerUiBrowser.presence.id,
+          hash: playerUiRecord.hash,
+        } : null,
       }, null, 2));
       return;
     }
@@ -800,6 +916,10 @@ async function run() {
 run().then(() => {
   process.exit(0);
 }).catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
+  const message = error?.stack || error?.message || String(error);
+  console.error(message);
+  if (/Executable doesn't exist|browserType\.launch/.test(message)) {
+    console.error('Run `npm run test:e2e:install-browsers` and retry this smoke test.');
+  }
   process.exit(1);
 });

@@ -4977,6 +4977,7 @@ function getSceneClockStateForLoomlet(now = performance.now()) {
     localNow,
     active: sceneClockState.active,
     transportActive: sceneClockState.transportActive,
+    sharedRevision: sceneClockState.sharedRevision,
     controller,
     isController: sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf(),
     modeLabel: CLOCK_MODE_LABELS[sceneClockState.mode] || sceneClockState.mode,
@@ -5612,6 +5613,7 @@ function getSceneClockStateForShell() {
     duration,
     transportActive: sceneClockState.transportActive,
     active: sceneClockState.active,
+    sharedRevision: sceneClockState.sharedRevision,
     controller,
     isController: sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf(),
     selectedObjectAge,
@@ -10734,6 +10736,10 @@ if (isDevUiEnabled()) {
     sceneClock: {
       requestControl: () => {
         requestSceneClockControl();
+        return getSceneClockStateForShell();
+      },
+      reset: () => {
+        resetSceneClock();
         return getSceneClockStateForShell();
       },
       play: () => {

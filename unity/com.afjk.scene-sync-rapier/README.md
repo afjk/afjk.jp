@@ -104,3 +104,16 @@ For an automated Unity-vs-Web Rapier hash check without launching a browser:
 ```bash
 npm run test:e2e:scene-sync-rapier-playerui-sample
 ```
+
+To also launch the real PlayerUI shell in Chromium and verify Unity and PlayerUI
+both publish the same tick 60 physics hash:
+
+```bash
+npm run test:e2e:scene-sync-rapier-playerui-browser
+```
+
+Install the local Chromium binary first when needed:
+
+```bash
+npm run test:e2e:install-browsers
+```
