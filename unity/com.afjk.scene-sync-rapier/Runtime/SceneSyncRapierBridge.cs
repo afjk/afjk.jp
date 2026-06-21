@@ -43,6 +43,7 @@ namespace Afjk.SceneSync.Rapier
         private bool hasInitialSnapshot;
         private bool hasPendingWorldEpochTime;
         private bool lastStepLimited;
+        private bool preserveMotionOnNextRebuild = true;
         private float accumulator;
         private float worldEpochTime;
         private float pendingWorldEpochTime;
@@ -176,6 +177,11 @@ namespace Afjk.SceneSync.Rapier
 
         public void RebuildWorld()
         {
+            var preservedBodyStates = preserveMotionOnNextRebuild
+                ? CapturePreservedBodyStates()
+                : new Dictionary<string, PreservedBodyState>(StringComparer.Ordinal);
+            preserveMotionOnNextRebuild = true;
+
             dirty = false;
             accumulator = 0f;
             tick = 0;
@@ -208,7 +214,8 @@ namespace Afjk.SceneSync.Rapier
 
                 foreach (var candidate in candidates.OrderBy(item => item.ObjectId, StringComparer.Ordinal))
                 {
-                    CreateBody(candidate);
+                    preservedBodyStates.TryGetValue(candidate.ObjectId, out var preservedState);
+                    CreateBody(candidate, preservedState);
                 }
 
                 worldEpochTime = hasPendingWorldEpochTime
@@ -381,6 +388,8 @@ namespace Afjk.SceneSync.Rapier
         private void ApplyPhysicsResetBaseline(string raw, double activeTime)
         {
             var baselineJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "physicsBaseline");
+            var preserveMotion = !string.IsNullOrWhiteSpace(baselineJson)
+                && ReadBool(baselineJson, "preserveMotion", false);
             var worldEpoch = !string.IsNullOrWhiteSpace(baselineJson)
                 ? ReadDouble(baselineJson, "worldEpochTime", activeTime)
                 : activeTime;
@@ -391,7 +400,7 @@ namespace Afjk.SceneSync.Rapier
             accumulator = 0f;
             lastStepLimited = false;
 
-            if (world != null && hasInitialSnapshot && world.TryReadSnapshot(initialSnapshot))
+            if (!preserveMotion && world != null && hasInitialSnapshot && world.TryReadSnapshot(initialSnapshot))
             {
                 worldEpochTime = pendingWorldEpochTime;
                 hasPendingWorldEpochTime = false;
@@ -405,6 +414,7 @@ namespace Afjk.SceneSync.Rapier
                 return;
             }
 
+            preserveMotionOnNextRebuild = preserveMotion;
             dirty = true;
         }
 
@@ -481,16 +491,43 @@ namespace Afjk.SceneSync.Rapier
             world.SetColliderStableId(collider, stableId);
         }
 
-        private void CreateBody(BodyCandidate candidate)
+        private Dictionary<string, PreservedBodyState> CapturePreservedBodyStates()
+        {
+            var result = new Dictionary<string, PreservedBodyState>(StringComparer.Ordinal);
+            if (world == null || !world.IsCreated || bindings.Count == 0)
+                return result;
+
+            foreach (var pair in bindings)
+            {
+                var binding = pair.Value;
+                if (binding.IsStatic) continue;
+                if (!world.TryGetRigidBodyState(binding.Body, out var state)) continue;
+
+                result[pair.Key] = new PreservedBodyState(
+                    state.Transform.Position,
+                    state.Transform.Rotation,
+                    state.LinearVelocity,
+                    state.AngularVelocity);
+            }
+
+            return result;
+        }
+
+        private void CreateBody(BodyCandidate candidate, PreservedBodyState preservedState)
         {
             var definition = candidate.Definition;
+            var hasPreservedState = !definition.IsStatic && preservedState.HasValue;
             var body = world.CreateRigidBody(new RapierBodyDesc
             {
                 BodyType = definition.IsStatic ? RapierRigidBodyType.Fixed : RapierRigidBodyType.Dynamic,
-                Position = definition.Position,
-                Rotation = definition.Rotation,
-                LinearVelocity = definition.IsStatic ? Vector3.zero : definition.LinearVelocity,
-                AngularVelocity = definition.IsStatic ? Vector3.zero : definition.AngularVelocity,
+                Position = hasPreservedState ? preservedState.Position : definition.Position,
+                Rotation = hasPreservedState ? preservedState.Rotation : definition.Rotation,
+                LinearVelocity = definition.IsStatic
+                    ? Vector3.zero
+                    : (hasPreservedState ? preservedState.LinearVelocity : definition.LinearVelocity),
+                AngularVelocity = definition.IsStatic
+                    ? Vector3.zero
+                    : (hasPreservedState ? preservedState.AngularVelocity : definition.AngularVelocity),
                 LinearDamping = definition.LinearDamping,
                 AngularDamping = definition.AngularDamping,
                 CanSleep = definition.CanSleep,
@@ -837,6 +874,28 @@ namespace Afjk.SceneSync.Rapier
             public GameObject GameObject { get; }
             public RapierRigidBodyHandle Body { get; }
             public bool IsStatic { get; }
+        }
+
+        private readonly struct PreservedBodyState
+        {
+            public PreservedBodyState(
+                Vector3 position,
+                Quaternion rotation,
+                Vector3 linearVelocity,
+                Vector3 angularVelocity)
+            {
+                Position = position;
+                Rotation = rotation;
+                LinearVelocity = linearVelocity;
+                AngularVelocity = angularVelocity;
+                HasValue = true;
+            }
+
+            public bool HasValue { get; }
+            public Vector3 Position { get; }
+            public Quaternion Rotation { get; }
+            public Vector3 LinearVelocity { get; }
+            public Vector3 AngularVelocity { get; }
         }
 
         private enum PhysicsShape

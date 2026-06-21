@@ -287,6 +287,11 @@ The bridge also follows Shared Playback `scene-clock` messages. It derives the
 target Rapier tick from the shared clock time and restores the initial Rapier
 snapshot when a reset or seek-to-zero payload carries a `physicsBaseline`.
 
+When object or scene metadata changes force a rebuild, Unity preserves dynamic
+body pose, linear velocity, and angular velocity for unchanged Scene Sync object
+ids. Reset baselines opt out of this and restore the initial snapshot unless
+`physicsBaseline.preserveMotion` is explicitly true.
+
 Unity collision events are exposed through `SceneSyncRapierBridge.CollisionEvent`
 using the same v0 event shape as Web runtime events: `physics.collision.enter`
 and `physics.collision.exit`, sorted `objectIdA` / `objectIdB`, `pairKey`,
