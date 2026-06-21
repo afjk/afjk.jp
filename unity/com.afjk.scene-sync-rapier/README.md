@@ -42,6 +42,11 @@ uses the shared clock time to step Rapier to the matching fixed tick. Reset and
 seek-to-zero payloads with `physicsBaseline` restore the initial Rapier snapshot
 before stepping again.
 
+When scene metadata changes cause a Rapier world rebuild, the bridge preserves
+dynamic body pose, linear velocity, and angular velocity for matching Scene Sync
+object ids. Reset baselines still restore the initial snapshot unless
+`physicsBaseline.preserveMotion` is explicitly true.
+
 `SceneSyncRapierBridge.CollisionEvent` raises Web-compatible
 `physics.collision.enter` and `physics.collision.exit` events after fixed physics
 steps. Events include sorted `objectIdA` / `objectIdB`, `pairKey`, physics
