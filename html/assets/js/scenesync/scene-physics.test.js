@@ -456,6 +456,115 @@ test('branches the physics event timeline and drops old future inputs', () => {
   runtime.dispose();
 });
 
+test('clears scene physics input history and rejects stale inputs', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'clear-before',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [6, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  runtime.update({ t: 3 / 60, transportActive: true });
+  assertVectorClose(object.position.toArray(), [6, 2, 0]);
+
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'clear-local-branch',
+    timelineRevision: 3,
+    timelineClearRevision: 0,
+    branchTick: 1,
+    objectId: 'ball',
+    applyTick: 10,
+    position: [4, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  assert.equal(runtime.getTimelineState().timelineRevision, 3);
+
+  assert.equal(runtime.clearInputHistory({
+    kind: 'scene-physics-input-log-clear',
+    timelineId: 'default',
+    timelineRevision: 1,
+    timelineForkTick: 0,
+    timelineClearRevision: 1,
+  }), true);
+  assert.equal(runtime.getTimelineState().timelineRevision, 1);
+  assert.equal(runtime.getTimelineState().timelineClearRevision, 1);
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'clear-stale',
+    timelineRevision: 1,
+    timelineClearRevision: 0,
+    objectId: 'ball',
+    applyTick: 2,
+    position: [8, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), false);
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'clear-after',
+    timelineRevision: 1,
+    timelineClearRevision: 1,
+    eventRevision: 1,
+    objectId: 'ball',
+    applyTick: 1,
+    position: [2, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  assert.equal(runtime.clearInputHistory({
+    kind: 'scene-physics-input-log-clear',
+    timelineId: 'default',
+    timelineRevision: 1,
+    timelineForkTick: 0,
+    timelineClearRevision: 1,
+  }), false);
+
+  const result = runtime.update({ t: 3 / 60, transportActive: true });
+  assert.equal(result.timelineRevision, 1);
+  assert.equal(result.timelineClearRevision, 1);
+  assert.equal(result.lastEventRevision, 1);
+  assertVectorClose(object.position.toArray(), [2, 2, 0]);
+
+  runtime.dispose();
+});
+
 test('normalizes parity object physics fields used by Rapier hashing', () => {
   assert.deepEqual(normalizeObjectPhysics({
     enabled: true,
@@ -695,6 +804,7 @@ test('scene physics runtime creates canonical snapshot reports on demand', () =>
   assert.equal(snapshot.timelineId, 'default');
   assert.equal(snapshot.timelineRevision, 0);
   assert.equal(snapshot.timelineForkTick, 0);
+  assert.equal(snapshot.timelineClearRevision, 0);
   assert.equal(snapshot.lastEventRevision, 0);
   assert.equal(snapshot.profile, SCENE_SYNC_RAPIER_PROFILE);
   assert.equal(snapshot.hashVersion, CANONICAL_PHYSICS_HASH_VERSION);

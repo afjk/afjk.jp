@@ -453,6 +453,7 @@ export function createScenePhysicsRuntime({
   let timelineId = DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
   let timelineRevision = 0;
   let timelineForkTick = 0;
+  let timelineClearRevision = 0;
   let lastEventRevision = 0;
 
   function clear({ preserveInputs = false } = {}) {
@@ -474,6 +475,7 @@ export function createScenePhysicsRuntime({
       timelineId = DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
       timelineRevision = 0;
       timelineForkTick = 0;
+      timelineClearRevision = 0;
       lastEventRevision = 0;
     }
   }
@@ -627,7 +629,11 @@ export function createScenePhysicsRuntime({
 
     const payloadTimelineRevision = nonNegativeInteger(payload.timelineRevision, timelineRevision);
     const branchTick = nonNegativeInteger(payload.branchTick, applyTick);
-    if (payloadTimelineRevision < timelineRevision && applyTick > timelineForkTick) {
+    const payloadTimelineClearRevision = nonNegativeInteger(payload.timelineClearRevision, 0);
+    if (
+      payloadTimelineClearRevision !== timelineClearRevision ||
+      (payloadTimelineRevision < timelineRevision && applyTick > timelineForkTick)
+    ) {
       return false;
     }
     if (payloadTimelineRevision > timelineRevision) {
@@ -652,6 +658,7 @@ export function createScenePhysicsRuntime({
       applyTick,
       timelineId: payloadTimelineId,
       timelineRevision: payloadTimelineRevision,
+      timelineClearRevision: payloadTimelineClearRevision,
       eventRevision,
       interactionId,
       sequence,
@@ -752,6 +759,43 @@ export function createScenePhysicsRuntime({
     if (world && world.tick > timelineForkTick) {
       rewindBodyStateInputsToInitialSnapshot();
     }
+    return true;
+  }
+
+  function clearInputHistory(payload = {}) {
+    const payloadTimelineId = normalizeTimelineId(payload.timelineId);
+    if (payloadTimelineId !== timelineId) return false;
+
+    const hasCanonicalRevision = payload.timelineRevision !== undefined && payload.timelineRevision !== null;
+    const canonicalRevision = hasCanonicalRevision
+      ? nonNegativeInteger(payload.timelineRevision, timelineRevision)
+      : null;
+    const payloadTimelineClearRevision = nonNegativeInteger(
+      payload.timelineClearRevision,
+      canonicalRevision ?? timelineClearRevision + 1,
+    );
+    if (payloadTimelineClearRevision < timelineClearRevision) return false;
+    if (payloadTimelineClearRevision === timelineClearRevision) return false;
+    const nextRevision = hasCanonicalRevision
+      ? canonicalRevision
+      : timelineRevision + 1;
+    const forkTick = nonNegativeInteger(payload.timelineForkTick, 0);
+    timelineRevision = nextRevision;
+    timelineForkTick = forkTick;
+    timelineClearRevision = payloadTimelineClearRevision;
+    lastEventRevision = 0;
+    pendingBodyStateInputs = [];
+    bodyStateInputHistory = [];
+    appliedBodyStateInputIds.clear();
+    previousCollisionPairs = new Set();
+
+    if (world && initialSnapshot) {
+      resetToInitialPose({ t: 0 });
+    }
+    markDirty({
+      preserveMotion: false,
+      worldEpochTime: 0,
+    });
     return true;
   }
 
@@ -914,6 +958,7 @@ export function createScenePhysicsRuntime({
       timelineId,
       timelineRevision,
       timelineForkTick,
+      timelineClearRevision,
       lastEventRevision,
       profile: SCENE_SYNC_RAPIER_PROFILE,
       hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
@@ -953,6 +998,7 @@ export function createScenePhysicsRuntime({
       timelineId,
       timelineRevision,
       timelineForkTick,
+      timelineClearRevision,
       lastEventRevision,
       profile: SCENE_SYNC_RAPIER_PROFILE,
       hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
@@ -971,6 +1017,7 @@ export function createScenePhysicsRuntime({
   return {
     markDirty,
     queueInput,
+    clearInputHistory,
     rebuild,
     update,
     createSnapshotReport,
@@ -982,6 +1029,7 @@ export function createScenePhysicsRuntime({
         timelineId,
         timelineRevision,
         timelineForkTick,
+        timelineClearRevision,
         lastEventRevision,
       };
     },

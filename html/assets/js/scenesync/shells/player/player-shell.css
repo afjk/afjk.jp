@@ -362,6 +362,12 @@
   color: #e2e8f0;
 }
 
+.player-stop-symbol {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .player-btn-play-pause {
   width: 36px;
   height: 36px;

@@ -97,9 +97,7 @@ function createPanelHtml({ title, closeable }) {
       </div>
       <div class="player-controls">
         <button class="player-btn player-btn-stop" data-player-stop type="button" title="Stop">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <rect x="3" y="3" width="10" height="10" rx="2"/>
-          </svg>
+          <span class="player-stop-symbol" data-player-stop-symbol aria-hidden="true">|&lt;</span>
         </button>
         <button class="player-btn player-btn-play-pause" data-player-play-pause data-player-playing="0" type="button" title="Play">
           <svg class="icon-play" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
@@ -200,7 +198,14 @@ export function createPlayerTransportPanel({
     }
 
     const stopBtn = panel.querySelector('[data-player-stop]');
-    if (stopBtn) stopBtn.disabled = controlsDisabled;
+    if (stopBtn) {
+      const atStart = Math.abs(time) <= 0.000001;
+      stopBtn.disabled = controlsDisabled;
+      stopBtn.title = atStart ? 'Clear Physics Event History' : 'Back to Start';
+      stopBtn.setAttribute('aria-label', stopBtn.title);
+      const symbolEl = stopBtn.querySelector('[data-player-stop-symbol]');
+      if (symbolEl) symbolEl.textContent = atStart ? '🔳' : '|<';
+    }
 
     const modeEl = panel.querySelector('[data-player-clock-mode]');
     if (modeEl) {

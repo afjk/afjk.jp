@@ -14,6 +14,7 @@ const KNOWN_KINDS = new Set([
   'scene-unlock',
   'scene-physics-hash',
   'scene-physics-input',
+  'scene-physics-input-log-clear',
   'scene-physics-input-log-request',
   'scene-physics-snapshot',
   'scene-physics-snapshot-request',
@@ -166,7 +167,7 @@ function validateScenePhysicsInputPayload(payload, maxStringLength) {
     const result = validateOptionalReasonableString(payload, key, maxStringLength);
     if (!result.ok) return result;
   }
-  for (const key of ['timelineRevision', 'eventRevision', 'sequence', 'branchTick']) {
+  for (const key of ['timelineRevision', 'timelineClearRevision', 'eventRevision', 'sequence', 'branchTick']) {
     const result = validateOptionalNonNegativeInteger(payload, key);
     if (!result.ok) return result;
   }
@@ -211,6 +212,7 @@ function validateScenePhysicsSyncPayload(payload, maxStringLength) {
     'bodyCount',
     'timelineRevision',
     'timelineForkTick',
+    'timelineClearRevision',
     'lastEventRevision',
   ]) {
     const result = validateOptionalNonNegativeInteger(payload, key);
@@ -440,6 +442,20 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-physics-input') {
     return validateScenePhysicsInputPayload(payload, maxStringLength);
+  }
+
+  if (payload.kind === 'scene-physics-input-log-clear') {
+    for (const key of ['timelineVersion', 'timelineId', 'reason']) {
+      const result = validateOptionalReasonableString(payload, key, maxStringLength);
+      if (!result.ok) return result;
+    }
+    for (const key of ['timelineRevision', 'timelineForkTick', 'timelineClearRevision', 'lastEventRevision']) {
+      const result = validateOptionalNonNegativeInteger(payload, key);
+      if (!result.ok) return result;
+    }
+    const sentAtResult = validateOptionalFiniteNumber(payload, 'sentAt');
+    if (!sentAtResult.ok) return sentAtResult;
+    return { ok: true };
   }
 
   if (

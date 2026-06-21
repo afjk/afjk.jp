@@ -525,6 +525,19 @@ function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+function stableJsonStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJsonStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function normalizePhysicsTimelineId(value) {
   return typeof value === 'string' && value.trim()
     ? value.trim()
@@ -541,6 +554,7 @@ function cloneRoomPhysicsTimelines(roomId) {
       timelineRevision: timeline.timelineRevision,
       timelineForkTick: timeline.timelineForkTick,
       lastEventRevision: timeline.lastEventRevision,
+      clearRevision: timeline.clearRevision || 0,
       events: cloneJson(timeline.events) || [],
     });
   }
@@ -565,6 +579,7 @@ function getPhysicsTimeline(timelines, timelineId) {
     timelineRevision: 0,
     timelineForkTick: 0,
     lastEventRevision: 0,
+    clearRevision: 0,
     events: [],
   };
   timelines.set(normalizedTimelineId, timeline);
@@ -591,9 +606,58 @@ function findPhysicsTimelineEventByInputId(timeline, inputId) {
   return timeline.events.find(event => event.inputId === inputId.trim()) || null;
 }
 
+function areSceneBatchOperationsMirrored(ops, actions) {
+  if (!Array.isArray(ops) || !Array.isArray(actions)) return false;
+  if (ops.length !== actions.length) return false;
+  for (let index = 0; index < ops.length; index += 1) {
+    if (stableJsonStringify(ops[index]) !== stableJsonStringify(actions[index])) return false;
+  }
+  return true;
+}
+
+function collectSceneBatchOperations(payload) {
+  const ops = Array.isArray(payload?.ops) ? payload.ops : null;
+  const actions = Array.isArray(payload?.actions) ? payload.actions : null;
+  if (ops && actions) {
+    return areSceneBatchOperationsMirrored(ops, actions)
+      ? ops
+      : [...ops, ...actions];
+  }
+  return ops || actions || [];
+}
+
+function clearPhysicsTimeline(timelines, timelineId, requestedRevision = 0) {
+  const timeline = getPhysicsTimeline(timelines, timelineId);
+  timeline.timelineRevision = Math.max(
+    timeline.timelineRevision + 2,
+    Math.max(0, Math.floor(Number(requestedRevision) || 0)) + 1,
+  );
+  timeline.timelineForkTick = 0;
+  timeline.lastEventRevision = 0;
+  timeline.clearRevision = timeline.timelineRevision;
+  timeline.events = [];
+  return timeline;
+}
+
 function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
   if (payload?.kind === 'scene-batch') {
     const nextPayload = { ...payload };
+    if (
+      Array.isArray(payload.ops) &&
+      Array.isArray(payload.actions) &&
+      areSceneBatchOperationsMirrored(payload.ops, payload.actions)
+    ) {
+      const operations = [];
+      for (const operation of payload.ops) {
+        const result = canonicalizeScenePhysicsPayloadInTimelines(timelines, operation);
+        if (!result.ok) return result;
+        operations.push(result.payload);
+      }
+      nextPayload.ops = operations;
+      nextPayload.actions = cloneJson(operations);
+      return { ok: true, payload: nextPayload };
+    }
+
     for (const key of ['ops', 'actions']) {
       if (!Array.isArray(payload[key])) continue;
       const operations = [];
@@ -605,6 +669,23 @@ function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
       nextPayload[key] = operations;
     }
     return { ok: true, payload: nextPayload };
+  }
+
+  if (payload?.kind === 'scene-physics-input-log-clear') {
+    const timelineId = normalizePhysicsTimelineId(payload.timelineId);
+    const timeline = clearPhysicsTimeline(timelines, timelineId, payload.timelineRevision);
+    return {
+      ok: true,
+      payload: {
+        ...payload,
+        timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+        timelineId,
+        timelineRevision: timeline.timelineRevision,
+        timelineForkTick: timeline.timelineForkTick,
+        timelineClearRevision: timeline.clearRevision,
+        lastEventRevision: timeline.lastEventRevision,
+      },
+    };
   }
 
   if (payload?.kind !== 'scene-physics-input') {
@@ -623,13 +704,17 @@ function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
   const requestedBranchTick = Math.max(0, Math.floor(Number(payload.branchTick ?? applyTick) || 0));
   const branchTick = Math.min(requestedBranchTick, applyTick);
   const payloadTimelineRevision = Math.max(0, Math.floor(Number(payload.timelineRevision) || 0));
+  const payloadTimelineClearRevision = Math.max(0, Math.floor(Number(payload.timelineClearRevision) || 0));
   const latestTick = getLatestPhysicsEventTick(timeline);
   const existingEvent = findPhysicsTimelineEventByInputId(timeline, payload.inputId);
   if (existingEvent) {
     return { ok: true, payload: cloneJson(existingEvent), duplicate: true };
   }
 
-  if (payloadTimelineRevision < timeline.timelineRevision) {
+  if (
+    payloadTimelineRevision < timeline.timelineRevision ||
+    payloadTimelineClearRevision !== (timeline.clearRevision || 0)
+  ) {
     return {
       ok: false,
       status: 409,
@@ -656,6 +741,7 @@ function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
     timelineId,
     timelineRevision: timeline.timelineRevision,
     timelineForkTick: timeline.timelineForkTick,
+    timelineClearRevision: timeline.clearRevision || 0,
     branchTick,
     eventRevision,
   };
@@ -680,11 +766,16 @@ function canonicalizeScenePhysicsPayload(roomId, payload) {
 function payloadIncludesScenePhysicsInput(payload) {
   if (payload?.kind === 'scene-physics-input') return true;
   if (payload?.kind !== 'scene-batch') return false;
-  const operations = [
-    ...(Array.isArray(payload.ops) ? payload.ops : []),
-    ...(Array.isArray(payload.actions) ? payload.actions : []),
-  ];
+  const operations = collectSceneBatchOperations(payload);
   return operations.some(payloadIncludesScenePhysicsInput);
+}
+
+function payloadRequiresScenePhysicsSenderEcho(payload) {
+  if (payload?.kind === 'scene-physics-input-log-clear') return true;
+  if (payloadIncludesScenePhysicsInput(payload)) return true;
+  if (payload?.kind !== 'scene-batch') return false;
+  const operations = collectSceneBatchOperations(payload);
+  return operations.some(payloadRequiresScenePhysicsSenderEcho);
 }
 
 function sendRoomPhysicsTimeline(client, timelineId = null) {
@@ -699,6 +790,22 @@ function sendRoomPhysicsTimeline(client, timelineId = null) {
   const normalizedTimelineId = timelineId ? normalizePhysicsTimelineId(timelineId) : null;
   for (const timeline of roomTimelines.values()) {
     if (normalizedTimelineId && timeline.timelineId !== normalizedTimelineId) continue;
+    if (timeline.clearRevision > 0) {
+      safeSend(client.conn, {
+        type: 'handoff',
+        from: sender,
+        payload: {
+          kind: 'scene-physics-input-log-clear',
+          timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+          timelineId: timeline.timelineId,
+          timelineRevision: timeline.clearRevision,
+          timelineForkTick: 0,
+          timelineClearRevision: timeline.clearRevision,
+          lastEventRevision: 0,
+          reason: 'timeline-replay',
+        },
+      });
+    }
     for (const event of timeline.events) {
       safeSend(client.conn, {
         type: 'handoff',
@@ -859,10 +966,7 @@ function simulateObjectLimitUpdate(objectIds, payload, roomId, actorId) {
   }
 
   if (payload.kind === 'scene-batch') {
-    const operations = [
-      ...(Array.isArray(payload.ops) ? payload.ops : []),
-      ...(Array.isArray(payload.actions) ? payload.actions : []),
-    ];
+    const operations = collectSceneBatchOperations(payload);
     for (const op of operations) {
       const result = simulateObjectLimitUpdate(nextObjectIds, op, roomId, actorId);
       if (!result.ok) return result;
@@ -1124,8 +1228,8 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     };
   }
 
-  if (peers.length > 0) {
-  const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, nextPayload);
+  if (peers.length > 0 || nextPayload?.kind === 'scene-physics-input-log-clear') {
+    const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, nextPayload);
     if (!physicsTimelinePayload.ok) {
       return {
         status: physicsTimelinePayload.status || 409,
@@ -1962,7 +2066,7 @@ function createPresenceServer() {
             }
 
             broadcastHandoff(client, data, {
-              includeSender: payloadIncludesScenePhysicsInput(data.payload),
+              includeSender: payloadRequiresScenePhysicsSenderEcho(data.payload),
             });
           }
           break;
