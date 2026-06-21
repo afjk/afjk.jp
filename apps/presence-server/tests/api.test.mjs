@@ -499,12 +499,25 @@ describe('presence REST broadcast API', () => {
             position: [1, 1, 1],
             rotation: [0, 0, 0, 1],
           }],
+          actions: [{
+            kind: 'scene-physics-input',
+            inputType: 'set-body-state',
+            inputId: 'batch-drag:000001',
+            timelineRevision: 0,
+            eventRevision: 999,
+            objectId: 'batch-box',
+            applyTick: 3,
+            position: [1, 1, 1],
+            rotation: [0, 0, 0, 1],
+          }],
         },
       }));
 
       const [echo, received] = await Promise.all([senderEcho, receiverMessage]);
       assert.equal(echo.payload.ops[0].eventRevision, 1);
+      assert.equal(echo.payload.actions[0].eventRevision, 1);
       assert.equal(received.payload.ops[0].eventRevision, 1);
+      assert.equal(received.payload.actions[0].eventRevision, 1);
       assert.equal(received.payload.ops[0].timelineVersion, 'SceneSyncPhysicsTimelineV1');
     } finally {
       await Promise.all([closeClient(sender), closeClient(receiver)]);

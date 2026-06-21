@@ -531,11 +531,33 @@ function normalizePhysicsTimelineId(value) {
     : DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
 }
 
-function getRoomPhysicsTimeline(roomId, timelineId) {
+function cloneRoomPhysicsTimelines(roomId) {
+  const source = roomPhysicsTimelines.get(roomId);
+  const draft = new Map();
+  if (!source) return draft;
+  for (const [timelineId, timeline] of source.entries()) {
+    draft.set(timelineId, {
+      timelineId: timeline.timelineId,
+      timelineRevision: timeline.timelineRevision,
+      timelineForkTick: timeline.timelineForkTick,
+      lastEventRevision: timeline.lastEventRevision,
+      events: cloneJson(timeline.events) || [],
+    });
+  }
+  return draft;
+}
+
+function commitRoomPhysicsTimelines(roomId, timelines) {
+  if (!timelines || timelines.size === 0) {
+    roomPhysicsTimelines.delete(roomId);
+    return;
+  }
+  roomPhysicsTimelines.set(roomId, timelines);
+}
+
+function getPhysicsTimeline(timelines, timelineId) {
   const normalizedTimelineId = normalizePhysicsTimelineId(timelineId);
-  const roomTimelines = roomPhysicsTimelines.get(roomId) ?? new Map();
-  roomPhysicsTimelines.set(roomId, roomTimelines);
-  const existing = roomTimelines.get(normalizedTimelineId);
+  const existing = timelines.get(normalizedTimelineId);
   if (existing) return existing;
 
   const timeline = {
@@ -545,12 +567,12 @@ function getRoomPhysicsTimeline(roomId, timelineId) {
     lastEventRevision: 0,
     events: [],
   };
-  roomTimelines.set(normalizedTimelineId, timeline);
+  timelines.set(normalizedTimelineId, timeline);
   return timeline;
 }
 
-function resetRoomPhysicsTimelines(roomId) {
-  roomPhysicsTimelines.delete(roomId);
+function resetRoomPhysicsTimelines(timelines) {
+  timelines.clear();
 }
 
 function getLatestPhysicsEventTick(timeline) {
@@ -569,40 +591,34 @@ function findPhysicsTimelineEventByInputId(timeline, inputId) {
   return timeline.events.find(event => event.inputId === inputId.trim()) || null;
 }
 
-function canonicalizeScenePhysicsPayload(roomId, payload) {
+function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
   if (payload?.kind === 'scene-batch') {
-    const key = Array.isArray(payload.ops)
-      ? 'ops'
-      : (Array.isArray(payload.actions) ? 'actions' : null);
-    if (!key) return { ok: true, payload };
-
-    const operations = [];
-    for (const operation of payload[key]) {
-      const result = canonicalizeScenePhysicsPayload(roomId, operation);
-      if (!result.ok) return result;
-      operations.push(result.payload);
+    const nextPayload = { ...payload };
+    for (const key of ['ops', 'actions']) {
+      if (!Array.isArray(payload[key])) continue;
+      const operations = [];
+      for (const operation of payload[key]) {
+        const result = canonicalizeScenePhysicsPayloadInTimelines(timelines, operation);
+        if (!result.ok) return result;
+        operations.push(result.payload);
+      }
+      nextPayload[key] = operations;
     }
-    return {
-      ok: true,
-      payload: {
-        ...payload,
-        [key]: operations,
-      },
-    };
+    return { ok: true, payload: nextPayload };
   }
 
   if (payload?.kind !== 'scene-physics-input') {
     if (payload?.kind === 'scene-state') {
-      resetRoomPhysicsTimelines(roomId);
+      resetRoomPhysicsTimelines(timelines);
     }
     if (payload?.kind === 'scene-physics' && payload?.physics?.enabled !== true) {
-      resetRoomPhysicsTimelines(roomId);
+      resetRoomPhysicsTimelines(timelines);
     }
     return { ok: true, payload };
   }
 
   const timelineId = normalizePhysicsTimelineId(payload.timelineId);
-  const timeline = getRoomPhysicsTimeline(roomId, timelineId);
+  const timeline = getPhysicsTimeline(timelines, timelineId);
   const applyTick = Math.max(0, Math.floor(Number(payload.applyTick) || 0));
   const requestedBranchTick = Math.max(0, Math.floor(Number(payload.branchTick ?? applyTick) || 0));
   const branchTick = Math.min(requestedBranchTick, applyTick);
@@ -650,6 +666,15 @@ function canonicalizeScenePhysicsPayload(roomId, payload) {
   }
 
   return { ok: true, payload: event };
+}
+
+function canonicalizeScenePhysicsPayload(roomId, payload) {
+  const draft = cloneRoomPhysicsTimelines(roomId);
+  const result = canonicalizeScenePhysicsPayloadInTimelines(draft, payload);
+  if (result.ok) {
+    commitRoomPhysicsTimelines(roomId, draft);
+  }
+  return result;
 }
 
 function payloadIncludesScenePhysicsInput(payload) {
