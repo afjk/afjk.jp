@@ -282,6 +282,45 @@ Debug.Log("ok:unity-physics-presence-cleanup");
 `;
 }
 
+function createUnitySnapshotApplyAssertionCode() {
+  return `
+using System;
+using System.Threading.Tasks;
+using UnityEngine;
+using Afjk.SceneSync.Rapier;
+
+var root = GameObject.Find(${csharpString(rootName)});
+if (root == null) throw new Exception("Smoke root not found");
+var bridge = root.GetComponent<SceneSyncRapierBridge>();
+if (bridge == null) throw new Exception("SceneSyncRapierBridge not found");
+
+var started = DateTime.UtcNow;
+while (!bridge.HasRemoteSnapshotReport && (DateTime.UtcNow - started).TotalSeconds < 10)
+{
+    await Task.Delay(100);
+}
+
+if (!bridge.HasRemoteSnapshotReport) throw new Exception("Unity did not receive a physics snapshot");
+if (!bridge.LastRemoteSnapshotApplied)
+{
+    var report = bridge.LastRemoteSnapshotReport;
+    throw new Exception(
+        "Unity did not apply physics snapshot: bodyCount=" + report.BodyCount
+        + " dynamicBodyCount=" + report.DynamicBodyCount
+        + " appliedBodyCount=" + report.AppliedBodyCount
+        + " missingBodyCount=" + report.MissingBodyCount);
+}
+
+Debug.Log(
+    "ok:unity-physics-snapshot-applied:"
+    + bridge.LastRemoteSnapshotReport.Tick
+    + ":"
+    + bridge.LastRemoteSnapshotReport.LocalHash
+    + ":"
+    + bridge.LastRemoteSnapshotReport.HashMatched);
+`;
+}
+
 function createPhysicsHashPayload() {
   return {
     kind: 'scene-physics-hash',
@@ -302,6 +341,37 @@ function createPhysicsHashPayload() {
       nickname: 'Web Physics Smoke',
     },
     sentAt: Date.now(),
+  };
+}
+
+function createPhysicsSnapshotPayload(requestPayload) {
+  return {
+    kind: 'scene-physics-snapshot',
+    source: 'physics',
+    phase: 'postPhysics',
+    snapshotVersion: 'SceneSyncPhysicsSnapshotV1',
+    profile: requestPayload.profile || 'SceneSyncRapierParity-0.30',
+    hashVersion: requestPayload.hashVersion || 'SceneSyncCanonicalPhysicsHashV1',
+    rapierCoreVersion: '0.19.3',
+    tick: requestPayload.localTick,
+    hash: requestPayload.localHash,
+    timestep: 1 / 60,
+    activeTime: 0,
+    worldAge: 0,
+    worldEpochTime: 0,
+    sceneClockRevision: requestPayload.sceneClockRevision,
+    requestId: requestPayload.requestId,
+    requestTick: requestPayload.tick,
+    requestReason: requestPayload.reason,
+    bodyCount: 1,
+    bodies: [{
+      id: 'unity-box',
+      type: 'dynamic',
+      position: [0, 1.25, 0],
+      rotation: [0, 0, 0, 1],
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    }],
   };
 }
 
@@ -349,6 +419,15 @@ async function run() {
     assert.equal(requestMessage.payload.remoteHash, '0000000000000000');
     assert.equal(typeof requestMessage.payload.localHash, 'string');
     assert.notEqual(requestMessage.payload.localHash, requestMessage.payload.remoteHash);
+    assert.equal(typeof requestMessage.from?.id, 'string');
+
+    webWs.send(JSON.stringify({
+      type: 'handoff',
+      targetId: requestMessage.from.id,
+      payload: createPhysicsSnapshotPayload(requestMessage.payload),
+    }));
+
+    await executeUnityCode(createUnitySnapshotApplyAssertionCode());
 
     console.log(JSON.stringify({
       ok: true,
@@ -356,6 +435,7 @@ async function run() {
       unityPeer: requestMessage.from?.id || null,
       requestId: requestMessage.payload.requestId,
       localHash: requestMessage.payload.localHash,
+      snapshotApplied: true,
     }, null, 2));
   } finally {
     await executeUnityCode(createUnityCleanupCode()).catch(() => {});
