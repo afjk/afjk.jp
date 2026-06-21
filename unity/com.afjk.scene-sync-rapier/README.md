@@ -73,3 +73,9 @@ dynamic body ids exist locally, the bridge applies the remote body pose, linear
 velocity, angular velocity, fixed tick, and world epoch. Snapshot results are
 available through `LastRemoteSnapshotReport`, `LastRemoteSnapshotApplied`, and
 `SnapshotReceived`.
+
+When `requestSnapshotOnHashMismatch` is enabled, same-tick hash mismatches
+publish a `scene-physics-snapshot-request` through `SceneSyncMessageBus`. A
+`SceneSyncManager` in the scene routes that request through the active presence
+connection, allowing the Web Shared Playback controller to hand back a targeted
+snapshot.

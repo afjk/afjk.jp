@@ -145,6 +145,8 @@ namespace Afjk.SceneSync
         {
             if (_isApplicationQuitting) return;
 
+            SceneSyncMessageBus.MessageRequested += HandleSceneSyncOutgoingMessage;
+
             if (_isShuttingDown)
             {
                 _isShuttingDown = false;
@@ -159,6 +161,7 @@ namespace Afjk.SceneSync
 
         private void OnDisable()
         {
+            SceneSyncMessageBus.MessageRequested -= HandleSceneSyncOutgoingMessage;
             BeginLifecycleDisconnect("OnDisable");
         }
 
@@ -1047,6 +1050,17 @@ namespace Afjk.SceneSync
             {
                 _ = HandleFileHandoff(fromId, raw);
             }
+        }
+
+        private void HandleSceneSyncOutgoingMessage(SceneSyncOutgoingMessage message)
+        {
+            if (_isShuttingDown || !_connected || _client == null || string.IsNullOrWhiteSpace(message.PayloadJson))
+                return;
+
+            if (message.IsHandoff)
+                _ = _client.SendHandoff(message.TargetPeerId, message.PayloadJson);
+            else
+                _ = _client.Broadcast(message.PayloadJson);
         }
 
         private void HandleSceneBatch(string raw, string fromId = null)

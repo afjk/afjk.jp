@@ -29,6 +29,8 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private int maxClockStepsPerUpdate = 600;
         [SerializeField] private int maxCollisionEventsPerDrain = 256;
         [SerializeField] private bool autoApplyRemoteSnapshots = true;
+        [SerializeField] private bool requestSnapshotOnHashMismatch = true;
+        [SerializeField] private float snapshotRequestCooldownSeconds = 1f;
         [SerializeField] private bool logStateHash;
 
         private readonly Dictionary<string, string> objectPhysicsJson = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -58,6 +60,8 @@ namespace Afjk.SceneSync.Rapier
         private SceneSyncRapierHashReport lastRemoteHashReport;
         private bool hasRemoteSnapshotReport;
         private SceneSyncRapierSnapshotReport lastRemoteSnapshotReport;
+        private int lastSnapshotRequestTick = int.MinValue;
+        private float lastSnapshotRequestTime = float.NegativeInfinity;
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
         public event Action<SceneSyncRapierHashReport> HashReportReceived;
@@ -542,6 +546,7 @@ namespace Afjk.SceneSync.Rapier
                 matched);
             hasRemoteHashReport = true;
             HashReportReceived?.Invoke(lastRemoteHashReport);
+            MaybeRequestSnapshotForHashMismatch(lastRemoteHashReport);
 
             if (logStateHash && !matched)
             {
@@ -557,6 +562,38 @@ namespace Afjk.SceneSync.Rapier
                     + " hashVersion="
                     + (hashVersion ?? "null"));
             }
+        }
+
+        private void MaybeRequestSnapshotForHashMismatch(SceneSyncRapierHashReport report)
+        {
+            if (!requestSnapshotOnHashMismatch || report.Matched) return;
+            if (!report.TickMatched || !report.HashVersionMatched) return;
+            if (report.Tick < 0) return;
+
+            var now = Time.unscaledTime;
+            var cooldown = Mathf.Max(0f, snapshotRequestCooldownSeconds);
+            if (lastSnapshotRequestTick == report.Tick && now - lastSnapshotRequestTime < cooldown)
+                return;
+
+            lastSnapshotRequestTick = report.Tick;
+            lastSnapshotRequestTime = now;
+            var requestId = Guid.NewGuid().ToString("N");
+            var payload =
+                "{\"kind\":\"scene-physics-snapshot-request\"" +
+                ",\"source\":\"physics\"" +
+                ",\"phase\":\"postPhysics\"" +
+                ",\"snapshotVersion\":\"" + SnapshotVersion + "\"" +
+                ",\"profile\":\"" + PhysicsProfile + "\"" +
+                ",\"hashVersion\":\"" + CanonicalStateHashVersion + "\"" +
+                ",\"requestId\":\"" + SceneSyncWireJson.JsonEscape(requestId) + "\"" +
+                ",\"reason\":\"hash-mismatch\"" +
+                ",\"tick\":" + report.Tick.ToString(CultureInfo.InvariantCulture) +
+                ",\"localTick\":" + report.LocalTick.ToString(CultureInfo.InvariantCulture) +
+                ",\"remoteHash\":\"" + SceneSyncWireJson.JsonEscape(report.Hash) + "\"" +
+                ",\"localHash\":\"" + SceneSyncWireJson.JsonEscape(report.LocalHash) + "\"" +
+                ",\"sceneClockRevision\":" + report.SceneClockRevision.ToString(CultureInfo.InvariantCulture) +
+                "}";
+            SceneSyncMessageBus.PublishOutgoing(payload, null, this);
         }
 
         private void ApplySceneClock(string raw)

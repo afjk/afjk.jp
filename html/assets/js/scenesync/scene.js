@@ -5252,18 +5252,30 @@ function maybeBroadcastScenePhysicsSnapshot(physicsTick, clockState = null) {
     return;
   }
 
-  const snapshot = scenePhysicsRuntime.createSnapshotReport(clockState);
-  if (!snapshot || snapshot.snapshotVersion !== SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION) return;
+  const snapshot = createScenePhysicsSnapshotPayload(clockState);
+  if (!snapshot) return;
 
   lastScenePhysicsSnapshotBroadcastTick = tick;
   lastScenePhysicsSnapshotBroadcastHash = hash;
   lastScenePhysicsSnapshotBroadcastRevision = revision;
-  broadcast({
+  broadcast(snapshot);
+}
+
+function createScenePhysicsSnapshotPayload(clockState = null, extra = {}) {
+  const snapshot = scenePhysicsRuntime.createSnapshotReport(clockState);
+  if (!snapshot || snapshot.snapshotVersion !== SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION) {
+    return null;
+  }
+  const revision = Number.isFinite(sceneClockState.sharedRevision)
+    ? sceneClockState.sharedRevision
+    : null;
+  return {
     ...snapshot,
     sceneClockRevision: revision,
     controller: getSceneClockController(),
     sentAt: Date.now(),
-  });
+    ...extra,
+  };
 }
 
 function broadcastSceneClockEvent(action, extra = {}) {
@@ -6710,6 +6722,25 @@ function handleHandoff(data) {
       });
       notifySceneStateChanged('scene-physics-handoff');
       publishSharedObjectClockBaselines('scene-physics-baseline');
+      break;
+    }
+    case 'scene-physics-snapshot-request': {
+      if (isOwn) break;
+      if (!isSceneClockControllerSelf()) break;
+      const snapshot = createScenePhysicsSnapshotPayload(
+        getSceneClockStateForLoomlet(performance.now()),
+        {
+          requestId: payload.requestId,
+          requestTick: payload.tick,
+          requestReason: payload.reason || 'snapshot-request',
+        },
+      );
+      if (!snapshot) break;
+      if (data.from?.id) {
+        sendHandoff({ targetId: data.from.id, payload: snapshot });
+      } else {
+        broadcast(snapshot);
+      }
       break;
     }
     case 'scene-mesh': {
