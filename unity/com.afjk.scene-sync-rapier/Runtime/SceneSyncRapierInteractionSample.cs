@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Afjk.SceneSync;
 using UnityEngine;
 
@@ -19,6 +20,7 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private float maxThrowSpeed = 18f;
         [SerializeField] private bool autoAddPickColliders = true;
         [SerializeField] private float pickColliderRefreshInterval = 1f;
+        [SerializeField] private bool disableRemoteSnapshotCorrection = true;
 
         private string draggingObjectId;
         private Quaternion draggingRotation = Quaternion.identity;
@@ -33,6 +35,9 @@ namespace Afjk.SceneSync.Rapier
         private Vector3 previousLookMousePosition;
         private float yaw;
         private float pitch;
+        private SceneSyncRapierBridge snapshotOverrideBridge;
+        private static readonly Dictionary<SceneSyncRapierBridge, SnapshotCorrectionOverrideState> SnapshotOverrides =
+            new Dictionary<SceneSyncRapierBridge, SnapshotCorrectionOverrideState>();
 
         private bool IsDragging => !string.IsNullOrWhiteSpace(draggingObjectId);
 
@@ -50,6 +55,7 @@ namespace Afjk.SceneSync.Rapier
 
         private void OnDisable()
         {
+            RestoreSnapshotCorrectionOverride();
             StopLooking();
             ClearDrag();
         }
@@ -70,6 +76,8 @@ namespace Afjk.SceneSync.Rapier
 
             if (targetCamera == null)
                 targetCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+
+            UpdateSnapshotCorrectionOverride();
         }
 
         private void InitializeLookAngles()
@@ -220,6 +228,58 @@ namespace Afjk.SceneSync.Rapier
             hasDragTarget = false;
         }
 
+        private void UpdateSnapshotCorrectionOverride()
+        {
+            if (!isActiveAndEnabled || !disableRemoteSnapshotCorrection || bridge == null)
+            {
+                RestoreSnapshotCorrectionOverride();
+                return;
+            }
+
+            if (snapshotOverrideBridge == bridge)
+                return;
+
+            RestoreSnapshotCorrectionOverride();
+            snapshotOverrideBridge = bridge;
+            if (SnapshotOverrides.TryGetValue(bridge, out var state))
+            {
+                state.ReferenceCount++;
+                SnapshotOverrides[bridge] = state;
+                return;
+            }
+
+            SnapshotOverrides[bridge] = new SnapshotCorrectionOverrideState(
+                bridge.AutoApplyRemoteSnapshots,
+                bridge.RequestSnapshotOnHashMismatch);
+            bridge.AutoApplyRemoteSnapshots = false;
+            bridge.RequestSnapshotOnHashMismatch = false;
+        }
+
+        private void RestoreSnapshotCorrectionOverride()
+        {
+            if (snapshotOverrideBridge == null)
+                return;
+
+            if (SnapshotOverrides.TryGetValue(snapshotOverrideBridge, out var state))
+            {
+                state.ReferenceCount--;
+                if (state.ReferenceCount <= 0)
+                {
+                    if (!snapshotOverrideBridge.AutoApplyRemoteSnapshots)
+                        snapshotOverrideBridge.AutoApplyRemoteSnapshots = state.AutoApplyRemoteSnapshots;
+                    if (!snapshotOverrideBridge.RequestSnapshotOnHashMismatch)
+                        snapshotOverrideBridge.RequestSnapshotOnHashMismatch = state.RequestSnapshotOnHashMismatch;
+                    SnapshotOverrides.Remove(snapshotOverrideBridge);
+                }
+                else
+                {
+                    SnapshotOverrides[snapshotOverrideBridge] = state;
+                }
+            }
+
+            snapshotOverrideBridge = null;
+        }
+
         private bool TryPickDynamicObject(out SceneSyncIdentity identity, out Vector3 hitPoint)
         {
             identity = null;
@@ -363,6 +423,20 @@ namespace Afjk.SceneSync.Rapier
             while (angle > 180f) angle -= 360f;
             while (angle < -180f) angle += 360f;
             return angle;
+        }
+
+        private struct SnapshotCorrectionOverrideState
+        {
+            public SnapshotCorrectionOverrideState(bool autoApplyRemoteSnapshots, bool requestSnapshotOnHashMismatch)
+            {
+                AutoApplyRemoteSnapshots = autoApplyRemoteSnapshots;
+                RequestSnapshotOnHashMismatch = requestSnapshotOnHashMismatch;
+                ReferenceCount = 1;
+            }
+
+            public bool AutoApplyRemoteSnapshots { get; }
+            public bool RequestSnapshotOnHashMismatch { get; }
+            public int ReferenceCount { get; set; }
         }
     }
 }
