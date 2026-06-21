@@ -327,6 +327,142 @@ describe('presence REST broadcast API', () => {
     }
   });
 
+  it('assigns canonical scene physics input revisions per room', async () => {
+    const roomId = 'physics-timeline-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const receiver = await connectClient(roomId, 'Physics Receiver');
+    try {
+      const firstInput = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'drag-a:000001',
+          timelineId: 'default',
+          timelineRevision: 0,
+          eventRevision: 999,
+          interactionId: 'drag-a',
+          sequence: 1,
+          phase: 'grab-move',
+          objectId: 'box',
+          applyTick: 20,
+          position: [1, 2, 3],
+          rotation: [0, 0, 0, 1],
+          velocity: [0, 0, 0],
+          angularVelocity: [0, 0, 0],
+        },
+      }));
+
+      const first = await firstInput;
+      assert.equal(first.payload.eventRevision, 1);
+      assert.equal(first.payload.timelineRevision, 0);
+      assert.equal(first.payload.timelineForkTick, 0);
+      assert.equal(first.payload.timelineVersion, 'SceneSyncPhysicsTimelineV1');
+
+      const branchInput = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.inputId === 'drag-b:000001');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'drag-b:000001',
+          timelineId: 'default',
+          timelineRevision: 1,
+          eventRevision: 1000,
+          interactionId: 'drag-b',
+          sequence: 1,
+          phase: 'grab-release',
+          branchTick: 10,
+          objectId: 'box',
+          applyTick: 10,
+          position: [2, 2, 3],
+          rotation: [0, 0, 0, 1],
+          velocity: [1, 0, 0],
+          angularVelocity: [0, 0, 0],
+        },
+      }));
+
+      const branch = await branchInput;
+      assert.equal(branch.payload.eventRevision, 2);
+      assert.equal(branch.payload.timelineRevision, 1);
+      assert.equal(branch.payload.timelineForkTick, 10);
+      assert.equal(branch.payload.branchTick, 10);
+
+      const staleError = waitForMessage(sender, message => message.type === 'error');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'stale:000001',
+          timelineId: 'default',
+          timelineRevision: 0,
+          objectId: 'box',
+          applyTick: 21,
+          position: [3, 2, 3],
+          rotation: [0, 0, 0, 1],
+        },
+      }));
+
+      const error = await staleError;
+      assert.equal(error.error, 'stale_physics_timeline');
+    } finally {
+      await Promise.all([closeClient(sender), closeClient(receiver)]);
+    }
+  });
+
+  it('replays scene physics input history to late joiners', async () => {
+    const roomId = 'physics-replay-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const receiver = await connectClient(roomId, 'Physics Receiver');
+    let lateJoiner;
+    try {
+      const liveInput = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'replay-drag:000001',
+          objectId: 'ball',
+          applyTick: 4,
+          position: [1, 2, 3],
+          rotation: [0, 0, 0, 1],
+        },
+      }));
+      const live = await liveInput;
+      assert.equal(live.payload.eventRevision, 1);
+
+      lateJoiner = new WebSocket(`${wsBaseUrl}?room=${roomId}`);
+      const welcomePromise = waitForMessage(lateJoiner, message => message.type === 'welcome');
+      const replayPromise = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      await waitForEvent(lateJoiner, 'open');
+      lateJoiner.send(JSON.stringify({
+        type: 'hello',
+        nickname: 'Late Physics Client',
+        device: 'Node Test',
+      }));
+      await welcomePromise;
+
+      const replay = await replayPromise;
+      assert.equal(replay.from.id, 'server');
+      assert.equal(replay.payload.inputId, 'replay-drag:000001');
+      assert.equal(replay.payload.eventRevision, 1);
+      assert.equal(replay.payload.timelineRevision, 0);
+    } finally {
+      await Promise.all([
+        closeClient(sender),
+        closeClient(receiver),
+        lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
+      ]);
+    }
+  });
+
   it('broadcasts scene-env to change environment', async () => {
     const ws = await connectClient('env-test-room');
     try {

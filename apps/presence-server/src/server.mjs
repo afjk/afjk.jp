@@ -34,9 +34,17 @@ const SCENE_GRAPH_MAX_SIZE = 64 * 1024; // 64 KB for graph payloads
 
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 const roomObjectIds = new Map(); // roomId -> Set<objectId>
+const roomPhysicsTimelines = new Map(); // roomId -> Map<timelineId, PhysicsTimeline>
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
 const clientsByIpHash = new Map(); // ipHash -> Set<clientId>
+
+const SCENE_SYNC_PHYSICS_TIMELINE_VERSION = 'SceneSyncPhysicsTimelineV1';
+const DEFAULT_SCENE_PHYSICS_TIMELINE_ID = 'default';
+const MAX_SCENE_PHYSICS_TIMELINE_EVENTS = Math.max(
+  1,
+  Math.floor(Number(process.env.SCENE_SYNC_PHYSICS_TIMELINE_EVENT_LIMIT) || 1024),
+);
 
 // ── Blob Store ────────────────────────────────────────────────────────────────
 const BLOB_MAX_SIZE = sceneSyncConfig.maxUploadBytes;
@@ -462,6 +470,7 @@ function removeClient(client) {
   if (!room.size) {
     rooms.delete(client.roomId);
     roomObjectIds.delete(client.roomId);
+    roomPhysicsTimelines.delete(client.roomId);
   }
 
   if (client.ipHash) {
@@ -509,6 +518,125 @@ function safeSend(conn, message) {
   } catch (err) {
     log('send fail', err.message);
     sceneSyncLogger.log('error', { reason: err.message });
+  }
+}
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function normalizePhysicsTimelineId(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
+}
+
+function getRoomPhysicsTimeline(roomId, timelineId) {
+  const normalizedTimelineId = normalizePhysicsTimelineId(timelineId);
+  const roomTimelines = roomPhysicsTimelines.get(roomId) ?? new Map();
+  roomPhysicsTimelines.set(roomId, roomTimelines);
+  const existing = roomTimelines.get(normalizedTimelineId);
+  if (existing) return existing;
+
+  const timeline = {
+    timelineId: normalizedTimelineId,
+    timelineRevision: 0,
+    timelineForkTick: 0,
+    lastEventRevision: 0,
+    events: [],
+  };
+  roomTimelines.set(normalizedTimelineId, timeline);
+  return timeline;
+}
+
+function resetRoomPhysicsTimelines(roomId) {
+  roomPhysicsTimelines.delete(roomId);
+}
+
+function getLatestPhysicsEventTick(timeline) {
+  return timeline.events.reduce((max, event) => Math.max(max, Number(event.applyTick) || 0), 0);
+}
+
+function branchPhysicsTimeline(timeline, branchTick) {
+  const normalizedBranchTick = Math.max(0, Math.floor(Number(branchTick) || 0));
+  timeline.timelineRevision += 1;
+  timeline.timelineForkTick = normalizedBranchTick;
+  timeline.events = timeline.events.filter(event => Number(event.applyTick) <= normalizedBranchTick);
+}
+
+function canonicalizeScenePhysicsInput(roomId, payload) {
+  if (payload?.kind !== 'scene-physics-input') {
+    if (payload?.kind === 'scene-state') {
+      resetRoomPhysicsTimelines(roomId);
+    }
+    if (payload?.kind === 'scene-physics' && payload?.physics?.enabled !== true) {
+      resetRoomPhysicsTimelines(roomId);
+    }
+    return { ok: true, payload };
+  }
+
+  const timelineId = normalizePhysicsTimelineId(payload.timelineId);
+  const timeline = getRoomPhysicsTimeline(roomId, timelineId);
+  const applyTick = Math.max(0, Math.floor(Number(payload.applyTick) || 0));
+  const branchTick = Math.max(0, Math.floor(Number(payload.branchTick ?? applyTick) || 0));
+  const payloadTimelineRevision = Math.max(0, Math.floor(Number(payload.timelineRevision) || 0));
+  const latestTick = getLatestPhysicsEventTick(timeline);
+  if (payloadTimelineRevision < timeline.timelineRevision) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'stale_physics_timeline',
+      message: '古い物理タイムラインの入力は破棄されました。',
+    };
+  }
+
+  const shouldBranch = payloadTimelineRevision > timeline.timelineRevision || applyTick < latestTick;
+
+  if (shouldBranch) {
+    branchPhysicsTimeline(timeline, branchTick);
+  }
+
+  timeline.lastEventRevision += 1;
+  const eventRevision = timeline.lastEventRevision;
+  const inputId = typeof payload.inputId === 'string' && payload.inputId.trim()
+    ? payload.inputId.trim()
+    : `${timelineId}:${timeline.timelineRevision}:${eventRevision}`;
+  const event = {
+    ...payload,
+    inputId,
+    timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+    timelineId,
+    timelineRevision: timeline.timelineRevision,
+    timelineForkTick: timeline.timelineForkTick,
+    branchTick,
+    eventRevision,
+  };
+
+  timeline.events.push(cloneJson(event));
+  while (timeline.events.length > MAX_SCENE_PHYSICS_TIMELINE_EVENTS) {
+    timeline.events.shift();
+  }
+
+  return { ok: true, payload: event };
+}
+
+function replayRoomPhysicsTimeline(client) {
+  const roomTimelines = roomPhysicsTimelines.get(client.roomId);
+  if (!roomTimelines) return;
+  const sender = {
+    id: 'server',
+    nickname: 'SceneSync',
+    device: 'server',
+  };
+
+  for (const timeline of roomTimelines.values()) {
+    for (const event of timeline.events) {
+      safeSend(client.conn, {
+        type: 'handoff',
+        from: sender,
+        payload: cloneJson(event),
+      });
+    }
   }
 }
 
@@ -923,6 +1051,18 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
       body: { error: objectLimit.error, message: objectLimit.message },
     };
   }
+
+  const physicsTimelinePayload = canonicalizeScenePhysicsInput(roomId, nextPayload);
+  if (!physicsTimelinePayload.ok) {
+    return {
+      status: physicsTimelinePayload.status || 409,
+      body: {
+        error: physicsTimelinePayload.error || 'physics timeline rejected',
+        message: physicsTimelinePayload.message,
+      },
+    };
+  }
+  nextPayload = physicsTimelinePayload.payload;
 
   const message = {
     type: 'handoff',
@@ -1670,6 +1810,7 @@ function createPresenceServer() {
             client.userId = String(data.userId);
           }
           broadcastPeers(roomId);
+          replayRoomPhysicsTimeline(client);
           break;
         case 'handoff':
           if (data.targetId && data.payload) {
@@ -1729,6 +1870,17 @@ function createPresenceServer() {
                 });
                 return;
               }
+
+              const physicsTimelinePayload = canonicalizeScenePhysicsInput(roomId, data.payload);
+              if (!physicsTimelinePayload.ok) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: physicsTimelinePayload.error || 'physics_timeline_rejected',
+                  message: physicsTimelinePayload.message,
+                });
+                return;
+              }
+              data.payload = physicsTimelinePayload.payload;
             }
 
             broadcastHandoff(client, data);
