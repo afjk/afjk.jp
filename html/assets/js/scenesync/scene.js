@@ -4977,6 +4977,7 @@ function getSceneClockStateForLoomlet(now = performance.now()) {
     localNow,
     active: sceneClockState.active,
     transportActive: sceneClockState.transportActive,
+    sharedRevision: sceneClockState.sharedRevision,
     controller,
     isController: sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK || isSceneClockControllerSelf(),
     modeLabel: CLOCK_MODE_LABELS[sceneClockState.mode] || sceneClockState.mode,

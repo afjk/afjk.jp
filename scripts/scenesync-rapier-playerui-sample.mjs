@@ -666,10 +666,11 @@ async function launchPlayerUiBrowser(playerUrl) {
 }
 
 async function resetPlayerUiClock(page) {
-  await page.evaluate(() => {
+  return page.evaluate(() => {
     window.__sceneSyncDebug.sceneClock.requestControl();
     window.__sceneSyncDebug.sceneClock.reset();
     window.__sceneSyncDebug.sceneClock.play();
+    return window.__sceneSyncDebug.sceneClock.state();
   });
 }
 
@@ -733,7 +734,7 @@ function installLoaderHandlers(ws, sceneState, expectedHashes) {
     if (!Number.isInteger(tick) || typeof hash !== 'string') return;
 
     const expected = expectedHashes[String(tick)];
-    const record = { message, peer, tick, hash };
+    const record = { message, peer, tick, hash, sceneClockRevision: payload.sceneClockRevision };
     observedPhysicsHashes.push(record);
     while (observedPhysicsHashes.length > 32) observedPhysicsHashes.shift();
 
@@ -751,10 +752,11 @@ function installLoaderHandlers(ws, sceneState, expectedHashes) {
     console.log(`[physics-hash] tick=${tick} hash=${hash} peers=${peers.join(',')} ${status}`);
   });
 
-  const waitForPhysicsHash = ({ peer, tick, timeoutMs = TEST_TIMEOUT_MS }) => {
+  const waitForPhysicsHash = ({ peer, tick, sceneClockRevision = null, timeoutMs = TEST_TIMEOUT_MS }) => {
     const predicate = record => (
       record.tick === tick
       && (!peer || record.peer === peer)
+      && (sceneClockRevision == null || record.sceneClockRevision === sceneClockRevision)
     );
     const existing = observedPhysicsHashes.find(predicate);
     if (existing) return Promise.resolve(existing);
@@ -773,6 +775,7 @@ function installLoaderHandlers(ws, sceneState, expectedHashes) {
           tick: record.tick,
           hash: record.hash,
           peer: record.peer,
+          sceneClockRevision: record.sceneClockRevision,
         })))}`));
       }, timeoutMs);
       physicsHashWaiters.add(waiter);
@@ -796,12 +799,10 @@ async function run() {
   const loaderWs = await connectPresenceClient(wsBaseUrl, options.roomId, 'Rapier Sample Loader');
   const loader = installLoaderHandlers(loaderWs, sceneState, expectedHashes);
   const targetTick = Math.max(...options.ticks);
-  const unityHashPromise = options.verify
+  let unityHashPromise = options.verify
     ? loader.waitForPhysicsHash({ peer: 'Unity Rapier Sample', tick: targetTick })
     : null;
-  const playerUiHashPromise = options.verifyPlayerUi
-    ? loader.waitForPhysicsHash({ peer: PLAYER_UI_NICKNAME, tick: targetTick })
-    : null;
+  let playerUiHashPromise = null;
   let rebroadcastTimer = null;
   let unityStarted = false;
   let playerUiBrowser = null;
@@ -845,7 +846,19 @@ async function run() {
     }
     loader.publishClock();
     if (options.verifyPlayerUi) {
-      await resetPlayerUiClock(playerUiBrowser.page);
+      const clockState = await resetPlayerUiClock(playerUiBrowser.page);
+      assert.ok(Number.isFinite(clockState?.sharedRevision), 'PlayerUI reset must expose a scene clock revision');
+      const sceneClockRevision = clockState.sharedRevision;
+      unityHashPromise = loader.waitForPhysicsHash({
+        peer: 'Unity Rapier Sample',
+        tick: targetTick,
+        sceneClockRevision,
+      });
+      playerUiHashPromise = loader.waitForPhysicsHash({
+        peer: PLAYER_UI_NICKNAME,
+        tick: targetTick,
+        sceneClockRevision,
+      });
     }
 
     if (options.rebroadcastMs > 0 && options.hold) {
@@ -864,6 +877,7 @@ async function run() {
       if (playerUiRecord) {
         assert.equal(playerUiRecord.hash, expectedHashes[String(targetTick)]);
         assert.equal(playerUiRecord.hash, unityRecord.hash);
+        assert.equal(playerUiRecord.sceneClockRevision, unityRecord.sceneClockRevision);
         assert.deepEqual(playerUiBrowser.pageErrors, [], 'PlayerUI page errors should be empty');
         assert.deepEqual(
           playerUiBrowser.consoleMessages.filter(entry => entry.type === 'error'),
