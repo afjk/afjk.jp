@@ -198,10 +198,12 @@ test('canonical hash includes body step settings and collider material fields', 
     ...base,
     friction: 0.5,
     restitution: 0.2,
+    gravityScale: 0.5,
     linearDamping: 0.25,
     angularDamping: 0.5,
     canSleep: false,
     ccd: true,
+    softCcdPrediction: 0.1,
   });
 
   assert.notEqual(a.canonicalStateHash(), b.canonicalStateHash());
@@ -210,6 +212,35 @@ test('canonical hash includes body step settings and collider material fields', 
   a.free();
   b.free();
   c.free();
+});
+
+test('canonical hash matches Unity Rapier native hash for a bridge-compatible box', () => {
+  const world = createWorld({ gravity: [0, -9.81, 0], ground: null, timestep: 0.016666667 });
+  world.addBody({
+    id: 'hash-body-a',
+    shape: 'box',
+    mass: 1,
+    density: 1,
+    halfExtents: [0.5, 0.5, 0.5],
+    position: [0, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    friction: 0.5,
+    restitution: 0.2,
+    linearDamping: 0,
+    angularDamping: 0,
+    canSleep: false,
+    ccd: false,
+    frictionCombineRule: 0,
+    restitutionCombineRule: 0,
+  });
+
+  assert.equal(world.canonicalStateHash(), '417f10e857ac4668');
+  assert.equal(world.canonicalStateDump().bodies[0].gravityScale, 1);
+  assert.equal(world.canonicalStateDump().bodies[0].softCcdPrediction, 0);
+
+  world.free();
 });
 
 test('stateHash remains tick and snapshot sensitive', () => {
