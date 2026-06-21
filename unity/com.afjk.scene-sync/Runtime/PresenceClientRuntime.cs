@@ -63,9 +63,7 @@ namespace Afjk.SceneSync
             _cts = new CancellationTokenSource();
             _ws = new ClientWebSocket();
 
-            var url = string.IsNullOrEmpty(room)
-                ? presenceUrl
-                : presenceUrl + "/?room=" + room;
+            var url = SceneSyncPresenceUrl.BuildRoomUrl(presenceUrl, room);
 
             try
             {
