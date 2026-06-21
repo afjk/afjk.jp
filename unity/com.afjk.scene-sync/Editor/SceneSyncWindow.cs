@@ -16,6 +16,8 @@ namespace Afjk.SceneSync.Editor
         private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
         private const string ApplyTransparentNameHintsForExportPrefKey = "Afjk.SceneSync.ApplyTransparentNameHintsForExport";
         private const string RapierBridgeTypeName = "Afjk.SceneSync.Rapier.SceneSyncRapierBridge";
+        private const string DefaultRapierScenePhysicsJson =
+            "{\"version\":1,\"enabled\":true,\"duration\":10,\"worldOptions\":{\"gravity\":[0,-9.81,0],\"ground\":null,\"timestep\":0.016666666666666666}}";
         private const float DefaultMaxGlbUploadMiB = 50f;
         private const int MaxPersistentGlbSizeBytes = 50 * 1024 * 1024;
         private const long MaxPersistentGlbCacheBytes = 512L * 1024L * 1024L;
@@ -1172,6 +1174,12 @@ namespace Afjk.SceneSync.Editor
             if (metadata == null)
             {
                 metadata = Undo.AddComponent<SceneSyncPhysicsMetadata>(manager.gameObject);
+                changed = true;
+            }
+            if (metadata != null && string.IsNullOrWhiteSpace(metadata.ScenePhysicsJson))
+            {
+                Undo.RecordObject(metadata, "Configure Scene Sync Rapier Physics");
+                metadata.ConfigureScenePhysics(DefaultRapierScenePhysicsJson);
                 changed = true;
             }
 
