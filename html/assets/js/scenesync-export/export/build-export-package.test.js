@@ -82,6 +82,7 @@ async function withMockExportEnvironment(run) {
     globalThis.fetch = async () => ({
       ok: true,
       text: async () => 'export default {};',
+      arrayBuffer: async () => new ArrayBuffer(0),
     });
     globalThis.document = {
       createElement(tagName) {
