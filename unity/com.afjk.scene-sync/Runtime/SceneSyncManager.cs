@@ -14,6 +14,7 @@ namespace Afjk.SceneSync
         [SerializeField] private string _room = "";
         [SerializeField] private string _nickname = "Unity";
         [SerializeField] private bool _autoConnect = true;
+        [SerializeField] private bool _syncHierarchy = true;
         [SerializeField] private Transform _syncRoot;
         [SerializeField] private bool includeManagerChildren = true;
         [SerializeField] private List<GameObject> managedObjects = new List<GameObject>();
@@ -70,11 +71,31 @@ namespace Afjk.SceneSync
         }
 
         public bool IsConnected => _connected;
+        public string PresenceUrl
+        {
+            get => _presenceUrl;
+            set => _presenceUrl = value ?? "";
+        }
         public string Room => _client != null && !string.IsNullOrEmpty(_client.Room) ? _client.Room : _room;
         public string ConfiguredRoom
         {
             get => _room;
             set => _room = value ?? "";
+        }
+        public string Nickname
+        {
+            get => _nickname;
+            set => _nickname = string.IsNullOrWhiteSpace(value) ? "Unity" : value.Trim();
+        }
+        public bool AutoConnect
+        {
+            get => _autoConnect;
+            set => _autoConnect = value;
+        }
+        public bool SyncHierarchy
+        {
+            get => _syncHierarchy;
+            set => _syncHierarchy = value;
         }
         public List<PeerInfo> Peers => _peers;
         public GameObject SelectedObject => _selectedObject;
@@ -675,6 +696,7 @@ namespace Afjk.SceneSync
         private void Update()
         {
             if (_isShuttingDown || !_connected || !gameObject.activeInHierarchy) return;
+            if (!_syncHierarchy) return;
 
             var currentTime = Time.realtimeSinceStartup;
             var deltaTime = currentTime - _lastTime;

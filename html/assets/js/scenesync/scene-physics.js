@@ -161,6 +161,26 @@ export function normalizeObjectPhysics(input = null) {
     physics.angularVelocity = [0, 0, 0];
   }
 
+  if (Number.isFinite(Number(input.density))) {
+    physics.density = bodyType === 'static'
+      ? finiteNonNegativeNumber(input.density, 0)
+      : positiveNumber(input.density, 1);
+  }
+  if (Number.isFinite(Number(input.linearDamping))) {
+    physics.linearDamping = finiteNonNegativeNumber(input.linearDamping, 0);
+  }
+  if (Number.isFinite(Number(input.angularDamping))) {
+    physics.angularDamping = finiteNonNegativeNumber(input.angularDamping, 0);
+  }
+  if (typeof input.canSleep === 'boolean') {
+    physics.canSleep = input.canSleep;
+  }
+  if (typeof input.ccd === 'boolean') {
+    physics.ccd = input.ccd;
+  } else if (typeof input.ccdEnabled === 'boolean') {
+    physics.ccd = input.ccdEnabled;
+  }
+
   if (shape === 'sphere' && Number.isFinite(Number(input.radius))) {
     physics.radius = positiveNumber(input.radius, 0.5);
   }
@@ -267,6 +287,11 @@ export function buildPhysicsBodyDef({ objectId, object, physics, useInitialTrans
     static: normalized.bodyType === 'static',
     restitution: normalized.restitution,
     friction: normalized.friction,
+    density: Number.isFinite(Number(normalized.density)) ? normalized.density : undefined,
+    linearDamping: Number.isFinite(Number(normalized.linearDamping)) ? normalized.linearDamping : undefined,
+    angularDamping: Number.isFinite(Number(normalized.angularDamping)) ? normalized.angularDamping : undefined,
+    canSleep: typeof normalized.canSleep === 'boolean' ? normalized.canSleep : undefined,
+    ccd: typeof normalized.ccd === 'boolean' ? normalized.ccd : undefined,
   };
 
   if (shape === 'sphere') {

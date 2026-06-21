@@ -59,13 +59,14 @@ requiring `logStateHash`; enable `logStateHash` only when console output is
 useful. Compare this value with the browser runtime's `world.canonicalStateHash()`
 only when both hosts use the same Scene Sync Rapier parity profile.
 
-During Shared Playback, the Web clock controller periodically broadcasts
-`scene-physics-hash` messages with `SceneSyncCanonicalPhysicsHashV1`, Rapier core
-version, physics profile, fixed `tick`, and canonical hash. The bridge stores
-the latest report in `LastRemoteHashReport`, exposes `LastRemoteHashMatched`,
-and raises `HashReportReceived` after comparing the remote hash with the local
-world at the same tick. This is diagnostic only; it does not resync or stream
-body transforms.
+During Shared Playback, the Web clock controller and the Unity bridge
+periodically broadcast `scene-physics-hash` messages with
+`SceneSyncCanonicalPhysicsHashV1`, Rapier core version, physics profile, fixed
+`tick`, and canonical hash. The bridge stores the latest remote report in
+`LastRemoteHashReport`, exposes `LastRemoteHashMatched`, and raises
+`HashReportReceived` after comparing the remote hash with the local world at the
+same tick. Hash messages are diagnostic and drive snapshot requests; they do not
+stream body transforms.
 
 The bridge also accepts `scene-physics-snapshot` messages using
 `SceneSyncPhysicsSnapshotV1`. When `autoApplyRemoteSnapshots` is enabled and all
@@ -79,3 +80,27 @@ publish a `scene-physics-snapshot-request` through `SceneSyncMessageBus`. A
 `SceneSyncManager` in the scene routes that request through the active presence
 connection, allowing the Web Shared Playback controller to hand back a targeted
 snapshot.
+
+## PlayerUI Parity Sample
+
+`SceneSyncRapierParitySampleBootstrap` builds a small floor + falling box scene
+matching `fixtures/rapier/parity-basic-001.json`, connects a `SceneSyncManager`
+to a room, and shows tick/hash diagnostics in the Unity Game View.
+
+From the repo root:
+
+```bash
+npm run sample:scene-sync-rapier
+```
+
+The command starts a local presence server, configures the sibling
+`SceneSyncClient` project through uloop, enters Unity Play Mode, and prints a
+PlayerUI URL. Open that URL to see the Web side in the same room. The loader peer
+keeps the sample `scene-state` available and logs `scene-physics-hash` messages
+from Unity and PlayerUI.
+
+For an automated Unity-vs-Web Rapier hash check without launching a browser:
+
+```bash
+npm run test:e2e:scene-sync-rapier-playerui-sample
+```
