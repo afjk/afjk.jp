@@ -12,6 +12,9 @@ const KNOWN_KINDS = new Set([
   'scene-avatar',
   'scene-lock',
   'scene-unlock',
+  'scene-physics-hash',
+  'scene-physics-snapshot',
+  'scene-physics-snapshot-request',
   'scene-asset-request',
   'scene-inspector',
   'scene-batch',
@@ -85,6 +88,130 @@ function validateScenePhysicsPayload(physics) {
         }
       }
     }
+  }
+
+  return { ok: true };
+}
+
+function validateOptionalReasonableString(payload, key, maxLength = 128) {
+  if (payload[key] === undefined || payload[key] === null) return { ok: true };
+  if (!isReasonableString(payload[key], maxLength)) {
+    return { ok: false, reason: `${key} must be a reasonable string` };
+  }
+  return { ok: true };
+}
+
+function validateOptionalFiniteNumber(payload, key) {
+  if (payload[key] === undefined || payload[key] === null) return { ok: true };
+  if (!isFiniteNumber(payload[key])) {
+    return { ok: false, reason: `${key} must be finite` };
+  }
+  return { ok: true };
+}
+
+function validateOptionalNonNegativeInteger(payload, key) {
+  if (payload[key] === undefined || payload[key] === null) return { ok: true };
+  if (!Number.isInteger(payload[key]) || payload[key] < 0) {
+    return { ok: false, reason: `${key} must be a non-negative integer` };
+  }
+  return { ok: true };
+}
+
+function validatePhysicsController(controller, maxStringLength) {
+  if (controller === undefined || controller === null) return { ok: true };
+  if (typeof controller !== 'object' || Array.isArray(controller)) {
+    return { ok: false, reason: 'controller must be an object or null' };
+  }
+  for (const key of ['id', 'nickname']) {
+    const result = validateOptionalReasonableString(controller, key, maxStringLength);
+    if (!result.ok) return { ok: false, reason: `controller.${result.reason}` };
+  }
+  return { ok: true };
+}
+
+function validatePhysicsSnapshotBody(body, maxStringLength) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, reason: 'snapshot body must be an object' };
+  }
+  if (!isReasonableString(body.id, maxStringLength)) {
+    return { ok: false, reason: 'snapshot body.id must be a reasonable string' };
+  }
+  const typeResult = validateOptionalReasonableString(body, 'type', maxStringLength);
+  if (!typeResult.ok) return { ok: false, reason: `snapshot body.${typeResult.reason}` };
+  if (body.position !== undefined && !hasFiniteNumberArray(body.position, 3)) {
+    return { ok: false, reason: 'snapshot body.position must be finite [x,y,z]' };
+  }
+  if (body.rotation !== undefined && !hasFiniteNumberArray(body.rotation, 4)) {
+    return { ok: false, reason: 'snapshot body.rotation must be finite quaternion [x,y,z,w]' };
+  }
+  if (body.velocity !== undefined && !hasFiniteNumberArray(body.velocity, 3)) {
+    return { ok: false, reason: 'snapshot body.velocity must be finite [x,y,z]' };
+  }
+  if (body.angularVelocity !== undefined && !hasFiniteNumberArray(body.angularVelocity, 3)) {
+    return { ok: false, reason: 'snapshot body.angularVelocity must be finite [x,y,z]' };
+  }
+  return { ok: true };
+}
+
+function validateScenePhysicsSyncPayload(payload, maxStringLength) {
+  for (const key of ['source', 'phase', 'profile', 'hashVersion', 'rapierCoreVersion', 'hash']) {
+    const result = validateOptionalReasonableString(payload, key, maxStringLength);
+    if (!result.ok) return result;
+  }
+
+  for (const key of ['tick', 'localTick', 'requestTick', 'bodyCount']) {
+    const result = validateOptionalNonNegativeInteger(payload, key);
+    if (!result.ok) return result;
+  }
+
+  for (const key of [
+    'timestep',
+    'activeTime',
+    'worldAge',
+    'worldEpochTime',
+    'sceneClockRevision',
+    'sentAt',
+  ]) {
+    const result = validateOptionalFiniteNumber(payload, key);
+    if (!result.ok) return result;
+  }
+
+  const controllerValidation = validatePhysicsController(payload.controller, maxStringLength);
+  if (!controllerValidation.ok) return controllerValidation;
+
+  if (payload.kind === 'scene-physics-hash') {
+    if (payload.hash !== undefined && !isReasonableString(payload.hash, maxStringLength)) {
+      return { ok: false, reason: 'scene-physics-hash.hash must be a reasonable string' };
+    }
+    return { ok: true };
+  }
+
+  if (payload.kind === 'scene-physics-snapshot-request') {
+    for (const key of ['snapshotVersion', 'requestId', 'reason', 'remoteHash', 'localHash']) {
+      const result = validateOptionalReasonableString(payload, key, maxStringLength);
+      if (!result.ok) return result;
+    }
+    return { ok: true };
+  }
+
+  if (payload.kind === 'scene-physics-snapshot') {
+    for (const key of ['snapshotVersion', 'requestId', 'requestReason']) {
+      const result = validateOptionalReasonableString(payload, key, maxStringLength);
+      if (!result.ok) return result;
+    }
+    if (payload.bodies !== undefined) {
+      if (!Array.isArray(payload.bodies)) {
+        return { ok: false, reason: 'scene-physics-snapshot.bodies must be an array' };
+      }
+      if (payload.bodies.length > 1000) {
+        return { ok: false, reason: 'scene-physics-snapshot.bodies is too large' };
+      }
+      for (const body of payload.bodies) {
+        const result = validatePhysicsSnapshotBody(body, maxStringLength);
+        if (!result.ok) return result;
+      }
+    }
+    return { ok: true };
   }
 
   return { ok: true };
@@ -256,6 +383,14 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-physics') {
     return validateScenePhysicsPayload(payload.physics);
+  }
+
+  if (
+    payload.kind === 'scene-physics-hash' ||
+    payload.kind === 'scene-physics-snapshot' ||
+    payload.kind === 'scene-physics-snapshot-request'
+  ) {
+    return validateScenePhysicsSyncPayload(payload, maxStringLength);
   }
 
   if (payload.kind === 'scene-batch') {

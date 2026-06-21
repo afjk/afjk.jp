@@ -4687,6 +4687,22 @@ function resolvePresenceUrl() {
   return isLocal ? 'ws://localhost:8787' : 'wss://afjk.jp/presence';
 }
 
+function buildPresenceRoomUrl(base, roomCode) {
+  if (!roomCode) return base;
+  const encodedRoom = encodeURIComponent(roomCode);
+  if (base.includes('?')) {
+    const separator = base.endsWith('?') || base.endsWith('&') ? '' : '&';
+    return `${base}${separator}room=${encodedRoom}`;
+  }
+  if (base.endsWith('/ws/')) {
+    return `${base.slice(0, -1)}?room=${encodedRoom}`;
+  }
+  if (base.endsWith('/') || base.endsWith('/ws')) {
+    return `${base}?room=${encodedRoom}`;
+  }
+  return `${base}/?room=${encodedRoom}`;
+}
+
 function sanitizeRoomCode(s) {
   if (!s) return null;
   const cleaned = String(s).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24);
@@ -6067,9 +6083,7 @@ function renderRoomSection() {
 
 function connectPresence() {
   const base = resolvePresenceUrl();
-  const url = activeRoomCode
-    ? `${base}/?room=${encodeURIComponent(activeRoomCode)}`
-    : base;
+  const url = buildPresenceRoomUrl(base, activeRoomCode);
 
   const ws = new WebSocket(url);
   presenceState.ws = ws;
@@ -10694,13 +10708,54 @@ const dragDropManager = new DragDropManager({
   urlImporter: urlImporterCallback,
 });
 
-window.__sceneSyncDebug = {
+const sceneSyncDebugApi = {
   ...(window.__sceneSyncDebug || {}),
   dragDropManager,
   getSelection: getCurrentSelectionPayload,
   getActiveTransformTweenCount: () => activeTransformTweens.size,
   audioSource: audioSourceHostApi,
 };
+
+if (isDevUiEnabled()) {
+  Object.assign(sceneSyncDebugApi, {
+    presence: () => ({
+      connected: presenceState.ws?.readyState === WebSocket.OPEN,
+      readyState: presenceState.ws?.readyState ?? WebSocket.CLOSED,
+      id: presenceState.id,
+      userId: presenceState.userId,
+      room: presenceState.room,
+      peers: presenceState.peers.map(peer => ({
+        id: peer.id,
+        nickname: peer.nickname || null,
+        device: peer.device || null,
+        userId: peer.userId || null,
+      })),
+    }),
+    sceneClock: {
+      requestControl: () => {
+        requestSceneClockControl();
+        return getSceneClockStateForShell();
+      },
+      play: () => {
+        playSceneClock();
+        return getSceneClockStateForShell();
+      },
+      state: () => getSceneClockStateForShell(),
+    },
+    physics: {
+      snapshot: () => createScenePhysicsSnapshotPayload(
+        getSceneClockStateForLoomlet(performance.now())
+      ),
+      state: () => ({
+        hasBodies: scenePhysicsRuntime.hasBodies(),
+        scenePhysics: getScenePhysicsForSerialize({ enableWhenObjectsExist: false }),
+        objectIds: Array.from(managedObjects.keys()),
+      }),
+    },
+  });
+}
+
+window.__sceneSyncDebug = sceneSyncDebugApi;
 
 // Loomlet host 連携用の AudioSource 操作 API（play/pause/stop/seek/playOneShot/setVolume/setClip/syncToAnimation/unsync）。
 window.sceneSyncAudioSource = audioSourceHostApi;

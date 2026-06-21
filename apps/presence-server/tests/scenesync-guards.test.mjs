@@ -240,6 +240,79 @@ describe('Scene Sync guard helpers', () => {
     assert.equal(result.ok, true);
   });
 
+  it('accepts scene-physics sync messages', () => {
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-hash',
+      source: 'physics',
+      phase: 'postPhysics',
+      profile: 'SceneSyncRapierParity-0.30',
+      hashVersion: 'SceneSyncCanonicalPhysicsHashV1',
+      rapierCoreVersion: '0.19.3',
+      tick: 30,
+      hash: 'dcb86ee6b590ceb4',
+      timestep: 1 / 60,
+      activeTime: 0.5,
+      worldAge: 0.5,
+      worldEpochTime: 0,
+      sceneClockRevision: 1,
+      controller: { id: 'peer-web', nickname: 'Web' },
+      sentAt: Date.now(),
+    }).ok, true);
+
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-snapshot-request',
+      source: 'physics',
+      phase: 'postPhysics',
+      snapshotVersion: 'SceneSyncPhysicsSnapshotV1',
+      profile: 'SceneSyncRapierParity-0.30',
+      hashVersion: 'SceneSyncCanonicalPhysicsHashV1',
+      requestId: 'request-1',
+      reason: 'hash-mismatch',
+      tick: 30,
+      localTick: 30,
+      remoteHash: 'dcb86ee6b590ceb4',
+      localHash: '0000000000000000',
+      sceneClockRevision: 1,
+    }).ok, true);
+
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-snapshot',
+      source: 'physics',
+      phase: 'postPhysics',
+      snapshotVersion: 'SceneSyncPhysicsSnapshotV1',
+      profile: 'SceneSyncRapierParity-0.30',
+      hashVersion: 'SceneSyncCanonicalPhysicsHashV1',
+      tick: 30,
+      hash: 'dcb86ee6b590ceb4',
+      timestep: 1 / 60,
+      activeTime: 0.5,
+      worldAge: 0.5,
+      worldEpochTime: 0,
+      bodyCount: 1,
+      requestId: 'request-1',
+      bodies: [{
+        id: 'live-box',
+        type: 'dynamic',
+        position: [0, 0.5, 0],
+        rotation: [0, 0, 0, 1],
+        velocity: [0, 0, 0],
+        angularVelocity: [0, 0, 0],
+      }],
+    }).ok, true);
+  });
+
+  it('rejects invalid scene-physics sync snapshots', () => {
+    const result = validateSceneSyncPayload({
+      kind: 'scene-physics-snapshot',
+      tick: 1,
+      bodies: [{
+        id: 'live-box',
+        position: [0, Infinity, 0],
+      }],
+    });
+    assert.equal(result.ok, false);
+  });
+
   it('rejects scene-physics with invalid gravity', () => {
     const result = validateSceneSyncPayload({
       kind: 'scene-physics',
