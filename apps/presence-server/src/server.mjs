@@ -680,9 +680,10 @@ function canonicalizeScenePhysicsPayload(roomId, payload) {
 function payloadIncludesScenePhysicsInput(payload) {
   if (payload?.kind === 'scene-physics-input') return true;
   if (payload?.kind !== 'scene-batch') return false;
-  const operations = Array.isArray(payload.ops)
-    ? payload.ops
-    : (Array.isArray(payload.actions) ? payload.actions : []);
+  const operations = [
+    ...(Array.isArray(payload.ops) ? payload.ops : []),
+    ...(Array.isArray(payload.actions) ? payload.actions : []),
+  ];
   return operations.some(payloadIncludesScenePhysicsInput);
 }
 
@@ -858,9 +859,10 @@ function simulateObjectLimitUpdate(objectIds, payload, roomId, actorId) {
   }
 
   if (payload.kind === 'scene-batch') {
-    const operations = Array.isArray(payload.ops)
-      ? payload.ops
-      : (Array.isArray(payload.actions) ? payload.actions : []);
+    const operations = [
+      ...(Array.isArray(payload.ops) ? payload.ops : []),
+      ...(Array.isArray(payload.actions) ? payload.actions : []),
+    ];
     for (const op of operations) {
       const result = simulateObjectLimitUpdate(nextObjectIds, op, roomId, actorId);
       if (!result.ok) return result;

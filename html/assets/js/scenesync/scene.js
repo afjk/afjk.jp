@@ -6372,6 +6372,26 @@ async function respondToSceneRequest(from) {
 
 // ── Handoff 受信（Scene Sync 用） ────────────────────────
 
+function areSceneBatchOperationsMirrored(ops, actions) {
+  if (!Array.isArray(ops) || !Array.isArray(actions)) return false;
+  if (ops.length !== actions.length) return false;
+  for (let index = 0; index < ops.length; index += 1) {
+    if (JSON.stringify(ops[index]) !== JSON.stringify(actions[index])) return false;
+  }
+  return true;
+}
+
+function collectSceneBatchOperations(payload) {
+  const ops = Array.isArray(payload?.ops) ? payload.ops : null;
+  const actions = Array.isArray(payload?.actions) ? payload.actions : null;
+  if (ops && actions) {
+    return areSceneBatchOperationsMirrored(ops, actions)
+      ? ops
+      : [...ops, ...actions];
+  }
+  return ops || actions || null;
+}
+
 function handleHandoff(data) {
   const payload = data.payload;
   if (!payload) return;
@@ -6871,7 +6891,7 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-batch': {
-      const batchOps = payload.ops ?? payload.actions;
+      const batchOps = collectSceneBatchOperations(payload);
       if (!Array.isArray(batchOps)) {
         console.warn('[scene-batch] invalid ops', payload);
         notifySceneStateChanged('scene-batch-handoff');

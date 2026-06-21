@@ -524,6 +524,68 @@ describe('presence REST broadcast API', () => {
     }
   });
 
+  it('detects scene physics inputs in scene-batch actions when ops is also present', async () => {
+    const roomId = 'physics-batch-actions-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const receiver = await connectClient(roomId, 'Physics Receiver');
+    let lateJoiner = null;
+    try {
+      const senderEcho = waitForMessage(sender, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+      const receiverMessage = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-batch',
+          ops: [{
+            kind: 'scene-env',
+            envId: 'outdoor_day',
+          }],
+          actions: [{
+            kind: 'scene-physics-input',
+            inputType: 'set-body-state',
+            inputId: 'batch-actions-drag:000001',
+            timelineRevision: 0,
+            eventRevision: 999,
+            objectId: 'batch-actions-box',
+            applyTick: 6,
+            position: [2, 1, 0],
+            rotation: [0, 0, 0, 1],
+          }],
+        },
+      }));
+
+      const [echo, received] = await Promise.all([senderEcho, receiverMessage]);
+      assert.equal(echo.payload.ops[0].kind, 'scene-env');
+      assert.equal(echo.payload.actions[0].eventRevision, 1);
+      assert.equal(received.payload.ops[0].kind, 'scene-env');
+      assert.equal(received.payload.actions[0].eventRevision, 1);
+      assert.equal(received.payload.actions[0].timelineVersion, 'SceneSyncPhysicsTimelineV1');
+
+      lateJoiner = await connectClient(roomId, 'Physics Late');
+      const replayPromise = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      lateJoiner.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input-log-request',
+          timelineId: 'default',
+        },
+      }));
+
+      const replay = await replayPromise;
+      assert.equal(replay.payload.inputId, 'batch-actions-drag:000001');
+      assert.equal(replay.payload.eventRevision, 1);
+    } finally {
+      await Promise.all([
+        closeClient(sender),
+        closeClient(receiver),
+        lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
+      ]);
+    }
+  });
+
   it('broadcasts scene-env to change environment', async () => {
     const ws = await connectClient('env-test-room');
     try {
