@@ -3664,6 +3664,12 @@ function vectorFromArray(value, fallback = [0, 0, 0]) {
   );
 }
 
+function readPlayerPhysicsNonNegativeInteger(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.floor(number));
+}
+
 function quaternionArrayFromObject(object, fallback = [0, 0, 0, 1]) {
   if (!object) return [...fallback];
   const quaternion = new THREE.Quaternion();
@@ -3748,9 +3754,25 @@ function updatePlayerPhysicsDragVelocity(targetPosition, now = performance.now()
 function publishPlayerPhysicsDragState(position, velocity, phase) {
   if (!isPlayerPhysicsDragging()) return false;
   const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
-  if (timelineState.timelineClearRevision !== playerPhysicsDragState.timelineClearRevision) {
+  const timelineClearRevision = readPlayerPhysicsNonNegativeInteger(
+    timelineState.timelineClearRevision,
+    playerPhysicsDragState.timelineClearRevision,
+  );
+  if (timelineClearRevision !== playerPhysicsDragState.timelineClearRevision) {
     clearPlayerPhysicsDragState();
     return false;
+  }
+
+  const timelineRevision = readPlayerPhysicsNonNegativeInteger(
+    timelineState.timelineRevision,
+    Math.max(0, playerPhysicsDragState.timelineRevision - 1),
+  );
+  if (timelineRevision > playerPhysicsDragState.timelineRevision) {
+    playerPhysicsDragState.timelineRevision = timelineRevision + 1;
+    playerPhysicsDragState.branchTick = Math.max(
+      0,
+      Math.floor(scenePhysicsRuntime.getTick?.() || 0),
+    );
   }
 
   let applyTick = (scenePhysicsRuntime.getTick?.() || 0) + PLAYER_PHYSICS_DRAG_INPUT_LEAD_TICKS;
@@ -3817,8 +3839,14 @@ function beginPlayerPhysicsDrag(clientX, clientY, event = null) {
   playerPhysicsDragState.velocity.copy(velocity);
   playerPhysicsDragState.previousTargetTime = performance.now();
   playerPhysicsDragState.sequence = 0;
-  playerPhysicsDragState.timelineRevision = Math.max(0, Math.floor(Number(timelineState.timelineRevision) || 0)) + 1;
-  playerPhysicsDragState.timelineClearRevision = Math.max(0, Math.floor(Number(timelineState.timelineClearRevision) || 0));
+  playerPhysicsDragState.timelineRevision = readPlayerPhysicsNonNegativeInteger(
+    timelineState.timelineRevision,
+    0,
+  ) + 1;
+  playerPhysicsDragState.timelineClearRevision = readPlayerPhysicsNonNegativeInteger(
+    timelineState.timelineClearRevision,
+    0,
+  );
   playerPhysicsDragState.branchTick = branchTick;
   playerPhysicsDragState.lastApplyTick = -1;
   playerPhysicsDragState.nextPublishAt = 0;
