@@ -2,6 +2,7 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyPhysicsResetBaseline,
+  buildPhysicsBodyDef,
   createPhysicsResetBaseline,
   createScenePhysicsRuntime,
   isScenePhysicsZeroTime,
@@ -146,7 +147,21 @@ test('normalizes parity object physics fields used by Rapier hashing', () => {
   assert.equal(normalizeObjectPhysics({
     enabled: true,
     bodyType: 'static',
-    density: 0,
+  }).density, 0);
+
+  const staticObject = makeObject({
+    objectId: 'static-box',
+    scale: [2, 2, 2],
+    physics: {
+      enabled: true,
+      bodyType: 'static',
+      shape: 'box',
+    },
+  });
+  assert.equal(buildPhysicsBodyDef({
+    objectId: 'static-box',
+    object: staticObject,
+    physics: staticObject.userData.physics,
   }).density, 0);
 });
 

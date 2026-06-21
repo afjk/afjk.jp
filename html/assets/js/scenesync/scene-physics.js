@@ -161,10 +161,10 @@ export function normalizeObjectPhysics(input = null) {
     physics.angularVelocity = [0, 0, 0];
   }
 
-  if (Number.isFinite(Number(input.density))) {
-    physics.density = bodyType === 'static'
-      ? finiteNonNegativeNumber(input.density, 0)
-      : positiveNumber(input.density, 1);
+  if (bodyType === 'static') {
+    physics.density = finiteNonNegativeNumber(input.density, 0);
+  } else if (Number.isFinite(Number(input.density))) {
+    physics.density = positiveNumber(input.density, 1);
   }
   if (Number.isFinite(Number(input.linearDamping))) {
     physics.linearDamping = finiteNonNegativeNumber(input.linearDamping, 0);
