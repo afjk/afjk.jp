@@ -69,6 +69,8 @@ Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` 
    - `SceneSyncManager`
    - `SceneSync Temporary`
    がシーンに作成されます
+   - `com.afjk.scene-sync-rapier` が入っている場合は、`SceneSyncManager` に
+     `SceneSyncPhysicsMetadata` と `SceneSyncRapierBridge` も追加されます
 3. `Room` にルームコードを入力する
 4. `Connect` を押す
 5. ブラウザで `https://afjk.jp/scenesync/?room=<同じルームコード>` を開く

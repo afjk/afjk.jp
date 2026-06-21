@@ -15,6 +15,7 @@ namespace Afjk.SceneSync.Editor
         private const string ShowSceneSyncGizmosPrefKey = "Afjk.SceneSync.ShowSceneSyncGizmos";
         private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
         private const string ApplyTransparentNameHintsForExportPrefKey = "Afjk.SceneSync.ApplyTransparentNameHintsForExport";
+        private const string RapierBridgeTypeName = "Afjk.SceneSync.Rapier.SceneSyncRapierBridge";
         private const float DefaultMaxGlbUploadMiB = 50f;
         private const int MaxPersistentGlbSizeBytes = 50 * 1024 * 1024;
         private const long MaxPersistentGlbCacheBytes = 512L * 1024L * 1024L;
@@ -86,6 +87,8 @@ namespace Afjk.SceneSync.Editor
         private bool _isManualDisconnect = false;
         private bool _publishInProgress = false;
         private string _envId = null;
+        private static bool _rapierBridgeTypeResolved;
+        private static Type _rapierBridgeType;
 
         private void OnEnable()
         {
@@ -317,7 +320,7 @@ namespace Afjk.SceneSync.Editor
         {
             var manager = FindSceneSyncManager();
             var temporaryRoot = FindTemporaryRoot();
-            if (manager != null && temporaryRoot != null) return;
+            if (!IsSceneSyncSetupMissing(manager, temporaryRoot)) return;
 
             EditorGUILayout.HelpBox(
                 "Scene Sync setup is required before publishing Unity objects.",
@@ -1009,7 +1012,7 @@ namespace Afjk.SceneSync.Editor
         {
             var manager = FindSceneSyncManager();
             var temporaryRoot = FindTemporaryRoot();
-            var setupMissing = manager == null || temporaryRoot == null;
+            var setupMissing = IsSceneSyncSetupMissing(manager, temporaryRoot);
 
             if (setupMissing)
             {
@@ -1029,6 +1032,8 @@ namespace Afjk.SceneSync.Editor
 
             GUILayout.Label("SceneSyncManager: " + (manager != null ? "Found" : "Missing"));
             GUILayout.Label("Temporary Root: " + (temporaryRoot != null ? "Found" : "Missing"));
+            GUILayout.Label("Manager Temporary Root: " + (IsManagerTemporaryRootReady(manager, temporaryRoot) ? "Assigned" : "Missing"));
+            GUILayout.Label("Rapier Setup: " + GetRapierSetupStatusLabel(manager, temporaryRoot));
 
             if (GUILayout.Button("Create Scene Sync Setup"))
             {
@@ -1086,6 +1091,12 @@ namespace Afjk.SceneSync.Editor
                 hasChanges = true;
             }
 
+            if (manager != null && temporaryRoot != null)
+            {
+                hasChanges |= EnsureManagerTemporaryRoot(manager, temporaryRoot.transform);
+                hasChanges |= EnsureOptionalRapierSetup(manager, temporaryRoot.transform);
+            }
+
             if (hasChanges)
             {
                 EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
@@ -1097,6 +1108,140 @@ namespace Afjk.SceneSync.Editor
                 MarkManagerDirty(manager);
                 Selection.activeGameObject = manager.gameObject;
             }
+        }
+
+        private static bool IsSceneSyncSetupMissing(SceneSyncManager manager, GameObject temporaryRoot)
+        {
+            if (manager == null || temporaryRoot == null) return true;
+            if (!IsManagerTemporaryRootReady(manager, temporaryRoot)) return true;
+            return IsOptionalRapierSetupMissing(manager, temporaryRoot.transform);
+        }
+
+        private static bool IsManagerTemporaryRootReady(SceneSyncManager manager, GameObject temporaryRoot)
+        {
+            return manager != null
+                && temporaryRoot != null
+                && manager.TemporaryRoot == temporaryRoot.transform;
+        }
+
+        private static bool EnsureManagerTemporaryRoot(SceneSyncManager manager, Transform temporaryRoot)
+        {
+            if (manager == null || temporaryRoot == null || manager.TemporaryRoot == temporaryRoot)
+                return false;
+
+            Undo.RecordObject(manager, "Configure Scene Sync Setup");
+            manager.TemporaryRoot = temporaryRoot;
+            EditorUtility.SetDirty(manager);
+            return true;
+        }
+
+        private static bool IsOptionalRapierSetupMissing(SceneSyncManager manager, Transform temporaryRoot)
+        {
+            var bridgeType = FindRapierBridgeType();
+            if (bridgeType == null) return false;
+            if (manager == null || temporaryRoot == null) return true;
+            if (manager.GetComponent<SceneSyncPhysicsMetadata>() == null) return true;
+
+            var bridge = manager.GetComponent(bridgeType);
+            return bridge == null || GetTransformProperty(bridge, "BodyRoot") != temporaryRoot;
+        }
+
+        private static string GetRapierSetupStatusLabel(SceneSyncManager manager, GameObject temporaryRoot)
+        {
+            var bridgeType = FindRapierBridgeType();
+            if (bridgeType == null) return "Package not installed";
+            if (manager == null) return "Missing SceneSyncManager";
+            if (manager.GetComponent<SceneSyncPhysicsMetadata>() == null) return "Missing Physics Metadata";
+
+            var bridge = manager.GetComponent(bridgeType);
+            if (bridge == null) return "Missing";
+            if (temporaryRoot == null) return "Missing Temporary Root";
+            return GetTransformProperty(bridge, "BodyRoot") == temporaryRoot.transform
+                ? "Found"
+                : "Body Root Missing";
+        }
+
+        private static bool EnsureOptionalRapierSetup(SceneSyncManager manager, Transform temporaryRoot)
+        {
+            var bridgeType = FindRapierBridgeType();
+            if (bridgeType == null || manager == null || temporaryRoot == null)
+                return false;
+
+            var changed = false;
+            var metadata = manager.GetComponent<SceneSyncPhysicsMetadata>();
+            if (metadata == null)
+            {
+                metadata = Undo.AddComponent<SceneSyncPhysicsMetadata>(manager.gameObject);
+                changed = true;
+            }
+
+            var bridge = manager.GetComponent(bridgeType);
+            if (bridge == null)
+            {
+                bridge = Undo.AddComponent(manager.gameObject, bridgeType);
+                changed = true;
+            }
+
+            if (bridge != null)
+            {
+                Undo.RecordObject(bridge, "Configure Scene Sync Rapier Bridge");
+                changed |= SetTransformProperty(bridge, "BodyRoot", temporaryRoot);
+                changed |= SetBoolProperty(bridge, "AutoRun", true);
+                changed |= SetBoolProperty(bridge, "UseSceneClock", true);
+                changed |= SetBoolProperty(bridge, "RequireSceneClock", false);
+                changed |= SetBoolProperty(bridge, "PreserveMotionOnRebuild", false);
+                EditorUtility.SetDirty(bridge);
+            }
+
+            if (metadata != null)
+                EditorUtility.SetDirty(metadata);
+
+            return changed;
+        }
+
+        private static Type FindRapierBridgeType()
+        {
+            if (_rapierBridgeTypeResolved)
+                return _rapierBridgeType;
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var type = assembly.GetType(RapierBridgeTypeName);
+                if (type == null) continue;
+                _rapierBridgeType = type;
+                _rapierBridgeTypeResolved = true;
+                return _rapierBridgeType;
+            }
+
+            _rapierBridgeTypeResolved = true;
+            return _rapierBridgeType;
+        }
+
+        private static Transform GetTransformProperty(Component component, string propertyName)
+        {
+            if (component == null) return null;
+            var property = component.GetType().GetProperty(propertyName);
+            return property != null ? property.GetValue(component, null) as Transform : null;
+        }
+
+        private static bool SetTransformProperty(Component component, string propertyName, Transform value)
+        {
+            if (component == null) return false;
+            var property = component.GetType().GetProperty(propertyName);
+            if (property == null || !property.CanWrite) return false;
+            if (property.GetValue(component, null) as Transform == value) return false;
+            property.SetValue(component, value, null);
+            return true;
+        }
+
+        private static bool SetBoolProperty(Component component, string propertyName, bool value)
+        {
+            if (component == null) return false;
+            var property = component.GetType().GetProperty(propertyName);
+            if (property == null || !property.CanWrite || property.PropertyType != typeof(bool)) return false;
+            if ((bool)property.GetValue(component, null) == value) return false;
+            property.SetValue(component, value, null);
+            return true;
         }
 
         private void SyncRoomFromSceneSyncManager()
