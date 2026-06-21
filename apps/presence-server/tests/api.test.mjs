@@ -361,6 +361,7 @@ describe('presence REST broadcast API', () => {
       assert.equal(first.payload.eventRevision, 1);
       assert.equal(first.payload.timelineRevision, 0);
       assert.equal(first.payload.timelineForkTick, 0);
+      assert.equal(first.payload.timelineClearRevision, 0);
       assert.equal(first.payload.timelineVersion, 'SceneSyncPhysicsTimelineV1');
       assert.equal(firstSender.payload.eventRevision, 1);
       assert.equal(firstSender.payload.inputId, 'drag-a:000001');
@@ -393,6 +394,7 @@ describe('presence REST broadcast API', () => {
       assert.equal(branch.payload.eventRevision, 2);
       assert.equal(branch.payload.timelineRevision, 1);
       assert.equal(branch.payload.timelineForkTick, 10);
+      assert.equal(branch.payload.timelineClearRevision, 0);
       assert.equal(branch.payload.branchTick, 10);
 
       const staleError = waitForMessage(sender, message => message.type === 'error');
@@ -466,12 +468,165 @@ describe('presence REST broadcast API', () => {
       assert.equal(replay.payload.inputId, 'replay-drag:000001');
       assert.equal(replay.payload.eventRevision, 1);
       assert.equal(replay.payload.timelineRevision, 0);
+      assert.equal(replay.payload.timelineClearRevision, 0);
     } finally {
       await Promise.all([
         closeClient(sender),
         closeClient(receiver),
         lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
       ]);
+    }
+  });
+
+  it('clears scene physics input history and advances the timeline revision', async () => {
+    const roomId = 'physics-clear-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const receiver = await connectClient(roomId, 'Physics Receiver');
+    let lateJoiner = null;
+    try {
+      const firstInput = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'clear-drag:000001',
+          timelineId: 'default',
+          timelineRevision: 0,
+          objectId: 'box',
+          applyTick: 4,
+          position: [1, 2, 3],
+          rotation: [0, 0, 0, 1],
+        },
+      }));
+      const first = await firstInput;
+      assert.equal(first.payload.eventRevision, 1);
+
+      const clearEcho = waitForMessage(sender, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input-log-clear');
+      const clearReceiver = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input-log-clear');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input-log-clear',
+          timelineId: 'default',
+          reason: 'test-clear',
+        },
+      }));
+
+      const [echo, received] = await Promise.all([clearEcho, clearReceiver]);
+      assert.equal(echo.payload.timelineVersion, 'SceneSyncPhysicsTimelineV1');
+      assert.equal(echo.payload.timelineId, 'default');
+      assert.equal(echo.payload.timelineRevision, 2);
+      assert.equal(echo.payload.timelineForkTick, 0);
+      assert.equal(echo.payload.timelineClearRevision, 2);
+      assert.equal(echo.payload.lastEventRevision, 0);
+      assert.equal(received.payload.timelineRevision, 2);
+      assert.equal(received.payload.timelineClearRevision, 2);
+
+      lateJoiner = await connectClient(roomId, 'Physics Late');
+      const markerPromise = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input-log-clear');
+      lateJoiner.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input-log-request',
+          timelineId: 'default',
+        },
+      }));
+      const marker = await markerPromise;
+      assert.equal(marker.from.id, 'server');
+      assert.equal(marker.payload.timelineRevision, echo.payload.timelineRevision);
+      assert.equal(marker.payload.timelineClearRevision, echo.payload.timelineClearRevision);
+
+      const staleError = waitForMessage(sender, message => message.type === 'error');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'clear-stale:000001',
+          timelineId: 'default',
+          timelineRevision: echo.payload.timelineRevision,
+          timelineClearRevision: 0,
+          objectId: 'box',
+          applyTick: 5,
+          position: [2, 2, 3],
+          rotation: [0, 0, 0, 1],
+        },
+      }));
+      const error = await staleError;
+      assert.equal(error.error, 'stale_physics_timeline');
+
+      const freshInput = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.inputId === 'clear-fresh:000001');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'clear-fresh:000001',
+          timelineId: 'default',
+          timelineRevision: echo.payload.timelineRevision,
+          timelineClearRevision: echo.payload.timelineClearRevision,
+          objectId: 'box',
+          applyTick: 1,
+          position: [0, 2, 3],
+          rotation: [0, 0, 0, 1],
+        },
+      }));
+      const fresh = await freshInput;
+      assert.equal(fresh.payload.timelineRevision, 2);
+      assert.equal(fresh.payload.timelineClearRevision, 2);
+      assert.equal(fresh.payload.eventRevision, 1);
+    } finally {
+      await Promise.all([
+        closeClient(sender),
+        closeClient(receiver),
+        lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
+      ]);
+    }
+  });
+
+  it('deduplicates mirrored scene-batch clear operations with reordered keys', async () => {
+    const roomId = 'physics-clear-batch-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const receiver = await connectClient(roomId, 'Physics Receiver');
+    try {
+      const senderEcho = waitForMessage(sender, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+      const receiverMessage = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-batch',
+          ops: [{
+            kind: 'scene-physics-input-log-clear',
+            timelineId: 'default',
+            reason: 'mirror-clear',
+          }],
+          actions: [{
+            reason: 'mirror-clear',
+            timelineId: 'default',
+            kind: 'scene-physics-input-log-clear',
+          }],
+        },
+      }));
+
+      const [echo, received] = await Promise.all([senderEcho, receiverMessage]);
+      assert.equal(echo.payload.ops[0].timelineRevision, 2);
+      assert.equal(echo.payload.actions[0].timelineRevision, 2);
+      assert.equal(received.payload.ops[0].timelineRevision, 2);
+      assert.equal(received.payload.actions[0].timelineRevision, 2);
+      assert.equal(echo.payload.ops[0].timelineClearRevision, 2);
+      assert.equal(echo.payload.actions[0].timelineClearRevision, 2);
+      assert.equal(received.payload.ops[0].timelineClearRevision, 2);
+      assert.equal(received.payload.actions[0].timelineClearRevision, 2);
+    } finally {
+      await Promise.all([closeClient(sender), closeClient(receiver)]);
     }
   });
 
@@ -519,6 +674,7 @@ describe('presence REST broadcast API', () => {
       assert.equal(received.payload.ops[0].eventRevision, 1);
       assert.equal(received.payload.actions[0].eventRevision, 1);
       assert.equal(received.payload.ops[0].timelineVersion, 'SceneSyncPhysicsTimelineV1');
+      assert.equal(received.payload.ops[0].timelineClearRevision, 0);
     } finally {
       await Promise.all([closeClient(sender), closeClient(receiver)]);
     }

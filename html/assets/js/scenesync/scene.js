@@ -84,6 +84,7 @@ import {
   normalizeObjectPhysics,
   normalizeScenePhysics,
   SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
+  SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
   SCENE_SYNC_RAPIER_PROFILE,
   serializeObjectPhysics,
   serializeScenePhysics,
@@ -1407,9 +1408,11 @@ let scenePhysicsState = normalizeScenePhysics();
 let lastScenePhysicsHashBroadcastTick = null;
 let lastScenePhysicsHashBroadcastHash = null;
 let lastScenePhysicsHashBroadcastRevision = null;
+let lastScenePhysicsHashBroadcastClearRevision = null;
 let lastScenePhysicsSnapshotBroadcastTick = null;
 let lastScenePhysicsSnapshotBroadcastHash = null;
 let lastScenePhysicsSnapshotBroadcastRevision = null;
+let lastScenePhysicsSnapshotBroadcastClearRevision = null;
 const scenePhysicsRuntime = createScenePhysicsRuntime({
   getScenePhysics: () => scenePhysicsState,
   getObjectEntries: () => Array.from(managedObjects.entries()).map(([objectId, object]) => ({
@@ -5212,10 +5215,14 @@ function maybeBroadcastScenePhysicsHash(physicsTick, clockState = null) {
   const revision = Number.isFinite(sceneClockState.sharedRevision)
     ? sceneClockState.sharedRevision
     : null;
+  const timelineClearRevision = Number.isFinite(physicsTick.timelineClearRevision)
+    ? physicsTick.timelineClearRevision
+    : null;
   if (
     lastScenePhysicsHashBroadcastTick === tick &&
     lastScenePhysicsHashBroadcastHash === hash &&
-    lastScenePhysicsHashBroadcastRevision === revision
+    lastScenePhysicsHashBroadcastRevision === revision &&
+    lastScenePhysicsHashBroadcastClearRevision === timelineClearRevision
   ) {
     return;
   }
@@ -5223,6 +5230,7 @@ function maybeBroadcastScenePhysicsHash(physicsTick, clockState = null) {
   lastScenePhysicsHashBroadcastTick = tick;
   lastScenePhysicsHashBroadcastHash = hash;
   lastScenePhysicsHashBroadcastRevision = revision;
+  lastScenePhysicsHashBroadcastClearRevision = timelineClearRevision;
   broadcast({
     kind: 'scene-physics-hash',
     source: 'physics',
@@ -5234,6 +5242,7 @@ function maybeBroadcastScenePhysicsHash(physicsTick, clockState = null) {
     timelineId: physicsTick.timelineId,
     timelineRevision: physicsTick.timelineRevision,
     timelineForkTick: physicsTick.timelineForkTick,
+    timelineClearRevision: physicsTick.timelineClearRevision,
     lastEventRevision: physicsTick.lastEventRevision,
     tick,
     hash,
@@ -5266,10 +5275,14 @@ function maybeBroadcastScenePhysicsSnapshot(physicsTick, clockState = null) {
   const revision = Number.isFinite(sceneClockState.sharedRevision)
     ? sceneClockState.sharedRevision
     : null;
+  const timelineClearRevision = Number.isFinite(physicsTick.timelineClearRevision)
+    ? physicsTick.timelineClearRevision
+    : null;
   if (
     lastScenePhysicsSnapshotBroadcastTick === tick &&
     lastScenePhysicsSnapshotBroadcastHash === hash &&
-    lastScenePhysicsSnapshotBroadcastRevision === revision
+    lastScenePhysicsSnapshotBroadcastRevision === revision &&
+    lastScenePhysicsSnapshotBroadcastClearRevision === timelineClearRevision
   ) {
     return;
   }
@@ -5280,6 +5293,7 @@ function maybeBroadcastScenePhysicsSnapshot(physicsTick, clockState = null) {
   lastScenePhysicsSnapshotBroadcastTick = tick;
   lastScenePhysicsSnapshotBroadcastHash = hash;
   lastScenePhysicsSnapshotBroadcastRevision = revision;
+  lastScenePhysicsSnapshotBroadcastClearRevision = timelineClearRevision;
   broadcast(snapshot);
 }
 
@@ -5298,6 +5312,36 @@ function createScenePhysicsSnapshotPayload(clockState = null, extra = {}) {
     sentAt: Date.now(),
     ...extra,
   };
+}
+
+function applyScenePhysicsInputLogClear(payload = {}, now = performance.now()) {
+  const cleared = scenePhysicsRuntime.clearInputHistory?.(payload) === true;
+  if (!cleared) return false;
+  const physicsBaseline = createSharedPlaybackPhysicsResetBaseline(now, 'physics-input-log-clear');
+  resetAllObjectClocksForSceneClock(now, {
+    reason: 'physics-input-log-clear',
+    physicsBaseline,
+  });
+  notifySceneSyncShellStateChanged('scene-physics-input-log-clear');
+  return true;
+}
+
+function clearScenePhysicsInputLog(reason = 'player-stop-clear', now = performance.now()) {
+  const payload = {
+    kind: 'scene-physics-input-log-clear',
+    timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+    timelineId: 'default',
+    reason,
+    sentAt: Date.now(),
+  };
+
+  const ws = presenceState.ws;
+  if (sceneClockState.mode === CLOCK_MODES.SHARED_PLAYBACK && ws?.readyState === WebSocket.OPEN) {
+    broadcast(payload);
+    return;
+  }
+
+  applyScenePhysicsInputLogClear(payload, now);
 }
 
 function broadcastSceneClockEvent(action, extra = {}) {
@@ -5586,7 +5630,11 @@ function playSceneClock(now = performance.now()) {
 }
 
 function stopSceneClock(now = performance.now()) {
-  resetSceneClock(now);
+  if (isScenePhysicsZeroTime(getSceneClockTime(now))) {
+    clearScenePhysicsInputLog('player-stop-clear', now);
+  } else {
+    resetSceneClock(now);
+  }
   pauseSceneClock(now);
 }
 
@@ -6372,11 +6420,24 @@ async function respondToSceneRequest(from) {
 
 // ── Handoff 受信（Scene Sync 用） ────────────────────────
 
+function stableJsonStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJsonStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function areSceneBatchOperationsMirrored(ops, actions) {
   if (!Array.isArray(ops) || !Array.isArray(actions)) return false;
   if (ops.length !== actions.length) return false;
   for (let index = 0; index < ops.length; index += 1) {
-    if (JSON.stringify(ops[index]) !== JSON.stringify(actions[index])) return false;
+    if (stableJsonStringify(ops[index]) !== stableJsonStringify(actions[index])) return false;
   }
   return true;
 }
@@ -6442,6 +6503,7 @@ function handleHandoff(data) {
     payload.kind === 'scene-add' ||
     payload.kind === 'scene-remove' ||
     payload.kind === 'scene-physics' ||
+    payload.kind === 'scene-physics-input-log-clear' ||
     payload.kind === 'scene-physics-input'
   ) {
     console.debug('[handoff] scene mutation received', {
@@ -6773,6 +6835,12 @@ function handleHandoff(data) {
     case 'scene-physics-input': {
       scenePhysicsRuntime.queueInput(payload);
       notifySceneStateChanged('scene-physics-input');
+      break;
+    }
+    case 'scene-physics-input-log-clear': {
+      if (applyScenePhysicsInputLogClear(payload)) {
+        notifySceneStateChanged('scene-physics-input-log-clear');
+      }
       break;
     }
     case 'scene-physics-snapshot-request': {

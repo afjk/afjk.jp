@@ -254,6 +254,12 @@ describe('Scene Sync guard helpers', () => {
       activeTime: 0.5,
       worldAge: 0.5,
       worldEpochTime: 0,
+      timelineVersion: 'SceneSyncPhysicsTimelineV1',
+      timelineId: 'default',
+      timelineRevision: 1,
+      timelineForkTick: 88,
+      timelineClearRevision: 0,
+      lastEventRevision: 3,
       sceneClockRevision: 1,
       controller: { id: 'peer-web', nickname: 'Web' },
       sentAt: Date.now(),
@@ -266,6 +272,7 @@ describe('Scene Sync guard helpers', () => {
       timelineVersion: 'SceneSyncPhysicsTimelineV1',
       timelineId: 'default',
       timelineRevision: 1,
+      timelineClearRevision: 0,
       eventRevision: 3,
       interactionId: 'drag-1',
       sequence: 2,
@@ -281,6 +288,18 @@ describe('Scene Sync guard helpers', () => {
     }).ok, true);
 
     assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-input-log-clear',
+      timelineVersion: 'SceneSyncPhysicsTimelineV1',
+      timelineId: 'default',
+      timelineRevision: 2,
+      timelineForkTick: 0,
+      timelineClearRevision: 2,
+      lastEventRevision: 0,
+      reason: 'player-stop-clear',
+      sentAt: Date.now(),
+    }).ok, true);
+
+    assert.equal(validateSceneSyncPayload({
       kind: 'scene-physics-snapshot-request',
       source: 'physics',
       phase: 'postPhysics',
@@ -289,6 +308,7 @@ describe('Scene Sync guard helpers', () => {
       timelineId: 'default',
       timelineRevision: 1,
       timelineForkTick: 88,
+      timelineClearRevision: 0,
       lastEventRevision: 3,
       profile: 'SceneSyncRapierParity-0.30',
       hashVersion: 'SceneSyncCanonicalPhysicsHashV1',
@@ -310,6 +330,7 @@ describe('Scene Sync guard helpers', () => {
       timelineId: 'default',
       timelineRevision: 1,
       timelineForkTick: 88,
+      timelineClearRevision: 0,
       lastEventRevision: 3,
       profile: 'SceneSyncRapierParity-0.30',
       hashVersion: 'SceneSyncCanonicalPhysicsHashV1',

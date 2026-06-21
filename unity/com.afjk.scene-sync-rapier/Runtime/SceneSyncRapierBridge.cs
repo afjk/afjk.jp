@@ -81,6 +81,7 @@ namespace Afjk.SceneSync.Rapier
         private string timelineId = DefaultTimelineId;
         private int timelineRevision;
         private int timelineForkTick;
+        private int timelineClearRevision;
         private long lastPhysicsEventRevision;
         private long localPhysicsEventRevisionCounter;
 
@@ -106,6 +107,7 @@ namespace Afjk.SceneSync.Rapier
         public string TimelineId => timelineId;
         public int TimelineRevision => timelineRevision;
         public int TimelineForkTick => timelineForkTick;
+        public int TimelineClearRevision => timelineClearRevision;
         public long LastPhysicsEventRevision => lastPhysicsEventRevision;
         public int LastBodyStateInputTick => bodyStateInputHistory.Count == 0
             ? -1
@@ -352,6 +354,7 @@ namespace Afjk.SceneSync.Rapier
                 Mathf.Max(0, applyTick),
                 timelineId,
                 timelineRevision,
+                timelineClearRevision,
                 0L,
                 null,
                 0,
@@ -369,6 +372,9 @@ namespace Afjk.SceneSync.Rapier
                 return false;
 
             if (!string.Equals(input.TimelineId, timelineId, StringComparison.Ordinal))
+                return false;
+
+            if (input.TimelineClearRevision != timelineClearRevision)
                 return false;
 
             if (input.TimelineRevision < timelineRevision && input.ApplyTick > timelineForkTick)
@@ -493,6 +499,7 @@ namespace Afjk.SceneSync.Rapier
                 applyTick,
                 timelineId,
                 normalizedTimelineRevision,
+                timelineClearRevision,
                 normalizedEventRevision,
                 interactionId,
                 sequence,
@@ -513,6 +520,7 @@ namespace Afjk.SceneSync.Rapier
                 applyTick,
                 timelineId,
                 normalizedTimelineRevision,
+                timelineClearRevision,
                 normalizedEventRevision,
                 interactionId,
                 sequence,
@@ -540,6 +548,7 @@ namespace Afjk.SceneSync.Rapier
                 applyTick,
                 DefaultTimelineId,
                 0,
+                0,
                 0L,
                 null,
                 0,
@@ -557,6 +566,7 @@ namespace Afjk.SceneSync.Rapier
             int applyTick,
             string timelineId,
             int timelineRevision,
+            int timelineClearRevision,
             long eventRevision,
             string interactionId,
             int sequence,
@@ -577,6 +587,7 @@ namespace Afjk.SceneSync.Rapier
                 ",\"timelineVersion\":\"" + TimelineVersion + "\"" +
                 ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(NormalizeTimelineId(timelineId)) + "\"" +
                 ",\"timelineRevision\":" + Mathf.Max(0, timelineRevision).ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineClearRevision\":" + Mathf.Max(0, timelineClearRevision).ToString(CultureInfo.InvariantCulture) +
                 ",\"eventRevision\":" + Math.Max(0L, eventRevision).ToString(CultureInfo.InvariantCulture) +
                 (!string.IsNullOrWhiteSpace(interactionId)
                     ? ",\"interactionId\":\"" + SceneSyncWireJson.JsonEscape(interactionId.Trim()) + "\""
@@ -628,6 +639,8 @@ namespace Afjk.SceneSync.Rapier
             if (tickCompare != 0) return tickCompare;
             var revisionCompare = left.TimelineRevision.CompareTo(right.TimelineRevision);
             if (revisionCompare != 0) return revisionCompare;
+            var clearRevisionCompare = left.TimelineClearRevision.CompareTo(right.TimelineClearRevision);
+            if (clearRevisionCompare != 0) return clearRevisionCompare;
             var eventCompare = left.EventRevision.CompareTo(right.EventRevision);
             if (eventCompare != 0) return eventCompare;
             var interactionCompare = string.CompareOrdinal(left.InteractionId ?? string.Empty, right.InteractionId ?? string.Empty);
@@ -892,6 +905,12 @@ namespace Afjk.SceneSync.Rapier
                 return;
             }
 
+            if (raw.Contains("\"kind\":\"scene-physics-input-log-clear\""))
+            {
+                ApplyScenePhysicsInputLogClear(raw);
+                return;
+            }
+
             if (raw.Contains("\"kind\":\"scene-physics\""))
             {
                 scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics"));
@@ -938,6 +957,7 @@ namespace Afjk.SceneSync.Rapier
             var applied = false;
             var payloadTimelineId = NormalizeTimelineId(payload?.timelineId);
             var payloadTimelineRevision = payload != null ? Mathf.Max(0, payload.timelineRevision) : 0;
+            var payloadTimelineClearRevision = payload != null ? Mathf.Max(0, payload.timelineClearRevision) : 0;
             var payloadLastEventRevision = payload != null ? Math.Max(0L, payload.lastEventRevision) : 0L;
             var payloadSceneClockRevision = ReadInt(payloadJson, "sceneClockRevision", int.MinValue);
             var expectedLastEventRevision = payloadTimelineRevision > timelineRevision
@@ -955,6 +975,7 @@ namespace Afjk.SceneSync.Rapier
                 && payload.bodies != null
                 && string.Equals(payloadTimelineId, timelineId, StringComparison.Ordinal)
                 && payloadTimelineRevision >= timelineRevision
+                && payloadTimelineClearRevision == timelineClearRevision
                 && (payloadSceneClockRevision == int.MinValue ||
                     latestSceneClockRevision == int.MinValue ||
                     payloadSceneClockRevision >= latestSceneClockRevision)
@@ -1059,6 +1080,7 @@ namespace Afjk.SceneSync.Rapier
             var sceneClockRevision = ReadInt(raw, "sceneClockRevision", int.MinValue);
             var remoteTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
             var remoteTimelineRevision = ReadInt(raw, "timelineRevision", 0);
+            var remoteTimelineClearRevision = ReadInt(raw, "timelineClearRevision", 0);
             var remoteLastEventRevision = ReadLong(raw, "lastEventRevision", 0L);
 
             var localHash = NormalizeHash(ComputeStateHashHex());
@@ -1066,6 +1088,7 @@ namespace Afjk.SceneSync.Rapier
             var hashVersionMatched = string.Equals(hashVersion, CanonicalStateHashVersion, StringComparison.Ordinal);
             var timelineComparable = string.Equals(remoteTimelineId, timelineId, StringComparison.Ordinal)
                 && remoteTimelineRevision == timelineRevision
+                && remoteTimelineClearRevision == timelineClearRevision
                 && remoteLastEventRevision >= lastPhysicsEventRevision;
             var matched = timelineComparable
                 && tickMatched
@@ -1144,6 +1167,7 @@ namespace Afjk.SceneSync.Rapier
             var applyTick = ReadInt(raw, "applyTick", tick);
             var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
             var inputTimelineRevision = ReadInt(raw, "timelineRevision", timelineRevision);
+            var inputTimelineClearRevision = ReadInt(raw, "timelineClearRevision", 0);
             var inputEventRevision = ReadLong(raw, "eventRevision", 0L);
             var interactionId = SceneSyncWireJson.ExtractString(raw, "interactionId");
             var sequence = ReadInt(raw, "sequence", 0);
@@ -1156,6 +1180,7 @@ namespace Afjk.SceneSync.Rapier
                 applyTick,
                 inputTimelineId,
                 inputTimelineRevision,
+                inputTimelineClearRevision,
                 inputEventRevision,
                 interactionId,
                 sequence,
@@ -1165,6 +1190,21 @@ namespace Afjk.SceneSync.Rapier
                 WireToUnityRotation(wireRotation),
                 WireToUnityVector(wireLinearVelocity),
                 WireToUnityVector(wireAngularVelocity)));
+        }
+
+        private void ApplyScenePhysicsInputLogClear(string raw)
+        {
+            var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
+            if (!string.Equals(inputTimelineId, timelineId, StringComparison.Ordinal))
+                return;
+
+            var inputTimelineRevision = ReadInt(raw, "timelineRevision", timelineRevision + 1);
+            var inputTimelineClearRevision = ReadInt(raw, "timelineClearRevision", inputTimelineRevision);
+            if (inputTimelineClearRevision <= timelineClearRevision)
+                return;
+
+            var inputTimelineForkTick = ReadInt(raw, "timelineForkTick", 0);
+            ClearBodyStateInputHistory(inputTimelineRevision, inputTimelineForkTick, inputTimelineClearRevision);
         }
 
         private bool ApplyDueBodyStateInputs()
@@ -1213,6 +1253,43 @@ namespace Afjk.SceneSync.Rapier
             return true;
         }
 
+        private void ClearBodyStateInputHistory(int nextTimelineRevision, int nextTimelineForkTick, int nextTimelineClearRevision)
+        {
+            timelineRevision = nextTimelineRevision >= 0
+                ? Mathf.Max(0, nextTimelineRevision)
+                : timelineRevision + 1;
+            timelineForkTick = Mathf.Max(0, nextTimelineForkTick);
+            timelineClearRevision = Math.Max(timelineClearRevision, Mathf.Max(0, nextTimelineClearRevision));
+            lastPhysicsEventRevision = 0L;
+            localPhysicsEventRevisionCounter = lastPhysicsEventRevision;
+            bodyStateInputHistory.Clear();
+            pendingBodyStateInputs.Clear();
+            appliedBodyStateInputIds.Clear();
+            currentCollisionPairs.Clear();
+            previousCollisionPairs.Clear();
+            lastCollisionEvents.Clear();
+            accumulator = 0f;
+            tick = 0;
+            lastStepLimited = false;
+            pendingWorldEpochTime = 0f;
+            hasPendingWorldEpochTime = true;
+
+            if (world != null && hasInitialSnapshot && world.TryReadSnapshot(initialSnapshot))
+            {
+                worldEpochTime = 0f;
+                hasPendingWorldEpochTime = false;
+                ApplyWorldTransforms();
+                UpdateLastStateHash("input-clear");
+            }
+            else
+            {
+                preserveMotionOnNextRebuild = false;
+                dirty = true;
+            }
+
+            ResetStateHashBroadcastCache();
+        }
+
         private bool ApplyBodyStateInput(BodyStateInput input)
         {
             if (string.IsNullOrWhiteSpace(input.InputId) ||
@@ -1258,6 +1335,7 @@ namespace Afjk.SceneSync.Rapier
                 ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(timelineId) + "\"" +
                 ",\"timelineRevision\":" + timelineRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"timelineForkTick\":" + timelineForkTick.ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineClearRevision\":" + timelineClearRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"lastEventRevision\":" + lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"requestId\":\"" + SceneSyncWireJson.JsonEscape(requestId) + "\"" +
                 ",\"reason\":\"hash-mismatch\"" +
@@ -1640,6 +1718,7 @@ namespace Afjk.SceneSync.Rapier
                 ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(timelineId) + "\"" +
                 ",\"timelineRevision\":" + timelineRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"timelineForkTick\":" + timelineForkTick.ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineClearRevision\":" + timelineClearRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"lastEventRevision\":" + lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture) +
                 ",\"tick\":" + tick.ToString(CultureInfo.InvariantCulture) +
                 ",\"hash\":\"" + SceneSyncWireJson.JsonEscape(lastStateHash) + "\"" +
@@ -1916,6 +1995,7 @@ namespace Afjk.SceneSync.Rapier
             public string timelineId;
             public int timelineRevision;
             public int timelineForkTick;
+            public int timelineClearRevision;
             public long lastEventRevision;
             public string profile;
             public string hashVersion;
@@ -1974,6 +2054,7 @@ namespace Afjk.SceneSync.Rapier
                 int applyTick,
                 string timelineId,
                 int timelineRevision,
+                int timelineClearRevision,
                 long eventRevision,
                 string interactionId,
                 int sequence,
@@ -1989,6 +2070,7 @@ namespace Afjk.SceneSync.Rapier
                 ApplyTick = applyTick;
                 TimelineId = NormalizeTimelineId(timelineId);
                 TimelineRevision = Mathf.Max(0, timelineRevision);
+                TimelineClearRevision = Mathf.Max(0, timelineClearRevision);
                 EventRevision = Math.Max(0L, eventRevision);
                 InteractionId = string.IsNullOrWhiteSpace(interactionId) ? null : interactionId.Trim();
                 Sequence = Mathf.Max(0, sequence);
@@ -2005,6 +2087,7 @@ namespace Afjk.SceneSync.Rapier
             public int ApplyTick { get; }
             public string TimelineId { get; }
             public int TimelineRevision { get; }
+            public int TimelineClearRevision { get; }
             public long EventRevision { get; }
             public string InteractionId { get; }
             public int Sequence { get; }
