@@ -24,10 +24,15 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private float metadataScanInterval = 0.5f;
         [SerializeField] private float maxFrameStepSeconds = 0.25f;
         [SerializeField] private int maxClockStepsPerUpdate = 600;
+        [SerializeField] private int maxCollisionEventsPerDrain = 256;
         [SerializeField] private bool logStateHash;
 
         private readonly Dictionary<string, string> objectPhysicsJson = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, BodyBinding> bindings = new Dictionary<string, BodyBinding>(StringComparer.Ordinal);
+        private readonly Dictionary<RapierColliderHandle, string> colliderObjectIds = new Dictionary<RapierColliderHandle, string>();
+        private readonly HashSet<string> currentCollisionPairs = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> previousCollisionPairs = new HashSet<string>(StringComparer.Ordinal);
+        private readonly List<SceneSyncRapierCollisionEvent> lastCollisionEvents = new List<SceneSyncRapierCollisionEvent>();
 
         private RapierWorld world;
         private RapierSnapshot initialSnapshot;
@@ -45,10 +50,13 @@ namespace Afjk.SceneSync.Rapier
         private float nextMetadataScanAt;
         private string lastStateHash;
 
+        public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
+
         public int Tick => tick;
         public string LastStateHash => lastStateHash;
         public bool HasWorld => world != null && world.IsCreated;
         public bool LastStepLimited => lastStepLimited;
+        public IReadOnlyList<SceneSyncRapierCollisionEvent> LastCollisionEvents => lastCollisionEvents;
 
         private void OnEnable()
         {
@@ -88,6 +96,7 @@ namespace Afjk.SceneSync.Rapier
 
         private void StepLocalFrame()
         {
+            lastCollisionEvents.Clear();
             var frameTime = Mathf.Min(Mathf.Max(0f, Time.unscaledDeltaTime), Mathf.Max(0f, maxFrameStepSeconds));
             accumulator += frameTime;
             var timestep = Mathf.Max(0.000001f, scenePhysics.Timestep);
@@ -96,15 +105,15 @@ namespace Afjk.SceneSync.Rapier
 
             while (accumulator + 0.0000001f >= timestep && steps < maxSteps)
             {
-                if (!world.Step()) break;
+                if (!StepWorldOnce()) break;
                 accumulator -= timestep;
-                tick++;
                 steps++;
             }
 
             if (steps > 0)
             {
                 ApplyWorldTransforms();
+                FlushCollisionEvents(GetCurrentPhysicsTime());
                 if (logStateHash)
                 {
                     lastStateHash = world.StateHash().ToString("x16", CultureInfo.InvariantCulture);
@@ -119,6 +128,7 @@ namespace Afjk.SceneSync.Rapier
             var timestep = Mathf.Max(0.000001f, scenePhysics.Timestep);
             var targetTick = Mathf.Max(0, Mathf.FloorToInt(Mathf.Max(0f, clockTime - worldEpochTime) / timestep));
             lastStepLimited = false;
+            lastCollisionEvents.Clear();
 
             if (targetTick < tick && hasInitialSnapshot)
             {
@@ -126,6 +136,9 @@ namespace Afjk.SceneSync.Rapier
                 {
                     tick = 0;
                     accumulator = 0f;
+                    currentCollisionPairs.Clear();
+                    previousCollisionPairs.Clear();
+                    lastCollisionEvents.Clear();
                 }
             }
 
@@ -133,8 +146,7 @@ namespace Afjk.SceneSync.Rapier
             var steps = 0;
             while (tick < targetTick && steps < maxSteps)
             {
-                if (!world.Step()) break;
-                tick++;
+                if (!StepWorldOnce()) break;
                 steps++;
             }
 
@@ -144,12 +156,22 @@ namespace Afjk.SceneSync.Rapier
             if (steps > 0 || targetTick == 0)
             {
                 ApplyWorldTransforms();
+                FlushCollisionEvents(clockTime);
                 if (logStateHash)
                 {
                     lastStateHash = world.StateHash().ToString("x16", CultureInfo.InvariantCulture);
                     Debug.Log("[SceneSyncRapier] tick=" + tick + " targetTick=" + targetTick + " stateHash=" + lastStateHash);
                 }
             }
+        }
+
+        private bool StepWorldOnce()
+        {
+            if (world == null || !world.Step())
+                return false;
+            tick++;
+            DrainCollisionEventsIntoCurrentPairs();
+            return true;
         }
 
         public void MarkDirty()
@@ -167,6 +189,10 @@ namespace Afjk.SceneSync.Rapier
             hasInitialSnapshot = false;
             initialSnapshot = default;
             bindings.Clear();
+            colliderObjectIds.Clear();
+            currentCollisionPairs.Clear();
+            previousCollisionPairs.Clear();
+            lastCollisionEvents.Clear();
             DisposeWorld();
 
             if (!scenePhysics.Enabled)
@@ -203,6 +229,10 @@ namespace Afjk.SceneSync.Rapier
                 Debug.LogWarning("[SceneSyncRapier] Failed to rebuild Rapier world: " + error.Message);
                 DisposeWorld();
                 bindings.Clear();
+                colliderObjectIds.Clear();
+                currentCollisionPairs.Clear();
+                previousCollisionPairs.Clear();
+                lastCollisionEvents.Clear();
                 hasInitialSnapshot = false;
             }
         }
@@ -371,6 +401,9 @@ namespace Afjk.SceneSync.Rapier
                 hasPendingWorldEpochTime = false;
                 pendingWorldEpochTime = 0f;
                 tick = 0;
+                currentCollisionPairs.Clear();
+                previousCollisionPairs.Clear();
+                lastCollisionEvents.Clear();
                 ApplyWorldTransforms();
                 return;
             }
@@ -497,6 +530,8 @@ namespace Afjk.SceneSync.Rapier
             }
 
             world.SetColliderStableId(collider, stableId);
+            world.SetColliderActiveEvents(collider, RapierActiveEvents.CollisionEvents);
+            colliderObjectIds[collider] = candidate.ObjectId;
             bindings[candidate.ObjectId] = new BodyBinding(candidate.GameObject, body, definition.IsStatic);
         }
 
@@ -512,6 +547,70 @@ namespace Afjk.SceneSync.Rapier
                     WireToUnityPosition(transform.Position),
                     WireToUnityRotation(transform.Rotation));
             }
+        }
+
+        private void DrainCollisionEventsIntoCurrentPairs()
+        {
+            if (world == null || colliderObjectIds.Count == 0) return;
+
+            var capacity = Mathf.Max(1, maxCollisionEventsPerDrain);
+            var buffer = new RapierCollisionEvent[capacity];
+            var count = world.DrainCollisionEvents(buffer);
+            for (var i = 0; i < count; i++)
+            {
+                var collisionEvent = buffer[i];
+                if (!colliderObjectIds.TryGetValue(collisionEvent.Collider1, out var objectIdA) ||
+                    !colliderObjectIds.TryGetValue(collisionEvent.Collider2, out var objectIdB))
+                {
+                    continue;
+                }
+
+                var pairKey = CreateCollisionPairKey(objectIdA, objectIdB, out _, out _);
+                if (string.IsNullOrWhiteSpace(pairKey)) continue;
+
+                if (collisionEvent.Started)
+                    currentCollisionPairs.Add(pairKey);
+                else
+                    currentCollisionPairs.Remove(pairKey);
+            }
+        }
+
+        private void FlushCollisionEvents(float time)
+        {
+            lastCollisionEvents.Clear();
+
+            foreach (var pairKey in currentCollisionPairs.OrderBy(value => value, StringComparer.Ordinal))
+            {
+                if (previousCollisionPairs.Contains(pairKey)) continue;
+                AddCollisionEvent("physics.collision.enter", pairKey, time);
+            }
+
+            foreach (var pairKey in previousCollisionPairs.OrderBy(value => value, StringComparer.Ordinal))
+            {
+                if (currentCollisionPairs.Contains(pairKey)) continue;
+                AddCollisionEvent("physics.collision.exit", pairKey, time);
+            }
+
+            previousCollisionPairs.Clear();
+            foreach (var pairKey in currentCollisionPairs)
+                previousCollisionPairs.Add(pairKey);
+        }
+
+        private void AddCollisionEvent(string type, string pairKey, float time)
+        {
+            var separator = pairKey.IndexOf('|');
+            if (separator <= 0 || separator >= pairKey.Length - 1) return;
+
+            var objectIdA = pairKey.Substring(0, separator);
+            var objectIdB = pairKey.Substring(separator + 1);
+            var collisionEvent = new SceneSyncRapierCollisionEvent(type, objectIdA, objectIdB, pairKey, tick, time);
+            lastCollisionEvents.Add(collisionEvent);
+            CollisionEvent?.Invoke(collisionEvent);
+        }
+
+        private float GetCurrentPhysicsTime()
+        {
+            return worldEpochTime + tick * Mathf.Max(0.000001f, scenePhysics.Timestep);
         }
 
         private void DisposeWorld()
@@ -541,6 +640,26 @@ namespace Afjk.SceneSync.Rapier
         private static Quaternion WireToUnityRotation(Quaternion value)
         {
             return new Quaternion(value.x, value.y, -value.z, -value.w);
+        }
+
+        private static string CreateCollisionPairKey(string left, string right, out string objectIdA, out string objectIdB)
+        {
+            objectIdA = null;
+            objectIdB = null;
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return null;
+
+            if (string.CompareOrdinal(left, right) <= 0)
+            {
+                objectIdA = left;
+                objectIdB = right;
+            }
+            else
+            {
+                objectIdA = right;
+                objectIdB = left;
+            }
+
+            return objectIdA + "|" + objectIdB;
         }
 
         private static Vector3 ReadVector3(string json, string field, Vector3 fallback)
