@@ -11,6 +11,7 @@ export const DEFAULT_TIMESTEP_SECONDS = 1 / 60;
 export const DEFAULT_MAX_STEPS_PER_UPDATE = 900;
 export const DEFAULT_CHECKPOINT_INTERVAL_TICKS = 120;
 
+const CANONICAL_INITIAL_NEXT_PID_CONTROLLER_ID = 1;
 const MAX_GROUND_HALF_EXTENT = 4096;
 const GROUND_THICKNESS = 0.1;
 const GROUND_STABLE_ID = '__scenesync_ground__';
@@ -350,11 +351,13 @@ function createGround(world, ground) {
     static: true,
     linearDamping: typeof body.linearDamping === 'function' ? body.linearDamping() : 0,
     angularDamping: typeof body.angularDamping === 'function' ? body.angularDamping() : 0,
+    gravityScale: typeof body.gravityScale === 'function' ? body.gravityScale() : 1,
     additionalSolverIterations: typeof body.additionalSolverIterations === 'function'
       ? body.additionalSolverIterations()
       : 0,
     canSleep: true,
     ccd: typeof body.isCcdEnabled === 'function' ? body.isCcdEnabled() : false,
+    softCcdPrediction: typeof body.softCcdPrediction === 'function' ? body.softCcdPrediction() : 0,
     density: typeof colliderObject.density === 'function' ? colliderObject.density() : 1,
     friction: typeof colliderObject.friction === 'function' ? colliderObject.friction() : ground.friction,
     frictionCombineRule: typeof colliderObject.frictionCombineRule === 'function'
@@ -393,8 +396,10 @@ function createRigidBodyDesc(def) {
     .setRotation(quaternionObject(rotation))
     .setLinearDamping(clampNumber(def.linearDamping, 0, 1024, 0))
     .setAngularDamping(clampNumber(def.angularDamping, 0, 1024, 0))
+    .setGravityScale(clampNumber(def.gravityScale, -1024, 1024, 1))
     .setCanSleep(def.canSleep !== false)
-    .setAdditionalSolverIterations(nonNegativeInteger(def.additionalSolverIterations, 0));
+    .setAdditionalSolverIterations(nonNegativeInteger(def.additionalSolverIterations, 0))
+    .setSoftCcdPrediction(clampNumber(def.softCcdPrediction, 0, 1024, 0));
 
   if (!(def.static === true || def.mass <= 0)) {
     desc
@@ -419,9 +424,11 @@ function cloneBodyRecord(record) {
     static: record.static === true,
     linearDamping: clampNumber(record.linearDamping, 0, 1024, 0),
     angularDamping: clampNumber(record.angularDamping, 0, 1024, 0),
+    gravityScale: clampNumber(record.gravityScale, -1024, 1024, 1),
     additionalSolverIterations: nonNegativeInteger(record.additionalSolverIterations, 0),
     canSleep: record.canSleep !== false,
     ccd: record.ccd === true,
+    softCcdPrediction: clampNumber(record.softCcdPrediction, 0, 1024, 0),
     density: finiteNumber(record.density, 1),
     friction: finiteNumber(record.friction, 0.5),
     frictionCombineRule: combineRuleId(record.frictionCombineRule, 0),
@@ -649,6 +656,9 @@ export function createWorld(options = {}) {
       angularDamping: typeof body.angularDamping === 'function'
         ? body.angularDamping()
         : clampNumber(def.angularDamping, 0, 1024, 0),
+      gravityScale: typeof body.gravityScale === 'function'
+        ? body.gravityScale()
+        : clampNumber(def.gravityScale, -1024, 1024, 1),
       additionalSolverIterations: typeof body.additionalSolverIterations === 'function'
         ? body.additionalSolverIterations()
         : nonNegativeInteger(def.additionalSolverIterations, 0),
@@ -656,6 +666,9 @@ export function createWorld(options = {}) {
       ccd: typeof body.isCcdEnabled === 'function'
         ? body.isCcdEnabled()
         : (!isStatic && def.ccd === true),
+      softCcdPrediction: typeof body.softCcdPrediction === 'function'
+        ? body.softCcdPrediction()
+        : clampNumber(def.softCcdPrediction, 0, 1024, 0),
       density: typeof collider.density === 'function'
         ? collider.density()
         : (isStatic ? 1 : positiveNumber(def.mass, 1)),
@@ -790,6 +803,10 @@ export function createWorld(options = {}) {
     next = hash64Uint8(next, record.static ? 1 : 0);
     next = hash64Float32(
       next,
+      typeof body.gravityScale === 'function' ? body.gravityScale() : record.gravityScale,
+    );
+    next = hash64Float32(
+      next,
       typeof body.linearDamping === 'function' ? body.linearDamping() : record.linearDamping,
     );
     next = hash64Float32(
@@ -805,6 +822,10 @@ export function createWorld(options = {}) {
     next = hash64Uint8(
       next,
       typeof body.isCcdEnabled === 'function' ? (body.isCcdEnabled() ? 1 : 0) : (record.ccd ? 1 : 0),
+    );
+    next = hash64Float32(
+      next,
+      typeof body.softCcdPrediction === 'function' ? body.softCcdPrediction() : record.softCcdPrediction,
     );
     next = hash64Uint8(next, record.canSleep !== false ? 1 : 0);
     next = hash64Pose(
@@ -869,6 +890,8 @@ export function createWorld(options = {}) {
     hash = hash64String(hash, RAPIER_CORE_VERSION);
     hash = hash64Vec3(hash, worldOptions.gravity);
     hash = hash64Float32(hash, world.timestep);
+    hash = hash64Uint64(hash, CANONICAL_INITIAL_NEXT_PID_CONTROLLER_ID);
+    hash = hash64Uint64(hash, 0);
 
     hash = hash64Uint64(hash, records.length);
     for (const { id, record, body } of records) {
@@ -908,6 +931,7 @@ export function createWorld(options = {}) {
           rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
           linvel: [velocity.x, velocity.y, velocity.z],
           angvel: [angularVelocity.x, angularVelocity.y, angularVelocity.z],
+          gravityScale: typeof body.gravityScale === 'function' ? body.gravityScale() : record.gravityScale,
           linearDamping: typeof body.linearDamping === 'function' ? body.linearDamping() : record.linearDamping,
           angularDamping: typeof body.angularDamping === 'function' ? body.angularDamping() : record.angularDamping,
           additionalSolverIterations: typeof body.additionalSolverIterations === 'function'
@@ -915,6 +939,9 @@ export function createWorld(options = {}) {
             : record.additionalSolverIterations,
           canSleep: record.canSleep !== false,
           ccd: typeof body.isCcdEnabled === 'function' ? body.isCcdEnabled() : record.ccd,
+          softCcdPrediction: typeof body.softCcdPrediction === 'function'
+            ? body.softCcdPrediction()
+            : record.softCcdPrediction,
           sleeping: typeof body.isSleeping === 'function' ? body.isSleeping() : false,
           enabled: typeof body.isEnabled === 'function' ? body.isEnabled() : true,
         };

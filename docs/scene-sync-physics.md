@@ -182,11 +182,12 @@ state.
 
 - `world.canonicalStateHash()` — exact `SceneSyncCanonicalPhysicsHashV1`
   FNV-1a-64 hash over raw `f32` state fields sorted by
-  `stableIdHash(objectId)`. It includes gravity, timestep, body type, damping,
-  additional solver iterations, CCD/can-sleep settings, pose, velocities,
-  sleeping/enabled state, collider shape, density, friction/combine rule,
-  restitution/combine rule, sensor, and enabled state. Use this for cross-host
-  parity detection.
+  `stableIdHash(objectId)`. It includes gravity, timestep, the empty PID
+  controller registry marker used by the Unity native profile, body type,
+  gravity scale, damping, additional solver iterations, CCD/soft-CCD/can-sleep
+  settings, pose, velocities, sleeping/enabled state, collider shape, density,
+  friction/combine rule, restitution/combine rule, sensor, and enabled state.
+  Use this for cross-host parity detection.
 - `world.canonicalStateDump()` — object containing the canonical body and
   collider fields used for parity debugging. This is not a snapshot format.
 - `world.stateHash()` — 32-bit local compatibility hash over engine/package,
