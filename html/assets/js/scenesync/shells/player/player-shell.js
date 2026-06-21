@@ -12,7 +12,7 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
     name: 'Player Shell',
     kind: 'player',
     layouts: ['desktop', 'mobile'],
-    inputs: [],
+    inputs: ['player-physics-drag'],
 
     async mount({ core, root } = {}) {
       mountedCore = core;
