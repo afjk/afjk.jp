@@ -16,6 +16,7 @@ namespace Afjk.SceneSync.Rapier
         private const float GroundThickness = 0.1f;
         private const double ZeroTimeEpsilon = 0.000001d;
         private const string GroundStableId = "__scenesync_ground__";
+        private const string CanonicalStateHashVersion = "SceneSyncCanonicalPhysicsHashV1";
 
         [SerializeField] private bool autoRun = true;
         [SerializeField] private bool useSceneClock = true;
@@ -52,6 +53,7 @@ namespace Afjk.SceneSync.Rapier
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
 
+        public string StateHashVersion => CanonicalStateHashVersion;
         public int Tick => tick;
         public string LastStateHash => lastStateHash;
         public bool HasWorld => world != null && world.IsCreated;
@@ -114,11 +116,7 @@ namespace Afjk.SceneSync.Rapier
             {
                 ApplyWorldTransforms();
                 FlushCollisionEvents(GetCurrentPhysicsTime());
-                if (logStateHash)
-                {
-                    lastStateHash = world.StateHash().ToString("x16", CultureInfo.InvariantCulture);
-                    Debug.Log("[SceneSyncRapier] tick=" + tick + " stateHash=" + lastStateHash);
-                }
+                UpdateLastStateHash(null);
             }
         }
 
@@ -157,11 +155,8 @@ namespace Afjk.SceneSync.Rapier
             {
                 ApplyWorldTransforms();
                 FlushCollisionEvents(clockTime);
-                if (logStateHash)
-                {
-                    lastStateHash = world.StateHash().ToString("x16", CultureInfo.InvariantCulture);
-                    Debug.Log("[SceneSyncRapier] tick=" + tick + " targetTick=" + targetTick + " stateHash=" + lastStateHash);
-                }
+                if (steps > 0 || string.IsNullOrWhiteSpace(lastStateHash))
+                    UpdateLastStateHash("targetTick=" + targetTick.ToString(CultureInfo.InvariantCulture));
             }
         }
 
@@ -223,6 +218,7 @@ namespace Afjk.SceneSync.Rapier
                 pendingWorldEpochTime = 0f;
                 hasInitialSnapshot = world.TryCreateSnapshot(out initialSnapshot);
                 ApplyWorldTransforms();
+                UpdateLastStateHash("rebuilt");
             }
             catch (Exception error)
             {
@@ -405,6 +401,7 @@ namespace Afjk.SceneSync.Rapier
                 previousCollisionPairs.Clear();
                 lastCollisionEvents.Clear();
                 ApplyWorldTransforms();
+                UpdateLastStateHash("reset");
                 return;
             }
 
@@ -611,6 +608,26 @@ namespace Afjk.SceneSync.Rapier
         private float GetCurrentPhysicsTime()
         {
             return worldEpochTime + tick * Mathf.Max(0.000001f, scenePhysics.Timestep);
+        }
+
+        public string ComputeStateHashHex()
+        {
+            if (world == null || !world.IsCreated)
+                return null;
+
+            return world.StateHash().ToString("x16", CultureInfo.InvariantCulture);
+        }
+
+        private void UpdateLastStateHash(string detail)
+        {
+            lastStateHash = ComputeStateHashHex();
+            if (!logStateHash || string.IsNullOrWhiteSpace(lastStateHash))
+                return;
+
+            var message = "[SceneSyncRapier] tick=" + tick.ToString(CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(detail))
+                message += " " + detail;
+            Debug.Log(message + " canonicalStateHash=" + lastStateHash);
         }
 
         private void DisposeWorld()

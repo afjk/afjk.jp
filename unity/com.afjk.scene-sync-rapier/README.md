@@ -46,3 +46,10 @@ before stepping again.
 `physics.collision.enter` and `physics.collision.exit` events after fixed physics
 steps. Events include sorted `objectIdA` / `objectIdB`, `pairKey`, physics
 `tick`, `time`, `source: "physics"`, and `phase: "postPhysics"`.
+
+`SceneSyncRapierBridge.ComputeStateHashHex()` returns the current
+`SceneSyncCanonicalPhysicsHashV1` value as 16-character lowercase hex.
+`LastStateHash` is updated after rebuilds, resets, and physics steps without
+requiring `logStateHash`; enable `logStateHash` only when console output is
+useful. Compare this value with the browser runtime's `world.canonicalStateHash()`
+only when both hosts use the same Scene Sync Rapier parity profile.
