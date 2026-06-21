@@ -276,6 +276,33 @@ Snapshot bodies use Scene Sync wire coordinates. Followers should only apply a
 snapshot when the snapshot version, hash version, physics profile, and dynamic
 body set match the local world.
 
+When Unity receives a `scene-physics-hash` for the same tick and hash version but
+the local hash differs, the bridge publishes a
+`scene-physics-snapshot-request` through the Unity Scene Sync outbound message
+bus:
+
+```json
+{
+  "kind": "scene-physics-snapshot-request",
+  "source": "physics",
+  "phase": "postPhysics",
+  "snapshotVersion": "SceneSyncPhysicsSnapshotV1",
+  "profile": "SceneSyncRapierParity-0.30",
+  "hashVersion": "SceneSyncCanonicalPhysicsHashV1",
+  "requestId": "request-id",
+  "reason": "hash-mismatch",
+  "tick": 120,
+  "localTick": 120,
+  "remoteHash": "0123456789abcdef",
+  "localHash": "fedcba9876543210",
+  "sceneClockRevision": 8
+}
+```
+
+`SceneSyncManager` routes outbound bus messages through the active presence
+client. The Web controller responds to snapshot requests with a targeted handoff
+containing the latest `scene-physics-snapshot`.
+
 ## Shared Playback
 
 Shared Playback uses:
@@ -387,6 +414,10 @@ applies dynamic body pose, linear velocity, angular velocity, tick, and world
 epoch when every dynamic body id in the snapshot exists locally. The latest
 snapshot result is exposed through `LastRemoteSnapshotReport`,
 `LastRemoteSnapshotApplied`, and `SnapshotReceived`.
+
+When `requestSnapshotOnHashMismatch` is enabled, the bridge requests a snapshot
+after same-tick hash mismatches. Requests are cooldown-limited by
+`snapshotRequestCooldownSeconds`.
 
 ## Supported Shapes
 
