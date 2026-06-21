@@ -569,7 +569,28 @@ function findPhysicsTimelineEventByInputId(timeline, inputId) {
   return timeline.events.find(event => event.inputId === inputId.trim()) || null;
 }
 
-function canonicalizeScenePhysicsInput(roomId, payload) {
+function canonicalizeScenePhysicsPayload(roomId, payload) {
+  if (payload?.kind === 'scene-batch') {
+    const key = Array.isArray(payload.ops)
+      ? 'ops'
+      : (Array.isArray(payload.actions) ? 'actions' : null);
+    if (!key) return { ok: true, payload };
+
+    const operations = [];
+    for (const operation of payload[key]) {
+      const result = canonicalizeScenePhysicsPayload(roomId, operation);
+      if (!result.ok) return result;
+      operations.push(result.payload);
+    }
+    return {
+      ok: true,
+      payload: {
+        ...payload,
+        [key]: operations,
+      },
+    };
+  }
+
   if (payload?.kind !== 'scene-physics-input') {
     if (payload?.kind === 'scene-state') {
       resetRoomPhysicsTimelines(roomId);
@@ -629,6 +650,15 @@ function canonicalizeScenePhysicsInput(roomId, payload) {
   }
 
   return { ok: true, payload: event };
+}
+
+function payloadIncludesScenePhysicsInput(payload) {
+  if (payload?.kind === 'scene-physics-input') return true;
+  if (payload?.kind !== 'scene-batch') return false;
+  const operations = Array.isArray(payload.ops)
+    ? payload.ops
+    : (Array.isArray(payload.actions) ? payload.actions : []);
+  return operations.some(payloadIncludesScenePhysicsInput);
 }
 
 function sendRoomPhysicsTimeline(client, timelineId = null) {
@@ -1068,7 +1098,7 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
   }
 
   if (peers.length > 0) {
-    const physicsTimelinePayload = canonicalizeScenePhysicsInput(roomId, nextPayload);
+  const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, nextPayload);
     if (!physicsTimelinePayload.ok) {
       return {
         status: physicsTimelinePayload.status || 409,
@@ -1892,7 +1922,7 @@ function createPresenceServer() {
                 return;
               }
 
-              const physicsTimelinePayload = canonicalizeScenePhysicsInput(roomId, data.payload);
+              const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, data.payload);
               if (!physicsTimelinePayload.ok) {
                 safeSend(conn, {
                   type: 'error',
@@ -1905,7 +1935,7 @@ function createPresenceServer() {
             }
 
             broadcastHandoff(client, data, {
-              includeSender: data.payload?.kind === 'scene-physics-input',
+              includeSender: payloadIncludesScenePhysicsInput(data.payload),
             });
           }
           break;

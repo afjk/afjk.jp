@@ -6751,7 +6751,6 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-physics-input': {
-      if (isOwn) break;
       scenePhysicsRuntime.queueInput(payload);
       notifySceneStateChanged('scene-physics-input');
       break;

@@ -475,6 +475,42 @@ describe('presence REST broadcast API', () => {
     }
   });
 
+  it('canonicalizes scene physics inputs inside scene-batch payloads', async () => {
+    const roomId = 'physics-batch-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const receiver = await connectClient(roomId, 'Physics Receiver');
+    try {
+      const senderEcho = waitForMessage(sender, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+      const receiverMessage = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-batch');
+      sender.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-batch',
+          ops: [{
+            kind: 'scene-physics-input',
+            inputType: 'set-body-state',
+            inputId: 'batch-drag:000001',
+            timelineRevision: 0,
+            eventRevision: 999,
+            objectId: 'batch-box',
+            applyTick: 3,
+            position: [1, 1, 1],
+            rotation: [0, 0, 0, 1],
+          }],
+        },
+      }));
+
+      const [echo, received] = await Promise.all([senderEcho, receiverMessage]);
+      assert.equal(echo.payload.ops[0].eventRevision, 1);
+      assert.equal(received.payload.ops[0].eventRevision, 1);
+      assert.equal(received.payload.ops[0].timelineVersion, 'SceneSyncPhysicsTimelineV1');
+    } finally {
+      await Promise.all([closeClient(sender), closeClient(receiver)]);
+    }
+  });
+
   it('broadcasts scene-env to change environment', async () => {
     const ws = await connectClient('env-test-room');
     try {
