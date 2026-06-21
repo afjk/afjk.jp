@@ -81,6 +81,25 @@ publish a `scene-physics-snapshot-request` through `SceneSyncMessageBus`. A
 connection, allowing the Web Shared Playback controller to hand back a targeted
 snapshot.
 
+## Interaction Sample
+
+`SceneSyncRapierInteractionSample` is a Play Mode helper for rooms that already
+use `SceneSyncRapierBridge`. Add it to the same setup scene, assign the bridge
+and camera if auto-discovery is not enough, then enter Play Mode.
+
+- `WASD` moves the camera horizontally relative to view direction.
+- `E` / `Q` moves up and down.
+- Right mouse drag rotates the camera.
+- Left mouse drag grabs a dynamic Rapier body under the cursor and publishes
+  `scene-physics-input` events.
+- Left mouse release publishes the final body state with throw velocity.
+
+The sample does not publish Scene Sync transform deltas while dragging. It sends
+scheduled Rapier body-state inputs, and Unity/Web apply those inputs at the same
+physics tick before stepping. For picking, the sample uses Unity raycasts; when a
+dynamic Scene Sync object has no Collider, it can add a lightweight BoxCollider
+from renderer bounds for Play Mode interaction.
+
 ## PlayerUI Parity Sample
 
 `SceneSyncRapierParitySampleBootstrap` builds a small floor + falling box scene

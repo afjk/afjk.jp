@@ -118,6 +118,146 @@ test('normalizes object physics with practical defaults', () => {
   });
 });
 
+test('queues scene physics input and applies it at the requested tick', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'drag-1',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+
+  const result = runtime.update({ t: 3 / 60, transportActive: true });
+  assert.equal(result.active, true);
+  assert.ok(result.tick >= 2);
+  assert.ok(object.position.toArray()[0] > 3);
+
+  runtime.dispose();
+});
+
+test('rewinds and replays when a scene physics input arrives late', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  runtime.update({ t: 0.2, transportActive: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'late-drag-1',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+
+  const result = runtime.update({ t: 0.25, transportActive: true });
+  assert.equal(result.active, true);
+  assert.ok(object.position.toArray()[0] > 3.15);
+
+  runtime.dispose();
+});
+
+test('keeps scene physics input pending until the body exists', () => {
+  const entries = [];
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries,
+  });
+
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'pending-drag-1',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+
+  runtime.update({ t: 0, transportActive: true });
+  entries.push(makeEntry(object));
+  runtime.update({ t: 0, transportActive: true });
+  const result = runtime.update({ t: 3 / 60, transportActive: true });
+  assert.equal(result.active, true);
+  assert.ok(object.position.toArray()[0] > 3);
+
+  runtime.dispose();
+});
+
 test('normalizes parity object physics fields used by Rapier hashing', () => {
   assert.deepEqual(normalizeObjectPhysics({
     enabled: true,

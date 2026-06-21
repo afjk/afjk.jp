@@ -31,6 +31,8 @@ export const DEFAULT_SCENE_PHYSICS = Object.freeze({
 const BODY_TYPES = new Set(['dynamic', 'static']);
 const SHAPES = new Set(['box', 'sphere']);
 const ZERO_TIME_EPSILON = 1e-6;
+const MAX_PENDING_BODY_STATE_INPUTS = 256;
+const MAX_BODY_STATE_INPUT_HISTORY = 512;
 
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -423,8 +425,11 @@ export function createScenePhysicsRuntime({
   let preserveMotionOnRebuild = true;
   let resetMotionObjectIds = new Set();
   let previousCollisionPairs = new Set();
+  let pendingBodyStateInputs = [];
+  let bodyStateInputHistory = [];
+  const appliedBodyStateInputIds = new Set();
 
-  function clear() {
+  function clear({ preserveInputs = false } = {}) {
     world?.free?.();
     world = null;
     initialSnapshot = null;
@@ -436,6 +441,11 @@ export function createScenePhysicsRuntime({
     preserveMotionOnRebuild = true;
     resetMotionObjectIds = new Set();
     previousCollisionPairs = new Set();
+    if (!preserveInputs) {
+      pendingBodyStateInputs = [];
+      bodyStateInputHistory = [];
+      appliedBodyStateInputIds.clear();
+    }
   }
 
   function markDirty({
@@ -489,7 +499,7 @@ export function createScenePhysicsRuntime({
     const scenePhysics = normalizeScenePhysics(getScenePhysics?.());
     const entries = collectRuntimeEntries(getObjectEntries?.());
     if (!scenePhysics.enabled || entries.length === 0) {
-      clear();
+      clear({ preserveInputs: scenePhysics.enabled });
       dirty = false;
       return { ok: false, reason: 'no-bodies' };
     }
@@ -570,6 +580,130 @@ export function createScenePhysicsRuntime({
     return Math.max(0, getClockTime(clockState) - worldEpochTime);
   }
 
+  function queueInput(payload = {}) {
+    if (payload.kind !== 'scene-physics-input' || payload.inputType !== 'set-body-state') {
+      return false;
+    }
+
+    const objectId = typeof payload.objectId === 'string' ? payload.objectId.trim() : '';
+    if (!objectId) return false;
+
+    const applyTickNumber = Number(payload.applyTick);
+    const applyTick = Number.isFinite(applyTickNumber)
+      ? Math.max(0, Math.floor(applyTickNumber))
+      : (world?.tick || 0);
+    const inputId = typeof payload.inputId === 'string' && payload.inputId.trim()
+      ? payload.inputId.trim()
+      : `${objectId}:${applyTick}`;
+
+    if (
+      appliedBodyStateInputIds.has(inputId) ||
+      pendingBodyStateInputs.some((input) => input.inputId === inputId) ||
+      bodyStateInputHistory.some((input) => input.inputId === inputId)
+    ) {
+      return false;
+    }
+
+    if (!Array.isArray(payload.position) || !Array.isArray(payload.rotation)) {
+      return false;
+    }
+
+    const input = {
+      inputId,
+      objectId,
+      applyTick,
+      position: readVec3(payload.position, [0, 0, 0]),
+      rotation: readQuaternion(payload.rotation, [0, 0, 0, 1]),
+      velocity: readVec3(payload.velocity || payload.linearVelocity, [0, 0, 0]),
+      angularVelocity: readVec3(payload.angularVelocity || payload.angvel, [0, 0, 0]),
+    };
+
+    addBodyStateInputHistory(input);
+    if (world && input.applyTick <= world.tick) {
+      if (input.applyTick < world.tick && hasDynamicBody(input.objectId) && rewindBodyStateInputsToInitialSnapshot()) {
+        return true;
+      }
+      if (input.applyTick === world.tick && applyBodyStateInput(input)) {
+        return true;
+      }
+    }
+
+    addPendingBodyStateInput(input);
+    return true;
+  }
+
+  function compareBodyStateInputs(left, right) {
+    return (
+      left.applyTick === right.applyTick
+        ? (left.inputId < right.inputId ? -1 : (left.inputId > right.inputId ? 1 : 0))
+        : left.applyTick - right.applyTick
+    );
+  }
+
+  function addBodyStateInputHistory(input) {
+    bodyStateInputHistory.push(input);
+    bodyStateInputHistory.sort(compareBodyStateInputs);
+    while (bodyStateInputHistory.length > MAX_BODY_STATE_INPUT_HISTORY) {
+      bodyStateInputHistory.shift();
+    }
+  }
+
+  function addPendingBodyStateInput(input) {
+    if (pendingBodyStateInputs.some((item) => item.inputId === input.inputId)) return;
+    pendingBodyStateInputs.push(input);
+    pendingBodyStateInputs.sort(compareBodyStateInputs);
+    while (pendingBodyStateInputs.length > MAX_PENDING_BODY_STATE_INPUTS) {
+      pendingBodyStateInputs.shift();
+    }
+  }
+
+  function applyDueBodyStateInputs(currentTick = world?.tick || 0) {
+    if (!world || pendingBodyStateInputs.length === 0) return false;
+
+    let applied = false;
+    for (let index = 0; index < pendingBodyStateInputs.length;) {
+      const input = pendingBodyStateInputs[index];
+      if (input.applyTick > currentTick) break;
+      if (input.applyTick < currentTick && hasDynamicBody(input.objectId) && rewindBodyStateInputsToInitialSnapshot()) {
+        return applied;
+      }
+      if (applyBodyStateInput(input)) {
+        pendingBodyStateInputs.splice(index, 1);
+        applied = true;
+        continue;
+      }
+      index += 1;
+    }
+    return applied;
+  }
+
+  function hasDynamicBody(objectId) {
+    const body = world?.getBody?.(objectId);
+    return Boolean(body && body.static !== true);
+  }
+
+  function rewindBodyStateInputsToInitialSnapshot() {
+    if (!world || !initialSnapshot || world.restore(initialSnapshot) !== true) {
+      return false;
+    }
+    previousCollisionPairs = new Set();
+    appliedBodyStateInputIds.clear();
+    pendingBodyStateInputs = [];
+    for (const input of bodyStateInputHistory) {
+      addPendingBodyStateInput(input);
+    }
+    return true;
+  }
+
+  function applyBodyStateInput(input) {
+    if (!input?.inputId || appliedBodyStateInputIds.has(input.inputId) || !world) {
+      return false;
+    }
+    const applied = world.setBodyState?.(input.objectId, input) === true;
+    if (applied) appliedBodyStateInputIds.add(input.inputId);
+    return applied;
+  }
+
   function update(clockState = null) {
     const scenePhysics = normalizeScenePhysics(getScenePhysics?.());
     if (!scenePhysics.enabled) {
@@ -593,10 +727,9 @@ export function createScenePhysicsRuntime({
     const worldAge = getWorldAge(clockState);
     const targetTick = Math.max(0, Math.floor(worldAge / timestepSeconds));
     if (targetTick < world.tick && initialSnapshot) {
-      world.restore(initialSnapshot);
-      previousCollisionPairs = new Set();
+      rewindBodyStateInputsToInitialSnapshot();
     }
-    const stepResult = world.stepTo(targetTick);
+    const stepResult = world.stepTo(targetTick, { beforeStep: applyDueBodyStateInputs });
     if (stepResult?.limited === true) {
       active = false;
       previousCollisionPairs = new Set();
@@ -712,6 +845,7 @@ export function createScenePhysicsRuntime({
 
   return {
     markDirty,
+    queueInput,
     rebuild,
     update,
     createSnapshotReport,

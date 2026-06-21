@@ -20,6 +20,8 @@ namespace Afjk.SceneSync.Rapier
         private const string PhysicsProfile = "SceneSyncRapierParity-0.30";
         private const string SnapshotVersion = "SceneSyncPhysicsSnapshotV1";
         private const string RapierCoreVersion = "0.30.0";
+        private const int MaxPendingBodyStateInputs = 256;
+        private const int MaxBodyStateInputHistory = 512;
 
         [SerializeField] private bool autoRun = true;
         [SerializeField] private bool useSceneClock = true;
@@ -44,7 +46,10 @@ namespace Afjk.SceneSync.Rapier
         private readonly Dictionary<RapierColliderHandle, string> colliderObjectIds = new Dictionary<RapierColliderHandle, string>();
         private readonly HashSet<string> currentCollisionPairs = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> previousCollisionPairs = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> appliedBodyStateInputIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly List<SceneSyncRapierCollisionEvent> lastCollisionEvents = new List<SceneSyncRapierCollisionEvent>();
+        private readonly List<BodyStateInput> pendingBodyStateInputs = new List<BodyStateInput>();
+        private readonly List<BodyStateInput> bodyStateInputHistory = new List<BodyStateInput>();
 
         private RapierWorld world;
         private RapierSnapshot initialSnapshot;
@@ -193,19 +198,10 @@ namespace Afjk.SceneSync.Rapier
             var targetTick = Mathf.Max(0, Mathf.FloorToInt(Mathf.Max(0f, clockTime - worldEpochTime) / timestep));
             lastStepLimited = false;
             lastCollisionEvents.Clear();
+            if (targetTick < tick)
+                RewindBodyStateInputsToInitialSnapshot();
 
-            if (targetTick < tick && hasInitialSnapshot)
-            {
-                if (world.TryReadSnapshot(initialSnapshot))
-                {
-                    tick = 0;
-                    accumulator = 0f;
-                    currentCollisionPairs.Clear();
-                    previousCollisionPairs.Clear();
-                    lastCollisionEvents.Clear();
-                }
-            }
-
+            var appliedInputs = ApplyDueBodyStateInputs();
             var maxSteps = Mathf.Max(1, maxClockStepsPerUpdate);
             var steps = 0;
             while (tick < targetTick && steps < maxSteps)
@@ -217,17 +213,18 @@ namespace Afjk.SceneSync.Rapier
             if (tick < targetTick)
                 lastStepLimited = true;
 
-            if (steps > 0 || targetTick == 0)
+            if (steps > 0 || targetTick == 0 || appliedInputs)
             {
                 ApplyWorldTransforms();
                 FlushCollisionEvents(clockTime);
-                if (steps > 0 || string.IsNullOrWhiteSpace(lastStateHash))
+                if (steps > 0 || appliedInputs || string.IsNullOrWhiteSpace(lastStateHash))
                     UpdateLastStateHash("targetTick=" + targetTick.ToString(CultureInfo.InvariantCulture));
             }
         }
 
         private bool StepWorldOnce()
         {
+            ApplyDueBodyStateInputs();
             if (world == null || !world.Step())
                 return false;
             tick++;
@@ -239,6 +236,210 @@ namespace Afjk.SceneSync.Rapier
         public void MarkDirty()
         {
             dirty = true;
+        }
+
+        public bool HasDynamicBody(string objectId)
+        {
+            return !string.IsNullOrWhiteSpace(objectId) &&
+                bindings.TryGetValue(objectId, out var binding) &&
+                !binding.IsStatic;
+        }
+
+        public bool TryGetDynamicBodyState(
+            string objectId,
+            out Vector3 position,
+            out Quaternion rotation,
+            out Vector3 linearVelocity,
+            out Vector3 angularVelocity)
+        {
+            position = Vector3.zero;
+            rotation = Quaternion.identity;
+            linearVelocity = Vector3.zero;
+            angularVelocity = Vector3.zero;
+
+            if (string.IsNullOrWhiteSpace(objectId) ||
+                world == null ||
+                !bindings.TryGetValue(objectId, out var binding) ||
+                binding.IsStatic ||
+                !world.TryGetRigidBodyState(binding.Body, out var state))
+            {
+                return false;
+            }
+
+            position = WireToUnityPosition(state.Transform.Position);
+            rotation = WireToUnityRotation(state.Transform.Rotation);
+            linearVelocity = WireToUnityVector(state.LinearVelocity);
+            angularVelocity = WireToUnityVector(state.AngularVelocity);
+            return true;
+        }
+
+        public bool TrySetDynamicBodyState(
+            string objectId,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 linearVelocity,
+            Vector3 angularVelocity,
+            bool wakeUp = true)
+        {
+            if (string.IsNullOrWhiteSpace(objectId) ||
+                world == null ||
+                !bindings.TryGetValue(objectId, out var binding) ||
+                binding.IsStatic)
+            {
+                return false;
+            }
+
+            var ok = world.SetTransform(
+                binding.Body,
+                new RapierTransform(UnityToWirePosition(position), UnityToWireRotation(rotation)));
+            ok = world.SetLinearVelocity(binding.Body, UnityToWireVector(linearVelocity), wakeUp) && ok;
+            ok = world.SetAngularVelocity(binding.Body, UnityToWireVector(angularVelocity), wakeUp) && ok;
+            if (!ok) return false;
+
+            if (binding.GameObject != null)
+                binding.GameObject.transform.SetPositionAndRotation(position, rotation);
+            UpdateLastStateHash("input");
+            return true;
+        }
+
+        public bool QueueBodyStateInput(
+            string inputId,
+            string objectId,
+            int applyTick,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 linearVelocity,
+            Vector3 angularVelocity)
+        {
+            if (string.IsNullOrWhiteSpace(objectId))
+                return false;
+
+            var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
+                ? Guid.NewGuid().ToString("N")
+                : inputId.Trim();
+            if (HasBodyStateInput(normalizedInputId))
+            {
+                return false;
+            }
+
+            var input = new BodyStateInput(
+                normalizedInputId,
+                objectId,
+                Mathf.Max(0, applyTick),
+                position,
+                rotation,
+                linearVelocity,
+                angularVelocity);
+
+            AddBodyStateInputHistory(input);
+
+            if (world != null && input.ApplyTick <= tick)
+            {
+                if (input.ApplyTick < tick && HasDynamicBody(input.ObjectId) && RewindBodyStateInputsToInitialSnapshot())
+                    return true;
+
+                if (input.ApplyTick == tick && ApplyBodyStateInput(input))
+                    return true;
+            }
+
+            AddPendingBodyStateInput(input);
+            return true;
+        }
+
+        public bool PublishBodyStateInput(
+            string objectId,
+            int applyTick,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 linearVelocity,
+            Vector3 angularVelocity,
+            string inputId = null,
+            object source = null)
+        {
+            var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
+                ? Guid.NewGuid().ToString("N")
+                : inputId.Trim();
+            if (!QueueBodyStateInput(
+                normalizedInputId,
+                objectId,
+                applyTick,
+                position,
+                rotation,
+                linearVelocity,
+                angularVelocity))
+            {
+                return false;
+            }
+
+            SceneSyncMessageBus.PublishOutgoing(BuildBodyStateInputJson(
+                normalizedInputId,
+                objectId,
+                applyTick,
+                position,
+                rotation,
+                linearVelocity,
+                angularVelocity), null, source ?? this);
+            return true;
+        }
+
+        public static string BuildBodyStateInputJson(
+            string inputId,
+            string objectId,
+            int applyTick,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 linearVelocity,
+            Vector3 angularVelocity)
+        {
+            var wirePosition = UnityToWirePosition(position);
+            var wireRotation = UnityToWireRotation(rotation);
+            var wireLinearVelocity = UnityToWireVector(linearVelocity);
+            var wireAngularVelocity = UnityToWireVector(angularVelocity);
+            return "{\"kind\":\"scene-physics-input\"" +
+                ",\"inputType\":\"set-body-state\"" +
+                ",\"inputId\":\"" + SceneSyncWireJson.JsonEscape(inputId) + "\"" +
+                ",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\"" +
+                ",\"applyTick\":" + Mathf.Max(0, applyTick).ToString(CultureInfo.InvariantCulture) +
+                ",\"position\":" + FormatVector3Json(wirePosition) +
+                ",\"rotation\":" + FormatQuaternionJson(wireRotation) +
+                ",\"velocity\":" + FormatVector3Json(wireLinearVelocity) +
+                ",\"angularVelocity\":" + FormatVector3Json(wireAngularVelocity) +
+                ",\"sentAt\":" + CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) + "}";
+        }
+
+        private bool HasBodyStateInput(string inputId)
+        {
+            return !string.IsNullOrWhiteSpace(inputId) && (
+                appliedBodyStateInputIds.Contains(inputId) ||
+                pendingBodyStateInputs.Any(item => string.Equals(item.InputId, inputId, StringComparison.Ordinal)) ||
+                bodyStateInputHistory.Any(item => string.Equals(item.InputId, inputId, StringComparison.Ordinal)));
+        }
+
+        private void AddBodyStateInputHistory(BodyStateInput input)
+        {
+            bodyStateInputHistory.Add(input);
+            bodyStateInputHistory.Sort(CompareBodyStateInputs);
+            while (bodyStateInputHistory.Count > MaxBodyStateInputHistory)
+                bodyStateInputHistory.RemoveAt(0);
+        }
+
+        private void AddPendingBodyStateInput(BodyStateInput input)
+        {
+            if (pendingBodyStateInputs.Any(item => string.Equals(item.InputId, input.InputId, StringComparison.Ordinal)))
+                return;
+
+            pendingBodyStateInputs.Add(input);
+            pendingBodyStateInputs.Sort(CompareBodyStateInputs);
+            while (pendingBodyStateInputs.Count > MaxPendingBodyStateInputs)
+                pendingBodyStateInputs.RemoveAt(0);
+        }
+
+        private static int CompareBodyStateInputs(BodyStateInput left, BodyStateInput right)
+        {
+            var tickCompare = left.ApplyTick.CompareTo(right.ApplyTick);
+            return tickCompare != 0
+                ? tickCompare
+                : string.CompareOrdinal(left.InputId, right.InputId);
         }
 
         public void RebuildWorld()
@@ -428,6 +629,12 @@ namespace Afjk.SceneSync.Rapier
             if (raw.Contains("\"kind\":\"scene-physics-hash\""))
             {
                 ApplyScenePhysicsHash(raw, message.FromPeerId);
+                return;
+            }
+
+            if (raw.Contains("\"kind\":\"scene-physics-input\""))
+            {
+                ApplyScenePhysicsInput(raw);
                 return;
             }
 
@@ -624,6 +831,111 @@ namespace Afjk.SceneSync.Rapier
                     + " hashVersion="
                     + (hashVersion ?? "null"));
             }
+        }
+
+        private void ApplyScenePhysicsInput(string raw)
+        {
+            if (!string.Equals(
+                SceneSyncWireJson.ExtractString(raw, "inputType"),
+                "set-body-state",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var objectId = SceneSyncWireJson.ExtractString(raw, "objectId");
+            if (string.IsNullOrWhiteSpace(objectId)) return;
+
+            var inputId = SceneSyncWireJson.ExtractString(raw, "inputId");
+            if (string.IsNullOrWhiteSpace(inputId))
+                inputId = objectId + ":" + ReadInt(raw, "applyTick", tick).ToString(CultureInfo.InvariantCulture);
+
+            if (!TryReadVector3(SceneSyncWireJson.ExtractArray(raw, "position"), out var wirePosition) ||
+                !TryReadQuaternion(SceneSyncWireJson.ExtractArray(raw, "rotation"), out var wireRotation))
+            {
+                return;
+            }
+
+            var wireLinearVelocity = Vector3.zero;
+            var wireAngularVelocity = Vector3.zero;
+            TryReadVector3(SceneSyncWireJson.ExtractArray(raw, "velocity"), out wireLinearVelocity);
+            if (!TryReadVector3(SceneSyncWireJson.ExtractArray(raw, "angularVelocity"), out wireAngularVelocity))
+                TryReadVector3(SceneSyncWireJson.ExtractArray(raw, "angvel"), out wireAngularVelocity);
+
+            QueueBodyStateInput(
+                inputId,
+                objectId,
+                ReadInt(raw, "applyTick", tick),
+                WireToUnityPosition(wirePosition),
+                WireToUnityRotation(wireRotation),
+                WireToUnityVector(wireLinearVelocity),
+                WireToUnityVector(wireAngularVelocity));
+        }
+
+        private bool ApplyDueBodyStateInputs()
+        {
+            if (world == null || pendingBodyStateInputs.Count == 0)
+                return false;
+
+            var applied = false;
+            for (var i = 0; i < pendingBodyStateInputs.Count;)
+            {
+                var input = pendingBodyStateInputs[i];
+                if (input.ApplyTick > tick) break;
+                if (input.ApplyTick < tick && HasDynamicBody(input.ObjectId) && RewindBodyStateInputsToInitialSnapshot())
+                    return applied;
+
+                if (ApplyBodyStateInput(input))
+                {
+                    pendingBodyStateInputs.RemoveAt(i);
+                    applied = true;
+                    continue;
+                }
+
+                i++;
+            }
+
+            return applied;
+        }
+
+        private bool RewindBodyStateInputsToInitialSnapshot()
+        {
+            if (world == null || !hasInitialSnapshot || !world.TryReadSnapshot(initialSnapshot))
+                return false;
+
+            tick = 0;
+            accumulator = 0f;
+            lastStepLimited = false;
+            currentCollisionPairs.Clear();
+            previousCollisionPairs.Clear();
+            lastCollisionEvents.Clear();
+            appliedBodyStateInputIds.Clear();
+            pendingBodyStateInputs.Clear();
+            foreach (var input in bodyStateInputHistory)
+                AddPendingBodyStateInput(input);
+            lastStateHash = null;
+            ResetStateHashBroadcastCache();
+            return true;
+        }
+
+        private bool ApplyBodyStateInput(BodyStateInput input)
+        {
+            if (string.IsNullOrWhiteSpace(input.InputId) ||
+                appliedBodyStateInputIds.Contains(input.InputId))
+            {
+                return false;
+            }
+
+            var applied = TrySetDynamicBodyState(
+                input.ObjectId,
+                input.Position,
+                input.Rotation,
+                input.LinearVelocity,
+                input.AngularVelocity);
+            if (applied)
+                appliedBodyStateInputIds.Add(input.InputId);
+
+            return applied;
         }
 
         private void MaybeRequestSnapshotForHashMismatch(SceneSyncRapierHashReport report)
@@ -1081,6 +1393,33 @@ namespace Afjk.SceneSync.Rapier
             return new Quaternion(value.x, value.y, -value.z, -value.w);
         }
 
+        private static Vector3 UnityToWireVector(Vector3 value)
+        {
+            return new Vector3(value.x, value.y, -value.z);
+        }
+
+        private static Vector3 WireToUnityVector(Vector3 value)
+        {
+            return new Vector3(value.x, value.y, -value.z);
+        }
+
+        private static string FormatVector3Json(Vector3 value)
+        {
+            return "[" +
+                SceneSyncWireJson.FormatFloat(value.x) + "," +
+                SceneSyncWireJson.FormatFloat(value.y) + "," +
+                SceneSyncWireJson.FormatFloat(value.z) + "]";
+        }
+
+        private static string FormatQuaternionJson(Quaternion value)
+        {
+            return "[" +
+                SceneSyncWireJson.FormatFloat(value.x) + "," +
+                SceneSyncWireJson.FormatFloat(value.y) + "," +
+                SceneSyncWireJson.FormatFloat(value.z) + "," +
+                SceneSyncWireJson.FormatFloat(value.w) + "]";
+        }
+
         private static string CreateCollisionPairKey(string left, string right, out string objectIdA, out string objectIdB)
         {
             objectIdA = null;
@@ -1277,6 +1616,35 @@ namespace Afjk.SceneSync.Rapier
             }
 
             public RapierRigidBodyHandle Body { get; }
+            public Vector3 Position { get; }
+            public Quaternion Rotation { get; }
+            public Vector3 LinearVelocity { get; }
+            public Vector3 AngularVelocity { get; }
+        }
+
+        private readonly struct BodyStateInput
+        {
+            public BodyStateInput(
+                string inputId,
+                string objectId,
+                int applyTick,
+                Vector3 position,
+                Quaternion rotation,
+                Vector3 linearVelocity,
+                Vector3 angularVelocity)
+            {
+                InputId = inputId;
+                ObjectId = objectId;
+                ApplyTick = applyTick;
+                Position = position;
+                Rotation = rotation;
+                LinearVelocity = linearVelocity;
+                AngularVelocity = angularVelocity;
+            }
+
+            public string InputId { get; }
+            public string ObjectId { get; }
+            public int ApplyTick { get; }
             public Vector3 Position { get; }
             public Quaternion Rotation { get; }
             public Vector3 LinearVelocity { get; }

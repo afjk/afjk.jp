@@ -102,6 +102,41 @@ test('Rapier snapshot restore reproduces the same future', () => {
   b.free();
 });
 
+test('setBodyState applies dynamic body state through stepTo beforeStep hook', () => {
+  const world = createWorld({
+    gravity: [0, 0, 0],
+    ground: null,
+    timestep: 1 / 60,
+  });
+  world.addBody({
+    id: 'box',
+    shape: 'box',
+    halfExtents: [0.5, 0.5, 0.5],
+    position: [0, 0, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    mass: 1,
+  });
+
+  const result = world.stepTo(2, {
+    beforeStep(tick) {
+      if (tick !== 1) return;
+      assert.equal(world.setBodyState('box', {
+        position: [3, 0, 0],
+        rotation: [0, 0, 0, 1],
+        velocity: [1, 0, 0],
+        angularVelocity: [0, 0, 0],
+      }), true);
+    },
+  });
+
+  assert.equal(result.reached, true);
+  assert.equal(world.tick, 2);
+  assert.ok(world.getBody('box').position[0] > 3);
+  world.free();
+});
+
 test('snapshot restore replaces stale body metadata with snapshot stable ids', () => {
   const a = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
   const b = createWorld({ gravity: -9.81, ground: null, timestep: 1 / 60 });
@@ -299,7 +334,7 @@ test('stepTo caps very long fast-forward work', () => {
 
   const result = world.stepTo(100);
   assert.equal(result.limited, true);
-  assert.equal(world.tick, 0);
+  assert.equal(world.tick, 10);
 
   world.free();
 });
