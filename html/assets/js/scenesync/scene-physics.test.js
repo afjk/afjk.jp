@@ -2,6 +2,7 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyPhysicsResetBaseline,
+  buildPhysicsBodyDef,
   createPhysicsResetBaseline,
   createScenePhysicsRuntime,
   isScenePhysicsZeroTime,
@@ -117,6 +118,53 @@ test('normalizes object physics with practical defaults', () => {
   });
 });
 
+test('normalizes parity object physics fields used by Rapier hashing', () => {
+  assert.deepEqual(normalizeObjectPhysics({
+    enabled: true,
+    bodyType: 'dynamic',
+    density: 1,
+    linearDamping: 0.02,
+    angularDamping: 0.03,
+    canSleep: false,
+    ccd: true,
+  }), {
+    version: 1,
+    enabled: true,
+    bodyType: 'dynamic',
+    shape: 'box',
+    mass: 1,
+    restitution: 0.2,
+    friction: 0.5,
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    density: 1,
+    linearDamping: 0.02,
+    angularDamping: 0.03,
+    canSleep: false,
+    ccd: true,
+  });
+
+  assert.equal(normalizeObjectPhysics({
+    enabled: true,
+    bodyType: 'static',
+  }).density, 0);
+
+  const staticObject = makeObject({
+    objectId: 'static-box',
+    scale: [2, 2, 2],
+    physics: {
+      enabled: true,
+      bodyType: 'static',
+      shape: 'box',
+    },
+  });
+  assert.equal(buildPhysicsBodyDef({
+    objectId: 'static-box',
+    object: staticObject,
+    physics: staticObject.userData.physics,
+  }).density, 0);
+});
+
 test('scene physics runtime is a function of supplied clock time', () => {
   const object = makeObject();
   const scenePhysics = normalizeScenePhysics({
@@ -209,6 +257,73 @@ test('scene physics runtime reports canonical hash metadata for wire diagnostics
   assert.equal(result.rapierCoreVersion, RAPIER_CORE_VERSION);
   assert.match(result.hash, /^[0-9a-f]{16}$/);
   assert.equal(result.stateHash, result.hash);
+});
+
+test('scene physics runtime produces a stable SceneSync Rapier sample hash', () => {
+  const floor = makeObject({
+    objectId: 'floor',
+    position: [0, -0.5, 0],
+    scale: [12, 1, 12],
+    physics: {
+      enabled: true,
+      bodyType: 'static',
+      shape: 'box',
+      halfExtents: [6, 0.5, 6],
+      density: 0,
+      friction: 0.5,
+      restitution: 0.2,
+      initialTransform: {
+        position: [0, -0.5, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [12, 1, 12],
+      },
+    },
+  });
+  const box = makeObject({
+    objectId: 'box-1',
+    position: [-0.75, 5, 0],
+    scale: [1, 1, 1],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'box',
+      halfExtents: [0.5, 0.5, 0.5],
+      density: 1,
+      friction: 0.5,
+      restitution: 0.2,
+      velocity: [0.75, 0, 0.15],
+      angularVelocity: [0.35, 1.25, 0.55],
+      linearDamping: 0.02,
+      angularDamping: 0.02,
+      canSleep: false,
+      ccd: false,
+      initialTransform: {
+        position: [-0.75, 5, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+    },
+  });
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    worldOptions: {
+      gravity: [0, -9.81, 0],
+      ground: null,
+      timestep: 1 / 60,
+    },
+  });
+  const runtime = createScenePhysicsRuntime({
+    getScenePhysics: () => scenePhysics,
+    getObjectEntries: () => [makeEntry(floor), makeEntry(box)],
+    isClockActive: () => true,
+  });
+
+  const initial = runtime.update({ t: 0, mode: 'shared-playback', active: true, transportActive: true });
+  assert.equal(initial.hash, '43af70bb0d584167');
+
+  const atTick60 = runtime.update({ t: 1 + 1e-6, mode: 'shared-playback', active: true, transportActive: true });
+  assert.equal(atTick60.tick, 60);
+  assert.equal(atTick60.hash, 'e0c4380396163cee');
 });
 
 test('scene physics runtime creates canonical snapshot reports on demand', () => {

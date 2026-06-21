@@ -19,17 +19,23 @@ namespace Afjk.SceneSync.Rapier
         private const string CanonicalStateHashVersion = "SceneSyncCanonicalPhysicsHashV1";
         private const string PhysicsProfile = "SceneSyncRapierParity-0.30";
         private const string SnapshotVersion = "SceneSyncPhysicsSnapshotV1";
+        private const string RapierCoreVersion = "0.30.0";
 
         [SerializeField] private bool autoRun = true;
         [SerializeField] private bool useSceneClock = true;
+        [SerializeField] private bool requireSceneClock;
         [SerializeField] private bool applyDynamicTransforms = true;
+        [SerializeField] private bool preserveMotionOnRebuild = true;
         [SerializeField] private bool includeGround = true;
+        [SerializeField] private Transform bodyRoot;
         [SerializeField] private float metadataScanInterval = 0.5f;
         [SerializeField] private float maxFrameStepSeconds = 0.25f;
         [SerializeField] private int maxClockStepsPerUpdate = 600;
         [SerializeField] private int maxCollisionEventsPerDrain = 256;
         [SerializeField] private bool autoApplyRemoteSnapshots = true;
         [SerializeField] private bool requestSnapshotOnHashMismatch = true;
+        [SerializeField] private bool broadcastStateHash = true;
+        [SerializeField] private int stateHashBroadcastTickInterval = 30;
         [SerializeField] private float snapshotRequestCooldownSeconds = 1f;
         [SerializeField] private bool logStateHash;
 
@@ -62,6 +68,9 @@ namespace Afjk.SceneSync.Rapier
         private SceneSyncRapierSnapshotReport lastRemoteSnapshotReport;
         private int lastSnapshotRequestTick = int.MinValue;
         private float lastSnapshotRequestTime = float.NegativeInfinity;
+        private int lastStateHashBroadcastTick = int.MinValue;
+        private int lastStateHashBroadcastRevision = int.MinValue;
+        private string lastStateHashBroadcastHash;
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
         public event Action<SceneSyncRapierHashReport> HashReportReceived;
@@ -79,6 +88,40 @@ namespace Afjk.SceneSync.Rapier
         public bool HasRemoteSnapshotReport => hasRemoteSnapshotReport;
         public SceneSyncRapierSnapshotReport LastRemoteSnapshotReport => lastRemoteSnapshotReport;
         public bool LastRemoteSnapshotApplied => hasRemoteSnapshotReport && lastRemoteSnapshotReport.Applied;
+        public int LastStateHashBroadcastTick => lastStateHashBroadcastTick;
+        public string LastStateHashBroadcastHash => lastStateHashBroadcastHash;
+        public bool AutoRun
+        {
+            get => autoRun;
+            set => autoRun = value;
+        }
+        public bool UseSceneClock
+        {
+            get => useSceneClock;
+            set => useSceneClock = value;
+        }
+        public bool RequireSceneClock
+        {
+            get => requireSceneClock;
+            set => requireSceneClock = value;
+        }
+        public Transform BodyRoot
+        {
+            get => bodyRoot;
+            set
+            {
+                if (bodyRoot == value) return;
+                bodyRoot = value;
+                objectPhysicsJson.Clear();
+                preserveMotionOnNextRebuild = false;
+                dirty = true;
+            }
+        }
+        public bool PreserveMotionOnRebuild
+        {
+            get => preserveMotionOnRebuild;
+            set => preserveMotionOnRebuild = value;
+        }
 
         private void OnEnable()
         {
@@ -112,6 +155,9 @@ namespace Afjk.SceneSync.Rapier
                 UpdateFromSceneClock();
                 return;
             }
+
+            if (useSceneClock && requireSceneClock)
+                return;
 
             StepLocalFrame();
         }
@@ -186,6 +232,7 @@ namespace Afjk.SceneSync.Rapier
                 return false;
             tick++;
             DrainCollisionEventsIntoCurrentPairs();
+            UpdateStateHashAtBroadcastTick();
             return true;
         }
 
@@ -196,7 +243,8 @@ namespace Afjk.SceneSync.Rapier
 
         public void RebuildWorld()
         {
-            var preservedBodyStates = preserveMotionOnNextRebuild
+            RefreshMetadataFromScene();
+            var preservedBodyStates = preserveMotionOnRebuild && preserveMotionOnNextRebuild
                 ? CapturePreservedBodyStates()
                 : new Dictionary<string, PreservedBodyState>(StringComparer.Ordinal);
             preserveMotionOnNextRebuild = true;
@@ -205,6 +253,7 @@ namespace Afjk.SceneSync.Rapier
             accumulator = 0f;
             tick = 0;
             lastStateHash = null;
+            ResetStateHashBroadcastCache();
             lastStepLimited = false;
             hasInitialSnapshot = false;
             initialSnapshot = default;
@@ -275,7 +324,7 @@ namespace Afjk.SceneSync.Rapier
             }
             else
             {
-                foreach (var metadata in FindObjectsByType<SceneSyncPhysicsMetadata>(FindObjectsSortMode.None))
+                foreach (var metadata in FindScenePhysicsMetadata())
                 {
                     if (metadata == null || string.IsNullOrWhiteSpace(metadata.ScenePhysicsJson)) continue;
                     var next = ScenePhysicsDefinition.Parse(metadata.ScenePhysicsJson);
@@ -288,7 +337,7 @@ namespace Afjk.SceneSync.Rapier
                 }
             }
 
-            foreach (var identity in FindObjectsByType<SceneSyncIdentity>(FindObjectsSortMode.None))
+            foreach (var identity in FindSceneSyncIdentities())
             {
                 if (identity == null || string.IsNullOrWhiteSpace(identity.ObjectId)) continue;
                 var metadata = identity.GetComponent<SceneSyncPhysicsMetadata>();
@@ -310,9 +359,8 @@ namespace Afjk.SceneSync.Rapier
 
         private List<BodyCandidate> CollectBodyCandidates()
         {
-            var identities = FindObjectsByType<SceneSyncIdentity>(FindObjectsSortMode.None);
             var byId = new Dictionary<string, SceneSyncIdentity>(StringComparer.Ordinal);
-            foreach (var identity in identities)
+            foreach (var identity in FindSceneSyncIdentities())
             {
                 if (identity == null || string.IsNullOrWhiteSpace(identity.ObjectId)) continue;
                 if (!byId.ContainsKey(identity.ObjectId))
@@ -329,6 +377,20 @@ namespace Afjk.SceneSync.Rapier
             }
 
             return result;
+        }
+
+        private SceneSyncIdentity[] FindSceneSyncIdentities()
+        {
+            return bodyRoot != null
+                ? bodyRoot.GetComponentsInChildren<SceneSyncIdentity>(true)
+                : FindObjectsByType<SceneSyncIdentity>(FindObjectsSortMode.None);
+        }
+
+        private SceneSyncPhysicsMetadata[] FindScenePhysicsMetadata()
+        {
+            return bodyRoot != null
+                ? bodyRoot.GetComponentsInChildren<SceneSyncPhysicsMetadata>(true)
+                : FindObjectsByType<SceneSyncPhysicsMetadata>(FindObjectsSortMode.None);
         }
 
         private void HandleSceneMessage(SceneSyncRawMessage message)
@@ -892,6 +954,7 @@ namespace Afjk.SceneSync.Rapier
         private void UpdateLastStateHash(string detail)
         {
             lastStateHash = ComputeStateHashHex();
+            MaybeBroadcastStateHash();
             if (!logStateHash || string.IsNullOrWhiteSpace(lastStateHash))
                 return;
 
@@ -899,6 +962,94 @@ namespace Afjk.SceneSync.Rapier
             if (!string.IsNullOrWhiteSpace(detail))
                 message += " " + detail;
             Debug.Log(message + " canonicalStateHash=" + lastStateHash);
+        }
+
+        private void UpdateStateHashAtBroadcastTick()
+        {
+            if (!broadcastStateHash || tick == 0)
+                return;
+
+            var interval = Mathf.Max(1, stateHashBroadcastTickInterval);
+            if (tick % interval != 0)
+                return;
+
+            lastStateHash = ComputeStateHashHex();
+            MaybeBroadcastStateHash();
+        }
+
+        private void ResetStateHashBroadcastCache()
+        {
+            lastStateHashBroadcastTick = int.MinValue;
+            lastStateHashBroadcastRevision = int.MinValue;
+            lastStateHashBroadcastHash = null;
+        }
+
+        private void MaybeBroadcastStateHash()
+        {
+            if (!broadcastStateHash || string.IsNullOrWhiteSpace(lastStateHash))
+                return;
+
+            var interval = Mathf.Max(1, stateHashBroadcastTickInterval);
+            if (tick != 0 && tick % interval != 0)
+                return;
+
+            if (!CanBroadcastStateHash())
+                return;
+
+            var revision = latestSceneClockRevision;
+            if (lastStateHashBroadcastTick == tick &&
+                lastStateHashBroadcastRevision == revision &&
+                string.Equals(lastStateHashBroadcastHash, lastStateHash, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var timestep = Mathf.Max(0.000001f, scenePhysics.Timestep);
+            var activeTime = GetCurrentPhysicsTime();
+            var worldAge = Mathf.Max(0f, tick * timestep);
+            var payload =
+                "{\"kind\":\"scene-physics-hash\"" +
+                ",\"source\":\"physics\"" +
+                ",\"phase\":\"postPhysics\"" +
+                ",\"profile\":\"" + PhysicsProfile + "\"" +
+                ",\"hashVersion\":\"" + CanonicalStateHashVersion + "\"" +
+                ",\"rapierCoreVersion\":\"" + RapierCoreVersion + "\"" +
+                ",\"tick\":" + tick.ToString(CultureInfo.InvariantCulture) +
+                ",\"hash\":\"" + SceneSyncWireJson.JsonEscape(lastStateHash) + "\"" +
+                ",\"timestep\":" + timestep.ToString(CultureInfo.InvariantCulture) +
+                ",\"activeTime\":" + activeTime.ToString(CultureInfo.InvariantCulture) +
+                ",\"worldAge\":" + worldAge.ToString(CultureInfo.InvariantCulture) +
+                ",\"worldEpochTime\":" + worldEpochTime.ToString(CultureInfo.InvariantCulture);
+
+            if (revision != int.MinValue)
+                payload += ",\"sceneClockRevision\":" + revision.ToString(CultureInfo.InvariantCulture);
+
+            payload += ",\"sentAt\":" + CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) + "}";
+
+            lastStateHashBroadcastTick = tick;
+            lastStateHashBroadcastRevision = revision;
+            lastStateHashBroadcastHash = lastStateHash;
+            SceneSyncMessageBus.PublishOutgoing(payload, null, this);
+        }
+
+        private static bool CanBroadcastStateHash()
+        {
+            var managers = FindObjectsByType<SceneSyncManager>(FindObjectsSortMode.None);
+            if (managers == null || managers.Length == 0)
+                return true;
+
+            foreach (var manager in managers)
+            {
+                if (manager != null && manager.IsConnected)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static long CurrentUnixTimeMilliseconds()
+        {
+            return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
         }
 
         private void DisposeWorld()
