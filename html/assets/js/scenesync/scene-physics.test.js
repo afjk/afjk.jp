@@ -9,6 +9,7 @@ import {
   normalizeObjectPhysics,
   normalizeScenePhysics,
   SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
+  SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
   SCENE_SYNC_RAPIER_PROFILE,
   shouldResetPhysicsForSceneClockPayload,
 } from './scene-physics.js';
@@ -258,6 +259,146 @@ test('keeps scene physics input pending until the body exists', () => {
   runtime.dispose();
 });
 
+test('orders same-tick interaction inputs by event revision and sequence', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'drag-1-move',
+    interactionId: 'drag-1',
+    sequence: 1,
+    eventRevision: 1,
+    phase: 'grab-move',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'drag-1-release',
+    interactionId: 'drag-1',
+    sequence: 2,
+    eventRevision: 2,
+    phase: 'grab-release',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [6, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+
+  const result = runtime.update({ t: 3 / 60, transportActive: true });
+  assert.equal(result.active, true);
+  assert.ok(object.position.toArray()[0] > 3.05);
+
+  runtime.dispose();
+});
+
+test('branches the physics event timeline and drops old future inputs', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'old-future',
+    objectId: 'ball',
+    applyTick: 20,
+    position: [20, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'branch-event',
+    timelineRevision: 1,
+    branchTick: 10,
+    eventRevision: 1,
+    interactionId: 'branch-drag',
+    sequence: 0,
+    phase: 'grab-release',
+    objectId: 'ball',
+    applyTick: 10,
+    position: [10, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'stale-future',
+    timelineRevision: 0,
+    objectId: 'ball',
+    applyTick: 21,
+    position: [21, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), false);
+
+  const result = runtime.update({ t: 22 / 60, transportActive: true });
+  assert.equal(result.timelineRevision, 1);
+  assert.equal(result.timelineForkTick, 10);
+  assert.equal(result.lastEventRevision, 1);
+  assertVectorClose(object.position.toArray(), [10, 2, 0]);
+
+  runtime.dispose();
+});
+
 test('normalizes parity object physics fields used by Rapier hashing', () => {
   assert.deepEqual(normalizeObjectPhysics({
     enabled: true,
@@ -493,6 +634,11 @@ test('scene physics runtime creates canonical snapshot reports on demand', () =>
 
   assert.equal(snapshot.kind, 'scene-physics-snapshot');
   assert.equal(snapshot.snapshotVersion, SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION);
+  assert.equal(snapshot.timelineVersion, SCENE_SYNC_PHYSICS_TIMELINE_VERSION);
+  assert.equal(snapshot.timelineId, 'default');
+  assert.equal(snapshot.timelineRevision, 0);
+  assert.equal(snapshot.timelineForkTick, 0);
+  assert.equal(snapshot.lastEventRevision, 0);
   assert.equal(snapshot.profile, SCENE_SYNC_RAPIER_PROFILE);
   assert.equal(snapshot.hashVersion, CANONICAL_PHYSICS_HASH_VERSION);
   assert.equal(snapshot.rapierCoreVersion, RAPIER_CORE_VERSION);

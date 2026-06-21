@@ -13,6 +13,8 @@ import { createCollisionPairKey } from './runtime/runtime-events.js';
 export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
 export const SCENE_SYNC_RAPIER_PROFILE = 'SceneSyncRapierParity-0.30';
 export const SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION = 'SceneSyncPhysicsSnapshotV1';
+export const SCENE_SYNC_PHYSICS_TIMELINE_VERSION = 'SceneSyncPhysicsTimelineV1';
+export const DEFAULT_SCENE_PHYSICS_TIMELINE_ID = 'default';
 export const DEFAULT_SCENE_PHYSICS = Object.freeze({
   version: 1,
   enabled: false,
@@ -354,6 +356,26 @@ function finiteNonNegativeNumber(value, fallback = 0) {
   return Number.isFinite(number) ? Math.max(0, number) : fallback;
 }
 
+function nonNegativeInteger(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function normalizeTimelineId(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
+}
+
+function normalizeOptionalString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function compareStrings(left = '', right = '') {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 export function isScenePhysicsZeroTime(value) {
   const number = Number(value);
   return Number.isFinite(number) && Math.abs(number) <= ZERO_TIME_EPSILON;
@@ -428,6 +450,10 @@ export function createScenePhysicsRuntime({
   let pendingBodyStateInputs = [];
   let bodyStateInputHistory = [];
   const appliedBodyStateInputIds = new Set();
+  let timelineId = DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
+  let timelineRevision = 0;
+  let timelineForkTick = 0;
+  let lastEventRevision = 0;
 
   function clear({ preserveInputs = false } = {}) {
     world?.free?.();
@@ -445,6 +471,10 @@ export function createScenePhysicsRuntime({
       pendingBodyStateInputs = [];
       bodyStateInputHistory = [];
       appliedBodyStateInputIds.clear();
+      timelineId = DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
+      timelineRevision = 0;
+      timelineForkTick = 0;
+      lastEventRevision = 0;
     }
   }
 
@@ -592,9 +622,25 @@ export function createScenePhysicsRuntime({
     const applyTick = Number.isFinite(applyTickNumber)
       ? Math.max(0, Math.floor(applyTickNumber))
       : (world?.tick || 0);
+    const payloadTimelineId = normalizeTimelineId(payload.timelineId);
+    if (payloadTimelineId !== timelineId) return false;
+
+    const payloadTimelineRevision = nonNegativeInteger(payload.timelineRevision, timelineRevision);
+    const branchTick = nonNegativeInteger(payload.branchTick, applyTick);
+    if (payloadTimelineRevision < timelineRevision && applyTick > timelineForkTick) {
+      return false;
+    }
+    if (payloadTimelineRevision > timelineRevision) {
+      advanceTimelineRevision(payloadTimelineRevision, branchTick);
+    }
+
+    const interactionId = normalizeOptionalString(payload.interactionId);
+    const sequence = nonNegativeInteger(payload.sequence, 0);
+    const phase = normalizeOptionalString(payload.phase);
+    const eventRevision = nonNegativeInteger(payload.eventRevision, 0);
     const inputId = typeof payload.inputId === 'string' && payload.inputId.trim()
       ? payload.inputId.trim()
-      : `${objectId}:${applyTick}`;
+      : (interactionId ? `${interactionId}:${sequence}` : `${objectId}:${applyTick}`);
 
     if (
       appliedBodyStateInputIds.has(inputId) ||
@@ -612,12 +658,20 @@ export function createScenePhysicsRuntime({
       inputId,
       objectId,
       applyTick,
+      timelineId: payloadTimelineId,
+      timelineRevision: payloadTimelineRevision,
+      eventRevision,
+      interactionId,
+      sequence,
+      phase,
+      branchTick,
       position: readVec3(payload.position, [0, 0, 0]),
       rotation: readQuaternion(payload.rotation, [0, 0, 0, 1]),
       velocity: readVec3(payload.velocity || payload.linearVelocity, [0, 0, 0]),
       angularVelocity: readVec3(payload.angularVelocity || payload.angvel, [0, 0, 0]),
     };
 
+    lastEventRevision = Math.max(lastEventRevision, input.eventRevision);
     addBodyStateInputHistory(input);
     if (world && input.applyTick <= world.tick) {
       if (input.applyTick < world.tick && hasDynamicBody(input.objectId) && rewindBodyStateInputsToInitialSnapshot()) {
@@ -633,11 +687,37 @@ export function createScenePhysicsRuntime({
   }
 
   function compareBodyStateInputs(left, right) {
-    return (
-      left.applyTick === right.applyTick
-        ? (left.inputId < right.inputId ? -1 : (left.inputId > right.inputId ? 1 : 0))
-        : left.applyTick - right.applyTick
+    return left.applyTick - right.applyTick
+      || left.timelineRevision - right.timelineRevision
+      || left.eventRevision - right.eventRevision
+      || compareStrings(left.interactionId, right.interactionId)
+      || left.sequence - right.sequence
+      || compareStrings(left.phase, right.phase)
+      || compareStrings(left.inputId, right.inputId);
+  }
+
+  function advanceTimelineRevision(nextRevision, branchTick) {
+    if (!Number.isInteger(nextRevision) || nextRevision <= timelineRevision) return false;
+    const forkTick = Math.max(0, Math.floor(Number(branchTick) || 0));
+    timelineRevision = nextRevision;
+    timelineForkTick = forkTick;
+
+    const keepInput = (input) => (
+      input.timelineRevision === timelineRevision ||
+      input.applyTick <= timelineForkTick
     );
+    bodyStateInputHistory = bodyStateInputHistory.filter(keepInput);
+    pendingBodyStateInputs = pendingBodyStateInputs.filter(keepInput);
+    appliedBodyStateInputIds.clear();
+    lastEventRevision = bodyStateInputHistory.reduce(
+      (max, input) => Math.max(max, input.eventRevision || 0),
+      0,
+    );
+
+    if (world && world.tick > timelineForkTick) {
+      rewindBodyStateInputsToInitialSnapshot();
+    }
+    return true;
   }
 
   function addBodyStateInputHistory(input) {
@@ -795,6 +875,11 @@ export function createScenePhysicsRuntime({
       activeTime: clockTime,
       worldAge,
       worldEpochTime,
+      timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      lastEventRevision,
       profile: SCENE_SYNC_RAPIER_PROFILE,
       hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
       rapierCoreVersion: RAPIER_CORE_VERSION,
@@ -829,6 +914,11 @@ export function createScenePhysicsRuntime({
       source: 'physics',
       phase: 'postPhysics',
       snapshotVersion: SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
+      timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      lastEventRevision,
       profile: SCENE_SYNC_RAPIER_PROFILE,
       hashVersion: CANONICAL_PHYSICS_HASH_VERSION,
       rapierCoreVersion: RAPIER_CORE_VERSION,
@@ -851,6 +941,15 @@ export function createScenePhysicsRuntime({
     createSnapshotReport,
     resetToInitialPose,
     resetActiveToInitialPose,
+    getTimelineState() {
+      return {
+        timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+        timelineId,
+        timelineRevision,
+        timelineForkTick,
+        lastEventRevision,
+      };
+    },
     hasBodies() {
       if (dirty || !world) {
         return collectRuntimeEntries(getObjectEntries?.()).length > 0;

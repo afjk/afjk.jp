@@ -161,8 +161,14 @@ function validateScenePhysicsInputPayload(payload, maxStringLength) {
   if (!isReasonableString(payload.objectId, maxStringLength)) {
     return { ok: false, reason: 'scene-physics-input.objectId must be a reasonable string' };
   }
-  const inputIdResult = validateOptionalReasonableString(payload, 'inputId', maxStringLength);
-  if (!inputIdResult.ok) return inputIdResult;
+  for (const key of ['inputId', 'timelineVersion', 'timelineId', 'interactionId', 'phase']) {
+    const result = validateOptionalReasonableString(payload, key, maxStringLength);
+    if (!result.ok) return result;
+  }
+  for (const key of ['timelineRevision', 'eventRevision', 'sequence', 'branchTick']) {
+    const result = validateOptionalNonNegativeInteger(payload, key);
+    if (!result.ok) return result;
+  }
   if (!Number.isInteger(payload.applyTick) || payload.applyTick < 0) {
     return { ok: false, reason: 'scene-physics-input.applyTick must be a non-negative integer' };
   }
@@ -183,12 +189,29 @@ function validateScenePhysicsInputPayload(payload, maxStringLength) {
 }
 
 function validateScenePhysicsSyncPayload(payload, maxStringLength) {
-  for (const key of ['source', 'phase', 'profile', 'hashVersion', 'rapierCoreVersion', 'hash']) {
+  for (const key of [
+    'source',
+    'phase',
+    'profile',
+    'hashVersion',
+    'rapierCoreVersion',
+    'hash',
+    'timelineVersion',
+    'timelineId',
+  ]) {
     const result = validateOptionalReasonableString(payload, key, maxStringLength);
     if (!result.ok) return result;
   }
 
-  for (const key of ['tick', 'localTick', 'requestTick', 'bodyCount']) {
+  for (const key of [
+    'tick',
+    'localTick',
+    'requestTick',
+    'bodyCount',
+    'timelineRevision',
+    'timelineForkTick',
+    'lastEventRevision',
+  ]) {
     const result = validateOptionalNonNegativeInteger(payload, key);
     if (!result.ok) return result;
   }
