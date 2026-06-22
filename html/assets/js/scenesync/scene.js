@@ -5698,7 +5698,15 @@ function requestSceneClockControl(now = performance.now()) {
   }
   sceneClockState.controller = getLocalClockControllerInfo();
   updateClockLegacyFields(now);
-  broadcastSceneClockEvent('controller');
+  const physicsBaseline = createSharedPlaybackPhysicsResetBaseline(now, 'player-controller-zero');
+  resetAllObjectClocksForSceneClock(now, {
+    reason: 'player-controller-zero',
+    physicsBaseline,
+  });
+  broadcastSceneClockEvent('controller', {
+    objectClocks: getSharedObjectClockPayload(now),
+    physicsBaseline,
+  });
   notifySceneSyncShellStateChanged('scene-clock-controller-requested');
 }
 

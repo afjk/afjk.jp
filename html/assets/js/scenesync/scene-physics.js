@@ -693,6 +693,27 @@ export function createScenePhysicsRuntime({
     return JSON.stringify(left) === JSON.stringify(right);
   }
 
+  function numberArrayEquals(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+  }
+
+  function bodyStateInputPhysicalStateEquals(left, right) {
+    if (!left || !right) return false;
+    return left.objectId === right.objectId
+      && left.applyTick === right.applyTick
+      && numberArrayEquals(left.position, right.position)
+      && numberArrayEquals(left.rotation, right.rotation)
+      && numberArrayEquals(left.velocity, right.velocity)
+      && numberArrayEquals(left.angularVelocity, right.angularVelocity);
+  }
+
+  function hasSameTickInputPeer(input) {
+    if (!input) return false;
+    return bodyStateInputHistory.some(item => item.inputId !== input.inputId && item.applyTick === input.applyTick)
+      || pendingBodyStateInputs.some(item => item.inputId !== input.inputId && item.applyTick === input.applyTick);
+  }
+
   function replaceBodyStateInput(list, input) {
     const index = list.findIndex((item) => item.inputId === input.inputId);
     if (index < 0) return false;
@@ -712,6 +733,12 @@ export function createScenePhysicsRuntime({
       || pendingBodyStateInputs.find((item) => item.inputId === input.inputId)
       || null;
     const changed = !previous || !bodyStateInputEquals(previous, input);
+    const physicalStateChanged = !previous || !bodyStateInputPhysicalStateEquals(previous, input);
+    const orderChangedWithPeer = Boolean(
+      previous &&
+      compareBodyStateInputs(previous, input) !== 0 &&
+      hasSameTickInputPeer(input),
+    );
     if (hasHistory) {
       replaceBodyStateInput(bodyStateInputHistory, input);
     } else {
@@ -722,7 +749,12 @@ export function createScenePhysicsRuntime({
     }
     lastEventRevision = Math.max(lastEventRevision, input.eventRevision);
 
-    if (changed && world && (hasApplied || input.applyTick <= world.tick)) {
+    if (
+      changed &&
+      (physicalStateChanged || orderChangedWithPeer) &&
+      world &&
+      (hasApplied || input.applyTick <= world.tick)
+    ) {
       rewindBodyStateInputsToInitialSnapshot();
     }
     return true;
@@ -741,6 +773,11 @@ export function createScenePhysicsRuntime({
   function advanceTimelineRevision(nextRevision, branchTick) {
     if (!Number.isInteger(nextRevision) || nextRevision <= timelineRevision) return false;
     const forkTick = Math.max(0, Math.floor(Number(branchTick) || 0));
+    const dropsAppliedInput = bodyStateInputHistory.some(input => (
+      input.timelineRevision !== nextRevision &&
+      input.applyTick > forkTick &&
+      appliedBodyStateInputIds.has(input.inputId)
+    ));
     timelineRevision = nextRevision;
     timelineForkTick = forkTick;
 
@@ -756,7 +793,7 @@ export function createScenePhysicsRuntime({
       0,
     );
 
-    if (world && world.tick > timelineForkTick) {
+    if (dropsAppliedInput && world && world.tick > timelineForkTick) {
       rewindBodyStateInputsToInitialSnapshot();
     }
     return true;
