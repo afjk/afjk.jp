@@ -327,6 +327,177 @@ describe('presence REST broadcast API', () => {
     }
   });
 
+  it('assigns canonical scene clock revisions and replays the latest clock', async () => {
+    const roomId = 'scene-clock-authority-room';
+    const controllerA = await connectClient(roomId, 'Controller A');
+    const controllerB = await connectClient(roomId, 'Controller B');
+    let lateJoiner;
+    try {
+      const firstEcho = waitForMessage(controllerA, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === controllerA.presenceId);
+      const firstReceived = waitForMessage(controllerB, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === controllerA.presenceId);
+
+      controllerA.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-clock',
+          action: 'controller',
+          mode: 'shared-playback',
+          source: 'room',
+          revision: 1,
+          offset: 0,
+          paused: false,
+          rate: 1,
+          controller: {
+            id: controllerA.presenceId,
+            nickname: 'Controller A',
+          },
+        },
+      }));
+
+      const [firstSenderClock, firstPeerClock] = await Promise.all([firstEcho, firstReceived]);
+      assert.equal(firstSenderClock.payload.revision, 1);
+      assert.equal(firstPeerClock.payload.revision, 1);
+
+      const secondEcho = waitForMessage(controllerB, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === controllerB.presenceId);
+      const secondReceived = waitForMessage(controllerA, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === controllerB.presenceId);
+
+      controllerB.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-clock',
+          action: 'controller',
+          mode: 'shared-playback',
+          source: 'room',
+          revision: 1,
+          offset: 0,
+          paused: false,
+          rate: 1,
+          controller: {
+            id: controllerB.presenceId,
+            nickname: 'Controller B',
+          },
+        },
+      }));
+
+      const [secondSenderClock, secondPeerClock] = await Promise.all([secondEcho, secondReceived]);
+      assert.equal(secondSenderClock.payload.revision, 2);
+      assert.equal(secondPeerClock.payload.revision, 2);
+
+      lateJoiner = new WebSocket(`${wsBaseUrl}?room=${roomId}`);
+      const lateWelcome = waitForMessage(lateJoiner, message => message.type === 'welcome');
+      const lateClock = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-clock');
+      await waitForEvent(lateJoiner, 'open');
+      await lateWelcome;
+      const replay = await lateClock;
+      assert.equal(replay.from.id, 'server');
+      assert.equal(replay.payload.action, 'mode');
+      assert.equal(replay.payload.revision, 2);
+      assert.equal(replay.payload.controller.id, controllerB.presenceId);
+    } finally {
+      await Promise.all([
+        closeClient(controllerA),
+        closeClient(controllerB),
+        lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
+      ]);
+    }
+  });
+
+  it('canonicalizes targeted scene clock handoffs before later broadcasts', async () => {
+    const roomId = 'scene-clock-targeted-room';
+    const controllerA = await connectClient(roomId, 'Controller A');
+    const controllerB = await connectClient(roomId, 'Controller B');
+    try {
+      const firstTargeted = waitForMessage(controllerA, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === 'loader');
+      controllerA.send(JSON.stringify({
+        type: 'handoff',
+        targetId: controllerA.presenceId,
+        payload: {
+          kind: 'scene-clock',
+          action: 'mode',
+          mode: 'shared-playback',
+          source: 'room',
+          revision: 1,
+          offset: 0,
+          paused: false,
+          rate: 1,
+          controller: { id: 'loader', nickname: 'Loader' },
+        },
+      }));
+      const first = await firstTargeted;
+      assert.equal(first.payload.revision, 1);
+
+      const secondTargeted = waitForMessage(controllerB, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === 'loader');
+      controllerA.send(JSON.stringify({
+        type: 'handoff',
+        targetId: controllerB.presenceId,
+        payload: {
+          kind: 'scene-clock',
+          action: 'mode',
+          mode: 'shared-playback',
+          source: 'room',
+          revision: 1,
+          offset: 0,
+          paused: false,
+          rate: 1,
+          controller: { id: 'loader', nickname: 'Loader' },
+        },
+      }));
+      const second = await secondTargeted;
+      assert.equal(second.payload.revision, 2);
+
+      const broadcastEcho = waitForMessage(controllerA, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === controllerA.presenceId);
+      const broadcastReceived = waitForMessage(controllerB, message =>
+        message.type === 'handoff' &&
+        message.payload?.kind === 'scene-clock' &&
+        message.payload?.controller?.id === controllerA.presenceId);
+      controllerA.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-clock',
+          action: 'controller',
+          mode: 'shared-playback',
+          source: 'room',
+          revision: 1,
+          offset: 0,
+          paused: false,
+          rate: 1,
+          controller: {
+            id: controllerA.presenceId,
+            nickname: 'Controller A',
+          },
+        },
+      }));
+
+      const [echo, received] = await Promise.all([broadcastEcho, broadcastReceived]);
+      assert.equal(echo.payload.revision, 3);
+      assert.equal(received.payload.revision, 3);
+    } finally {
+      await Promise.all([closeClient(controllerA), closeClient(controllerB)]);
+    }
+  });
+
   it('assigns canonical scene physics input revisions per room', async () => {
     const roomId = 'physics-timeline-room';
     const sender = await connectClient(roomId, 'Physics Sender');

@@ -386,6 +386,248 @@ test('updates existing scene physics input metadata from canonical server echo',
   runtime.dispose();
 });
 
+test('scene physics input metadata echo does not rewind unchanged applied state', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  const localInput = {
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'drag-echo-applied:000001',
+    timelineId: 'default',
+    timelineRevision: 0,
+    eventRevision: 0,
+    interactionId: 'drag-echo-applied',
+    sequence: 1,
+    phase: 'grab-drag',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  };
+
+  assert.equal(runtime.queueInput(localInput), true);
+  runtime.update({ t: 2 / 60, transportActive: true });
+  const beforeEcho = runtime.createSnapshotReport({ t: 2 / 60, transportActive: true });
+  assert.ok(beforeEcho.tick > 0);
+
+  assert.equal(runtime.queueInput({
+    ...localInput,
+    eventRevision: 7,
+    timelineForkTick: 0,
+  }), true);
+  const afterEcho = runtime.createSnapshotReport({ t: 2 / 60, transportActive: true });
+  assert.equal(afterEcho.tick, beforeEcho.tick);
+  assert.equal(afterEcho.hash, beforeEcho.hash);
+
+  runtime.dispose();
+});
+
+test('starting a new physics timeline revision does not rewind when no applied input is dropped', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0.25, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  runtime.update({ t: 4 / 60, transportActive: true });
+  const beforeInput = runtime.createSnapshotReport({ t: 4 / 60, transportActive: true });
+  assert.ok(beforeInput.tick > 0);
+
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'drag-new-branch:000001',
+    timelineId: 'default',
+    timelineRevision: 1,
+    eventRevision: 0,
+    interactionId: 'drag-new-branch',
+    sequence: 1,
+    phase: 'grab-start',
+    objectId: 'ball',
+    branchTick: beforeInput.tick,
+    applyTick: beforeInput.tick + 2,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+
+  const afterInput = runtime.createSnapshotReport({ t: 4 / 60, transportActive: true });
+  assert.equal(afterInput.tick, beforeInput.tick);
+  assert.equal(afterInput.hash, beforeInput.hash);
+
+  runtime.dispose();
+});
+
+test('scene physics drag hold keeps applying body state until release', () => {
+  const object = makeObject({
+    objectId: 'held-domino',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'box',
+      halfExtents: [0.1, 0.6, 0.3],
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, -9.81, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  const holdInput = {
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'hold-domino:000001',
+    timelineId: 'default',
+    timelineRevision: 1,
+    eventRevision: 1,
+    interactionId: 'hold-domino',
+    sequence: 1,
+    phase: 'grab-move',
+    objectId: 'held-domino',
+    branchTick: 0,
+    applyTick: 1,
+    position: [0, 5, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  };
+  assert.equal(runtime.queueInput(holdInput), true);
+
+  runtime.update({ t: 30 / 60, transportActive: true });
+  assertVectorClose(object.position.toArray(), [0, 5, 0]);
+
+  assert.equal(runtime.queueInput({
+    ...holdInput,
+    inputId: 'hold-domino:000002',
+    eventRevision: 2,
+    sequence: 2,
+    phase: 'grab-release',
+    applyTick: 31,
+  }), true);
+  runtime.update({ t: 45 / 60, transportActive: true });
+  assert.ok(object.position.toArray()[1] < 5);
+
+  runtime.dispose();
+});
+
+test('scene physics drag cancel clears active body state hold', () => {
+  const object = makeObject({
+    objectId: 'cancelled-domino',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'box',
+      halfExtents: [0.1, 0.6, 0.3],
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, -9.81, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  const holdInput = {
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'cancel-domino:000001',
+    timelineId: 'default',
+    timelineRevision: 1,
+    eventRevision: 1,
+    interactionId: 'cancel-domino',
+    sequence: 1,
+    phase: 'grab-move',
+    objectId: 'cancelled-domino',
+    branchTick: 0,
+    applyTick: 1,
+    position: [0, 5, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  };
+  assert.equal(runtime.queueInput(holdInput), true);
+  runtime.update({ t: 30 / 60, transportActive: true });
+  assertVectorClose(object.position.toArray(), [0, 5, 0]);
+
+  assert.equal(runtime.queueInput({
+    ...holdInput,
+    inputId: 'cancel-domino:000002',
+    eventRevision: 2,
+    sequence: 2,
+    phase: 'grab-cancel',
+    applyTick: 31,
+  }), true);
+  runtime.update({ t: 45 / 60, transportActive: true });
+  assert.ok(object.position.toArray()[1] < 5);
+
+  runtime.dispose();
+});
+
 test('branches the physics event timeline and drops old future inputs', () => {
   const object = makeObject({
     objectId: 'ball',
@@ -1005,6 +1247,16 @@ test('scene physics runtime applies remote reset payload as a zero baseline', ()
     }),
   };
   assert.equal(shouldResetPhysicsForSceneClockPayload(payload, 0), true);
+  assert.equal(shouldResetPhysicsForSceneClockPayload({
+    action: 'controller',
+    physicsBaseline: createPhysicsResetBaseline({
+      time: 0,
+      worldEpochTime: 0,
+      preserveMotion: false,
+      reason: 'remote-player-controller-zero',
+    }),
+  }, 0), true);
+  assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'controller' }, 0), false);
   assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'seek', targetTime: 0 }, 0), true);
   assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'seek', targetTime: 0.0000001 }, 0.0000001), true);
   assert.equal(shouldResetPhysicsForSceneClockPayload({ action: 'seek', targetTime: 2 }, 2), false);

@@ -3143,6 +3143,7 @@ const playerPhysicsDragPlanePoint = new THREE.Vector3();
 const playerPhysicsDragCameraForward = new THREE.Vector3();
 const playerPhysicsDragTarget = new THREE.Vector3();
 const playerPhysicsDragTmp = new THREE.Vector3();
+const playerPhysicsDragZero = new THREE.Vector3();
 const playerPhysicsDragState = {
   objectId: null,
   interactionId: null,
@@ -3902,6 +3903,17 @@ function endPlayerPhysicsDrag(clientX = null, clientY = null) {
   return true;
 }
 
+function cancelPlayerPhysicsDrag() {
+  if (!isPlayerPhysicsDragging()) return false;
+  publishPlayerPhysicsDragState(
+    playerPhysicsDragState.previousTarget,
+    playerPhysicsDragZero,
+    'grab-cancel',
+  );
+  clearPlayerPhysicsDragState();
+  return true;
+}
+
 // click（paste 配置確定）。戻り値=ハンドルしたか
 function inputCommitPasteClick() {
   if (!pastePreviewMode) return false;
@@ -3972,11 +3984,7 @@ const sceneInputIntent = {
   beginPhysicsDrag: beginPlayerPhysicsDrag,
   updatePhysicsDrag: updatePlayerPhysicsDrag,
   endPhysicsDrag: endPlayerPhysicsDrag,
-  cancelPhysicsDrag: () => {
-    if (!isPlayerPhysicsDragging()) return false;
-    clearPlayerPhysicsDragState();
-    return true;
-  },
+  cancelPhysicsDrag: cancelPlayerPhysicsDrag,
   pasteMoveFromPointer: (event) => updatePastePreviewFromPointer(event),
   commitPasteClick: inputCommitPasteClick,
   handleEmptyTapDeselect: inputHandleEmptyTapDeselect,
@@ -5698,7 +5706,15 @@ function requestSceneClockControl(now = performance.now()) {
   }
   sceneClockState.controller = getLocalClockControllerInfo();
   updateClockLegacyFields(now);
-  broadcastSceneClockEvent('controller');
+  const physicsBaseline = createSharedPlaybackPhysicsResetBaseline(now, 'player-controller-zero');
+  resetAllObjectClocksForSceneClock(now, {
+    reason: 'player-controller-zero',
+    physicsBaseline,
+  });
+  broadcastSceneClockEvent('controller', {
+    objectClocks: getSharedObjectClockPayload(now),
+    physicsBaseline,
+  });
   notifySceneSyncShellStateChanged('scene-clock-controller-requested');
 }
 
@@ -5792,7 +5808,7 @@ function setSceneClockMode(mode, now = performance.now(), options = {}) {
 
   if (nextMode !== CLOCK_MODES.SHARED_PLAYBACK) {
     sceneClockState.controller = null;
-  } else if (options.requestControl === true || !sceneClockState.controller) {
+  } else if (options.requestControl === true) {
     sceneClockState.controller = getLocalClockControllerInfo();
   }
 
@@ -6839,7 +6855,6 @@ function handleHandoff(data) {
 
   switch (payload.kind) {
     case 'scene-clock': {
-      if (isOwn) break;
       applyRemoteSceneClock(payload, data.from);
       break;
     }

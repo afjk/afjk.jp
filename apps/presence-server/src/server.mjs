@@ -35,6 +35,7 @@ const SCENE_GRAPH_MAX_SIZE = 64 * 1024; // 64 KB for graph payloads
 const rooms = new Map(); // roomId -> Map<clientId, Client>
 const roomObjectIds = new Map(); // roomId -> Set<objectId>
 const roomPhysicsTimelines = new Map(); // roomId -> Map<timelineId, PhysicsTimeline>
+const roomSceneClocks = new Map(); // roomId -> latest canonical scene-clock payload
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
 const clientsByIpHash = new Map(); // ipHash -> Set<clientId>
@@ -471,6 +472,7 @@ function removeClient(client) {
     rooms.delete(client.roomId);
     roomObjectIds.delete(client.roomId);
     roomPhysicsTimelines.delete(client.roomId);
+    roomSceneClocks.delete(client.roomId);
   }
 
   if (client.ipHash) {
@@ -763,6 +765,24 @@ function canonicalizeScenePhysicsPayload(roomId, payload) {
   return result;
 }
 
+function canonicalizeSceneClockPayload(roomId, payload) {
+  if (payload?.kind !== 'scene-clock') {
+    return { ok: true, payload };
+  }
+
+  const previous = roomSceneClocks.get(roomId);
+  const previousRevision = Math.max(0, Math.floor(Number(previous?.revision) || 0));
+  const nextPayload = {
+    ...payload,
+    mode: payload.mode || 'shared-playback',
+    source: payload.source || 'room',
+    revision: previousRevision + 1,
+  };
+
+  roomSceneClocks.set(roomId, cloneJson(nextPayload));
+  return { ok: true, payload: nextPayload };
+}
+
 function payloadIncludesScenePhysicsInput(payload) {
   if (payload?.kind === 'scene-physics-input') return true;
   if (payload?.kind !== 'scene-batch') return false;
@@ -771,11 +791,29 @@ function payloadIncludesScenePhysicsInput(payload) {
 }
 
 function payloadRequiresScenePhysicsSenderEcho(payload) {
+  if (payload?.kind === 'scene-clock') return true;
   if (payload?.kind === 'scene-physics-input-log-clear') return true;
   if (payloadIncludesScenePhysicsInput(payload)) return true;
   if (payload?.kind !== 'scene-batch') return false;
   const operations = collectSceneBatchOperations(payload);
   return operations.some(payloadRequiresScenePhysicsSenderEcho);
+}
+
+function sendRoomSceneClock(client) {
+  const latest = roomSceneClocks.get(client.roomId);
+  if (!latest) return;
+  safeSend(client.conn, {
+    type: 'handoff',
+    from: {
+      id: 'server',
+      nickname: 'SceneSync',
+      device: 'server',
+    },
+    payload: {
+      ...cloneJson(latest),
+      action: 'mode',
+    },
+  });
 }
 
 function sendRoomPhysicsTimeline(client, timelineId = null) {
@@ -833,7 +871,16 @@ function deliverHandoff(sender, msg) {
   if (!room) return;
   const target = room.get(msg.targetId);
   if (!target) return;
-  safeSend(target.conn, createHandoffMessage(sender, msg.payload));
+  const sceneClockPayload = canonicalizeSceneClockPayload(sender.roomId, msg.payload);
+  if (!sceneClockPayload.ok) {
+    safeSend(sender.conn, {
+      type: 'error',
+      error: sceneClockPayload.error || 'scene_clock_rejected',
+      message: sceneClockPayload.message,
+    });
+    return;
+  }
+  safeSend(target.conn, createHandoffMessage(sender, sceneClockPayload.payload));
 }
 
 function broadcastHandoff(sender, msg, { includeSender = false } = {}) {
@@ -1241,6 +1288,17 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     }
     nextPayload = physicsTimelinePayload.payload;
   }
+  const sceneClockPayload = canonicalizeSceneClockPayload(roomId, nextPayload);
+  if (!sceneClockPayload.ok) {
+    return {
+      status: sceneClockPayload.status || 409,
+      body: {
+        error: sceneClockPayload.error || 'scene clock rejected',
+        message: sceneClockPayload.message,
+      },
+    };
+  }
+  nextPayload = sceneClockPayload.payload;
 
   const message = {
     type: 'handoff',
@@ -1954,6 +2012,7 @@ function createPresenceServer() {
     });
 
     conn.send({ type: 'welcome', id: client.id, room: roomId, serverTime: Date.now() });
+    sendRoomSceneClock(client);
     broadcastPeers(roomId);
 
     conn.onMessage = raw => {
@@ -2063,6 +2122,16 @@ function createPresenceServer() {
                 return;
               }
               data.payload = physicsTimelinePayload.payload;
+              const sceneClockPayload = canonicalizeSceneClockPayload(roomId, data.payload);
+              if (!sceneClockPayload.ok) {
+                safeSend(conn, {
+                  type: 'error',
+                  error: sceneClockPayload.error || 'scene_clock_rejected',
+                  message: sceneClockPayload.message,
+                });
+                return;
+              }
+              data.payload = sceneClockPayload.payload;
             }
 
             broadcastHandoff(client, data, {
