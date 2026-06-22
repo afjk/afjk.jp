@@ -371,6 +371,16 @@ function normalizeOptionalString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+// Generic hold/release intent for a body-state input. The runtime core does not
+// know about drag/grab phase names — it only reads this generic control mode.
+// Returns 'hold', 'release', or '' (one-shot apply, leaves any existing hold).
+function normalizeControlMode(payload) {
+  const raw = normalizeOptionalString(payload?.controlMode).toLowerCase();
+  if (raw === 'hold' || raw === 'release') return raw;
+  if (typeof payload?.hold === 'boolean') return payload.hold ? 'hold' : 'release';
+  return '';
+}
+
 function compareStrings(left = '', right = '') {
   if (left === right) return 0;
   return left < right ? -1 : 1;
@@ -645,6 +655,7 @@ export function createScenePhysicsRuntime({
     const interactionId = normalizeOptionalString(payload.interactionId);
     const sequence = nonNegativeInteger(payload.sequence, 0);
     const phase = normalizeOptionalString(payload.phase);
+    const controlMode = normalizeControlMode(payload);
     const eventRevision = nonNegativeInteger(payload.eventRevision, 0);
     const inputId = typeof payload.inputId === 'string' && payload.inputId.trim()
       ? payload.inputId.trim()
@@ -665,6 +676,7 @@ export function createScenePhysicsRuntime({
       interactionId,
       sequence,
       phase,
+      controlMode,
       branchTick,
       position: readVec3(payload.position, [0, 0, 0]),
       rotation: readQuaternion(payload.rotation, [0, 0, 0, 1]),
@@ -904,9 +916,13 @@ export function createScenePhysicsRuntime({
 
   function updateActiveBodyStateHold(input) {
     if (!input?.objectId) return;
-    if (input.phase === 'grab-start' || input.phase === 'grab-move') {
+    // The runtime core is phase-agnostic: it only honors the generic control
+    // mode. 'hold' keeps re-applying the body state every tick until a matching
+    // 'release' arrives. Inputs without a control mode are one-shot and leave
+    // any existing hold untouched.
+    if (input.controlMode === 'hold') {
       activeBodyStateHolds.set(input.objectId, input);
-    } else if (input.phase === 'grab-release' || input.phase === 'grab-cancel') {
+    } else if (input.controlMode === 'release') {
       activeBodyStateHolds.delete(input.objectId);
     }
   }

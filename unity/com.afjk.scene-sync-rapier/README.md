@@ -83,9 +83,12 @@ snapshot.
 
 ## Interaction Sample
 
-`SceneSyncRapierInteractionSample` is a Play Mode helper for rooms that already
-use `SceneSyncRapierBridge`. Add it to the same setup scene, assign the bridge
-and camera if auto-discovery is not enough, then enter Play Mode.
+`SceneSyncRapierInteractionSample` ships as an importable package sample
+(*Rapier Interaction Sample* under the Package Manager **Samples** tab), not as
+part of the library `Runtime` assembly. It is a Play Mode helper for rooms that
+already use `SceneSyncRapierBridge`: import the sample, add the component to your
+setup scene, assign the bridge and camera if auto-discovery is not enough, then
+enter Play Mode.
 
 - `WASD` moves the camera horizontally relative to view direction.
 - `E` / `Q` moves up and down.
@@ -101,19 +104,26 @@ dynamic Scene Sync object has no Collider, it can add a lightweight BoxCollider
 from renderer bounds for Play Mode interaction.
 
 Each drag is published as a timeline interaction with a stable
-`interactionId`, monotonic `sequence`, `phase` (`grab-start`, `grab-move`,
-`grab-release`), `eventRevision`, and `applyTick`. The Rapier bridge keeps those
-events as the primary synchronization source; snapshots are checkpoints for
-late join/recovery and are ignored when their timeline revision or event
-watermark is older than the local event history. When a local drag starts after
-a rewind and future inputs already exist, or when a newer `timelineRevision`
-arrives from the room, future inputs after the branch tick are discarded so the
-new interaction can fork the playback history.
+`interactionId`, monotonic `sequence`, a generic `controlMode` (`hold` while the
+body is being dragged, `release` on throw/cancel), `eventRevision`, and
+`applyTick`. The sample also sends a human-readable `phase` string
+(`grab-start` / `grab-move` / `grab-release`) for debugging, but the runtime
+core decides hold/release purely from `controlMode` and never inspects the phase
+name. The Rapier bridge keeps these events as the primary synchronization
+source; snapshots are checkpoints for late join/recovery and are ignored when
+their timeline revision or event watermark is older than the local event
+history. When a local drag starts after a rewind and future inputs already
+exist, or when a newer `timelineRevision` arrives from the room, future inputs
+after the fork tick are discarded so the new interaction can fork the playback
+history.
 
-By default the sample disables automatic remote physics snapshot correction while
-it is active. Shared Playback Player UI still drives the shared clock, but its
-periodic `scene-physics-snapshot` messages should not overwrite the local
-drag/release authority immediately after an interaction input.
+While `disableRemoteSnapshotCorrection` is set, the sample switches the bridge to
+the `IgnoreWhileLocalInteractionActive` snapshot apply policy and toggles
+`SceneSyncRapierBridge.LocalInteractionActive` for the duration of a drag, rather
+than permanently turning snapshot correction off. Shared Playback Player UI still
+drives the shared clock and snapshot correction resumes as soon as the local
+interaction ends, so periodic `scene-physics-snapshot` messages do not overwrite
+local drag/release authority mid-interaction.
 
 ## PlayerUI Parity Sample
 

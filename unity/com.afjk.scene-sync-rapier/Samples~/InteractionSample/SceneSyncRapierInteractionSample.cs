@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Afjk.SceneSync;
 using UnityEngine;
 
@@ -40,9 +39,8 @@ namespace Afjk.SceneSync.Rapier
         private Vector3 previousLookMousePosition;
         private float yaw;
         private float pitch;
-        private SceneSyncRapierBridge snapshotOverrideBridge;
-        private static readonly Dictionary<SceneSyncRapierBridge, SnapshotCorrectionOverrideState> SnapshotOverrides =
-            new Dictionary<SceneSyncRapierBridge, SnapshotCorrectionOverrideState>();
+        private SceneSyncRapierBridge snapshotPolicyBridge;
+        private SceneSyncRapierSnapshotApplyPolicy previousSnapshotPolicy;
 
         private bool IsDragging => !string.IsNullOrWhiteSpace(draggingObjectId);
 
@@ -60,7 +58,7 @@ namespace Afjk.SceneSync.Rapier
 
         private void OnDisable()
         {
-            RestoreSnapshotCorrectionOverride();
+            RestoreSnapshotPolicy();
             StopLooking();
             ClearDrag();
         }
@@ -82,7 +80,7 @@ namespace Afjk.SceneSync.Rapier
             if (targetCamera == null)
                 targetCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
 
-            UpdateSnapshotCorrectionOverride();
+            UpdateSnapshotPolicy();
         }
 
         private void InitializeLookAngles()
@@ -176,7 +174,7 @@ namespace Afjk.SceneSync.Rapier
             {
                 UpdateDragVelocity(targetPosition);
                 if (Time.unscaledTime >= nextInputPublishAt)
-                    PublishDragState(targetPosition, dragVelocity, "grab-move");
+                    PublishDragState(targetPosition, dragVelocity, "grab-move", "hold");
             }
         }
 
@@ -207,7 +205,9 @@ namespace Afjk.SceneSync.Rapier
             dragTimelineRevision = bridge.PreparePhysicsTimelineBranch(dragBranchTick);
             lastDragApplyTick = -1;
             hasDragTarget = true;
-            PublishDragState(position, linearVelocity, "grab-start");
+            if (bridge != null)
+                bridge.LocalInteractionActive = true;
+            PublishDragState(position, linearVelocity, "grab-start", "hold");
             nextInputPublishAt = Time.unscaledTime + Mathf.Max(0.005f, inputIntervalSeconds);
         }
 
@@ -223,12 +223,14 @@ namespace Afjk.SceneSync.Rapier
                 UpdateDragVelocity(targetPosition);
 
             var throwVelocity = Vector3.ClampMagnitude(dragVelocity * Mathf.Max(0f, throwVelocityScale), maxThrowSpeed);
-            PublishDragState(previousDragTarget, throwVelocity, "grab-release");
+            PublishDragState(previousDragTarget, throwVelocity, "grab-release", "release");
             ClearDrag();
         }
 
         private void ClearDrag()
         {
+            if (bridge != null)
+                bridge.LocalInteractionActive = false;
             draggingObjectId = null;
             draggingInteractionId = null;
             draggingRotation = Quaternion.identity;
@@ -244,56 +246,39 @@ namespace Afjk.SceneSync.Rapier
             hasDragTarget = false;
         }
 
-        private void UpdateSnapshotCorrectionOverride()
+        // Rather than permanently disabling the bridge's snapshot correction, the
+        // sample opts the bridge into a policy that simply ignores remote snapshots
+        // while a local interaction (drag) is active. The previous policy is
+        // restored when the sample is disabled or points at a different bridge.
+        private void UpdateSnapshotPolicy()
         {
             if (!isActiveAndEnabled || !disableRemoteSnapshotCorrection || bridge == null)
             {
-                RestoreSnapshotCorrectionOverride();
+                RestoreSnapshotPolicy();
                 return;
             }
 
-            if (snapshotOverrideBridge == bridge)
+            if (snapshotPolicyBridge == bridge)
                 return;
 
-            RestoreSnapshotCorrectionOverride();
-            snapshotOverrideBridge = bridge;
-            if (SnapshotOverrides.TryGetValue(bridge, out var state))
-            {
-                state.ReferenceCount++;
-                SnapshotOverrides[bridge] = state;
-                return;
-            }
-
-            SnapshotOverrides[bridge] = new SnapshotCorrectionOverrideState(
-                bridge.AutoApplyRemoteSnapshots,
-                bridge.RequestSnapshotOnHashMismatch);
-            bridge.AutoApplyRemoteSnapshots = false;
-            bridge.RequestSnapshotOnHashMismatch = false;
+            RestoreSnapshotPolicy();
+            snapshotPolicyBridge = bridge;
+            previousSnapshotPolicy = bridge.SnapshotApplyPolicy;
+            bridge.SnapshotApplyPolicy = SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive;
         }
 
-        private void RestoreSnapshotCorrectionOverride()
+        private void RestoreSnapshotPolicy()
         {
-            if (snapshotOverrideBridge == null)
+            if (snapshotPolicyBridge == null)
                 return;
 
-            if (SnapshotOverrides.TryGetValue(snapshotOverrideBridge, out var state))
+            snapshotPolicyBridge.LocalInteractionActive = false;
+            if (snapshotPolicyBridge.SnapshotApplyPolicy ==
+                SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive)
             {
-                state.ReferenceCount--;
-                if (state.ReferenceCount <= 0)
-                {
-                    if (!snapshotOverrideBridge.AutoApplyRemoteSnapshots)
-                        snapshotOverrideBridge.AutoApplyRemoteSnapshots = state.AutoApplyRemoteSnapshots;
-                    if (!snapshotOverrideBridge.RequestSnapshotOnHashMismatch)
-                        snapshotOverrideBridge.RequestSnapshotOnHashMismatch = state.RequestSnapshotOnHashMismatch;
-                    SnapshotOverrides.Remove(snapshotOverrideBridge);
-                }
-                else
-                {
-                    SnapshotOverrides[snapshotOverrideBridge] = state;
-                }
+                snapshotPolicyBridge.SnapshotApplyPolicy = previousSnapshotPolicy;
             }
-
-            snapshotOverrideBridge = null;
+            snapshotPolicyBridge = null;
         }
 
         private bool TryPickDynamicObject(out SceneSyncIdentity identity, out Vector3 hitPoint)
@@ -348,7 +333,7 @@ namespace Afjk.SceneSync.Rapier
             hasDragTarget = true;
         }
 
-        private void PublishDragState(Vector3 position, Vector3 linearVelocity, string phase)
+        private void PublishDragState(Vector3 position, Vector3 linearVelocity, string phase, string controlMode)
         {
             if (!IsDragging || bridge == null) return;
             var applyTick = bridge.Tick + Mathf.Max(0, inputLeadTicks);
@@ -375,7 +360,8 @@ namespace Afjk.SceneSync.Rapier
                 phase,
                 dragTimelineRevision,
                 0L,
-                dragBranchTick);
+                dragBranchTick,
+                controlMode);
             nextInputPublishAt = Time.unscaledTime + Mathf.Max(0.005f, inputIntervalSeconds);
         }
 
@@ -454,20 +440,6 @@ namespace Afjk.SceneSync.Rapier
             while (angle > 180f) angle -= 360f;
             while (angle < -180f) angle += 360f;
             return angle;
-        }
-
-        private struct SnapshotCorrectionOverrideState
-        {
-            public SnapshotCorrectionOverrideState(bool autoApplyRemoteSnapshots, bool requestSnapshotOnHashMismatch)
-            {
-                AutoApplyRemoteSnapshots = autoApplyRemoteSnapshots;
-                RequestSnapshotOnHashMismatch = requestSnapshotOnHashMismatch;
-                ReferenceCount = 1;
-            }
-
-            public bool AutoApplyRemoteSnapshots { get; }
-            public bool RequestSnapshotOnHashMismatch { get; }
-            public int ReferenceCount { get; set; }
         }
     }
 }

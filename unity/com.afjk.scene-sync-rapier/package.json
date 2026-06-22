@@ -16,5 +16,12 @@
   "dependencies": {
     "com.afjk.scene-sync": "0.1.0",
     "com.afjk.rapier": "0.3.0"
-  }
+  },
+  "samples": [
+    {
+      "displayName": "Rapier Interaction Sample",
+      "description": "Play Mode sample for dragging Rapier-backed Scene Sync bodies with scheduled physics inputs.",
+      "path": "Samples~/InteractionSample"
+    }
+  ]
 }

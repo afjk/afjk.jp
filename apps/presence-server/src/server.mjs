@@ -554,7 +554,7 @@ function cloneRoomPhysicsTimelines(roomId) {
     draft.set(timelineId, {
       timelineId: timeline.timelineId,
       timelineRevision: timeline.timelineRevision,
-      timelineForkTick: timeline.timelineForkTick,
+      forkTick: timeline.forkTick,
       lastEventRevision: timeline.lastEventRevision,
       clearRevision: timeline.clearRevision || 0,
       events: cloneJson(timeline.events) || [],
@@ -579,7 +579,7 @@ function getPhysicsTimeline(timelines, timelineId) {
   const timeline = {
     timelineId: normalizedTimelineId,
     timelineRevision: 0,
-    timelineForkTick: 0,
+    forkTick: 0,
     lastEventRevision: 0,
     clearRevision: 0,
     events: [],
@@ -599,7 +599,7 @@ function getLatestPhysicsEventTick(timeline) {
 function branchPhysicsTimeline(timeline, branchTick) {
   const normalizedBranchTick = Math.max(0, Math.floor(Number(branchTick) || 0));
   timeline.timelineRevision += 1;
-  timeline.timelineForkTick = normalizedBranchTick;
+  timeline.forkTick = normalizedBranchTick;
   timeline.events = timeline.events.filter(event => Number(event.applyTick) <= normalizedBranchTick);
 }
 
@@ -628,15 +628,16 @@ function collectSceneBatchOperations(payload) {
   return ops || actions || [];
 }
 
-function clearPhysicsTimeline(timelines, timelineId, requestedRevision = 0) {
+function clearPhysicsTimeline(timelines, timelineId) {
   const timeline = getPhysicsTimeline(timelines, timelineId);
-  timeline.timelineRevision = Math.max(
-    timeline.timelineRevision + 2,
-    Math.max(0, Math.floor(Number(requestedRevision) || 0)) + 1,
-  );
-  timeline.timelineForkTick = 0;
+  // A clear opens a fresh timeline epoch. timelineRevision is the branch/epoch
+  // counter and clearRevision is the history-clear generation; both advance by
+  // one. Stale inputs from before the clear are rejected because their
+  // clearRevision no longer matches (see canonicalize stale check below).
+  timeline.timelineRevision += 1;
+  timeline.clearRevision += 1;
+  timeline.forkTick = 0;
   timeline.lastEventRevision = 0;
-  timeline.clearRevision = timeline.timelineRevision;
   timeline.events = [];
   return timeline;
 }
@@ -675,7 +676,7 @@ function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
 
   if (payload?.kind === 'scene-physics-input-log-clear') {
     const timelineId = normalizePhysicsTimelineId(payload.timelineId);
-    const timeline = clearPhysicsTimeline(timelines, timelineId, payload.timelineRevision);
+    const timeline = clearPhysicsTimeline(timelines, timelineId);
     return {
       ok: true,
       payload: {
@@ -683,7 +684,7 @@ function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
         timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
         timelineId,
         timelineRevision: timeline.timelineRevision,
-        timelineForkTick: timeline.timelineForkTick,
+        timelineForkTick: timeline.forkTick,
         timelineClearRevision: timeline.clearRevision,
         lastEventRevision: timeline.lastEventRevision,
       },
@@ -742,7 +743,7 @@ function canonicalizeScenePhysicsPayloadInTimelines(timelines, payload) {
     timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
     timelineId,
     timelineRevision: timeline.timelineRevision,
-    timelineForkTick: timeline.timelineForkTick,
+    timelineForkTick: timeline.forkTick,
     timelineClearRevision: timeline.clearRevision || 0,
     branchTick,
     eventRevision,
@@ -788,6 +789,16 @@ function payloadIncludesScenePhysicsInput(payload) {
   if (payload?.kind !== 'scene-batch') return false;
   const operations = collectSceneBatchOperations(payload);
   return operations.some(payloadIncludesScenePhysicsInput);
+}
+
+// True when a payload must flow through the room physics timeline canonicalizer
+// (to be recorded / assigned a canonical eventRevision, or to clear the log).
+function payloadRequiresScenePhysicsTimeline(payload) {
+  if (payload?.kind === 'scene-physics-input') return true;
+  if (payload?.kind === 'scene-physics-input-log-clear') return true;
+  if (payload?.kind !== 'scene-batch') return false;
+  const operations = collectSceneBatchOperations(payload);
+  return operations.some(payloadRequiresScenePhysicsTimeline);
 }
 
 function payloadRequiresScenePhysicsSenderEcho(payload) {
@@ -836,7 +847,7 @@ function sendRoomPhysicsTimeline(client, timelineId = null) {
           kind: 'scene-physics-input-log-clear',
           timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
           timelineId: timeline.timelineId,
-          timelineRevision: timeline.clearRevision,
+          timelineRevision: timeline.timelineRevision,
           timelineForkTick: 0,
           timelineClearRevision: timeline.clearRevision,
           lastEventRevision: 0,
@@ -871,7 +882,23 @@ function deliverHandoff(sender, msg) {
   if (!room) return;
   const target = room.get(msg.targetId);
   if (!target) return;
-  const sceneClockPayload = canonicalizeSceneClockPayload(sender.roomId, msg.payload);
+  let payload = msg.payload;
+  // scene-physics-input is broadcast-shaped state: even when it arrives as a
+  // targeted handoff it must pass through the room physics timeline so it gets a
+  // canonical eventRevision (and clears are recorded), matching the broadcast path.
+  if (payloadRequiresScenePhysicsTimeline(payload)) {
+    const physicsTimelinePayload = canonicalizeScenePhysicsPayload(sender.roomId, payload);
+    if (!physicsTimelinePayload.ok) {
+      safeSend(sender.conn, {
+        type: 'error',
+        error: physicsTimelinePayload.error || 'physics_timeline_rejected',
+        message: physicsTimelinePayload.message,
+      });
+      return;
+    }
+    payload = physicsTimelinePayload.payload;
+  }
+  const sceneClockPayload = canonicalizeSceneClockPayload(sender.roomId, payload);
   if (!sceneClockPayload.ok) {
     safeSend(sender.conn, {
       type: 'error',
@@ -1275,7 +1302,10 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     };
   }
 
-  if (peers.length > 0 || nextPayload?.kind === 'scene-physics-input-log-clear') {
+  // Always run physics inputs / clears through the room timeline, even with no
+  // peers connected, so late joiners receive the full input history. (Other
+  // payload kinds pass through unchanged; scene-state still resets the log.)
+  {
     const physicsTimelinePayload = canonicalizeScenePhysicsPayload(roomId, nextPayload);
     if (!physicsTimelinePayload.ok) {
       return {

@@ -690,12 +690,12 @@ describe('presence REST broadcast API', () => {
       const [echo, received] = await Promise.all([clearEcho, clearReceiver]);
       assert.equal(echo.payload.timelineVersion, 'SceneSyncPhysicsTimelineV1');
       assert.equal(echo.payload.timelineId, 'default');
-      assert.equal(echo.payload.timelineRevision, 2);
+      assert.equal(echo.payload.timelineRevision, 1);
       assert.equal(echo.payload.timelineForkTick, 0);
-      assert.equal(echo.payload.timelineClearRevision, 2);
+      assert.equal(echo.payload.timelineClearRevision, 1);
       assert.equal(echo.payload.lastEventRevision, 0);
-      assert.equal(received.payload.timelineRevision, 2);
-      assert.equal(received.payload.timelineClearRevision, 2);
+      assert.equal(received.payload.timelineRevision, 1);
+      assert.equal(received.payload.timelineClearRevision, 1);
 
       lateJoiner = await connectClient(roomId, 'Physics Late');
       const markerPromise = waitForMessage(lateJoiner, message =>
@@ -749,8 +749,8 @@ describe('presence REST broadcast API', () => {
         },
       }));
       const fresh = await freshInput;
-      assert.equal(fresh.payload.timelineRevision, 2);
-      assert.equal(fresh.payload.timelineClearRevision, 2);
+      assert.equal(fresh.payload.timelineRevision, 1);
+      assert.equal(fresh.payload.timelineClearRevision, 1);
       assert.equal(fresh.payload.eventRevision, 1);
     } finally {
       await Promise.all([
@@ -788,14 +788,14 @@ describe('presence REST broadcast API', () => {
       }));
 
       const [echo, received] = await Promise.all([senderEcho, receiverMessage]);
-      assert.equal(echo.payload.ops[0].timelineRevision, 2);
-      assert.equal(echo.payload.actions[0].timelineRevision, 2);
-      assert.equal(received.payload.ops[0].timelineRevision, 2);
-      assert.equal(received.payload.actions[0].timelineRevision, 2);
-      assert.equal(echo.payload.ops[0].timelineClearRevision, 2);
-      assert.equal(echo.payload.actions[0].timelineClearRevision, 2);
-      assert.equal(received.payload.ops[0].timelineClearRevision, 2);
-      assert.equal(received.payload.actions[0].timelineClearRevision, 2);
+      assert.equal(echo.payload.ops[0].timelineRevision, 1);
+      assert.equal(echo.payload.actions[0].timelineRevision, 1);
+      assert.equal(received.payload.ops[0].timelineRevision, 1);
+      assert.equal(received.payload.actions[0].timelineRevision, 1);
+      assert.equal(echo.payload.ops[0].timelineClearRevision, 1);
+      assert.equal(echo.payload.actions[0].timelineClearRevision, 1);
+      assert.equal(received.payload.ops[0].timelineClearRevision, 1);
+      assert.equal(received.payload.actions[0].timelineClearRevision, 1);
     } finally {
       await Promise.all([closeClient(sender), closeClient(receiver)]);
     }
@@ -908,6 +908,104 @@ describe('presence REST broadcast API', () => {
       await Promise.all([
         closeClient(sender),
         closeClient(receiver),
+        lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
+      ]);
+    }
+  });
+
+  it('records REST scene physics inputs even with no peers connected', async () => {
+    const roomId = 'physics-rest-no-peer-room';
+    // No clients are connected when the REST input arrives.
+    const response = await fetch(`${baseUrl}/api/room/${roomId}/broadcast?name=Claude`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'scene-physics-input',
+        inputType: 'set-body-state',
+        inputId: 'rest-drag:000001',
+        timelineId: 'default',
+        timelineRevision: 0,
+        eventRevision: 999,
+        objectId: 'rest-box',
+        applyTick: 7,
+        position: [1, 2, 3],
+        rotation: [0, 0, 0, 1],
+      }),
+    });
+    assert.equal(response.status, 200);
+
+    // A late joiner must still receive the recorded input from the room log.
+    const lateJoiner = await connectClient(roomId, 'REST Late');
+    try {
+      const replayPromise = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      lateJoiner.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input-log-request',
+          timelineId: 'default',
+        },
+      }));
+      const replay = await replayPromise;
+      assert.equal(replay.from.id, 'server');
+      assert.equal(replay.payload.inputId, 'rest-drag:000001');
+      assert.equal(replay.payload.eventRevision, 1);
+      assert.equal(replay.payload.timelineRevision, 0);
+      assert.equal(replay.payload.timelineClearRevision, 0);
+    } finally {
+      await closeClient(lateJoiner);
+    }
+  });
+
+  it('canonicalizes scene physics inputs delivered via targeted handoff', async () => {
+    const roomId = 'physics-targeted-room';
+    const sender = await connectClient(roomId, 'Physics Sender');
+    const target = await connectClient(roomId, 'Physics Target');
+    let lateJoiner = null;
+    try {
+      const targetInput = waitForMessage(target, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      sender.send(JSON.stringify({
+        type: 'handoff',
+        targetId: target.presenceId,
+        payload: {
+          kind: 'scene-physics-input',
+          inputType: 'set-body-state',
+          inputId: 'targeted-drag:000001',
+          timelineId: 'default',
+          timelineRevision: 0,
+          eventRevision: 999,
+          objectId: 'targeted-box',
+          applyTick: 9,
+          position: [4, 5, 6],
+          rotation: [0, 0, 0, 1],
+        },
+      }));
+
+      // The targeted recipient receives a server-canonical eventRevision.
+      const delivered = await targetInput;
+      assert.equal(delivered.payload.inputId, 'targeted-drag:000001');
+      assert.equal(delivered.payload.eventRevision, 1);
+      assert.equal(delivered.payload.timelineVersion, 'SceneSyncPhysicsTimelineV1');
+
+      // The input was recorded in the room log and replays to late joiners.
+      lateJoiner = await connectClient(roomId, 'Physics Late');
+      const replayPromise = waitForMessage(lateJoiner, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-physics-input');
+      lateJoiner.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-physics-input-log-request',
+          timelineId: 'default',
+        },
+      }));
+      const replay = await replayPromise;
+      assert.equal(replay.payload.inputId, 'targeted-drag:000001');
+      assert.equal(replay.payload.eventRevision, 1);
+    } finally {
+      await Promise.all([
+        closeClient(sender),
+        closeClient(target),
         lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
       ]);
     }

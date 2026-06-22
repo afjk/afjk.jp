@@ -8,6 +8,21 @@ using UnityEngine;
 
 namespace Afjk.SceneSync.Rapier
 {
+    /// <summary>
+    /// Controls when the bridge applies remote physics snapshots. This lets
+    /// callers (e.g. interaction samples) opt out of snapshot correction while a
+    /// local interaction is in flight without permanently disabling correction.
+    /// </summary>
+    public enum SceneSyncRapierSnapshotApplyPolicy
+    {
+        /// <summary>Apply remote snapshots whenever the legacy auto-apply flags allow.</summary>
+        Auto,
+        /// <summary>Never auto-apply; snapshots must be applied manually.</summary>
+        ManualOnly,
+        /// <summary>Apply automatically except while a local interaction is active.</summary>
+        IgnoreWhileLocalInteractionActive,
+    }
+
     [DisallowMultipleComponent]
     public sealed class SceneSyncRapierBridge : MonoBehaviour
     {
@@ -38,6 +53,8 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private int maxCollisionEventsPerDrain = 256;
         [SerializeField] private bool autoApplyRemoteSnapshots = true;
         [SerializeField] private bool requestSnapshotOnHashMismatch = true;
+        [SerializeField] private SceneSyncRapierSnapshotApplyPolicy snapshotApplyPolicy =
+            SceneSyncRapierSnapshotApplyPolicy.Auto;
         [SerializeField] private bool broadcastStateHash = true;
         [SerializeField] private int stateHashBroadcastTickInterval = 30;
         [SerializeField] private float snapshotRequestCooldownSeconds = 1f;
@@ -52,6 +69,9 @@ namespace Afjk.SceneSync.Rapier
         private readonly List<SceneSyncRapierCollisionEvent> lastCollisionEvents = new List<SceneSyncRapierCollisionEvent>();
         private readonly List<BodyStateInput> pendingBodyStateInputs = new List<BodyStateInput>();
         private readonly List<BodyStateInput> bodyStateInputHistory = new List<BodyStateInput>();
+        // Bodies currently held by a controlMode:"hold" input, re-applied every tick
+        // until a controlMode:"release" input arrives (parity with the web runtime).
+        private readonly Dictionary<string, BodyStateInput> activeBodyStateHolds = new Dictionary<string, BodyStateInput>(StringComparer.Ordinal);
 
         private RapierWorld world;
         private RapierSnapshot initialSnapshot;
@@ -161,6 +181,44 @@ namespace Afjk.SceneSync.Rapier
             get => requestSnapshotOnHashMismatch;
             set => requestSnapshotOnHashMismatch = value;
         }
+        public SceneSyncRapierSnapshotApplyPolicy SnapshotApplyPolicy
+        {
+            get => snapshotApplyPolicy;
+            set => snapshotApplyPolicy = value;
+        }
+        /// <summary>
+        /// Set by interaction layers while a local drag/grab is in flight. Honored
+        /// by <see cref="SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive"/>.
+        /// </summary>
+        public bool LocalInteractionActive { get; set; }
+
+        // Effective snapshot correction gates, derived from the policy. Auto keeps
+        // the legacy serialized flags; the other policies override them.
+        private bool ShouldAutoApplyRemoteSnapshots()
+        {
+            switch (snapshotApplyPolicy)
+            {
+                case SceneSyncRapierSnapshotApplyPolicy.ManualOnly:
+                    return false;
+                case SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive:
+                    return autoApplyRemoteSnapshots && !LocalInteractionActive;
+                default:
+                    return autoApplyRemoteSnapshots;
+            }
+        }
+
+        private bool ShouldRequestSnapshotOnHashMismatch()
+        {
+            switch (snapshotApplyPolicy)
+            {
+                case SceneSyncRapierSnapshotApplyPolicy.ManualOnly:
+                    return false;
+                case SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive:
+                    return requestSnapshotOnHashMismatch && !LocalInteractionActive;
+                default:
+                    return requestSnapshotOnHashMismatch;
+            }
+        }
 
         private void OnEnable()
         {
@@ -217,7 +275,11 @@ namespace Afjk.SceneSync.Rapier
                 steps++;
             }
 
-            if (steps > 0)
+            // Re-pin held bodies after the final step so the rendered/hashed state
+            // reflects the hold position rather than the post-step physics drift.
+            var heldBodies = ApplyActiveBodyStateHolds();
+
+            if (steps > 0 || heldBodies)
             {
                 ApplyWorldTransforms();
                 FlushCollisionEvents(GetCurrentPhysicsTime());
@@ -247,11 +309,15 @@ namespace Afjk.SceneSync.Rapier
             if (tick < targetTick)
                 lastStepLimited = true;
 
-            if (steps > 0 || targetTick == 0 || appliedInputs)
+            // Re-pin held bodies after the final step so the rendered/hashed state
+            // reflects the hold position rather than the post-step physics drift.
+            var heldBodies = ApplyActiveBodyStateHolds();
+
+            if (steps > 0 || targetTick == 0 || appliedInputs || heldBodies)
             {
                 ApplyWorldTransforms();
                 FlushCollisionEvents(clockTime);
-                if (steps > 0 || appliedInputs || string.IsNullOrWhiteSpace(lastStateHash))
+                if (steps > 0 || appliedInputs || heldBodies || string.IsNullOrWhiteSpace(lastStateHash))
                     UpdateLastStateHash("targetTick=" + targetTick.ToString(CultureInfo.InvariantCulture));
             }
         }
@@ -479,7 +545,8 @@ namespace Afjk.SceneSync.Rapier
             string phase = null,
             int timelineRevision = -1,
             long eventRevision = 0L,
-            int branchTick = -1)
+            int branchTick = -1,
+            string controlMode = null)
         {
             var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
                 ? Guid.NewGuid().ToString("N")
@@ -508,7 +575,8 @@ namespace Afjk.SceneSync.Rapier
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity);
+                angularVelocity,
+                controlMode);
             if (!QueueBodyStateInput(input))
             {
                 return false;
@@ -529,7 +597,8 @@ namespace Afjk.SceneSync.Rapier
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity), null, source ?? this);
+                angularVelocity,
+                controlMode), null, source ?? this);
             return true;
         }
 
@@ -557,7 +626,8 @@ namespace Afjk.SceneSync.Rapier
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity);
+                angularVelocity,
+                null);
         }
 
         public static string BuildBodyStateInputJson(
@@ -575,7 +645,8 @@ namespace Afjk.SceneSync.Rapier
             Vector3 position,
             Quaternion rotation,
             Vector3 linearVelocity,
-            Vector3 angularVelocity)
+            Vector3 angularVelocity,
+            string controlMode)
         {
             var wirePosition = UnityToWirePosition(position);
             var wireRotation = UnityToWireRotation(rotation);
@@ -595,6 +666,9 @@ namespace Afjk.SceneSync.Rapier
                 ",\"sequence\":" + Mathf.Max(0, sequence).ToString(CultureInfo.InvariantCulture) +
                 (!string.IsNullOrWhiteSpace(phase)
                     ? ",\"phase\":\"" + SceneSyncWireJson.JsonEscape(phase.Trim()) + "\""
+                    : string.Empty) +
+                (!string.IsNullOrWhiteSpace(controlMode)
+                    ? ",\"controlMode\":\"" + SceneSyncWireJson.JsonEscape(controlMode.Trim()) + "\""
                     : string.Empty) +
                 ",\"branchTick\":" + Mathf.Max(0, branchTick).ToString(CultureInfo.InvariantCulture) +
                 ",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\"" +
@@ -669,6 +743,7 @@ namespace Afjk.SceneSync.Rapier
             bodyStateInputHistory.RemoveAll(ShouldDropForCurrentTimelineBranch);
             pendingBodyStateInputs.RemoveAll(ShouldDropForCurrentTimelineBranch);
             appliedBodyStateInputIds.Clear();
+            activeBodyStateHolds.Clear();
             lastPhysicsEventRevision = bodyStateInputHistory.Count == 0
                 ? 0L
                 : bodyStateInputHistory.Max(item => item.EventRevision);
@@ -964,7 +1039,7 @@ namespace Afjk.SceneSync.Rapier
                 ? GetLastPhysicsEventRevisionAfterTimelineBranch(payloadTimelineRevision, payload?.timelineForkTick ?? 0)
                 : lastPhysicsEventRevision;
 
-            var canApply = autoApplyRemoteSnapshots
+            var canApply = ShouldAutoApplyRemoteSnapshots()
                 && payload != null
                 && world != null
                 && world.IsCreated
@@ -1172,6 +1247,12 @@ namespace Afjk.SceneSync.Rapier
             var interactionId = SceneSyncWireJson.ExtractString(raw, "interactionId");
             var sequence = ReadInt(raw, "sequence", 0);
             var phase = SceneSyncWireJson.ExtractString(raw, "phase");
+            var controlMode = SceneSyncWireJson.ExtractString(raw, "controlMode");
+            if (string.IsNullOrWhiteSpace(controlMode))
+            {
+                var hold = SceneSyncWireJson.ExtractBoolean(raw, "hold");
+                if (hold.HasValue) controlMode = hold.Value ? "hold" : "release";
+            }
             var branchTick = ReadInt(raw, "branchTick", applyTick);
 
             QueueBodyStateInput(new BodyStateInput(
@@ -1189,7 +1270,8 @@ namespace Afjk.SceneSync.Rapier
                 WireToUnityPosition(wirePosition),
                 WireToUnityRotation(wireRotation),
                 WireToUnityVector(wireLinearVelocity),
-                WireToUnityVector(wireAngularVelocity)));
+                WireToUnityVector(wireAngularVelocity),
+                controlMode));
         }
 
         private void ApplyScenePhysicsInputLogClear(string raw)
@@ -1209,7 +1291,7 @@ namespace Afjk.SceneSync.Rapier
 
         private bool ApplyDueBodyStateInputs()
         {
-            if (world == null || pendingBodyStateInputs.Count == 0)
+            if (world == null)
                 return false;
 
             var applied = false;
@@ -1230,7 +1312,46 @@ namespace Afjk.SceneSync.Rapier
                 i++;
             }
 
+            if (ApplyActiveBodyStateHolds())
+                applied = true;
+
             return applied;
+        }
+
+        // Re-applies the most recent held body state for each grabbed object every
+        // tick so a controlMode:"hold" input pins the body until release. Iterates in
+        // a deterministic order to match the web runtime's hold application.
+        private bool ApplyActiveBodyStateHolds()
+        {
+            if (world == null || activeBodyStateHolds.Count == 0)
+                return false;
+
+            var applied = false;
+            foreach (var objectId in activeBodyStateHolds.Keys.OrderBy(id => id, StringComparer.Ordinal).ToList())
+            {
+                var input = activeBodyStateHolds[objectId];
+                if (TrySetDynamicBodyState(
+                        input.ObjectId,
+                        input.Position,
+                        input.Rotation,
+                        input.LinearVelocity,
+                        input.AngularVelocity))
+                {
+                    applied = true;
+                }
+            }
+
+            return applied;
+        }
+
+        private void UpdateActiveBodyStateHold(BodyStateInput input)
+        {
+            if (string.IsNullOrWhiteSpace(input.ObjectId))
+                return;
+            if (input.ControlMode == "hold")
+                activeBodyStateHolds[input.ObjectId] = input;
+            else if (input.ControlMode == "release")
+                activeBodyStateHolds.Remove(input.ObjectId);
         }
 
         private bool RewindBodyStateInputsToInitialSnapshot()
@@ -1245,6 +1366,7 @@ namespace Afjk.SceneSync.Rapier
             previousCollisionPairs.Clear();
             lastCollisionEvents.Clear();
             appliedBodyStateInputIds.Clear();
+            activeBodyStateHolds.Clear();
             pendingBodyStateInputs.Clear();
             foreach (var input in bodyStateInputHistory)
                 AddPendingBodyStateInput(input);
@@ -1265,6 +1387,7 @@ namespace Afjk.SceneSync.Rapier
             bodyStateInputHistory.Clear();
             pendingBodyStateInputs.Clear();
             appliedBodyStateInputIds.Clear();
+            activeBodyStateHolds.Clear();
             currentCollisionPairs.Clear();
             previousCollisionPairs.Clear();
             lastCollisionEvents.Clear();
@@ -1305,14 +1428,17 @@ namespace Afjk.SceneSync.Rapier
                 input.LinearVelocity,
                 input.AngularVelocity);
             if (applied)
+            {
                 appliedBodyStateInputIds.Add(input.InputId);
+                UpdateActiveBodyStateHold(input);
+            }
 
             return applied;
         }
 
         private void MaybeRequestSnapshotForHashMismatch(SceneSyncRapierHashReport report)
         {
-            if (!requestSnapshotOnHashMismatch || report.Matched) return;
+            if (!ShouldRequestSnapshotOnHashMismatch() || report.Matched) return;
             if (!report.TickMatched || !report.HashVersionMatched) return;
             if (report.Tick < 0) return;
 
@@ -1922,6 +2048,16 @@ namespace Afjk.SceneSync.Rapier
                 : value.Trim();
         }
 
+        // Normalizes the generic hold/release control mode. Returns "hold",
+        // "release", or null. Mirrors the web runtime's normalizeControlMode so the
+        // two stay in sync about when a body-state input should be held each tick.
+        private static string NormalizeControlMode(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            var trimmed = value.Trim().ToLowerInvariant();
+            return trimmed == "hold" || trimmed == "release" ? trimmed : null;
+        }
+
         private static bool IsDynamicSnapshotBody(ScenePhysicsSnapshotBody body)
         {
             return body != null &&
@@ -2063,7 +2199,8 @@ namespace Afjk.SceneSync.Rapier
                 Vector3 position,
                 Quaternion rotation,
                 Vector3 linearVelocity,
-                Vector3 angularVelocity)
+                Vector3 angularVelocity,
+                string controlMode = null)
             {
                 InputId = inputId;
                 ObjectId = objectId;
@@ -2075,6 +2212,7 @@ namespace Afjk.SceneSync.Rapier
                 InteractionId = string.IsNullOrWhiteSpace(interactionId) ? null : interactionId.Trim();
                 Sequence = Mathf.Max(0, sequence);
                 Phase = string.IsNullOrWhiteSpace(phase) ? null : phase.Trim();
+                ControlMode = NormalizeControlMode(controlMode);
                 BranchTick = Mathf.Max(0, branchTick);
                 Position = position;
                 Rotation = rotation;
@@ -2092,6 +2230,9 @@ namespace Afjk.SceneSync.Rapier
             public string InteractionId { get; }
             public int Sequence { get; }
             public string Phase { get; }
+            // Generic hold/release intent: "hold", "release", or null (one-shot).
+            // The bridge honors this rather than the phase name, matching the web runtime.
+            public string ControlMode { get; }
             public int BranchTick { get; }
             public Vector3 Position { get; }
             public Quaternion Rotation { get; }
