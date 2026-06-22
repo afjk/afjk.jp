@@ -5792,7 +5792,7 @@ function setSceneClockMode(mode, now = performance.now(), options = {}) {
 
   if (nextMode !== CLOCK_MODES.SHARED_PLAYBACK) {
     sceneClockState.controller = null;
-  } else if (options.requestControl === true || !sceneClockState.controller) {
+  } else if (options.requestControl === true) {
     sceneClockState.controller = getLocalClockControllerInfo();
   }
 
@@ -6839,7 +6839,6 @@ function handleHandoff(data) {
 
   switch (payload.kind) {
     case 'scene-clock': {
-      if (isOwn) break;
       applyRemoteSceneClock(payload, data.from);
       break;
     }
