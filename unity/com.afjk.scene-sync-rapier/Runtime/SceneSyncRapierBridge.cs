@@ -8,6 +8,21 @@ using UnityEngine;
 
 namespace Afjk.SceneSync.Rapier
 {
+    /// <summary>
+    /// Controls when the bridge applies remote physics snapshots. This lets
+    /// callers (e.g. interaction samples) opt out of snapshot correction while a
+    /// local interaction is in flight without permanently disabling correction.
+    /// </summary>
+    public enum SceneSyncRapierSnapshotApplyPolicy
+    {
+        /// <summary>Apply remote snapshots whenever the legacy auto-apply flags allow.</summary>
+        Auto,
+        /// <summary>Never auto-apply; snapshots must be applied manually.</summary>
+        ManualOnly,
+        /// <summary>Apply automatically except while a local interaction is active.</summary>
+        IgnoreWhileLocalInteractionActive,
+    }
+
     [DisallowMultipleComponent]
     public sealed class SceneSyncRapierBridge : MonoBehaviour
     {
@@ -38,6 +53,8 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private int maxCollisionEventsPerDrain = 256;
         [SerializeField] private bool autoApplyRemoteSnapshots = true;
         [SerializeField] private bool requestSnapshotOnHashMismatch = true;
+        [SerializeField] private SceneSyncRapierSnapshotApplyPolicy snapshotApplyPolicy =
+            SceneSyncRapierSnapshotApplyPolicy.Auto;
         [SerializeField] private bool broadcastStateHash = true;
         [SerializeField] private int stateHashBroadcastTickInterval = 30;
         [SerializeField] private float snapshotRequestCooldownSeconds = 1f;
@@ -160,6 +177,44 @@ namespace Afjk.SceneSync.Rapier
         {
             get => requestSnapshotOnHashMismatch;
             set => requestSnapshotOnHashMismatch = value;
+        }
+        public SceneSyncRapierSnapshotApplyPolicy SnapshotApplyPolicy
+        {
+            get => snapshotApplyPolicy;
+            set => snapshotApplyPolicy = value;
+        }
+        /// <summary>
+        /// Set by interaction layers while a local drag/grab is in flight. Honored
+        /// by <see cref="SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive"/>.
+        /// </summary>
+        public bool LocalInteractionActive { get; set; }
+
+        // Effective snapshot correction gates, derived from the policy. Auto keeps
+        // the legacy serialized flags; the other policies override them.
+        private bool ShouldAutoApplyRemoteSnapshots()
+        {
+            switch (snapshotApplyPolicy)
+            {
+                case SceneSyncRapierSnapshotApplyPolicy.ManualOnly:
+                    return false;
+                case SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive:
+                    return autoApplyRemoteSnapshots && !LocalInteractionActive;
+                default:
+                    return autoApplyRemoteSnapshots;
+            }
+        }
+
+        private bool ShouldRequestSnapshotOnHashMismatch()
+        {
+            switch (snapshotApplyPolicy)
+            {
+                case SceneSyncRapierSnapshotApplyPolicy.ManualOnly:
+                    return false;
+                case SceneSyncRapierSnapshotApplyPolicy.IgnoreWhileLocalInteractionActive:
+                    return requestSnapshotOnHashMismatch && !LocalInteractionActive;
+                default:
+                    return requestSnapshotOnHashMismatch;
+            }
         }
 
         private void OnEnable()
@@ -479,7 +534,8 @@ namespace Afjk.SceneSync.Rapier
             string phase = null,
             int timelineRevision = -1,
             long eventRevision = 0L,
-            int branchTick = -1)
+            int branchTick = -1,
+            string controlMode = null)
         {
             var normalizedInputId = string.IsNullOrWhiteSpace(inputId)
                 ? Guid.NewGuid().ToString("N")
@@ -529,7 +585,8 @@ namespace Afjk.SceneSync.Rapier
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity), null, source ?? this);
+                angularVelocity,
+                controlMode), null, source ?? this);
             return true;
         }
 
@@ -557,7 +614,8 @@ namespace Afjk.SceneSync.Rapier
                 position,
                 rotation,
                 linearVelocity,
-                angularVelocity);
+                angularVelocity,
+                null);
         }
 
         public static string BuildBodyStateInputJson(
@@ -575,7 +633,8 @@ namespace Afjk.SceneSync.Rapier
             Vector3 position,
             Quaternion rotation,
             Vector3 linearVelocity,
-            Vector3 angularVelocity)
+            Vector3 angularVelocity,
+            string controlMode)
         {
             var wirePosition = UnityToWirePosition(position);
             var wireRotation = UnityToWireRotation(rotation);
@@ -595,6 +654,9 @@ namespace Afjk.SceneSync.Rapier
                 ",\"sequence\":" + Mathf.Max(0, sequence).ToString(CultureInfo.InvariantCulture) +
                 (!string.IsNullOrWhiteSpace(phase)
                     ? ",\"phase\":\"" + SceneSyncWireJson.JsonEscape(phase.Trim()) + "\""
+                    : string.Empty) +
+                (!string.IsNullOrWhiteSpace(controlMode)
+                    ? ",\"controlMode\":\"" + SceneSyncWireJson.JsonEscape(controlMode.Trim()) + "\""
                     : string.Empty) +
                 ",\"branchTick\":" + Mathf.Max(0, branchTick).ToString(CultureInfo.InvariantCulture) +
                 ",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(objectId) + "\"" +
@@ -964,7 +1026,7 @@ namespace Afjk.SceneSync.Rapier
                 ? GetLastPhysicsEventRevisionAfterTimelineBranch(payloadTimelineRevision, payload?.timelineForkTick ?? 0)
                 : lastPhysicsEventRevision;
 
-            var canApply = autoApplyRemoteSnapshots
+            var canApply = ShouldAutoApplyRemoteSnapshots()
                 && payload != null
                 && world != null
                 && world.IsCreated
@@ -1312,7 +1374,7 @@ namespace Afjk.SceneSync.Rapier
 
         private void MaybeRequestSnapshotForHashMismatch(SceneSyncRapierHashReport report)
         {
-            if (!requestSnapshotOnHashMismatch || report.Matched) return;
+            if (!ShouldRequestSnapshotOnHashMismatch() || report.Matched) return;
             if (!report.TickMatched || !report.HashVersionMatched) return;
             if (report.Tick < 0) return;
 

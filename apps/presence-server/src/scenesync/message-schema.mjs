@@ -163,9 +163,12 @@ function validateScenePhysicsInputPayload(payload, maxStringLength) {
   if (!isReasonableString(payload.objectId, maxStringLength)) {
     return { ok: false, reason: 'scene-physics-input.objectId must be a reasonable string' };
   }
-  for (const key of ['inputId', 'timelineVersion', 'timelineId', 'interactionId', 'phase']) {
+  for (const key of ['inputId', 'timelineVersion', 'timelineId', 'interactionId', 'phase', 'controlMode']) {
     const result = validateOptionalReasonableString(payload, key, maxStringLength);
     if (!result.ok) return result;
+  }
+  if (payload.hold !== undefined && payload.hold !== null && typeof payload.hold !== 'boolean') {
+    return { ok: false, reason: 'scene-physics-input.hold must be a boolean' };
   }
   for (const key of ['timelineRevision', 'timelineClearRevision', 'eventRevision', 'sequence', 'branchTick']) {
     const result = validateOptionalNonNegativeInteger(payload, key);

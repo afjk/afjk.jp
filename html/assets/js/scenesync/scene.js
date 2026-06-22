@@ -3752,7 +3752,14 @@ function updatePlayerPhysicsDragVelocity(targetPosition, now = performance.now()
   playerPhysicsDragState.hasTarget = true;
 }
 
-function publishPlayerPhysicsDragState(position, velocity, phase) {
+// phase は人間可読なデバッグ/順序メタデータとして残す。Runtime core が hold/release
+// を判断するのは汎用 controlMode フィールド。未指定なら phase から導出する。
+function controlModeForDragPhase(phase) {
+  if (phase === 'grab-release' || phase === 'grab-cancel') return 'release';
+  return 'hold';
+}
+
+function publishPlayerPhysicsDragState(position, velocity, phase, controlMode = controlModeForDragPhase(phase)) {
   if (!isPlayerPhysicsDragging()) return false;
   const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
   const timelineClearRevision = readPlayerPhysicsNonNegativeInteger(
@@ -3796,6 +3803,7 @@ function publishPlayerPhysicsDragState(position, velocity, phase) {
     interactionId: playerPhysicsDragState.interactionId,
     sequence,
     phase,
+    controlMode,
     objectId: playerPhysicsDragState.objectId,
     applyTick,
     position: position.toArray(),
