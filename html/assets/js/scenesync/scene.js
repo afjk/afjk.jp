@@ -3143,6 +3143,7 @@ const playerPhysicsDragPlanePoint = new THREE.Vector3();
 const playerPhysicsDragCameraForward = new THREE.Vector3();
 const playerPhysicsDragTarget = new THREE.Vector3();
 const playerPhysicsDragTmp = new THREE.Vector3();
+const playerPhysicsDragZero = new THREE.Vector3();
 const playerPhysicsDragState = {
   objectId: null,
   interactionId: null,
@@ -3902,6 +3903,17 @@ function endPlayerPhysicsDrag(clientX = null, clientY = null) {
   return true;
 }
 
+function cancelPlayerPhysicsDrag() {
+  if (!isPlayerPhysicsDragging()) return false;
+  publishPlayerPhysicsDragState(
+    playerPhysicsDragState.previousTarget,
+    playerPhysicsDragZero,
+    'grab-cancel',
+  );
+  clearPlayerPhysicsDragState();
+  return true;
+}
+
 // click（paste 配置確定）。戻り値=ハンドルしたか
 function inputCommitPasteClick() {
   if (!pastePreviewMode) return false;
@@ -3972,11 +3984,7 @@ const sceneInputIntent = {
   beginPhysicsDrag: beginPlayerPhysicsDrag,
   updatePhysicsDrag: updatePlayerPhysicsDrag,
   endPhysicsDrag: endPlayerPhysicsDrag,
-  cancelPhysicsDrag: () => {
-    if (!isPlayerPhysicsDragging()) return false;
-    clearPlayerPhysicsDragState();
-    return true;
-  },
+  cancelPhysicsDrag: cancelPlayerPhysicsDrag,
   pasteMoveFromPointer: (event) => updatePastePreviewFromPointer(event),
   commitPasteClick: inputCommitPasteClick,
   handleEmptyTapDeselect: inputHandleEmptyTapDeselect,

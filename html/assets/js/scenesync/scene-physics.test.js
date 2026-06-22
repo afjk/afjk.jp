@@ -566,6 +566,68 @@ test('scene physics drag hold keeps applying body state until release', () => {
   runtime.dispose();
 });
 
+test('scene physics drag cancel clears active body state hold', () => {
+  const object = makeObject({
+    objectId: 'cancelled-domino',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'box',
+      halfExtents: [0.1, 0.6, 0.3],
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, -9.81, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  const holdInput = {
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'cancel-domino:000001',
+    timelineId: 'default',
+    timelineRevision: 1,
+    eventRevision: 1,
+    interactionId: 'cancel-domino',
+    sequence: 1,
+    phase: 'grab-move',
+    objectId: 'cancelled-domino',
+    branchTick: 0,
+    applyTick: 1,
+    position: [0, 5, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  };
+  assert.equal(runtime.queueInput(holdInput), true);
+  runtime.update({ t: 30 / 60, transportActive: true });
+  assertVectorClose(object.position.toArray(), [0, 5, 0]);
+
+  assert.equal(runtime.queueInput({
+    ...holdInput,
+    inputId: 'cancel-domino:000002',
+    eventRevision: 2,
+    sequence: 2,
+    phase: 'grab-cancel',
+    applyTick: 31,
+  }), true);
+  runtime.update({ t: 45 / 60, transportActive: true });
+  assert.ok(object.position.toArray()[1] < 5);
+
+  runtime.dispose();
+});
+
 test('branches the physics event timeline and drops old future inputs', () => {
   const object = makeObject({
     objectId: 'ball',
