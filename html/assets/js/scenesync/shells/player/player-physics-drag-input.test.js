@@ -116,6 +116,75 @@ test('player physics drag adapter cancels and releases capture on window blur', 
   ]);
 });
 
+test('player physics drag adapter delegates primary touch pointer drags', () => {
+  const canvas = new EventTarget();
+  const calls = [];
+  canvas.setPointerCapture = (pointerId) => calls.push(['capture', pointerId]);
+  canvas.releasePointerCapture = (pointerId) => calls.push(['release', pointerId]);
+
+  const adapter = createPlayerPhysicsDragInputAdapter();
+  adapter.mount({
+    core: {
+      input: {
+        getCanvas: () => canvas,
+        isPasteMode: () => false,
+        beginPhysicsDrag: (x, y) => {
+          calls.push(['begin', x, y]);
+          return true;
+        },
+        updatePhysicsDrag: (x, y) => calls.push(['move', x, y]),
+        endPhysicsDrag: (x, y) => calls.push(['end', x, y]),
+        cancelPhysicsDrag: () => calls.push(['cancel']),
+      },
+    },
+  });
+
+  const touch = { pointerType: 'touch', isPrimary: true };
+  canvas.dispatchEvent(pointerEvent('pointerdown', { ...touch, clientX: 12, clientY: 24 }));
+  canvas.dispatchEvent(pointerEvent('pointermove', { ...touch, clientX: 18, clientY: 30 }));
+  canvas.dispatchEvent(pointerEvent('pointerup', { ...touch, clientX: 22, clientY: 34 }));
+  adapter.unmount();
+
+  assert.deepEqual(calls, [
+    ['begin', 12, 24],
+    ['capture', 1],
+    ['move', 18, 30],
+    ['capture', 1],
+    ['end', 22, 34],
+    ['release', 1],
+  ]);
+});
+
+test('player physics drag adapter ignores non-primary touch pointers', () => {
+  const canvas = new EventTarget();
+  const calls = [];
+  canvas.setPointerCapture = () => calls.push(['capture']);
+
+  const adapter = createPlayerPhysicsDragInputAdapter();
+  adapter.mount({
+    core: {
+      input: {
+        getCanvas: () => canvas,
+        isPasteMode: () => false,
+        beginPhysicsDrag: () => {
+          calls.push(['begin']);
+          return true;
+        },
+        updatePhysicsDrag: () => calls.push(['move']),
+        endPhysicsDrag: () => calls.push(['end']),
+      },
+    },
+  });
+
+  const touch = { pointerType: 'touch', isPrimary: false, pointerId: 2 };
+  canvas.dispatchEvent(pointerEvent('pointerdown', { ...touch, clientX: 12, clientY: 24 }));
+  canvas.dispatchEvent(pointerEvent('pointermove', { ...touch, clientX: 18, clientY: 30 }));
+  canvas.dispatchEvent(pointerEvent('pointerup', { ...touch, clientX: 22, clientY: 34 }));
+  adapter.unmount();
+
+  assert.deepEqual(calls, []);
+});
+
 test('player physics drag adapter ignores non-object pointerdown', () => {
   const canvas = new EventTarget();
   const calls = [];

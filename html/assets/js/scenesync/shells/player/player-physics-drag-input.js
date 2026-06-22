@@ -49,7 +49,8 @@ export function createPlayerPhysicsDragInputAdapter() {
       mountedCanvas = canvas;
 
       add(canvas, 'pointerdown', (event) => {
-        if (event.pointerType === 'touch') return;
+        // multi-touch は誤爆しやすいので primary pointer のみ許可（touch も含む）
+        if (event.isPrimary === false) return;
         if (event.button !== 0) return;
         if (input.isPasteMode?.()) return;
         if (input.beginPhysicsDrag?.(event.clientX, event.clientY, event) !== true) return;
