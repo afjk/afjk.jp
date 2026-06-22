@@ -449,6 +449,7 @@ export function createScenePhysicsRuntime({
   let previousCollisionPairs = new Set();
   let pendingBodyStateInputs = [];
   let bodyStateInputHistory = [];
+  let activeBodyStateHolds = new Map();
   const appliedBodyStateInputIds = new Set();
   let timelineId = DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
   let timelineRevision = 0;
@@ -471,6 +472,7 @@ export function createScenePhysicsRuntime({
     if (!preserveInputs) {
       pendingBodyStateInputs = [];
       bodyStateInputHistory = [];
+      activeBodyStateHolds = new Map();
       appliedBodyStateInputIds.clear();
       timelineId = DEFAULT_SCENE_PHYSICS_TIMELINE_ID;
       timelineRevision = 0;
@@ -788,6 +790,7 @@ export function createScenePhysicsRuntime({
     bodyStateInputHistory = bodyStateInputHistory.filter(keepInput);
     pendingBodyStateInputs = pendingBodyStateInputs.filter(keepInput);
     appliedBodyStateInputIds.clear();
+    activeBodyStateHolds = new Map();
     lastEventRevision = bodyStateInputHistory.reduce(
       (max, input) => Math.max(max, input.eventRevision || 0),
       0,
@@ -823,6 +826,7 @@ export function createScenePhysicsRuntime({
     lastEventRevision = 0;
     pendingBodyStateInputs = [];
     bodyStateInputHistory = [];
+    activeBodyStateHolds = new Map();
     appliedBodyStateInputIds.clear();
     previousCollisionPairs = new Set();
 
@@ -854,7 +858,10 @@ export function createScenePhysicsRuntime({
   }
 
   function applyDueBodyStateInputs(currentTick = world?.tick || 0) {
-    if (!world || pendingBodyStateInputs.length === 0) return false;
+    if (!world) return false;
+    if (pendingBodyStateInputs.length === 0) {
+      return applyActiveBodyStateHolds();
+    }
 
     let applied = false;
     for (let index = 0; index < pendingBodyStateInputs.length;) {
@@ -870,6 +877,9 @@ export function createScenePhysicsRuntime({
       }
       index += 1;
     }
+    if (applyActiveBodyStateHolds()) {
+      applied = true;
+    }
     return applied;
   }
 
@@ -884,6 +894,7 @@ export function createScenePhysicsRuntime({
     }
     previousCollisionPairs = new Set();
     appliedBodyStateInputIds.clear();
+    activeBodyStateHolds = new Map();
     pendingBodyStateInputs = [];
     for (const input of bodyStateInputHistory) {
       addPendingBodyStateInput(input);
@@ -891,12 +902,34 @@ export function createScenePhysicsRuntime({
     return true;
   }
 
+  function updateActiveBodyStateHold(input) {
+    if (!input?.objectId) return;
+    if (input.phase === 'grab-start' || input.phase === 'grab-move') {
+      activeBodyStateHolds.set(input.objectId, input);
+    } else if (input.phase === 'grab-release' || input.phase === 'grab-cancel') {
+      activeBodyStateHolds.delete(input.objectId);
+    }
+  }
+
+  function applyActiveBodyStateHolds() {
+    if (!world || activeBodyStateHolds.size === 0) return false;
+    let applied = false;
+    for (const input of Array.from(activeBodyStateHolds.values())
+      .sort((left, right) => compareStrings(left.objectId, right.objectId))) {
+      applied = world.setBodyState?.(input.objectId, input) === true || applied;
+    }
+    return applied;
+  }
+
   function applyBodyStateInput(input) {
     if (!input?.inputId || appliedBodyStateInputIds.has(input.inputId) || !world) {
       return false;
     }
     const applied = world.setBodyState?.(input.objectId, input) === true;
-    if (applied) appliedBodyStateInputIds.add(input.inputId);
+    if (applied) {
+      appliedBodyStateInputIds.add(input.inputId);
+      updateActiveBodyStateHold(input);
+    }
     return applied;
   }
 
@@ -938,6 +971,7 @@ export function createScenePhysicsRuntime({
         events: [],
       };
     }
+    applyActiveBodyStateHolds();
     applyWorldToObjects(clockState);
     active = true;
 
