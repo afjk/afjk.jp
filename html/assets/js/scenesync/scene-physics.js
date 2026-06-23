@@ -449,6 +449,7 @@ export function createScenePhysicsRuntime({
   let dirty = true;
   let world = null;
   let initialSnapshot = null;
+  let authoritativeSnapshotBaseline = null;
   let entryMap = new Map();
   let active = false;
   let timestepSeconds = DEFAULT_TIMESTEP_SECONDS;
@@ -471,6 +472,7 @@ export function createScenePhysicsRuntime({
     world?.free?.();
     world = null;
     initialSnapshot = null;
+    authoritativeSnapshotBaseline = null;
     entryMap = new Map();
     active = false;
     timestepSeconds = DEFAULT_TIMESTEP_SECONDS;
@@ -585,6 +587,7 @@ export function createScenePhysicsRuntime({
     }
 
     initialSnapshot = world.snapshot();
+    authoritativeSnapshotBaseline = null;
     dirty = false;
     preserveMotionOnRebuild = true;
     resetMotionObjectIds = new Set();
@@ -616,6 +619,7 @@ export function createScenePhysicsRuntime({
   function resetToInitialPose(clockState = null) {
     if (!world || !initialSnapshot) return false;
     world.restore(initialSnapshot);
+    authoritativeSnapshotBaseline = null;
     previousCollisionPairs = new Set();
     worldEpochTime = getClockTime(clockState);
     applyWorldToObjects(clockState);
@@ -828,6 +832,7 @@ export function createScenePhysicsRuntime({
     ));
     timelineRevision = nextRevision;
     timelineForkTick = forkTick;
+    authoritativeSnapshotBaseline = null;
 
     const keepInput = (input) => (
       input.timelineRevision === timelineRevision ||
@@ -863,6 +868,71 @@ export function createScenePhysicsRuntime({
       }
     }
     return revision;
+  }
+
+  function inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision) {
+    if (!input) return false;
+    if (input.timelineClearRevision !== timelineClearRevision) return false;
+    if (input.applyTick > snapshotTick) return false;
+    if (nonNegativeInteger(input.eventRevision, 0) > snapshotLastEventRevision) return false;
+    return input.timelineRevision === timelineRevision || input.applyTick <= timelineForkTick;
+  }
+
+  function markInputsCoveredBySnapshot(snapshotTick, snapshotLastEventRevision) {
+    bodyStateInputHistory = bodyStateInputHistory.filter((input) => {
+      if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
+        appliedBodyStateInputIds.add(input.inputId);
+        return false;
+      }
+      return true;
+    });
+    pendingBodyStateInputs = pendingBodyStateInputs.filter((input) => {
+      if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
+        appliedBodyStateInputIds.add(input.inputId);
+        return false;
+      }
+      return true;
+    });
+    for (const [objectId, input] of activeBodyStateHolds.entries()) {
+      if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
+        activeBodyStateHolds.delete(objectId);
+      }
+    }
+    lastEventRevision = Math.max(lastEventRevision, snapshotLastEventRevision);
+  }
+
+  function setAuthoritativeSnapshotBaseline(snapshotTick, snapshotLastEventRevision) {
+    if (!world?.snapshot) return;
+    authoritativeSnapshotBaseline = {
+      tick: snapshotTick,
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      timelineClearRevision,
+      lastEventRevision: snapshotLastEventRevision,
+      worldEpochTime,
+      snapshot: world.snapshot(),
+    };
+  }
+
+  function restoreAuthoritativeSnapshotBaseline() {
+    const baseline = authoritativeSnapshotBaseline;
+    if (!baseline || !world || world.restore(baseline.snapshot) !== true) return false;
+    timelineId = baseline.timelineId;
+    timelineRevision = baseline.timelineRevision;
+    timelineForkTick = baseline.timelineForkTick;
+    timelineClearRevision = baseline.timelineClearRevision;
+    lastEventRevision = Math.max(lastEventRevision, baseline.lastEventRevision);
+    worldEpochTime = baseline.worldEpochTime;
+    pendingWorldEpochTime = null;
+    previousCollisionPairs = new Set();
+    appliedBodyStateInputIds.clear();
+    activeBodyStateHolds = new Map();
+    pendingBodyStateInputs = [];
+    for (const input of bodyStateInputHistory) {
+      addPendingBodyStateInput(input);
+    }
+    return true;
   }
 
   function applySnapshotReport(payload = {}, clockState = null, options = {}) {
@@ -909,7 +979,7 @@ export function createScenePhysicsRuntime({
     if (canApply) {
       const bodyStates = [];
       for (const body of payload.bodies) {
-        if (!body || body.type === 'static') continue;
+        if (!body || body.type === 'static' || body.type === 'fixed' || body.static === true) continue;
         dynamicBodyCount += 1;
         const id = typeof body.id === 'string' ? body.id.trim() : '';
         if (!id || !hasDynamicBody(id)) {
@@ -922,6 +992,8 @@ export function createScenePhysicsRuntime({
           rotation: readQuaternion(body.rotation, [0, 0, 0, 1]),
           velocity: readVec3(body.velocity || body.linearVelocity || body.linvel, [0, 0, 0]),
           angularVelocity: readVec3(body.angularVelocity || body.angvel, [0, 0, 0]),
+          sleeping: typeof body.sleeping === 'boolean' ? body.sleeping : undefined,
+          enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
         });
       }
 
@@ -949,6 +1021,10 @@ export function createScenePhysicsRuntime({
 
     const localHash = world?.canonicalStateHash?.() || '';
     const hashMatched = applied && remoteHash && localHash && remoteHash === localHash;
+    if (hashMatched) {
+      markInputsCoveredBySnapshot(payloadTick, payloadLastEventRevision);
+      setAuthoritativeSnapshotBaseline(payloadTick, payloadLastEventRevision);
+    }
     return {
       kind: 'scene-physics-snapshot',
       snapshotVersion: payload?.snapshotVersion,
@@ -1169,6 +1245,13 @@ export function createScenePhysicsRuntime({
     if (targetTick < world.tick && initialSnapshot) {
       rewindBodyStateInputsToInitialSnapshot();
     }
+    if (
+      authoritativeSnapshotBaseline &&
+      world.tick < authoritativeSnapshotBaseline.tick &&
+      targetTick >= authoritativeSnapshotBaseline.tick
+    ) {
+      restoreAuthoritativeSnapshotBaseline();
+    }
     const stepResult = world.stepTo(targetTick, { beforeStep: applyDueBodyStateInputs });
     if (stepResult?.limited === true) {
       active = false;
@@ -1268,6 +1351,8 @@ export function createScenePhysicsRuntime({
           rotation: body.rotation,
           velocity: body.linvel,
           angularVelocity: body.angvel,
+          sleeping: body.sleeping,
+          enabled: body.enabled,
         }))
       : [];
 

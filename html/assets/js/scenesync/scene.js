@@ -5671,10 +5671,10 @@ function applyScenePhysicsSnapshotPayload(payload = {}, fromPeer = null) {
     appliedBodyCount: report.appliedBodyCount,
     missingBodyCount: report.missingBodyCount,
   });
-  if (report.applied) {
+  if (report.matched) {
     notifySceneSyncShellStateChanged('scene-physics-snapshot');
   }
-  return report.applied === true;
+  return report.matched === true;
 }
 
 function requestScenePhysicsSnapshotForHashMismatch(payload = {}, fromPeer = null, report = null) {

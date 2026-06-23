@@ -735,11 +735,20 @@ export function createWorld(options = {}) {
       state.angularVelocity || state.angvel,
       current?.angularVelocity || [0, 0, 0],
     );
+    const wakeUp = state.sleeping === true ? false : true;
 
-    body.setTranslation(vectorObject(position), true);
-    body.setRotation(quaternionObject(rotation), true);
-    body.setLinvel(vectorObject(velocity), true);
-    body.setAngvel(vectorObject(angularVelocity), true);
+    body.setTranslation(vectorObject(position), wakeUp);
+    body.setRotation(quaternionObject(rotation), wakeUp);
+    body.setLinvel(vectorObject(velocity), wakeUp);
+    body.setAngvel(vectorObject(angularVelocity), wakeUp);
+    if (typeof state.enabled === 'boolean' && typeof body.setEnabled === 'function') {
+      body.setEnabled(state.enabled);
+    }
+    if (typeof body.sleep === 'function' && state.sleeping === true) {
+      try { body.sleep(); } catch {}
+    } else if (typeof body.wakeUp === 'function' && state.sleeping === false) {
+      try { body.wakeUp(); } catch {}
+    }
     return true;
   }
 
