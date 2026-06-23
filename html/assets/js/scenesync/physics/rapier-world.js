@@ -790,6 +790,13 @@ export function createWorld(options = {}) {
     };
   }
 
+  function setTick(nextTick) {
+    if (!Number.isInteger(nextTick) || nextTick < 0) return false;
+    tick = nextTick;
+    checkpoints.clear();
+    return true;
+  }
+
   function getCanonicalRecords() {
     const records = groundRecord ? [[groundRecord.id, groundRecord]] : [];
     for (const entry of bodyRecords.entries()) records.push(entry);
@@ -1076,6 +1083,7 @@ export function createWorld(options = {}) {
     setBodyState,
     step,
     stepTo,
+    setTick,
     snapshot,
     restore,
     canonicalStateHash,

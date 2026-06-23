@@ -848,6 +848,167 @@ export function createScenePhysicsRuntime({
     return true;
   }
 
+  function getLastEventRevisionAfterTimelineBranch(nextRevision, branchTick) {
+    const normalizedRevision = Math.max(0, Math.floor(Number(nextRevision) || 0));
+    const normalizedBranchTick = Math.max(0, Math.floor(Number(branchTick) || 0));
+    let revision = 0;
+    for (const input of bodyStateInputHistory) {
+      if (input.timelineRevision === normalizedRevision || input.applyTick <= normalizedBranchTick) {
+        revision = Math.max(revision, input.eventRevision || 0);
+      }
+    }
+    for (const input of pendingBodyStateInputs) {
+      if (input.timelineRevision === normalizedRevision || input.applyTick <= normalizedBranchTick) {
+        revision = Math.max(revision, input.eventRevision || 0);
+      }
+    }
+    return revision;
+  }
+
+  function applySnapshotReport(payload = {}, clockState = null, options = {}) {
+    const localTickBeforeApply = world?.tick ?? -1;
+    const remoteHash = typeof payload.hash === 'string' ? payload.hash.trim() : '';
+    const bodyCount = Array.isArray(payload.bodies) ? payload.bodies.length : 0;
+    let dynamicBodyCount = 0;
+    let appliedBodyCount = 0;
+    let missingBodyCount = 0;
+    let applied = false;
+
+    const payloadTimelineId = normalizeTimelineId(payload.timelineId);
+    const payloadTimelineRevision = nonNegativeInteger(payload.timelineRevision, 0);
+    const payloadTimelineForkTick = nonNegativeInteger(payload.timelineForkTick, 0);
+    const payloadTimelineClearRevision = nonNegativeInteger(payload.timelineClearRevision, 0);
+    const payloadLastEventRevision = nonNegativeInteger(payload.lastEventRevision, 0);
+    const payloadSceneClockRevision = Number.isFinite(Number(payload.sceneClockRevision))
+      ? Math.floor(Number(payload.sceneClockRevision))
+      : null;
+    const latestSceneClockRevision = Number.isFinite(Number(options.latestSceneClockRevision))
+      ? Math.floor(Number(options.latestSceneClockRevision))
+      : null;
+    const expectedLastEventRevision = payloadTimelineRevision > timelineRevision
+      ? getLastEventRevisionAfterTimelineBranch(payloadTimelineRevision, payloadTimelineForkTick)
+      : lastEventRevision;
+    const payloadTick = nonNegativeInteger(payload.tick, -1);
+
+    const canApply = payload?.kind === 'scene-physics-snapshot'
+      && world
+      && payload.snapshotVersion === SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION
+      && payload.hashVersion === CANONICAL_PHYSICS_HASH_VERSION
+      && payload.profile === SCENE_SYNC_RAPIER_PROFILE
+      && Array.isArray(payload.bodies)
+      && payloadTick >= 0
+      && payloadTimelineId === timelineId
+      && payloadTimelineRevision >= timelineRevision
+      && payloadTimelineClearRevision === timelineClearRevision
+      && (payloadSceneClockRevision == null ||
+        latestSceneClockRevision == null ||
+        payloadSceneClockRevision >= latestSceneClockRevision)
+      && payloadLastEventRevision >= expectedLastEventRevision
+      && payloadTick >= localTickBeforeApply;
+
+    if (canApply) {
+      const bodyStates = [];
+      for (const body of payload.bodies) {
+        if (!body || body.type === 'static') continue;
+        dynamicBodyCount += 1;
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        if (!id || !hasDynamicBody(id)) {
+          missingBodyCount += 1;
+          continue;
+        }
+        bodyStates.push({
+          id,
+          position: readVec3(body.position, [0, 0, 0]),
+          rotation: readQuaternion(body.rotation, [0, 0, 0, 1]),
+          velocity: readVec3(body.velocity || body.linearVelocity || body.linvel, [0, 0, 0]),
+          angularVelocity: readVec3(body.angularVelocity || body.angvel, [0, 0, 0]),
+        });
+      }
+
+      if (missingBodyCount === 0) {
+        if (payloadTimelineRevision > timelineRevision) {
+          advanceTimelineRevision(payloadTimelineRevision, payloadTimelineForkTick);
+        }
+        for (const state of bodyStates) {
+          if (world.setBodyState?.(state.id, state) === true) {
+            appliedBodyCount += 1;
+          }
+        }
+        applied = appliedBodyCount === dynamicBodyCount;
+        if (applied) {
+          world.setTick?.(payloadTick);
+          worldEpochTime = Number.isFinite(Number(payload.worldEpochTime))
+            ? Math.max(0, Number(payload.worldEpochTime))
+            : Math.max(0, getClockTime(clockState) - payloadTick * Math.max(0.000001, timestepSeconds));
+          pendingWorldEpochTime = null;
+          previousCollisionPairs = new Set();
+          applyWorldToObjects(clockState);
+        }
+      }
+    }
+
+    const localHash = world?.canonicalStateHash?.() || '';
+    const hashMatched = applied && remoteHash && localHash && remoteHash === localHash;
+    return {
+      kind: 'scene-physics-snapshot',
+      snapshotVersion: payload?.snapshotVersion,
+      remoteHash,
+      localHash,
+      hashVersion: payload?.hashVersion,
+      profile: payload?.profile,
+      rapierCoreVersion: payload?.rapierCoreVersion,
+      tick: payloadTick,
+      localTick: localTickBeforeApply,
+      sceneClockRevision: payloadSceneClockRevision,
+      bodyCount,
+      dynamicBodyCount,
+      appliedBodyCount,
+      missingBodyCount,
+      applied,
+      matched: hashMatched,
+    };
+  }
+
+  function compareHashReport(payload = {}) {
+    const remoteTick = nonNegativeInteger(payload.tick, -1);
+    const remoteHash = typeof payload.hash === 'string' ? payload.hash.trim() : '';
+    const localTick = world?.tick ?? -1;
+    const localHash = world?.canonicalStateHash?.() || '';
+    const hashVersionMatched = payload.hashVersion === CANONICAL_PHYSICS_HASH_VERSION;
+    const profileMatched = payload.profile === SCENE_SYNC_RAPIER_PROFILE;
+    const timelineMatched = normalizeTimelineId(payload.timelineId) === timelineId
+      && nonNegativeInteger(payload.timelineRevision, timelineRevision) === timelineRevision
+      && nonNegativeInteger(payload.timelineClearRevision, timelineClearRevision) === timelineClearRevision;
+    const tickMatched = remoteTick >= 0 && remoteTick === localTick;
+    const matched = Boolean(
+      remoteHash &&
+      localHash &&
+      tickMatched &&
+      hashVersionMatched &&
+      profileMatched &&
+      timelineMatched &&
+      remoteHash === localHash,
+    );
+    return {
+      kind: 'scene-physics-hash',
+      remoteHash,
+      localHash,
+      hashVersion: payload.hashVersion,
+      profile: payload.profile,
+      rapierCoreVersion: payload.rapierCoreVersion,
+      tick: remoteTick,
+      localTick,
+      tickMatched,
+      hashVersionMatched,
+      profileMatched,
+      timelineMatched,
+      matched,
+      sceneClockRevision: Number.isFinite(Number(payload.sceneClockRevision))
+        ? Math.floor(Number(payload.sceneClockRevision))
+        : null,
+    };
+  }
+
   function clearInputHistory(payload = {}) {
     const payloadTimelineId = normalizeTimelineId(payload.timelineId);
     if (payloadTimelineId !== timelineId) return false;
@@ -1139,6 +1300,8 @@ export function createScenePhysicsRuntime({
     markDirty,
     queueInput,
     clearInputHistory,
+    applySnapshotReport,
+    compareHashReport,
     rebuild,
     update,
     createSnapshotReport,
