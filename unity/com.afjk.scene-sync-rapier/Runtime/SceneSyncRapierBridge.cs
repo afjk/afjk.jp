@@ -24,7 +24,7 @@ namespace Afjk.SceneSync.Rapier
     }
 
     [DisallowMultipleComponent]
-    public sealed class SceneSyncRapierBridge : MonoBehaviour
+    public sealed class SceneSyncRapierBridge : MonoBehaviour, ISceneSyncInitialPhysicsPoseProvider
     {
         private const float DefaultTimestep = 1f / 60f;
         private const float GroundHalfExtent = 4096f;
@@ -373,6 +373,44 @@ namespace Afjk.SceneSync.Rapier
             return true;
         }
 
+        public bool TryGetInitialPhysicsPoses(IDictionary<string, SceneSyncInitialPhysicsPose> poses)
+        {
+            if (poses == null ||
+                world == null ||
+                !world.IsCreated ||
+                !hasInitialSnapshot ||
+                !world.TryCreateSnapshot(out var liveSnapshot))
+            {
+                return false;
+            }
+
+            var any = false;
+            try
+            {
+                if (!world.TryReadSnapshot(initialSnapshot))
+                    return false;
+
+                foreach (var pair in bindings.OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    var binding = pair.Value;
+                    if (binding.IsStatic || !world.TryGetTransform(binding.Body, out var transform))
+                        continue;
+
+                    poses[pair.Key] = new SceneSyncInitialPhysicsPose(
+                        WireToUnityPosition(transform.Position),
+                        WireToUnityRotation(transform.Rotation));
+                    any = true;
+                }
+            }
+            finally
+            {
+                if (!world.TryReadSnapshot(liveSnapshot))
+                    Debug.LogWarning("[SceneSyncRapier] Failed to restore live Rapier snapshot after reading initial poses.");
+            }
+
+            return any;
+        }
+
         public bool TrySetDynamicBodyState(
             string objectId,
             Vector3 position,
@@ -480,10 +518,15 @@ namespace Afjk.SceneSync.Rapier
             if (!wasApplied && historyIndex < 0 && pendingIndex < 0)
                 return false;
 
+            var hasPrevious = historyIndex >= 0 || pendingIndex >= 0;
             var previous = historyIndex >= 0
                 ? bodyStateInputHistory[historyIndex]
                 : (pendingIndex >= 0 ? pendingBodyStateInputs[pendingIndex] : default);
-            var changed = historyIndex < 0 && pendingIndex < 0 || !previous.Equals(input);
+            var changed = !hasPrevious || !previous.Equals(input);
+            var physicalStateChanged = !hasPrevious || !BodyStateInputPhysicalStateEquals(previous, input);
+            var orderChangedWithPeer = hasPrevious &&
+                CompareBodyStateInputs(previous, input) != 0 &&
+                HasSameTickInputPeer(input);
 
             if (historyIndex >= 0)
             {
@@ -504,10 +547,35 @@ namespace Afjk.SceneSync.Rapier
             if (input.EventRevision > lastPhysicsEventRevision)
                 lastPhysicsEventRevision = input.EventRevision;
 
-            if (changed && world != null && (wasApplied || input.ApplyTick <= tick))
+            if (changed &&
+                (physicalStateChanged || orderChangedWithPeer) &&
+                world != null &&
+                (wasApplied || input.ApplyTick <= tick))
+            {
                 RewindBodyStateInputsToInitialSnapshot();
+            }
 
             return true;
+        }
+
+        private bool HasSameTickInputPeer(BodyStateInput input)
+        {
+            return bodyStateInputHistory.Any(item =>
+                    !string.Equals(item.InputId, input.InputId, StringComparison.Ordinal) &&
+                    item.ApplyTick == input.ApplyTick) ||
+                pendingBodyStateInputs.Any(item =>
+                    !string.Equals(item.InputId, input.InputId, StringComparison.Ordinal) &&
+                    item.ApplyTick == input.ApplyTick);
+        }
+
+        private static bool BodyStateInputPhysicalStateEquals(BodyStateInput left, BodyStateInput right)
+        {
+            return string.Equals(left.ObjectId, right.ObjectId, StringComparison.Ordinal) &&
+                left.ApplyTick == right.ApplyTick &&
+                left.Position == right.Position &&
+                left.Rotation == right.Rotation &&
+                left.LinearVelocity == right.LinearVelocity &&
+                left.AngularVelocity == right.AngularVelocity;
         }
 
         public bool PublishBodyStateInput(
@@ -735,11 +803,18 @@ namespace Afjk.SceneSync.Rapier
 
         private bool AdvancePhysicsTimeline(int nextRevision, int branchTick)
         {
-            if (nextRevision <= timelineRevision)
+            var nextTimelineRevision = Mathf.Max(0, nextRevision);
+            var nextForkTick = Mathf.Max(0, branchTick);
+            if (nextTimelineRevision <= timelineRevision)
                 return false;
 
-            timelineRevision = nextRevision;
-            timelineForkTick = Mathf.Max(0, branchTick);
+            var dropsAppliedInput = bodyStateInputHistory.Any(input =>
+                input.TimelineRevision != nextTimelineRevision &&
+                input.ApplyTick > nextForkTick &&
+                appliedBodyStateInputIds.Contains(input.InputId));
+
+            timelineRevision = nextTimelineRevision;
+            timelineForkTick = nextForkTick;
             bodyStateInputHistory.RemoveAll(ShouldDropForCurrentTimelineBranch);
             pendingBodyStateInputs.RemoveAll(ShouldDropForCurrentTimelineBranch);
             appliedBodyStateInputIds.Clear();
@@ -749,7 +824,7 @@ namespace Afjk.SceneSync.Rapier
                 : bodyStateInputHistory.Max(item => item.EventRevision);
             localPhysicsEventRevisionCounter = Math.Max(localPhysicsEventRevisionCounter, lastPhysicsEventRevision);
 
-            if (world != null && tick > timelineForkTick)
+            if (dropsAppliedInput && world != null && tick > timelineForkTick)
                 RewindBodyStateInputsToInitialSnapshot();
 
             return true;
@@ -786,6 +861,9 @@ namespace Afjk.SceneSync.Rapier
         public void RebuildWorld()
         {
             RefreshMetadataFromScene();
+            var replayInputsAfterRebuild =
+                (!preserveMotionOnRebuild || !preserveMotionOnNextRebuild) &&
+                bodyStateInputHistory.Count > 0;
             var preservedBodyStates = preserveMotionOnRebuild && preserveMotionOnNextRebuild
                 ? CapturePreservedBodyStates()
                 : new Dictionary<string, PreservedBodyState>(StringComparer.Ordinal);
@@ -834,6 +912,8 @@ namespace Afjk.SceneSync.Rapier
                 hasPendingWorldEpochTime = false;
                 pendingWorldEpochTime = 0f;
                 hasInitialSnapshot = world.TryCreateSnapshot(out initialSnapshot);
+                if (replayInputsAfterRebuild && hasInitialSnapshot)
+                    RewindBodyStateInputsToInitialSnapshot();
                 ApplyWorldTransforms();
                 UpdateLastStateHash("rebuilt");
             }
@@ -1522,15 +1602,11 @@ namespace Afjk.SceneSync.Rapier
             accumulator = 0f;
             lastStepLimited = false;
 
-            if (!preserveMotion && world != null && hasInitialSnapshot && world.TryReadSnapshot(initialSnapshot))
+            if (!preserveMotion && world != null && hasInitialSnapshot && RewindBodyStateInputsToInitialSnapshot())
             {
                 worldEpochTime = pendingWorldEpochTime;
                 hasPendingWorldEpochTime = false;
                 pendingWorldEpochTime = 0f;
-                tick = 0;
-                currentCollisionPairs.Clear();
-                previousCollisionPairs.Clear();
-                lastCollisionEvents.Clear();
                 ApplyWorldTransforms();
                 UpdateLastStateHash("reset");
                 return;
