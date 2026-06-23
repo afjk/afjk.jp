@@ -1,13 +1,14 @@
 # Rapier Interaction Sample
 
-A Play Mode sample that demonstrates how to drive Rapier-backed Scene Sync bodies
-through the generic `SceneSyncRapierBridge` runtime API. Everything in this sample
-is *operation convenience* for trying the bridge out — none of it is part of the
-library Runtime surface.
+A backwards-compatible Play Mode sample that demonstrates how to drive
+Rapier-backed Scene Sync bodies through the generic `SceneSyncRapierBridge`
+runtime API. New scenes can use `SceneSyncRapierInteractionController` directly
+from the package Runtime assembly without importing this sample.
 
 ## What it contains
 
-`SceneSyncRapierInteractionSample` bundles the following sample-only behavior:
+`SceneSyncRapierInteractionSample` derives from the runtime
+`SceneSyncRapierInteractionController`, which bundles the following behavior:
 
 - WASD / E / Q free-fly camera movement (hold Shift to move faster)
 - Right-mouse-drag mouse look
@@ -20,16 +21,14 @@ library Runtime surface.
 
 ## Setup
 
-1. Import this sample from the **Scene Sync Rapier** package via the Unity
-   Package Manager (`Samples` tab → *Rapier Interaction Sample* → **Import**).
-2. Add a `SceneSyncRapierBridge` to your scene (or let the sample find one with
+1. Add a `SceneSyncRapierBridge` to your scene (or let the controller find one with
    `FindFirstObjectByType`).
-3. Add the `SceneSyncRapierInteractionSample` component to any GameObject and
+2. Add `SceneSyncRapierInteractionController`, or import this sample and add the
+   legacy `SceneSyncRapierInteractionSample` component to any GameObject, then
    enter Play Mode.
 
-## Why it lives in `Samples~`
+## Why this sample remains
 
-The interaction sample knows about pointer input, camera rigs, and snapshot
-correction policy that belongs to the *application*, not to the deterministic
-physics bridge. Keeping it out of the `Runtime` assembly means the library only
-ships the generic Rapier bridge, while this convenience layer stays opt-in.
+Older scenes may already serialize `SceneSyncRapierInteractionSample`. The
+sample now stays as a small compatibility wrapper while the maintained behavior
+lives in `SceneSyncRapierInteractionController`.

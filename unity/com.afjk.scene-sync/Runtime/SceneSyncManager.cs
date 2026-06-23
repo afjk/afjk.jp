@@ -2138,11 +2138,47 @@ namespace Afjk.SceneSync
             return true;
         }
 
+        private static Dictionary<string, SceneSyncInitialPhysicsPose> CollectInitialPhysicsPoses()
+        {
+            var poses = new Dictionary<string, SceneSyncInitialPhysicsPose>(StringComparer.Ordinal);
+            foreach (var behaviour in FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None))
+            {
+                if (!(behaviour is ISceneSyncInitialPhysicsPoseProvider provider)) continue;
+                try
+                {
+                    provider.TryGetInitialPhysicsPoses(poses);
+                }
+                catch (Exception error)
+                {
+                    Debug.LogWarning("[SceneSync] Failed to read initial physics poses: " + error.Message);
+                }
+            }
+            return poses;
+        }
+
+        private static void ApplyInitialPhysicsPoseIfPresent(
+            Dictionary<string, SceneSyncInitialPhysicsPose> initialPhysicsPoses,
+            string objectId,
+            ref Vector3 position,
+            ref Quaternion rotation)
+        {
+            if (initialPhysicsPoses == null ||
+                string.IsNullOrWhiteSpace(objectId) ||
+                !initialPhysicsPoses.TryGetValue(objectId, out var pose))
+            {
+                return;
+            }
+
+            position = pose.Position;
+            rotation = pose.Rotation;
+        }
+
         private async System.Threading.Tasks.Task HandleSceneRequest(string fromId)
         {
             Debug.Log("[SceneSync] Responding to scene-request for: " + fromId);
 
             var rootObjects = GetAllSyncTargets();
+            var initialPhysicsPoses = CollectInitialPhysicsPoses();
 
             var objectsJson = new System.Text.StringBuilder();
             objectsJson.Append("{");
@@ -2177,6 +2213,7 @@ namespace Afjk.SceneSync
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
+                ApplyInitialPhysicsPoseIfPresent(initialPhysicsPoses, objectId, ref pos, ref rot);
 
                 // 保存済み meshPath を優先使用
                 string path = null;
@@ -2276,6 +2313,7 @@ namespace Afjk.SceneSync
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
+                ApplyInitialPhysicsPoseIfPresent(initialPhysicsPoses, kvp.Key, ref pos, ref rot);
 
                 string path = null;
                 _meshPaths.TryGetValue(kvp.Key, out path);

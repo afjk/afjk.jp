@@ -16,6 +16,8 @@ namespace Afjk.SceneSync.Editor
         private const string MaxGlbUploadMiBPrefKey = "Afjk.SceneSync.MaxGlbUploadMiB";
         private const string ApplyTransparentNameHintsForExportPrefKey = "Afjk.SceneSync.ApplyTransparentNameHintsForExport";
         private const string RapierBridgeTypeName = "Afjk.SceneSync.Rapier.SceneSyncRapierBridge";
+        private const string RapierInteractionControllerTypeName =
+            "Afjk.SceneSync.Rapier.SceneSyncRapierInteractionController";
         private const string DefaultRapierScenePhysicsJson =
             "{\"version\":1,\"enabled\":true,\"duration\":10,\"worldOptions\":{\"gravity\":[0,-9.81,0],\"ground\":null,\"timestep\":0.016666666666666666}}";
         private const float DefaultMaxGlbUploadMiB = 50f;
@@ -91,6 +93,8 @@ namespace Afjk.SceneSync.Editor
         private string _envId = null;
         private static bool _rapierBridgeTypeResolved;
         private static Type _rapierBridgeType;
+        private static bool _rapierInteractionControllerTypeResolved;
+        private static Type _rapierInteractionControllerType;
 
         private void OnEnable()
         {
@@ -1007,7 +1011,8 @@ namespace Afjk.SceneSync.Editor
         private static void MarkManagerDirty(SceneSyncManager manager)
         {
             EditorUtility.SetDirty(manager);
-            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            if (!Application.isPlaying)
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
         }
 
         private void DrawSetupSection()
@@ -1145,7 +1150,11 @@ namespace Afjk.SceneSync.Editor
             if (manager.GetComponent<SceneSyncPhysicsMetadata>() == null) return true;
 
             var bridge = manager.GetComponent(bridgeType);
-            return bridge == null || GetTransformProperty(bridge, "BodyRoot") != temporaryRoot;
+            if (bridge == null || GetTransformProperty(bridge, "BodyRoot") != temporaryRoot)
+                return true;
+
+            var interactionControllerType = FindRapierInteractionControllerType();
+            return interactionControllerType != null && manager.GetComponent(interactionControllerType) == null;
         }
 
         private static string GetRapierSetupStatusLabel(SceneSyncManager manager, GameObject temporaryRoot)
@@ -1158,9 +1167,14 @@ namespace Afjk.SceneSync.Editor
             var bridge = manager.GetComponent(bridgeType);
             if (bridge == null) return "Missing";
             if (temporaryRoot == null) return "Missing Temporary Root";
-            return GetTransformProperty(bridge, "BodyRoot") == temporaryRoot.transform
-                ? "Found"
-                : "Body Root Missing";
+            if (GetTransformProperty(bridge, "BodyRoot") != temporaryRoot.transform)
+                return "Body Root Missing";
+
+            var interactionControllerType = FindRapierInteractionControllerType();
+            if (interactionControllerType != null && manager.GetComponent(interactionControllerType) == null)
+                return "Missing Interaction Controller";
+
+            return "Found";
         }
 
         private static bool EnsureOptionalRapierSetup(SceneSyncManager manager, Transform temporaryRoot)
@@ -1201,6 +1215,27 @@ namespace Afjk.SceneSync.Editor
                 EditorUtility.SetDirty(bridge);
             }
 
+            var interactionControllerType = FindRapierInteractionControllerType();
+            if (interactionControllerType != null)
+            {
+                var interactionController = manager.GetComponent(interactionControllerType);
+                if (interactionController == null)
+                {
+                    interactionController = Undo.AddComponent(manager.gameObject, interactionControllerType);
+                    changed = true;
+                }
+
+                if (interactionController != null)
+                {
+                    Undo.RecordObject(interactionController, "Configure Scene Sync Rapier Interaction");
+                    changed |= SetObjectProperty(interactionController, "Bridge", bridge);
+                    var sceneCamera = FindSceneCamera();
+                    if (sceneCamera != null)
+                        changed |= SetObjectProperty(interactionController, "TargetCamera", sceneCamera);
+                    EditorUtility.SetDirty(interactionController);
+                }
+            }
+
             if (metadata != null)
                 EditorUtility.SetDirty(metadata);
 
@@ -1225,6 +1260,24 @@ namespace Afjk.SceneSync.Editor
             return _rapierBridgeType;
         }
 
+        private static Type FindRapierInteractionControllerType()
+        {
+            if (_rapierInteractionControllerTypeResolved)
+                return _rapierInteractionControllerType;
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var type = assembly.GetType(RapierInteractionControllerTypeName);
+                if (type == null) continue;
+                _rapierInteractionControllerType = type;
+                _rapierInteractionControllerTypeResolved = true;
+                return _rapierInteractionControllerType;
+            }
+
+            _rapierInteractionControllerTypeResolved = true;
+            return _rapierInteractionControllerType;
+        }
+
         private static Transform GetTransformProperty(Component component, string propertyName)
         {
             if (component == null) return null;
@@ -1240,6 +1293,22 @@ namespace Afjk.SceneSync.Editor
             if (property.GetValue(component, null) as Transform == value) return false;
             property.SetValue(component, value, null);
             return true;
+        }
+
+        private static bool SetObjectProperty(Component component, string propertyName, object value)
+        {
+            if (component == null) return false;
+            var property = component.GetType().GetProperty(propertyName);
+            if (property == null || !property.CanWrite) return false;
+            if (value != null && !property.PropertyType.IsInstanceOfType(value)) return false;
+            if (Equals(property.GetValue(component, null), value)) return false;
+            property.SetValue(component, value, null);
+            return true;
+        }
+
+        private static Camera FindSceneCamera()
+        {
+            return Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
         }
 
         private static bool SetBoolProperty(Component component, string propertyName, bool value)
