@@ -217,6 +217,71 @@ test('rewinds and replays when a scene physics input arrives late', () => {
   runtime.dispose();
 });
 
+test('replays recorded input history after a Back-to-Start zero baseline reset', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  // Play and record a drag input, then confirm it applies during the first run.
+  runtime.update({ t: 0, active: true });
+  runtime.update({ t: 0.2, active: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'replay-drag-1',
+    objectId: 'ball',
+    applyTick: 1,
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  runtime.update({ t: 0.25, active: true });
+  assert.ok(object.position.toArray()[0] > 3.15, 'input applied during first playback');
+
+  // Back to Start: the player stop button issues a zero baseline reset, which
+  // markDirty(preserveMotion:false) -> rebuilds the world at tick 0.
+  const baseline = createPhysicsResetBaseline({
+    time: 0,
+    worldEpochTime: 0,
+    preserveMotion: false,
+    reason: 'player-reset',
+  });
+  applyPhysicsResetBaseline(runtime, { t: 0, mode: 'local-preview', active: false }, baseline);
+  runtime.update({ t: 0, active: false });
+
+  // Press Play again: the recorded input history must replay from the reset.
+  runtime.update({ t: 0, active: true });
+  runtime.update({ t: 0.2, active: true });
+  runtime.update({ t: 0.25, active: true });
+  assert.ok(
+    object.position.toArray()[0] > 3.15,
+    'recorded input history should replay after Back-to-Start reset',
+  );
+
+  runtime.dispose();
+});
+
 test('keeps scene physics input pending until the body exists', () => {
   const entries = [];
   const object = makeObject({

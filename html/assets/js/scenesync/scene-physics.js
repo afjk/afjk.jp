@@ -589,6 +589,15 @@ export function createScenePhysicsRuntime({
     preserveMotionOnRebuild = true;
     resetMotionObjectIds = new Set();
     previousCollisionPairs = new Set();
+
+    // Hard reset rebuild (Back to Start / zero baseline) starts a fresh world at
+    // tick 0, so the tick-based rewind in update() (targetTick < world.tick) never
+    // re-arms recorded inputs. Re-queue the input history here so it replays
+    // deterministically from the reset, matching plain backward-seek behaviour.
+    if (useInitialTransform && bodyStateInputHistory.length > 0) {
+      rewindBodyStateInputsToInitialSnapshot();
+    }
+
     return entryMap.size > 0
       ? { ok: true }
       : { ok: false, reason: 'no-bodies' };
