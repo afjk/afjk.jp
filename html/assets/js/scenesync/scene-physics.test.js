@@ -1565,3 +1565,33 @@ test('scene physics runtime clears collision pairs after rebuild (no stale exit)
   assert.deepEqual(exitEvents, [], 'rebuild should not produce false exit events');
   runtime.dispose();
 });
+
+test('getInitialBodyPoses returns the initial pose without disturbing the live simulation', () => {
+  const object = makeObject({ objectId: 'ball', position: [0, 5, 0] });
+  const scenePhysics = normalizeScenePhysics({
+    enabled: true,
+    worldOptions: { gravity: -9.81, ground: null, timestep: 1 / 60 },
+  });
+  const runtime = makeRuntime({ scenePhysics, entries: [makeEntry(object)] });
+
+  // Advance so the live pose diverges from the initial pose.
+  runtime.update({ t: 0, transportActive: true });
+  runtime.update({ t: 0.5, transportActive: true });
+  const liveTick = runtime.getTick();
+  const livePos = object.position.toArray();
+  assert.ok(livePos[1] < 5, 'precondition: ball should have fallen below its initial height');
+
+  const poses = runtime.getInitialBodyPoses();
+  // Returns the initial (authoring) pose, not the live simulated one.
+  assert.ok(poses instanceof Map);
+  assertVectorClose(poses.get('ball').position, [0, 5, 0]);
+
+  // The live world and the scene object are untouched by the read.
+  assert.equal(runtime.getTick(), liveTick, 'live tick must be unchanged');
+  assert.deepEqual(object.position.toArray(), livePos, 'live mesh transform must be unchanged');
+
+  // The simulation continues seamlessly from the live state (does not restart from t=0).
+  runtime.update({ t: 1.0, transportActive: true });
+  assert.ok(object.position.toArray()[1] < livePos[1], 'simulation should keep advancing from the live pose');
+  runtime.dispose();
+});

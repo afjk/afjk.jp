@@ -620,6 +620,31 @@ export function createScenePhysicsRuntime({
     return reset;
   }
 
+  // Read each dynamic body's initial (authoring) pose WITHOUT disturbing the live
+  // simulation or the scene objects. Persistence paths must serialize the initial
+  // pose, but doing so must not visibly teleport the running bodies (that snap-back
+  // is what made interactive drags appear to "rewind").
+  function getInitialBodyPoses() {
+    if (!world || !initialSnapshot) return null;
+    const liveState = world.snapshot();
+    if (world.restore(initialSnapshot) !== true) {
+      return null;
+    }
+    const poses = new Map();
+    for (const objectId of entryMap.keys()) {
+      const body = world.getBody(objectId);
+      if (!body || body.static) continue;
+      poses.set(objectId, {
+        position: readVec3(body.position),
+        rotation: readQuaternion(body.rotation),
+      });
+    }
+    // Restore the live state. Note: we deliberately do NOT call applyWorldToObjects,
+    // so the scene meshes keep their current (simulated) transforms.
+    world.restore(liveState);
+    return poses;
+  }
+
   function getWorldAge(clockState) {
     return Math.max(0, getClockTime(clockState) - worldEpochTime);
   }
@@ -1110,6 +1135,7 @@ export function createScenePhysicsRuntime({
     createSnapshotReport,
     resetToInitialPose,
     resetActiveToInitialPose,
+    getInitialBodyPoses,
     getTimelineState() {
       return {
         timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,

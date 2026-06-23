@@ -6673,17 +6673,19 @@ async function respondToSceneRequest(from) {
   console.log('[SceneSync] Responding to scene-request from:',
     from?.nickname || from?.id);
 
-  resetScenePhysicsRuntimeBeforePersistence();
+  // Serialize the initial physics pose without disturbing the live simulation/visuals.
+  const initialPhysicsPoses = scenePhysicsRuntime.getInitialBodyPoses?.() || null;
 
   const objects = {};
 
   for (const [objectId, obj] of managedObjects) {
     if (isSampleCubeObjectId(objectId)) continue;
 
+    const initialPose = initialPhysicsPoses?.get(objectId) || null;
     const entry = {
       name: obj.userData.name || obj.name || objectId,
-      position: obj.position.toArray(),
-      rotation: obj.quaternion.toArray(),
+      position: initialPose ? initialPose.position : obj.position.toArray(),
+      rotation: initialPose ? initialPose.rotation : obj.quaternion.toArray(),
       scale: obj.scale.toArray(),
     };
     const clock = serializeObjectClockForSceneSync(obj);
@@ -13794,7 +13796,9 @@ function hasSnapshotRestorableObjects() {
 }
 
 function createCurrentSceneSnapshot() {
-  resetScenePhysicsRuntimeBeforePersistence();
+  // Persistence stores the initial physics pose, but reading it must NOT disturb the
+  // live simulation/visuals (otherwise an in-progress drag visibly snaps back).
+  const initialPhysicsPoses = scenePhysicsRuntime.getInitialBodyPoses?.() || null;
 
   const objects = [];
 
@@ -13807,11 +13811,12 @@ function createCurrentSceneSnapshot() {
     const audioSources = getObjectAudioSourcesForSerialize(object);
     const physics = getObjectPhysicsForSerialize(object);
 
+    const initialPose = initialPhysicsPoses?.get(objectId) || null;
     const entry = {
       objectId,
       name: object.userData?.name || object.name || objectId,
-      position: object.position.toArray(),
-      rotation: object.quaternion.toArray(),
+      position: initialPose ? initialPose.position : object.position.toArray(),
+      rotation: initialPose ? initialPose.rotation : object.quaternion.toArray(),
       scale: object.scale.toArray(),
       visible: object.visible !== false,
       asset,
