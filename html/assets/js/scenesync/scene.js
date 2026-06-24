@@ -5150,7 +5150,14 @@ renderer.setAnimationLoop((time, frame) => {
   updateObjectGlbAnimations(now, sceneClockStateForTick);
   updateGazeStateFromCamera();
   updateGazeDwellState(now);
-  loomIntegration?.tickObjectGraphs?.(sceneClockStateForTick);
+  const loomletClockStateForTick = {
+    ...sceneClockStateForTick,
+    ...(Number.isFinite(physicsTick?.tick) ? { tick: physicsTick.tick } : {}),
+    deltaTime: physicsTick?.active && Number.isFinite(physicsTick?.timestep)
+      ? physicsTick.timestep
+      : sceneClockStateForTick.delta,
+  };
+  loomIntegration?.tickObjectGraphs?.(loomletClockStateForTick);
   audioSourceController.tick(now, sceneClockStateForTick);
 
   // Update Scene Clock debug UI
