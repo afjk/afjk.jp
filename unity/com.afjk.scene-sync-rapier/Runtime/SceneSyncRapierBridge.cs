@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using AFJK.Rapier;
 using Afjk.SceneSync;
 using UnityEngine;
@@ -75,10 +76,12 @@ namespace Afjk.SceneSync.Rapier
 
         private RapierWorld world;
         private RapierSnapshot initialSnapshot;
+        private AuthoritativeSnapshotBaseline authoritativeSnapshotBaseline;
         private ScenePhysicsDefinition scenePhysics = ScenePhysicsDefinition.Disabled;
         private SceneClockState sceneClock = SceneClockState.Inactive;
         private bool dirty = true;
         private bool hasInitialSnapshot;
+        private bool hasAuthoritativeSnapshotBaseline;
         private bool hasPendingWorldEpochTime;
         private bool lastStepLimited;
         private bool preserveMotionOnNextRebuild = true;
@@ -295,6 +298,9 @@ namespace Afjk.SceneSync.Rapier
             lastCollisionEvents.Clear();
             if (targetTick < tick)
                 RewindBodyStateInputsToInitialSnapshot();
+            var restoredBaseline = false;
+            if (ShouldRestoreAuthoritativeSnapshotBaseline(targetTick))
+                restoredBaseline = RestoreAuthoritativeSnapshotBaseline();
 
             var appliedInputs = ApplyDueBodyStateInputs();
             var maxSteps = Mathf.Max(1, maxClockStepsPerUpdate);
@@ -312,11 +318,11 @@ namespace Afjk.SceneSync.Rapier
             // reflects the hold position rather than the post-step physics drift.
             var heldBodies = ApplyActiveBodyStateHolds();
 
-            if (steps > 0 || targetTick == 0 || appliedInputs || heldBodies)
+            if (steps > 0 || targetTick == 0 || appliedInputs || heldBodies || restoredBaseline)
             {
                 ApplyWorldTransforms();
                 FlushCollisionEvents(clockTime);
-                if (steps > 0 || appliedInputs || heldBodies || string.IsNullOrWhiteSpace(lastStateHash))
+                if (steps > 0 || appliedInputs || heldBodies || restoredBaseline || string.IsNullOrWhiteSpace(lastStateHash))
                     UpdateLastStateHash("targetTick=" + targetTick.ToString(CultureInfo.InvariantCulture));
             }
         }
@@ -814,6 +820,7 @@ namespace Afjk.SceneSync.Rapier
 
             timelineRevision = nextTimelineRevision;
             timelineForkTick = nextForkTick;
+            hasAuthoritativeSnapshotBaseline = false;
             bodyStateInputHistory.RemoveAll(ShouldDropForCurrentTimelineBranch);
             pendingBodyStateInputs.RemoveAll(ShouldDropForCurrentTimelineBranch);
             appliedBodyStateInputIds.Clear();
@@ -857,6 +864,125 @@ namespace Afjk.SceneSync.Rapier
             return lastRevision;
         }
 
+        private bool InputCoveredBySnapshot(BodyStateInput input, int snapshotTick, long snapshotLastEventRevision)
+        {
+            if (input.TimelineClearRevision != timelineClearRevision)
+                return false;
+            if (input.ApplyTick > snapshotTick)
+                return false;
+            if (input.EventRevision > snapshotLastEventRevision)
+                return false;
+            return input.TimelineRevision == timelineRevision || input.ApplyTick <= timelineForkTick;
+        }
+
+        private bool InputJsonCoveredBySnapshot(string raw, int snapshotTick, long snapshotLastEventRevision)
+        {
+            if (string.IsNullOrWhiteSpace(raw) || snapshotTick < 0)
+                return false;
+            var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
+            if (!string.Equals(inputTimelineId, timelineId, StringComparison.Ordinal))
+                return false;
+            var inputTimelineClearRevision = ReadInt(raw, "timelineClearRevision", 0);
+            if (inputTimelineClearRevision != timelineClearRevision)
+                return false;
+            var applyTick = ReadInt(raw, "applyTick", -1);
+            if (applyTick < 0 || applyTick > snapshotTick)
+                return false;
+            var eventRevision = ReadLong(raw, "eventRevision", 0L);
+            if (eventRevision > snapshotLastEventRevision)
+                return false;
+            var inputTimelineRevision = ReadInt(raw, "timelineRevision", timelineRevision);
+            return inputTimelineRevision == timelineRevision || applyTick <= timelineForkTick;
+        }
+
+        private void MarkInputsCoveredBySnapshot(int snapshotTick, long snapshotLastEventRevision)
+        {
+            for (var i = bodyStateInputHistory.Count - 1; i >= 0; i--)
+            {
+                var input = bodyStateInputHistory[i];
+                if (!InputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision))
+                    continue;
+                appliedBodyStateInputIds.Add(input.InputId);
+                bodyStateInputHistory.RemoveAt(i);
+            }
+
+            for (var i = pendingBodyStateInputs.Count - 1; i >= 0; i--)
+            {
+                var input = pendingBodyStateInputs[i];
+                if (!InputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision))
+                    continue;
+                appliedBodyStateInputIds.Add(input.InputId);
+                pendingBodyStateInputs.RemoveAt(i);
+            }
+
+            foreach (var key in activeBodyStateHolds.Keys.ToList())
+            {
+                if (InputCoveredBySnapshot(activeBodyStateHolds[key], snapshotTick, snapshotLastEventRevision))
+                    activeBodyStateHolds.Remove(key);
+            }
+
+            lastPhysicsEventRevision = Math.Max(lastPhysicsEventRevision, snapshotLastEventRevision);
+            localPhysicsEventRevisionCounter = Math.Max(localPhysicsEventRevisionCounter, lastPhysicsEventRevision);
+        }
+
+        private void SetAuthoritativeSnapshotBaseline(int snapshotTick, long snapshotLastEventRevision)
+        {
+            if (world == null || !world.TryCreateSnapshot(out var snapshot))
+                return;
+
+            authoritativeSnapshotBaseline = new AuthoritativeSnapshotBaseline(
+                snapshotTick,
+                timelineId,
+                timelineRevision,
+                timelineForkTick,
+                timelineClearRevision,
+                snapshotLastEventRevision,
+                worldEpochTime,
+                snapshot);
+            hasAuthoritativeSnapshotBaseline = true;
+        }
+
+        private bool ShouldRestoreAuthoritativeSnapshotBaseline(int targetTick)
+        {
+            return hasAuthoritativeSnapshotBaseline &&
+                tick < authoritativeSnapshotBaseline.Tick &&
+                targetTick >= authoritativeSnapshotBaseline.Tick;
+        }
+
+        private bool RestoreAuthoritativeSnapshotBaseline()
+        {
+            if (!hasAuthoritativeSnapshotBaseline ||
+                world == null ||
+                !world.TryReadSnapshot(authoritativeSnapshotBaseline.Snapshot))
+            {
+                return false;
+            }
+
+            tick = authoritativeSnapshotBaseline.Tick;
+            timelineId = authoritativeSnapshotBaseline.TimelineId;
+            timelineRevision = authoritativeSnapshotBaseline.TimelineRevision;
+            timelineForkTick = authoritativeSnapshotBaseline.TimelineForkTick;
+            timelineClearRevision = authoritativeSnapshotBaseline.TimelineClearRevision;
+            lastPhysicsEventRevision = Math.Max(lastPhysicsEventRevision, authoritativeSnapshotBaseline.LastEventRevision);
+            localPhysicsEventRevisionCounter = Math.Max(localPhysicsEventRevisionCounter, lastPhysicsEventRevision);
+            worldEpochTime = authoritativeSnapshotBaseline.WorldEpochTime;
+            hasPendingWorldEpochTime = false;
+            pendingWorldEpochTime = 0f;
+            accumulator = 0f;
+            lastStepLimited = false;
+            currentCollisionPairs.Clear();
+            previousCollisionPairs.Clear();
+            lastCollisionEvents.Clear();
+            appliedBodyStateInputIds.Clear();
+            activeBodyStateHolds.Clear();
+            pendingBodyStateInputs.Clear();
+            foreach (var input in bodyStateInputHistory)
+                AddPendingBodyStateInput(input);
+            lastStateHash = null;
+            ResetStateHashBroadcastCache();
+            return true;
+        }
+
         public void RebuildWorld()
         {
             RefreshMetadataFromScene();
@@ -875,6 +1001,7 @@ namespace Afjk.SceneSync.Rapier
             ResetStateHashBroadcastCache();
             lastStepLimited = false;
             hasInitialSnapshot = false;
+            hasAuthoritativeSnapshotBaseline = false;
             initialSnapshot = default;
             bindings.Clear();
             colliderObjectIds.Clear();
@@ -1031,7 +1158,7 @@ namespace Afjk.SceneSync.Rapier
                 }
 
                 dirty = true;
-                RequestPhysicsInputLog();
+                RequestPhysicsInputLog(message.FromPeerId);
                 return;
             }
 
@@ -1050,6 +1177,18 @@ namespace Afjk.SceneSync.Rapier
             if (raw.Contains("\"kind\":\"scene-physics-hash\""))
             {
                 ApplyScenePhysicsHash(raw, message.FromPeerId);
+                return;
+            }
+
+            if (raw.Contains("\"kind\":\"scene-physics-input-log-request\""))
+            {
+                PublishPhysicsInputLog(raw, message.FromPeerId);
+                return;
+            }
+
+            if (raw.Contains("\"kind\":\"scene-physics-input-log\""))
+            {
+                ApplyScenePhysicsInputLog(raw, message.FromPeerId);
                 return;
             }
 
@@ -1089,7 +1228,7 @@ namespace Afjk.SceneSync.Rapier
                 dirty = true;
         }
 
-        private void ApplyScenePhysicsSnapshot(string raw, string fromPeerId)
+        private bool ApplyScenePhysicsSnapshot(string raw, string fromPeerId, bool allowRewindSnapshot = false)
         {
             var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload") ?? raw;
             ScenePhysicsSnapshotPayload payload = null;
@@ -1134,7 +1273,7 @@ namespace Afjk.SceneSync.Rapier
                     latestSceneClockRevision == int.MinValue ||
                     payloadSceneClockRevision >= latestSceneClockRevision)
                 && payloadLastEventRevision >= expectedLastEventRevision
-                && payload.tick >= localTickBeforeApply;
+                && (allowRewindSnapshot || payload.tick >= localTickBeforeApply);
 
             var bodyStates = new List<SnapshotBodyState>();
             if (canApply)
@@ -1195,6 +1334,11 @@ namespace Afjk.SceneSync.Rapier
                 && !string.IsNullOrWhiteSpace(remoteHash)
                 && !string.IsNullOrWhiteSpace(localHash)
                 && string.Equals(remoteHash, localHash, StringComparison.Ordinal);
+            if (hashMatched)
+            {
+                MarkInputsCoveredBySnapshot(payload.tick, payloadLastEventRevision);
+                SetAuthoritativeSnapshotBaseline(payload.tick, payloadLastEventRevision);
+            }
             lastRemoteSnapshotReport = new SceneSyncRapierSnapshotReport(
                 payload?.snapshotVersion,
                 remoteHash,
@@ -1218,6 +1362,7 @@ namespace Afjk.SceneSync.Rapier
                 hashMatched);
             hasRemoteSnapshotReport = true;
             SnapshotReceived?.Invoke(lastRemoteSnapshotReport);
+            return hashMatched;
         }
 
         private void ApplyScenePhysicsHash(string raw, string fromPeerId)
@@ -1353,6 +1498,32 @@ namespace Afjk.SceneSync.Rapier
                 controlMode));
         }
 
+        private void ApplyScenePhysicsInputLog(string raw, string fromPeerId)
+        {
+            var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload") ?? raw;
+            var snapshotJson = SceneSyncWireJson.ExtractTopLevelRawObject(payloadJson, "snapshot");
+            var snapshotMatched = false;
+            if (!string.IsNullOrWhiteSpace(snapshotJson))
+                snapshotMatched = ApplyScenePhysicsSnapshot(snapshotJson, fromPeerId, allowRewindSnapshot: true);
+            var snapshotTick = ReadInt(snapshotJson, "tick", -1);
+            var snapshotLastEventRevision = ReadLong(snapshotJson, "lastEventRevision", 0L);
+
+            var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(payloadJson, "timelineId"));
+            if (!string.Equals(inputTimelineId, timelineId, StringComparison.Ordinal))
+                return;
+
+            var inputTimelineClearRevision = ReadInt(payloadJson, "timelineClearRevision", timelineClearRevision);
+            if (inputTimelineClearRevision != timelineClearRevision)
+                return;
+
+            foreach (var inputJson in ExtractObjectArrayEntries(payloadJson, "inputs"))
+            {
+                if (snapshotMatched && InputJsonCoveredBySnapshot(inputJson, snapshotTick, snapshotLastEventRevision))
+                    continue;
+                ApplyScenePhysicsInput(inputJson);
+            }
+        }
+
         private void ApplyScenePhysicsInputLogClear(string raw)
         {
             var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
@@ -1470,6 +1641,7 @@ namespace Afjk.SceneSync.Rapier
             currentCollisionPairs.Clear();
             previousCollisionPairs.Clear();
             lastCollisionEvents.Clear();
+            hasAuthoritativeSnapshotBaseline = false;
             accumulator = 0f;
             tick = 0;
             lastStepLimited = false;
@@ -1553,14 +1725,152 @@ namespace Afjk.SceneSync.Rapier
             SceneSyncMessageBus.PublishOutgoing(payload, null, this);
         }
 
-        private void RequestPhysicsInputLog()
+        private void RequestPhysicsInputLog(string targetPeerId = null)
         {
+            var requestId = Guid.NewGuid().ToString("N");
             var payload =
                 "{\"kind\":\"scene-physics-input-log-request\"" +
                 ",\"timelineVersion\":\"" + TimelineVersion + "\"" +
                 ",\"timelineId\":\"" + SceneSyncWireJson.JsonEscape(timelineId) + "\"" +
+                ",\"timelineRevision\":" + timelineRevision.ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineForkTick\":" + timelineForkTick.ToString(CultureInfo.InvariantCulture) +
+                ",\"timelineClearRevision\":" + timelineClearRevision.ToString(CultureInfo.InvariantCulture) +
+                ",\"lastEventRevision\":" + lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture) +
+                ",\"requestId\":\"" + SceneSyncWireJson.JsonEscape(requestId) + "\"" +
+                ",\"reason\":\"scene-state-handoff\"" +
                 ",\"sentAt\":" + CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) + "}";
-            SceneSyncMessageBus.PublishOutgoing(payload, null, this);
+            SceneSyncMessageBus.PublishOutgoing(payload, targetPeerId, this);
+        }
+
+        private void PublishPhysicsInputLog(string requestRaw, string targetPeerId)
+        {
+            var requestPayloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(requestRaw, "payload") ?? requestRaw;
+            var requestTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(requestPayloadJson, "timelineId"));
+            if (!string.Equals(requestTimelineId, timelineId, StringComparison.Ordinal))
+                return;
+
+            var requestId = SceneSyncWireJson.ExtractString(requestPayloadJson, "requestId");
+            SceneSyncMessageBus.PublishOutgoing(BuildPhysicsInputLogJson(requestId, requestPayloadJson), targetPeerId, this);
+        }
+
+        private string BuildPhysicsInputLogJson(string requestId, string requestRaw)
+        {
+            var builder = new StringBuilder();
+            builder.Append("{\"kind\":\"scene-physics-input-log\"");
+            builder.Append(",\"source\":\"physics\"");
+            builder.Append(",\"phase\":\"postPhysics\"");
+            builder.Append(",\"timelineVersion\":\"").Append(TimelineVersion).Append("\"");
+            builder.Append(",\"timelineId\":\"").Append(SceneSyncWireJson.JsonEscape(timelineId)).Append("\"");
+            builder.Append(",\"timelineRevision\":").Append(timelineRevision.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"timelineForkTick\":").Append(timelineForkTick.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"timelineClearRevision\":").Append(timelineClearRevision.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"lastEventRevision\":").Append(lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture));
+            if (!string.IsNullOrWhiteSpace(requestId))
+                builder.Append(",\"requestId\":\"").Append(SceneSyncWireJson.JsonEscape(requestId)).Append("\"");
+            builder.Append(",\"requestTimelineId\":\"")
+                .Append(SceneSyncWireJson.JsonEscape(NormalizeTimelineId(SceneSyncWireJson.ExtractString(requestRaw, "timelineId"))))
+                .Append("\"");
+            if (SceneSyncWireJson.HasTopLevelField(requestRaw, "timelineRevision"))
+                builder.Append(",\"requestTimelineRevision\":")
+                    .Append(ReadInt(requestRaw, "timelineRevision", 0).ToString(CultureInfo.InvariantCulture));
+            if (SceneSyncWireJson.HasTopLevelField(requestRaw, "timelineClearRevision"))
+                builder.Append(",\"requestTimelineClearRevision\":")
+                    .Append(ReadInt(requestRaw, "timelineClearRevision", 0).ToString(CultureInfo.InvariantCulture));
+            var requestReason = SceneSyncWireJson.ExtractString(requestRaw, "reason");
+            if (!string.IsNullOrWhiteSpace(requestReason))
+                builder.Append(",\"requestReason\":\"").Append(SceneSyncWireJson.JsonEscape(requestReason.Trim())).Append("\"");
+            var snapshot = BuildPhysicsSnapshotJson(requestId, "input-log-request");
+            if (!string.IsNullOrWhiteSpace(snapshot))
+                builder.Append(",\"snapshot\":").Append(snapshot);
+            builder.Append(",\"inputCount\":").Append(bodyStateInputHistory.Count.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"inputs\":[");
+            for (var i = 0; i < bodyStateInputHistory.Count; i++)
+            {
+                if (i > 0) builder.Append(",");
+                var input = bodyStateInputHistory[i];
+                builder.Append(BuildBodyStateInputJson(
+                    input.InputId,
+                    input.ObjectId,
+                    input.ApplyTick,
+                    input.TimelineId,
+                    input.TimelineRevision,
+                    input.TimelineClearRevision,
+                    input.EventRevision,
+                    input.InteractionId,
+                    input.Sequence,
+                    input.Phase,
+                    input.BranchTick,
+                    input.Position,
+                    input.Rotation,
+                    input.LinearVelocity,
+                    input.AngularVelocity,
+                    input.ControlMode));
+            }
+            builder.Append("]");
+            builder.Append(",\"sentAt\":").Append(CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+            builder.Append("}");
+            return builder.ToString();
+        }
+
+        private string BuildPhysicsSnapshotJson(string requestId = null, string requestReason = null)
+        {
+            if (world == null || !world.IsCreated)
+                return null;
+
+            var hash = ComputeStateHashHex();
+            if (string.IsNullOrWhiteSpace(hash))
+                return null;
+
+            var activeTime = sceneClock.Active ? sceneClock.GetTime() : GetCurrentPhysicsTime();
+            var worldAge = Mathf.Max(0f, activeTime - worldEpochTime);
+            var builder = new StringBuilder();
+            builder.Append("{\"kind\":\"scene-physics-snapshot\"");
+            builder.Append(",\"source\":\"physics\"");
+            builder.Append(",\"phase\":\"postPhysics\"");
+            builder.Append(",\"snapshotVersion\":\"").Append(SnapshotVersion).Append("\"");
+            builder.Append(",\"timelineVersion\":\"").Append(TimelineVersion).Append("\"");
+            builder.Append(",\"timelineId\":\"").Append(SceneSyncWireJson.JsonEscape(timelineId)).Append("\"");
+            builder.Append(",\"timelineRevision\":").Append(timelineRevision.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"timelineForkTick\":").Append(timelineForkTick.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"timelineClearRevision\":").Append(timelineClearRevision.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"lastEventRevision\":").Append(lastPhysicsEventRevision.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"profile\":\"").Append(PhysicsProfile).Append("\"");
+            builder.Append(",\"hashVersion\":\"").Append(CanonicalStateHashVersion).Append("\"");
+            builder.Append(",\"rapierCoreVersion\":\"").Append(RapierCoreVersion).Append("\"");
+            builder.Append(",\"tick\":").Append(tick.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"hash\":\"").Append(SceneSyncWireJson.JsonEscape(hash)).Append("\"");
+            builder.Append(",\"timestep\":").Append(scenePhysics.Timestep.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"activeTime\":").Append(activeTime.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"worldAge\":").Append(worldAge.ToString(CultureInfo.InvariantCulture));
+            builder.Append(",\"worldEpochTime\":").Append(worldEpochTime.ToString(CultureInfo.InvariantCulture));
+            if (latestSceneClockRevision != int.MinValue)
+                builder.Append(",\"sceneClockRevision\":").Append(latestSceneClockRevision.ToString(CultureInfo.InvariantCulture));
+            if (!string.IsNullOrWhiteSpace(requestId))
+                builder.Append(",\"requestId\":\"").Append(SceneSyncWireJson.JsonEscape(requestId)).Append("\"");
+            if (!string.IsNullOrWhiteSpace(requestReason))
+                builder.Append(",\"requestReason\":\"").Append(SceneSyncWireJson.JsonEscape(requestReason.Trim())).Append("\"");
+            builder.Append(",\"bodies\":[");
+            var bodyIndex = 0;
+            foreach (var pair in bindings.OrderBy(item => item.Key, StringComparer.Ordinal))
+            {
+                var binding = pair.Value;
+                if (binding.IsStatic || !world.TryGetRigidBodyState(binding.Body, out var state))
+                    continue;
+                if (bodyIndex > 0)
+                    builder.Append(",");
+                bodyIndex++;
+                builder.Append("{\"id\":\"").Append(SceneSyncWireJson.JsonEscape(pair.Key)).Append("\"");
+                builder.Append(",\"type\":\"dynamic\"");
+                builder.Append(",\"position\":").Append(FormatVector3Json(state.Transform.Position));
+                builder.Append(",\"rotation\":").Append(FormatQuaternionJson(state.Transform.Rotation));
+                builder.Append(",\"velocity\":").Append(FormatVector3Json(state.LinearVelocity));
+                builder.Append(",\"angularVelocity\":").Append(FormatVector3Json(state.AngularVelocity));
+                builder.Append("}");
+            }
+            builder.Append("]");
+            builder.Append(",\"sentAt\":").Append(CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+            builder.Append("}");
+            return builder.ToString();
         }
 
         private void ApplySceneClock(string raw)
@@ -1598,6 +1908,7 @@ namespace Afjk.SceneSync.Rapier
 
             pendingWorldEpochTime = Mathf.Max(0f, (float)worldEpoch);
             hasPendingWorldEpochTime = true;
+            hasAuthoritativeSnapshotBaseline = false;
             accumulator = 0f;
             lastStepLimited = false;
 
@@ -1966,6 +2277,7 @@ namespace Afjk.SceneSync.Rapier
             world = null;
             initialSnapshot = default;
             hasInitialSnapshot = false;
+            hasAuthoritativeSnapshotBaseline = false;
         }
 
         private static Vector3 UnityToWirePosition(Vector3 value)
@@ -2107,6 +2419,86 @@ namespace Afjk.SceneSync.Rapier
         {
             var value = SceneSyncWireJson.ExtractBoolean(json, field);
             return value ?? fallback;
+        }
+
+        private static List<string> ExtractObjectArrayEntries(string json, string fieldName)
+        {
+            var result = new List<string>();
+            var arrayJson = SceneSyncWireJson.ExtractTopLevelRawValue(json, fieldName);
+            if (string.IsNullOrWhiteSpace(arrayJson))
+                arrayJson = SceneSyncWireJson.ExtractRawValue(json, fieldName);
+            if (string.IsNullOrWhiteSpace(arrayJson))
+                return result;
+
+            arrayJson = arrayJson.Trim();
+            if (arrayJson.Length < 2 || arrayJson[0] != '[')
+                return result;
+
+            var index = 1;
+            while (index < arrayJson.Length - 1)
+            {
+                SkipJsonWhitespaceAndCommas(arrayJson, ref index);
+                if (index >= arrayJson.Length - 1 || arrayJson[index] == ']')
+                    break;
+                if (arrayJson[index] != '{')
+                {
+                    index++;
+                    continue;
+                }
+
+                var end = FindMatchingJson(arrayJson, index, '{', '}');
+                if (end < 0)
+                    break;
+                result.Add(arrayJson.Substring(index, end - index + 1));
+                index = end + 1;
+            }
+
+            return result;
+        }
+
+        private static void SkipJsonWhitespaceAndCommas(string json, ref int index)
+        {
+            while (index < json.Length && (char.IsWhiteSpace(json[index]) || json[index] == ','))
+                index++;
+        }
+
+        private static int FindMatchingJson(string json, int start, char open, char close)
+        {
+            var depth = 0;
+            var inString = false;
+            var escape = false;
+            for (var i = start; i < json.Length; i++)
+            {
+                var ch = json[i];
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+                if (inString)
+                {
+                    if (ch == '\\')
+                        escape = true;
+                    else if (ch == '"')
+                        inString = false;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+                if (ch == open)
+                    depth++;
+                else if (ch == close)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return i;
+                }
+            }
+
+            return -1;
         }
 
         private static string NormalizeHash(string value)
@@ -2255,6 +2647,38 @@ namespace Afjk.SceneSync.Rapier
             public Quaternion Rotation { get; }
             public Vector3 LinearVelocity { get; }
             public Vector3 AngularVelocity { get; }
+        }
+
+        private readonly struct AuthoritativeSnapshotBaseline
+        {
+            public AuthoritativeSnapshotBaseline(
+                int tick,
+                string timelineId,
+                int timelineRevision,
+                int timelineForkTick,
+                int timelineClearRevision,
+                long lastEventRevision,
+                float worldEpochTime,
+                RapierSnapshot snapshot)
+            {
+                Tick = Mathf.Max(0, tick);
+                TimelineId = NormalizeTimelineId(timelineId);
+                TimelineRevision = Mathf.Max(0, timelineRevision);
+                TimelineForkTick = Mathf.Max(0, timelineForkTick);
+                TimelineClearRevision = Mathf.Max(0, timelineClearRevision);
+                LastEventRevision = Math.Max(0L, lastEventRevision);
+                WorldEpochTime = Mathf.Max(0f, worldEpochTime);
+                Snapshot = snapshot;
+            }
+
+            public int Tick { get; }
+            public string TimelineId { get; }
+            public int TimelineRevision { get; }
+            public int TimelineForkTick { get; }
+            public int TimelineClearRevision { get; }
+            public long LastEventRevision { get; }
+            public float WorldEpochTime { get; }
+            public RapierSnapshot Snapshot { get; }
         }
 
         private readonly struct BodyStateInput

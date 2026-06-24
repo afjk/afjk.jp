@@ -5651,12 +5651,13 @@ function createScenePhysicsSnapshotPayload(clockState = null, extra = {}) {
   };
 }
 
-function applyScenePhysicsSnapshotPayload(payload = {}, fromPeer = null) {
+function applyScenePhysicsSnapshotPayload(payload = {}, fromPeer = null, options = {}) {
   const report = scenePhysicsRuntime.applySnapshotReport?.(
     payload,
     getSceneClockStateForLoomlet(performance.now()),
     {
       latestSceneClockRevision: sceneClockState.sharedRevision,
+      ...options,
     },
   );
   if (!report) return false;
@@ -5675,6 +5676,54 @@ function applyScenePhysicsSnapshotPayload(payload = {}, fromPeer = null) {
     notifySceneSyncShellStateChanged('scene-physics-snapshot');
   }
   return report.matched === true;
+}
+
+function createScenePhysicsRequestId() {
+  return typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
+function createScenePhysicsInputLogPayload(clockState = null, extra = {}) {
+  const log = scenePhysicsRuntime.createInputLogReport?.();
+  if (!log || log.kind !== 'scene-physics-input-log') return null;
+  const revision = Number.isFinite(sceneClockState.sharedRevision)
+    ? sceneClockState.sharedRevision
+    : null;
+  const snapshot = createScenePhysicsSnapshotPayload(clockState, {
+    requestId: extra.requestId,
+    requestReason: extra.requestReason || extra.reason || 'input-log-request',
+  });
+  return {
+    ...log,
+    ...extra,
+    sceneClockRevision: revision,
+    controller: getSceneClockController(),
+    snapshot,
+    sentAt: Date.now(),
+  };
+}
+
+function applyScenePhysicsInputLogPayload(payload = {}, fromPeer = null) {
+  const snapshotMatched = payload.snapshot && typeof payload.snapshot === 'object'
+    ? applyScenePhysicsSnapshotPayload(payload.snapshot, fromPeer, { allowSnapshotRewind: true })
+    : false;
+  const report = scenePhysicsRuntime.applyInputLogReport?.(payload, {
+    skipInputsCoveredBySnapshot: snapshotMatched,
+  });
+  if (!report) return snapshotMatched;
+  console.debug('[scene-physics] input log received', {
+    fromId: fromPeer?.id || null,
+    accepted: report.accepted,
+    inputCount: report.inputCount,
+    queuedCount: report.queuedCount,
+    skippedCoveredCount: report.skippedCoveredCount,
+    timelineId: report.timelineId || payload.timelineId || null,
+    timelineRevision: report.timelineRevision ?? payload.timelineRevision ?? null,
+    timelineClearRevision: report.timelineClearRevision ?? payload.timelineClearRevision ?? null,
+    snapshotMatched,
+  });
+  return snapshotMatched || report.accepted === true;
 }
 
 function requestScenePhysicsSnapshotForHashMismatch(payload = {}, fromPeer = null, report = null) {
@@ -5707,9 +5756,7 @@ function requestScenePhysicsSnapshotForHashMismatch(payload = {}, fromPeer = nul
     timelineForkTick: payload.timelineForkTick,
     timelineClearRevision: payload.timelineClearRevision,
     lastEventRevision: payload.lastEventRevision,
-    requestId: typeof globalThis.crypto?.randomUUID === 'function'
-      ? globalThis.crypto.randomUUID().replace(/-/g, '')
-      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`,
+    requestId: createScenePhysicsRequestId(),
     reason: 'hash-mismatch',
     tick: report.tick,
     localTick: report.localTick,
@@ -6945,6 +6992,8 @@ function handleHandoff(data) {
     payload.kind === 'scene-remove' ||
     payload.kind === 'scene-physics' ||
     payload.kind === 'scene-physics-input-log-clear' ||
+    payload.kind === 'scene-physics-input-log-request' ||
+    payload.kind === 'scene-physics-input-log' ||
     payload.kind === 'scene-physics-input'
   ) {
     console.debug('[handoff] scene mutation received', {
@@ -7007,10 +7056,24 @@ function handleHandoff(data) {
       }
       notifySceneStateChanged('scene-state-handoff');
       publishSharedObjectClockBaselines('scene-state-baseline');
-      broadcast({
+      const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
+      const inputLogRequest = {
         kind: 'scene-physics-input-log-request',
-        timelineId: 'default',
-      });
+        timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+        timelineId: timelineState.timelineId || 'default',
+        timelineRevision: timelineState.timelineRevision,
+        timelineForkTick: timelineState.timelineForkTick,
+        timelineClearRevision: timelineState.timelineClearRevision,
+        lastEventRevision: timelineState.lastEventRevision,
+        requestId: createScenePhysicsRequestId(),
+        reason: 'scene-state-handoff',
+        sentAt: Date.now(),
+      };
+      if (data.from?.id) {
+        sendHandoff({ targetId: data.from.id, payload: inputLogRequest });
+      } else {
+        broadcast(inputLogRequest);
+      }
       break;
     }
     case 'scene-request': {
@@ -7275,6 +7338,36 @@ function handleHandoff(data) {
     case 'scene-physics-input': {
       scenePhysicsRuntime.queueInput(payload);
       notifySceneStateChanged('scene-physics-input');
+      break;
+    }
+    case 'scene-physics-input-log-request': {
+      if (isOwn) break;
+      const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
+      const requestedTimelineId = payload.timelineId || 'default';
+      if (timelineState.timelineId && requestedTimelineId !== timelineState.timelineId) break;
+      const inputLog = createScenePhysicsInputLogPayload(
+        getSceneClockStateForLoomlet(performance.now()),
+        {
+          requestId: payload.requestId,
+          requestTimelineId: requestedTimelineId,
+          requestTimelineRevision: payload.timelineRevision,
+          requestTimelineClearRevision: payload.timelineClearRevision,
+          requestReason: payload.reason || 'input-log-request',
+        },
+      );
+      if (!inputLog) break;
+      if (data.from?.id) {
+        sendHandoff({ targetId: data.from.id, payload: inputLog });
+      } else {
+        broadcast(inputLog);
+      }
+      break;
+    }
+    case 'scene-physics-input-log': {
+      if (isOwn) break;
+      if (applyScenePhysicsInputLogPayload(payload, data.from)) {
+        notifySceneStateChanged('scene-physics-input-log');
+      }
       break;
     }
     case 'scene-physics-input-log-clear': {

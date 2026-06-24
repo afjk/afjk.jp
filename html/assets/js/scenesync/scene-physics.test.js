@@ -487,6 +487,159 @@ test('rewinds and replays when a scene physics input arrives late', () => {
   runtime.dispose();
 });
 
+test('exports and applies scene physics input logs for late join replay', () => {
+  const makeBall = () => makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = {
+    enabled: true,
+    worldOptions: {
+      gravity: [0, 0, 0],
+      ground: null,
+      timestep: 1 / 60,
+    },
+  };
+  const authorityObject = makeBall();
+  const followerObject = makeBall();
+  const authority = makeRuntime({ scenePhysics, entries: [makeEntry(authorityObject)] });
+  const follower = makeRuntime({ scenePhysics, entries: [makeEntry(followerObject)] });
+
+  authority.update({ t: 0, transportActive: true });
+  assert.equal(authority.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'late-join-drag-1',
+    objectId: 'ball',
+    applyTick: 1,
+    timelineId: 'default',
+    timelineRevision: 0,
+    timelineClearRevision: 0,
+    eventRevision: 1,
+    interactionId: 'late-join-drag',
+    sequence: 0,
+    phase: 'move',
+    position: [2, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  assert.equal(authority.queueInput({
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'late-join-drag-2',
+    objectId: 'ball',
+    applyTick: 2,
+    timelineId: 'default',
+    timelineRevision: 0,
+    timelineClearRevision: 0,
+    eventRevision: 2,
+    interactionId: 'late-join-drag',
+    sequence: 1,
+    phase: 'move',
+    position: [3, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [1, 0, 0],
+    angularVelocity: [0, 0, 0],
+  }), true);
+  authority.update({ t: 4 / 60, transportActive: true });
+
+  follower.update({ t: 0, transportActive: true });
+  const log = authority.createInputLogReport({ requestId: 'late-join-request' });
+  assert.equal(log.kind, 'scene-physics-input-log');
+  assert.equal(log.inputCount, 2);
+  assert.equal(log.lastEventRevision, 2);
+  assert.equal(log.inputs[0].inputId, 'late-join-drag-1');
+  assert.equal(log.inputs[1].inputId, 'late-join-drag-2');
+
+  const report = follower.applyInputLogReport(log);
+  assert.equal(report.accepted, true);
+  assert.equal(report.inputCount, 2);
+  assert.equal(report.queuedCount, 2);
+  follower.update({ t: 4 / 60, transportActive: true });
+
+  const authoritySnapshot = authority.createSnapshotReport({ t: 4 / 60, transportActive: true });
+  const followerSnapshot = follower.createSnapshotReport({ t: 4 / 60, transportActive: true });
+  assert.equal(followerSnapshot.hash, authoritySnapshot.hash);
+  assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  const snapshotFollowerObject = makeBall();
+  const snapshotFollower = makeRuntime({ scenePhysics, entries: [makeEntry(snapshotFollowerObject)] });
+  snapshotFollower.update({ t: 0, transportActive: true });
+  snapshotFollower.update({ t: 6 / 60, transportActive: true });
+  const snapshotApplyReport = snapshotFollower.applySnapshotReport(
+    authoritySnapshot,
+    { t: 6 / 60, transportActive: true },
+    { allowSnapshotRewind: true },
+  );
+  assert.equal(snapshotApplyReport.matched, true);
+  const fullLogReport = snapshotFollower.applyInputLogReport(
+    { ...log, snapshot: authoritySnapshot },
+    { skipInputsCoveredBySnapshot: snapshotApplyReport.matched },
+  );
+  assert.equal(fullLogReport.accepted, true);
+  assert.equal(fullLogReport.queuedCount, 0);
+  assert.equal(fullLogReport.skippedCoveredCount, 2);
+
+  authority.dispose();
+  follower.dispose();
+  snapshotFollower.dispose();
+});
+
+test('applies input-log snapshot baseline even when local playback is ahead', () => {
+  const makeBall = () => makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = {
+    enabled: true,
+    worldOptions: {
+      gravity: [0, 0, 0],
+      ground: null,
+      timestep: 1 / 60,
+    },
+  };
+  const authorityObject = makeBall();
+  const followerObject = makeBall();
+  const authority = makeRuntime({ scenePhysics, entries: [makeEntry(authorityObject)] });
+  const follower = makeRuntime({ scenePhysics, entries: [makeEntry(followerObject)] });
+
+  authority.update({ t: 4 / 60, transportActive: true });
+  const snapshot = authority.createSnapshotReport({ t: 4 / 60, transportActive: true });
+  follower.update({ t: 0, transportActive: true });
+  follower.update({ t: 6 / 60, transportActive: true });
+
+  const rejected = follower.applySnapshotReport(snapshot, { t: 6 / 60, transportActive: true });
+  assert.equal(rejected.applied, false);
+  const accepted = follower.applySnapshotReport(
+    snapshot,
+    { t: 6 / 60, transportActive: true },
+    { allowSnapshotRewind: true },
+  );
+  assert.equal(accepted.matched, true);
+  assert.equal(follower.getTick(), snapshot.tick);
+  assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  authority.dispose();
+  follower.dispose();
+});
+
 test('replays recorded input history after a Back-to-Start zero baseline reset', () => {
   const object = makeObject({
     objectId: 'ball',
