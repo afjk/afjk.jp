@@ -974,7 +974,7 @@ export function createScenePhysicsRuntime({
         latestSceneClockRevision == null ||
         payloadSceneClockRevision >= latestSceneClockRevision)
       && payloadLastEventRevision >= expectedLastEventRevision
-      && payloadTick >= localTickBeforeApply;
+      && (options.allowSnapshotRewind === true || payloadTick >= localTickBeforeApply);
 
     if (canApply) {
       const bodyStates = [];
@@ -1138,6 +1138,102 @@ export function createScenePhysicsRuntime({
     while (pendingBodyStateInputs.length > MAX_PENDING_BODY_STATE_INPUTS) {
       pendingBodyStateInputs.shift();
     }
+  }
+
+  function serializeBodyStateInput(input) {
+    return {
+      kind: 'scene-physics-input',
+      inputType: 'set-body-state',
+      inputId: input.inputId,
+      timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+      timelineId: input.timelineId,
+      timelineRevision: input.timelineRevision,
+      timelineClearRevision: input.timelineClearRevision,
+      eventRevision: input.eventRevision,
+      interactionId: input.interactionId,
+      sequence: input.sequence,
+      phase: input.phase,
+      controlMode: input.controlMode,
+      branchTick: input.branchTick,
+      objectId: input.objectId,
+      applyTick: input.applyTick,
+      position: input.position.slice(),
+      rotation: input.rotation.slice(),
+      velocity: input.velocity.slice(),
+      angularVelocity: input.angularVelocity.slice(),
+    };
+  }
+
+  function createInputLogReport(extra = {}) {
+    const inputs = bodyStateInputHistory.map(serializeBodyStateInput);
+    return {
+      kind: 'scene-physics-input-log',
+      source: 'physics',
+      phase: 'postPhysics',
+      timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      timelineClearRevision,
+      lastEventRevision,
+      inputCount: inputs.length,
+      inputs,
+      ...extra,
+    };
+  }
+
+  function inputPayloadCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision) {
+    if (!input) return false;
+    const applyTick = nonNegativeInteger(input.applyTick, -1);
+    if (applyTick < 0 || applyTick > snapshotTick) return false;
+    if (nonNegativeInteger(input.eventRevision, 0) > snapshotLastEventRevision) return false;
+    if (normalizeTimelineId(input.timelineId) !== timelineId) return false;
+    if (nonNegativeInteger(input.timelineClearRevision, 0) !== timelineClearRevision) return false;
+    const inputTimelineRevision = nonNegativeInteger(input.timelineRevision, timelineRevision);
+    return inputTimelineRevision === timelineRevision || applyTick <= timelineForkTick;
+  }
+
+  function applyInputLogReport(payload = {}, options = {}) {
+    const payloadTimelineId = normalizeTimelineId(payload.timelineId);
+    const payloadTimelineClearRevision = nonNegativeInteger(payload.timelineClearRevision, timelineClearRevision);
+    const inputs = Array.isArray(payload.inputs) ? payload.inputs : [];
+    if (
+      payload?.kind !== 'scene-physics-input-log' ||
+      payloadTimelineId !== timelineId ||
+      payloadTimelineClearRevision !== timelineClearRevision
+    ) {
+      return {
+        kind: 'scene-physics-input-log',
+        accepted: false,
+        inputCount: inputs.length,
+        queuedCount: 0,
+      };
+    }
+
+    let queuedCount = 0;
+    let skippedCoveredCount = 0;
+    const snapshotTick = nonNegativeInteger(payload.snapshot?.tick, -1);
+    const snapshotLastEventRevision = nonNegativeInteger(payload.snapshot?.lastEventRevision, 0);
+    const skipCoveredInputs = options.skipInputsCoveredBySnapshot === true && snapshotTick >= 0;
+    for (const input of inputs) {
+      if (skipCoveredInputs && inputPayloadCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
+        skippedCoveredCount += 1;
+        continue;
+      }
+      if (queueInput(input)) queuedCount += 1;
+    }
+    return {
+      kind: 'scene-physics-input-log',
+      accepted: true,
+      inputCount: inputs.length,
+      queuedCount,
+      skippedCoveredCount,
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      timelineClearRevision,
+      lastEventRevision,
+    };
   }
 
   function applyDueBodyStateInputs(currentTick = world?.tick || 0) {
@@ -1387,6 +1483,8 @@ export function createScenePhysicsRuntime({
     clearInputHistory,
     applySnapshotReport,
     compareHashReport,
+    createInputLogReport,
+    applyInputLogReport,
     rebuild,
     update,
     createSnapshotReport,
