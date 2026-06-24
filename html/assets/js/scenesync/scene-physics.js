@@ -9,6 +9,7 @@ import {
   RAPIER_CORE_VERSION,
 } from './physics/index.js';
 import { createCollisionPairKey } from './runtime/runtime-events.js';
+import { createSceneEventTimeline } from './runtime/event-timeline.js';
 
 export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
 export const SCENE_SYNC_RAPIER_PROFILE = 'SceneSyncRapierParity-0.30';
@@ -467,6 +468,59 @@ export function createScenePhysicsRuntime({
   let timelineForkTick = 0;
   let timelineClearRevision = 0;
   let lastEventRevision = 0;
+  const bodyStateEventTimeline = createSceneEventTimeline({
+    timelineId: DEFAULT_SCENE_PHYSICS_TIMELINE_ID,
+    maxHistory: MAX_BODY_STATE_INPUT_HISTORY,
+    maxPending: MAX_PENDING_BODY_STATE_INPUTS,
+  });
+
+  function syncBodyStateTimelineState() {
+    const state = bodyStateEventTimeline.getTimelineState();
+    timelineId = state.timelineId;
+    timelineRevision = state.timelineRevision;
+    timelineForkTick = state.timelineForkTick;
+    timelineClearRevision = state.timelineClearRevision;
+    lastEventRevision = state.lastEventRevision;
+  }
+
+  function bodyStateEventFromInput(input) {
+    return {
+      ...input,
+      kind: 'scene-event',
+      channel: 'physics.body.setState',
+      eventId: input.inputId,
+      target: input.objectId,
+      source: 'physics',
+      timestamp: input.applyTick * Math.max(0.000001, timestepSeconds),
+    };
+  }
+
+  function bodyStateInputFromEvent(event) {
+    return {
+      inputId: event.inputId || event.eventId,
+      objectId: event.objectId || event.target,
+      applyTick: nonNegativeInteger(event.applyTick, 0),
+      timelineId: normalizeTimelineId(event.timelineId),
+      timelineRevision: nonNegativeInteger(event.timelineRevision, 0),
+      timelineClearRevision: nonNegativeInteger(event.timelineClearRevision, 0),
+      eventRevision: nonNegativeInteger(event.eventRevision, 0),
+      interactionId: normalizeOptionalString(event.interactionId),
+      sequence: nonNegativeInteger(event.sequence, 0),
+      phase: normalizeOptionalString(event.phase),
+      controlMode: normalizeOptionalString(event.controlMode),
+      branchTick: nonNegativeInteger(event.branchTick, event.applyTick),
+      position: readVec3(event.position, [0, 0, 0]),
+      rotation: readQuaternion(event.rotation, [0, 0, 0, 1]),
+      velocity: readVec3(event.velocity || event.linearVelocity, [0, 0, 0]),
+      angularVelocity: readVec3(event.angularVelocity || event.angvel, [0, 0, 0]),
+    };
+  }
+
+  function syncBodyStateInputListsFromTimeline() {
+    bodyStateInputHistory = bodyStateEventTimeline.getEventHistory().map(bodyStateInputFromEvent);
+    pendingBodyStateInputs = bodyStateEventTimeline.getPendingEvents().map(bodyStateInputFromEvent);
+    syncBodyStateTimelineState();
+  }
 
   function clear({ preserveInputs = false } = {}) {
     world?.free?.();
@@ -491,6 +545,7 @@ export function createScenePhysicsRuntime({
       timelineForkTick = 0;
       timelineClearRevision = 0;
       lastEventRevision = 0;
+      bodyStateEventTimeline.reset({ timelineId });
     }
   }
 
@@ -675,20 +730,9 @@ export function createScenePhysicsRuntime({
       ? Math.max(0, Math.floor(applyTickNumber))
       : (world?.tick || 0);
     const payloadTimelineId = normalizeTimelineId(payload.timelineId);
-    if (payloadTimelineId !== timelineId) return false;
-
     const payloadTimelineRevision = nonNegativeInteger(payload.timelineRevision, timelineRevision);
     const branchTick = nonNegativeInteger(payload.branchTick, applyTick);
     const payloadTimelineClearRevision = nonNegativeInteger(payload.timelineClearRevision, 0);
-    if (
-      payloadTimelineClearRevision !== timelineClearRevision ||
-      (payloadTimelineRevision < timelineRevision && applyTick > timelineForkTick)
-    ) {
-      return false;
-    }
-    if (payloadTimelineRevision > timelineRevision) {
-      advanceTimelineRevision(payloadTimelineRevision, branchTick);
-    }
 
     const interactionId = normalizeOptionalString(payload.interactionId);
     const sequence = nonNegativeInteger(payload.sequence, 0);
@@ -720,34 +764,45 @@ export function createScenePhysicsRuntime({
       rotation: readQuaternion(payload.rotation, [0, 0, 0, 1]),
       velocity: readVec3(payload.velocity || payload.linearVelocity, [0, 0, 0]),
       angularVelocity: readVec3(payload.angularVelocity || payload.angvel, [0, 0, 0]),
-    };
+      };
 
-    if (updateExistingBodyStateInput(input)) {
+      const previousTimelineRevision = timelineRevision;
+      const result = bodyStateEventTimeline.queueEvent(bodyStateEventFromInput(input), {
+        currentTick: world?.tick,
+        isReplayRelevantChange: (previousEvent, nextEvent) => {
+          const previousInput = previousEvent ? bodyStateInputFromEvent(previousEvent) : null;
+          const nextInput = bodyStateInputFromEvent(nextEvent);
+          const physicalStateChanged = !previousInput ||
+            !bodyStateInputPhysicalStateEquals(previousInput, nextInput);
+          const orderChangedWithPeer = Boolean(
+            previousInput &&
+            compareBodyStateInputs(previousInput, nextInput) !== 0 &&
+            hasSameTickInputPeer(nextInput),
+          );
+          return physicalStateChanged || orderChangedWithPeer;
+        },
+      });
+      if (!result.ok) return false;
+
+      syncBodyStateInputListsFromTimeline();
+    if (timelineRevision > previousTimelineRevision) {
+      authoritativeSnapshotBaseline = null;
+      activeBodyStateHolds = new Map();
+      appliedBodyStateInputIds.clear();
+    }
+
+    if (result.replayRequired && world && rewindBodyStateInputsToInitialSnapshot()) {
       return true;
     }
-
-    lastEventRevision = Math.max(lastEventRevision, input.eventRevision);
-    addBodyStateInputHistory(input);
-    if (world && input.applyTick <= world.tick) {
-      if (input.applyTick < world.tick && hasDynamicBody(input.objectId) && rewindBodyStateInputsToInitialSnapshot()) {
-        return true;
+      if (world && input.applyTick === world.tick && result.replayRelevantChange === true) {
+        applyDueBodyStateInputs(world.tick);
       }
-      if (input.applyTick === world.tick && applyBodyStateInput(input)) {
-        return true;
-      }
-    }
-
-    addPendingBodyStateInput(input);
     return true;
   }
 
-  function bodyStateInputEquals(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-
-  function numberArrayEquals(left, right) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
-    return left.every((value, index) => value === right[index]);
+    function numberArrayEquals(left, right) {
+      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+      return left.every((value, index) => value === right[index]);
   }
 
   function bodyStateInputPhysicalStateEquals(left, right) {
@@ -766,53 +821,7 @@ export function createScenePhysicsRuntime({
       || pendingBodyStateInputs.some(item => item.inputId !== input.inputId && item.applyTick === input.applyTick);
   }
 
-  function replaceBodyStateInput(list, input) {
-    const index = list.findIndex((item) => item.inputId === input.inputId);
-    if (index < 0) return false;
-    if (bodyStateInputEquals(list[index], input)) return true;
-    list[index] = input;
-    list.sort(compareBodyStateInputs);
-    return true;
-  }
-
-  function updateExistingBodyStateInput(input) {
-    const hasApplied = appliedBodyStateInputIds.has(input.inputId);
-    const hasHistory = bodyStateInputHistory.some((item) => item.inputId === input.inputId);
-    const hasPending = pendingBodyStateInputs.some((item) => item.inputId === input.inputId);
-    if (!hasApplied && !hasHistory && !hasPending) return false;
-
-    const previous = bodyStateInputHistory.find((item) => item.inputId === input.inputId)
-      || pendingBodyStateInputs.find((item) => item.inputId === input.inputId)
-      || null;
-    const changed = !previous || !bodyStateInputEquals(previous, input);
-    const physicalStateChanged = !previous || !bodyStateInputPhysicalStateEquals(previous, input);
-    const orderChangedWithPeer = Boolean(
-      previous &&
-      compareBodyStateInputs(previous, input) !== 0 &&
-      hasSameTickInputPeer(input),
-    );
-    if (hasHistory) {
-      replaceBodyStateInput(bodyStateInputHistory, input);
-    } else {
-      addBodyStateInputHistory(input);
-    }
-    if (hasPending) {
-      replaceBodyStateInput(pendingBodyStateInputs, input);
-    }
-    lastEventRevision = Math.max(lastEventRevision, input.eventRevision);
-
-    if (
-      changed &&
-      (physicalStateChanged || orderChangedWithPeer) &&
-      world &&
-      (hasApplied || input.applyTick <= world.tick)
-    ) {
-      rewindBodyStateInputsToInitialSnapshot();
-    }
-    return true;
-  }
-
-  function compareBodyStateInputs(left, right) {
+    function compareBodyStateInputs(left, right) {
     return left.applyTick - right.applyTick
       || left.timelineRevision - right.timelineRevision
       || left.eventRevision - right.eventRevision
@@ -846,6 +855,18 @@ export function createScenePhysicsRuntime({
       (max, input) => Math.max(max, input.eventRevision || 0),
       0,
     );
+    bodyStateEventTimeline.setTimelineState({
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      timelineClearRevision,
+      lastEventRevision,
+    });
+    bodyStateEventTimeline.removeEvents((event) => {
+      const input = bodyStateInputFromEvent(event);
+      return !(input.timelineRevision === timelineRevision || input.applyTick <= timelineForkTick);
+    });
+    syncBodyStateInputListsFromTimeline();
 
     if (dropsAppliedInput && world && world.tick > timelineForkTick) {
       rewindBodyStateInputsToInitialSnapshot();
@@ -879,27 +900,29 @@ export function createScenePhysicsRuntime({
   }
 
   function markInputsCoveredBySnapshot(snapshotTick, snapshotLastEventRevision) {
-    bodyStateInputHistory = bodyStateInputHistory.filter((input) => {
-      if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
-        appliedBodyStateInputIds.add(input.inputId);
-        return false;
-      }
-      return true;
-    });
-    pendingBodyStateInputs = pendingBodyStateInputs.filter((input) => {
-      if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
-        appliedBodyStateInputIds.add(input.inputId);
-        return false;
-      }
-      return true;
-    });
-    for (const [objectId, input] of activeBodyStateHolds.entries()) {
-      if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
-        activeBodyStateHolds.delete(objectId);
-      }
+    const removed = bodyStateEventTimeline.removeEvents((event) => {
+      const input = bodyStateInputFromEvent(event);
+      return inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision);
+    }, { markApplied: true });
+    for (const event of removed) {
+      const input = bodyStateInputFromEvent(event);
+      if (input.inputId) appliedBodyStateInputIds.add(input.inputId);
     }
-    lastEventRevision = Math.max(lastEventRevision, snapshotLastEventRevision);
-  }
+    syncBodyStateInputListsFromTimeline();
+      for (const [objectId, input] of activeBodyStateHolds.entries()) {
+        if (inputCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
+          activeBodyStateHolds.delete(objectId);
+        }
+      }
+      lastEventRevision = Math.max(lastEventRevision, snapshotLastEventRevision);
+      bodyStateEventTimeline.setTimelineState({
+        timelineId,
+        timelineRevision,
+        timelineForkTick,
+        timelineClearRevision,
+        lastEventRevision,
+      }, { resetApplied: false });
+    }
 
   function setAuthoritativeSnapshotBaseline(snapshotTick, snapshotLastEventRevision) {
     if (!world?.snapshot) return;
@@ -928,10 +951,14 @@ export function createScenePhysicsRuntime({
     previousCollisionPairs = new Set();
     appliedBodyStateInputIds.clear();
     activeBodyStateHolds = new Map();
-    pendingBodyStateInputs = [];
-    for (const input of bodyStateInputHistory) {
-      addPendingBodyStateInput(input);
-    }
+    bodyStateEventTimeline.setTimelineState({
+      timelineId,
+      timelineRevision,
+      timelineForkTick,
+      timelineClearRevision,
+      lastEventRevision,
+    }, { requeueHistory: true });
+    syncBodyStateInputListsFromTimeline();
     return true;
   }
 
@@ -1086,29 +1113,11 @@ export function createScenePhysicsRuntime({
   }
 
   function clearInputHistory(payload = {}) {
-    const payloadTimelineId = normalizeTimelineId(payload.timelineId);
-    if (payloadTimelineId !== timelineId) return false;
-
-    const hasCanonicalRevision = payload.timelineRevision !== undefined && payload.timelineRevision !== null;
-    const canonicalRevision = hasCanonicalRevision
-      ? nonNegativeInteger(payload.timelineRevision, timelineRevision)
-      : null;
-    const payloadTimelineClearRevision = nonNegativeInteger(
-      payload.timelineClearRevision,
-      canonicalRevision ?? timelineClearRevision + 1,
-    );
-    if (payloadTimelineClearRevision < timelineClearRevision) return false;
-    if (payloadTimelineClearRevision === timelineClearRevision) return false;
-    const nextRevision = hasCanonicalRevision
-      ? canonicalRevision
-      : timelineRevision + 1;
-    const forkTick = nonNegativeInteger(payload.timelineForkTick, 0);
-    timelineRevision = nextRevision;
-    timelineForkTick = forkTick;
-    timelineClearRevision = payloadTimelineClearRevision;
-    lastEventRevision = 0;
-    pendingBodyStateInputs = [];
-    bodyStateInputHistory = [];
+    const cleared = bodyStateEventTimeline.clearEventHistory(payload, {
+      allowRevisionRegression: true,
+    });
+    if (!cleared) return false;
+    syncBodyStateInputListsFromTimeline();
     activeBodyStateHolds = new Map();
     appliedBodyStateInputIds.clear();
     previousCollisionPairs = new Set();
@@ -1123,24 +1132,7 @@ export function createScenePhysicsRuntime({
     return true;
   }
 
-  function addBodyStateInputHistory(input) {
-    bodyStateInputHistory.push(input);
-    bodyStateInputHistory.sort(compareBodyStateInputs);
-    while (bodyStateInputHistory.length > MAX_BODY_STATE_INPUT_HISTORY) {
-      bodyStateInputHistory.shift();
-    }
-  }
-
-  function addPendingBodyStateInput(input) {
-    if (pendingBodyStateInputs.some((item) => item.inputId === input.inputId)) return;
-    pendingBodyStateInputs.push(input);
-    pendingBodyStateInputs.sort(compareBodyStateInputs);
-    while (pendingBodyStateInputs.length > MAX_PENDING_BODY_STATE_INPUTS) {
-      pendingBodyStateInputs.shift();
-    }
-  }
-
-  function serializeBodyStateInput(input) {
+    function serializeBodyStateInput(input) {
     return {
       kind: 'scene-physics-input',
       inputType: 'set-body-state',
@@ -1242,20 +1234,15 @@ export function createScenePhysicsRuntime({
       return applyActiveBodyStateHolds();
     }
 
-    let applied = false;
-    for (let index = 0; index < pendingBodyStateInputs.length;) {
-      const input = pendingBodyStateInputs[index];
-      if (input.applyTick > currentTick) break;
+    const processed = bodyStateEventTimeline.processDueEvents(currentTick, (event) => {
+      const input = bodyStateInputFromEvent(event);
       if (input.applyTick < currentTick && hasDynamicBody(input.objectId) && rewindBodyStateInputsToInitialSnapshot()) {
-        return applied;
+        return { replayRequired: true };
       }
-      if (applyBodyStateInput(input)) {
-        pendingBodyStateInputs.splice(index, 1);
-        applied = true;
-        continue;
-      }
-      index += 1;
-    }
+      return applyBodyStateInput(input);
+    });
+    syncBodyStateInputListsFromTimeline();
+    let applied = processed.applied;
     if (applyActiveBodyStateHolds()) {
       applied = true;
     }
@@ -1274,10 +1261,8 @@ export function createScenePhysicsRuntime({
     previousCollisionPairs = new Set();
     appliedBodyStateInputIds.clear();
     activeBodyStateHolds = new Map();
-    pendingBodyStateInputs = [];
-    for (const input of bodyStateInputHistory) {
-      addPendingBodyStateInput(input);
-    }
+    bodyStateEventTimeline.resetAppliedFromHistory();
+    syncBodyStateInputListsFromTimeline();
     return true;
   }
 

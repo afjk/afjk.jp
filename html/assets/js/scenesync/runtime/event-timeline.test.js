@@ -75,6 +75,45 @@ test('timeline reports replay when an already consumed event id is updated', () 
   assert.equal(result.replayRequired, true);
 });
 
+test('timeline does not request replay for unchanged applied event echoes', () => {
+  const timeline = createSceneEventTimeline();
+  const event = { channel: 'pointer.click', eventId: 'click:1', applyTick: 1, payload: { value: 1 } };
+  timeline.queueEvent(event);
+  timeline.consumeDueEvents(1);
+  const result = timeline.queueEvent(event, { currentTick: 3 });
+  assert.equal(result.ok, true);
+  assert.equal(result.replayRequired, false);
+});
+
+test('timeline can update applied metadata without requeueing replay-irrelevant changes', () => {
+  const timeline = createSceneEventTimeline();
+  timeline.queueEvent({
+    channel: 'physics.body.setState',
+    eventId: 'drag:1',
+    eventRevision: 0,
+    applyTick: 1,
+    payload: { x: 1 },
+  });
+  timeline.consumeDueEvents(1);
+  const result = timeline.queueEvent({
+    channel: 'physics.body.setState',
+    eventId: 'drag:1',
+    eventRevision: 7,
+    applyTick: 1,
+    payload: { x: 1 },
+  }, {
+    currentTick: 3,
+    isReplayRelevantChange: (previousEvent, nextEvent) => (
+      previousEvent?.payload?.x !== nextEvent.payload.x
+    ),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.replayRequired, false);
+  assert.deepEqual(timeline.getPendingEvents(), []);
+  assert.equal(timeline.getTimelineState().lastEventRevision, 7);
+  assert.equal(timeline.getEventHistory()[0].eventRevision, 7);
+});
+
 test('timeline advances revision and rejects old future events', () => {
   const timeline = createSceneEventTimeline();
   assert.equal(timeline.queueEvent({ channel: 'future.old', eventId: 'old', applyTick: 20 }).ok, true);
@@ -114,6 +153,17 @@ test('timeline clear drops history and rejects duplicate clears', () => {
     timelineRevision: 2,
     timelineClearRevision: 1,
   }), false);
+});
+
+test('timeline clear defaults clear revision to canonical revision for compatibility', () => {
+  const timeline = createSceneEventTimeline();
+  timeline.queueEvent({ channel: 'pointer.click', eventId: 'click', applyTick: 1 });
+  assert.equal(timeline.clearEventHistory({
+    timelineId: 'default',
+    timelineRevision: 3,
+  }), true);
+  assert.equal(timeline.getTimelineState().timelineRevision, 3);
+  assert.equal(timeline.getTimelineState().timelineClearRevision, 3);
 });
 
 test('sceneEventToRuntimeEvent produces Loomlet-compatible env event fields', () => {
@@ -174,4 +224,66 @@ test('timeline clear can explicitly allow canonical revision regression', () => 
   }, { allowRevisionRegression: true }), true);
   assert.equal(timeline.getTimelineState().timelineRevision, 1);
   assert.equal(timeline.getTimelineState().timelineClearRevision, 1);
+});
+
+test('processDueEvents removes only applied events and keeps failed events pending', () => {
+  const timeline = createSceneEventTimeline();
+  timeline.queueEvent({ channel: 'a', eventId: 'a', applyTick: 1 });
+  timeline.queueEvent({ channel: 'b', eventId: 'b', applyTick: 1 });
+  const processed = timeline.processDueEvents(1, event => event.eventId === 'a');
+  assert.equal(processed.applied, true);
+  assert.equal(processed.replayRequired, false);
+  assert.deepEqual(timeline.getPendingEvents().map(event => event.eventId), ['b']);
+});
+
+test('processDueEvents can stop for replay without consuming the event', () => {
+  const timeline = createSceneEventTimeline();
+  timeline.queueEvent({ channel: 'a', eventId: 'a', applyTick: 1 });
+  const processed = timeline.processDueEvents(2, () => ({ replayRequired: true }));
+  assert.equal(processed.applied, false);
+  assert.equal(processed.replayRequired, true);
+  assert.deepEqual(timeline.getPendingEvents().map(event => event.eventId), ['a']);
+});
+
+test('removeEvents drops matching events from history and pending', () => {
+  const timeline = createSceneEventTimeline();
+  timeline.queueEvent({ channel: 'a', eventId: 'a', applyTick: 1 });
+  timeline.queueEvent({ channel: 'b', eventId: 'b', applyTick: 2 });
+  const removed = timeline.removeEvents(event => event.eventId === 'a', { markApplied: true });
+  assert.deepEqual(removed.map(event => event.eventId), ['a']);
+  assert.deepEqual(timeline.getEventHistory().map(event => event.eventId), ['b']);
+  assert.deepEqual(timeline.getPendingEvents().map(event => event.eventId), ['b']);
+});
+
+test('setTimelineState updates revision metadata and can requeue history', () => {
+  const timeline = createSceneEventTimeline();
+  timeline.queueEvent({ channel: 'a', eventId: 'a', applyTick: 1 });
+  timeline.consumeDueEvents(1);
+  timeline.setTimelineState({
+    timelineRevision: 2,
+    timelineForkTick: 1,
+    timelineClearRevision: 1,
+    lastEventRevision: 7,
+  }, { requeueHistory: true });
+  assert.equal(timeline.getTimelineState().timelineRevision, 2);
+  assert.equal(timeline.getTimelineState().timelineForkTick, 1);
+  assert.equal(timeline.getTimelineState().timelineClearRevision, 1);
+  assert.equal(timeline.getTimelineState().lastEventRevision, 7);
+  assert.deepEqual(timeline.getPendingEvents().map(event => event.eventId), ['a']);
+});
+
+test('reset clears events and resets timeline metadata', () => {
+  const timeline = createSceneEventTimeline({ timelineRevision: 5 });
+  timeline.queueEvent({ channel: 'a', eventId: 'a', applyTick: 1 });
+  timeline.reset({ timelineId: 'next' });
+  assert.deepEqual(timeline.getPendingEvents(), []);
+  assert.deepEqual(timeline.getEventHistory(), []);
+  assert.deepEqual(timeline.getTimelineState(), {
+    timelineVersion: 1,
+    timelineId: 'next',
+    timelineRevision: 0,
+    timelineForkTick: 0,
+    timelineClearRevision: 0,
+    lastEventRevision: 0,
+  });
 });
