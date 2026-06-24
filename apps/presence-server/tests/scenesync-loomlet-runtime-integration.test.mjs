@@ -122,3 +122,49 @@ test('Scene Sync Loomlet integration ignores removed sceneSetAudio graph nodes',
     { x: 0, y: 0, z: 0 }
   );
 });
+
+test('Scene Sync Loomlet integration records event evaluations for debug smoke tests', () => {
+  const object = makeObject();
+  const integration = createSceneSyncLoomIntegration({
+    getObjectById: (id) => id === 'box-1' ? object : null,
+    send: () => {},
+    getHostTime: () => 1,
+    getObjectRuntimeTime: () => 1,
+    isObjectBeingEdited: () => false,
+    getLoomletHostEvents: () => [{
+      channel: 'pointer.click',
+      eventId: 'click-1',
+      target: 'box-1',
+    }],
+    clearLoomletHostEvents: () => {},
+    enableDebug: true,
+  });
+
+  integration.handlePayload({
+    type: 'scene-graph-set',
+    scope: { object: 'box-1' },
+    graph: {
+      nodes: [
+        { id: 'click', type: 'onEvent', params: { channel: 'pointer.click' } },
+        { id: 'count', type: 'list.length' },
+        { id: 'set', type: 'sceneSetPosition', params: { y: 2, z: 3 } },
+      ],
+      edges: [
+        { from: 'click.event', to: 'count.list' },
+        { from: 'count.out', to: 'set.x' },
+      ],
+    },
+  });
+  integration.tickObjectGraphs({ t: 1, deltaTime: 1, tick: 4 }, 1000);
+
+  assert.deepEqual(
+    { x: object.position.x, y: object.position.y, z: object.position.z },
+    { x: 1, y: 2, z: 3 }
+  );
+  const debug = integration.debugState();
+  const records = debug.eventEvaluations['object:box-1'];
+  assert.equal(records.length, 1);
+  assert.equal(records[0].events[0].eventId, 'click-1');
+  assert.equal(records[0].effects[0].type, 'scene.setPosition');
+  assert.deepEqual(records[0].effects[0].position, [1, 2, 3]);
+});
