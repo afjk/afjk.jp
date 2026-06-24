@@ -257,6 +257,10 @@ export function createSceneEventTimeline(options = {}) {
       return { ok: false, reason: 'stale-event' };
     }
 
+    const existingEvent = eventHistory.find(item => item.eventId === event.eventId)
+      || pendingEvents.find(item => item.eventId === event.eventId)
+      || null;
+    const changed = !existingEvent || JSON.stringify(existingEvent) !== JSON.stringify(event);
     let replayRequired = false;
     if (event.timelineRevision > timelineRevision) {
       replayRequired = advanceTimelineRevision(event.timelineRevision, payload.branchTick ?? event.applyTick);
@@ -266,14 +270,32 @@ export function createSceneEventTimeline(options = {}) {
     const currentTick = Number.isFinite(optionsForQueue.currentTick)
       ? nonNegativeInteger(optionsForQueue.currentTick, 0)
       : null;
+    if (alreadyApplied && !changed) {
+      lastEventRevision = Math.max(lastEventRevision, event.eventRevision || 0);
+      return { ok: true, event, replayRequired: false, unchanged: true };
+    }
     addHistory(event);
     lastEventRevision = Math.max(lastEventRevision, event.eventRevision || 0);
 
-    if (alreadyApplied || (currentTick !== null && event.applyTick <= currentTick)) {
+    const replayRelevantChange = typeof optionsForQueue.isReplayRelevantChange === 'function'
+      ? optionsForQueue.isReplayRelevantChange(existingEvent, event, {
+        alreadyApplied,
+        changed,
+        currentTick,
+      }) === true
+      : changed;
+    if (
+      changed &&
+      replayRelevantChange &&
+      (alreadyApplied || (currentTick !== null && event.applyTick < currentTick))
+    ) {
       replayRequired = true;
     }
+    if (alreadyApplied && !replayRequired && !replayRelevantChange) {
+      return { ok: true, event, replayRequired: false, replayRelevantChange };
+    }
     addPending(event);
-    return { ok: true, event, replayRequired };
+    return { ok: true, event, replayRequired, replayRelevantChange };
   }
 
   function consumeDueEvents(currentTick = 0) {
@@ -289,27 +311,102 @@ export function createSceneEventTimeline(options = {}) {
     return due;
   }
 
-  function clearEventHistory(payload = {}, optionsForClear = {}) {
-    const payloadTimelineId = normalizeSceneEventTimelineId(payload.timelineId);
-    if (payloadTimelineId !== timelineId) return false;
-
-    const hasCanonicalRevision = payload.timelineRevision !== undefined && payload.timelineRevision !== null;
-    const nextClearRevision = nonNegativeInteger(
-      payload.timelineClearRevision,
-      hasCanonicalRevision ? timelineClearRevision + 1 : timelineClearRevision + 1,
-    );
-    if (nextClearRevision <= timelineClearRevision) return false;
-    if (
-      hasCanonicalRevision &&
-      optionsForClear.allowRevisionRegression !== true &&
-      nonNegativeInteger(payload.timelineRevision, timelineRevision) < timelineRevision
-    ) {
-      return false;
+  function processDueEvents(currentTick = 0, handler = () => true) {
+    const tick = nonNegativeInteger(currentTick, 0);
+    let applied = false;
+    let replayRequired = false;
+    for (let index = 0; index < pendingEvents.length;) {
+      const event = pendingEvents[index];
+      if (event.applyTick > tick) break;
+      const decision = handler(event);
+      if (decision?.replayRequired === true) {
+        replayRequired = true;
+        break;
+      }
+      const shouldApply = decision === true || decision?.applied === true;
+      if (shouldApply) {
+        appliedEventIds.add(event.eventId);
+        pendingEvents.splice(index, 1);
+        applied = true;
+        continue;
+      }
+      index += 1;
     }
+    return { applied, replayRequired };
+  }
 
-    timelineRevision = hasCanonicalRevision
-      ? nonNegativeInteger(payload.timelineRevision, timelineRevision)
-      : timelineRevision + 1;
+  function removeEvents(predicate = () => false, optionsForRemove = {}) {
+    const removedById = new Map();
+    const shouldRemove = (event) => {
+      const remove = predicate(event) === true;
+      if (remove) {
+        if (!removedById.has(event.eventId)) {
+          removedById.set(event.eventId, event);
+        }
+        if (optionsForRemove.markApplied === true) {
+          appliedEventIds.add(event.eventId);
+        } else {
+          appliedEventIds.delete(event.eventId);
+        }
+      }
+      return remove;
+    };
+    eventHistory = eventHistory.filter(event => !shouldRemove(event));
+    pendingEvents = pendingEvents.filter(event => !shouldRemove(event));
+    return Array.from(removedById.values()).map(cloneJson);
+  }
+
+  function setTimelineState(nextState = {}, optionsForState = {}) {
+    const nextTimelineId = normalizeSceneEventTimelineId(nextState.timelineId ?? timelineId);
+    timelineId = nextTimelineId;
+    timelineRevision = nonNegativeInteger(nextState.timelineRevision, timelineRevision);
+    timelineForkTick = nonNegativeInteger(nextState.timelineForkTick, timelineForkTick);
+    timelineClearRevision = nonNegativeInteger(nextState.timelineClearRevision, timelineClearRevision);
+    lastEventRevision = nonNegativeInteger(nextState.lastEventRevision, lastEventRevision);
+    if (optionsForState.resetApplied !== false) {
+      appliedEventIds.clear();
+    }
+    if (optionsForState.requeueHistory === true) {
+      pendingEvents = [];
+      for (const event of eventHistory) addPending(event);
+    }
+  }
+
+  function reset(nextState = {}) {
+    timelineId = normalizeSceneEventTimelineId(nextState.timelineId);
+    timelineRevision = nonNegativeInteger(nextState.timelineRevision, 0);
+    timelineForkTick = nonNegativeInteger(nextState.timelineForkTick, 0);
+    timelineClearRevision = nonNegativeInteger(nextState.timelineClearRevision, 0);
+    lastEventRevision = nonNegativeInteger(nextState.lastEventRevision, 0);
+    pendingEvents = [];
+    eventHistory = [];
+    appliedEventIds.clear();
+  }
+
+    function clearEventHistory(payload = {}, optionsForClear = {}) {
+      const payloadTimelineId = normalizeSceneEventTimelineId(payload.timelineId);
+      if (payloadTimelineId !== timelineId) return false;
+
+      const hasCanonicalRevision = payload.timelineRevision !== undefined && payload.timelineRevision !== null;
+      const canonicalRevision = hasCanonicalRevision
+        ? nonNegativeInteger(payload.timelineRevision, timelineRevision)
+        : null;
+      const nextClearRevision = nonNegativeInteger(
+        payload.timelineClearRevision,
+        canonicalRevision ?? timelineClearRevision + 1,
+      );
+      if (nextClearRevision <= timelineClearRevision) return false;
+      if (
+        hasCanonicalRevision &&
+        optionsForClear.allowRevisionRegression !== true &&
+        canonicalRevision < timelineRevision
+      ) {
+        return false;
+      }
+
+      timelineRevision = hasCanonicalRevision
+        ? canonicalRevision
+        : timelineRevision + 1;
     timelineForkTick = nonNegativeInteger(payload.timelineForkTick, 0);
     timelineClearRevision = nextClearRevision;
     lastEventRevision = 0;
@@ -330,8 +427,12 @@ export function createSceneEventTimeline(options = {}) {
   return {
     queueEvent,
     consumeDueEvents,
+    processDueEvents,
+    removeEvents,
     clearEventHistory,
     resetAppliedFromHistory,
+    setTimelineState,
+    reset,
     getTimelineState,
     getPendingEvents,
     getEventHistory,

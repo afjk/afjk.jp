@@ -339,14 +339,26 @@ test('scene physics runtime drops pending inputs covered by a matching snapshot'
   }), true);
   authority.update({ t: 10 / 60 + 1e-8, transportActive: true });
 
-  const snapshot = authority.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true });
-  assert.equal(snapshot.lastEventRevision, 1);
-  const report = follower.applySnapshotReport(snapshot, { t: 10 / 60 + 1e-8, transportActive: true });
-  assert.equal(report.applied, true);
-  assert.equal(report.matched, true);
-  assert.equal(follower.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).hash, snapshot.hash);
+    const snapshot = {
+      ...authority.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }),
+      lastEventRevision: 10,
+    };
+    assert.equal(authority.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).lastEventRevision, 1);
+    const report = follower.applySnapshotReport(snapshot, { t: 10 / 60 + 1e-8, transportActive: true });
+    assert.equal(report.applied, true);
+    assert.equal(report.matched, true);
+    assert.equal(follower.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).hash, snapshot.hash);
+    assert.equal(follower.getTimelineState().lastEventRevision, 10);
+    assert.equal(follower.queueInput({
+      ...input,
+      inputId: 'covered-drag-after-snapshot:000001',
+      eventRevision: 1,
+      applyTick: 11,
+      position: [11, 2, 0],
+    }), true);
+    assert.equal(follower.getTimelineState().lastEventRevision, 10);
 
-  follower.update({ t: 10 / 60 + 1e-8, transportActive: true });
+    follower.update({ t: 10 / 60 + 1e-8, transportActive: true });
   assert.equal(follower.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).hash, snapshot.hash);
   assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
 
