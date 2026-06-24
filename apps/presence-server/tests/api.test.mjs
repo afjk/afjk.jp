@@ -591,7 +591,7 @@ describe('presence REST broadcast API', () => {
     }
   });
 
-  it('replays scene physics input history to late joiners', async () => {
+  it('replays scene physics input history through generic event log requests', async () => {
     const roomId = 'physics-replay-room';
     const sender = await connectClient(roomId, 'Physics Sender');
     const receiver = await connectClient(roomId, 'Physics Receiver');
@@ -629,8 +629,13 @@ describe('presence REST broadcast API', () => {
       lateJoiner.send(JSON.stringify({
         type: 'broadcast',
         payload: {
-          kind: 'scene-physics-input-log-request',
+          kind: 'scene-event-log-request',
+          eventLogKind: 'scene-event-log',
           timelineId: 'default',
+          timelines: [{
+            source: 'physics',
+            timelineId: 'default',
+          }],
         },
       }));
 
@@ -645,6 +650,38 @@ describe('presence REST broadcast API', () => {
         closeClient(sender),
         closeClient(receiver),
         lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
+      ]);
+    }
+  });
+
+  it('relays generic event log requests to peers after optional room replay', async () => {
+    const roomId = 'event-log-request-relay-room';
+    const requester = await connectClient(roomId, 'Event Requester');
+    const receiver = await connectClient(roomId, 'Event Receiver');
+    try {
+      const requestPromise = waitForMessage(receiver, message =>
+        message.type === 'handoff' && message.payload?.kind === 'scene-event-log-request');
+      requester.send(JSON.stringify({
+        type: 'broadcast',
+        payload: {
+          kind: 'scene-event-log-request',
+          eventLogKind: 'scene-event-log',
+          requestId: 'player-shell-request-1',
+          timelines: [{
+            source: 'player-shell',
+            timelineId: 'player-interaction',
+          }],
+        },
+      }));
+
+      const received = await requestPromise;
+      assert.equal(received.from.id, requester.presenceId);
+      assert.equal(received.payload.requestId, 'player-shell-request-1');
+      assert.equal(received.payload.timelines[0].source, 'player-shell');
+    } finally {
+      await Promise.all([
+        closeClient(requester),
+        closeClient(receiver),
       ]);
     }
   });
@@ -1009,6 +1046,24 @@ describe('presence REST broadcast API', () => {
         lateJoiner ? closeClient(lateJoiner) : Promise.resolve(),
       ]);
     }
+  });
+
+  it('rejects event log requests from REST broadcasts', async () => {
+    const response = await fetch(`${baseUrl}/api/room/event-log-rest-room/broadcast?name=Claude`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'scene-event-log-request',
+        eventLogKind: 'scene-event-log',
+        timelines: [{
+          source: 'physics',
+          timelineId: 'default',
+        }],
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, 'scene-event-log-request requires a websocket client');
   });
 
   it('broadcasts scene-env to change environment', async () => {

@@ -1387,6 +1387,9 @@ const PLAYER_PHYSICS_DRAG_INPUT_INTERVAL_MS = 50;
 const PLAYER_PHYSICS_DRAG_INPUT_LEAD_TICKS = 8;
 const PLAYER_PHYSICS_DRAG_THROW_VELOCITY_SCALE = 1.2;
 const PLAYER_PHYSICS_DRAG_MAX_THROW_SPEED = 18;
+const SCENE_SYNC_EVENT_LOG_KIND = 'scene-event-log';
+const SCENE_SYNC_EVENT_LOG_REQUEST_KIND = 'scene-event-log-request';
+const SCENE_PHYSICS_INPUT_LOG_REQUEST_KIND = 'scene-physics-input-log-request';
 const PLAYER_INTERACTION_EVENT_TIMELINE_ID = 'player-interaction';
 const PLAYER_INTERACTION_CLICK_DISTANCE_SQUARED = 25;
 const PLAYER_INTERACTION_EVENT_CHANNELS = new Set([
@@ -5929,6 +5932,134 @@ function createScenePhysicsRequestId() {
     : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
+function createSceneEventLogTimelineRequest(source, state = {}, fallbackTimelineId = 'default') {
+  return {
+    source,
+    timelineVersion: state.timelineVersion,
+    timelineId: state.timelineId || fallbackTimelineId,
+    timelineRevision: state.timelineRevision,
+    timelineForkTick: state.timelineForkTick,
+    timelineClearRevision: state.timelineClearRevision,
+    lastEventRevision: state.lastEventRevision,
+  };
+}
+
+function createSceneEventLogRequestPayload(reason = 'event-log-request', options = {}) {
+  const physicsTimelineState = scenePhysicsRuntime.getTimelineState?.() || {};
+  const playerInteractionTimelineState = playerInteractionEventTimeline.getTimelineState();
+  return {
+    kind: options.kind || SCENE_SYNC_EVENT_LOG_REQUEST_KIND,
+    eventLogKind: SCENE_SYNC_EVENT_LOG_KIND,
+    timelineVersion: physicsTimelineState.timelineVersion || SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
+    timelineId: physicsTimelineState.timelineId || 'default',
+    timelineRevision: physicsTimelineState.timelineRevision,
+    timelineForkTick: physicsTimelineState.timelineForkTick,
+    timelineClearRevision: physicsTimelineState.timelineClearRevision,
+    lastEventRevision: physicsTimelineState.lastEventRevision,
+    requestId: createScenePhysicsRequestId(),
+    reason,
+    timelines: [
+      createSceneEventLogTimelineRequest('physics', physicsTimelineState, 'default'),
+      createSceneEventLogTimelineRequest(
+        'player-shell',
+        playerInteractionTimelineState,
+        PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+      ),
+    ],
+    sentAt: Date.now(),
+  };
+}
+
+function getRequestedSceneEventTimeline(payload = {}, source, localTimelineId, fallbackTimelineId) {
+  const timelines = Array.isArray(payload.timelines) ? payload.timelines : [];
+  if (timelines.length === 0) return payload;
+  return timelines.find(timeline => {
+    if (!timeline || typeof timeline !== 'object') return false;
+    if (timeline.source === source) return true;
+    const requestedTimelineId = timeline.timelineId || fallbackTimelineId;
+    return requestedTimelineId === (localTimelineId || fallbackTimelineId);
+  }) || null;
+}
+
+function shouldRespondToSceneEventTimelineRequest(
+  request = null,
+  state = {},
+  fallbackTimelineId = 'default',
+  { strictTimelineId = true } = {},
+) {
+  if (!request) return false;
+  if (!strictTimelineId) return true;
+  const requestedTimelineId = request.timelineId || fallbackTimelineId;
+  const localTimelineId = state.timelineId || fallbackTimelineId;
+  return requestedTimelineId === localTimelineId;
+}
+
+function createSceneEventLogResponseMeta(
+  payload = {},
+  request = {},
+  fallbackTimelineId = 'default',
+  { preferFallbackTimelineId = false } = {},
+) {
+  const defaultRequestReason = payload.kind === SCENE_PHYSICS_INPUT_LOG_REQUEST_KIND
+    ? 'input-log-request'
+    : 'event-log-request';
+  return {
+    requestId: payload.requestId,
+    requestKind: payload.kind,
+    requestTimelineId: preferFallbackTimelineId ? fallbackTimelineId : (request.timelineId || fallbackTimelineId),
+    requestTimelineRevision: request.timelineRevision,
+    requestTimelineClearRevision: request.timelineClearRevision,
+    requestReason: payload.reason || defaultRequestReason,
+    eventLogKind: payload.eventLogKind || SCENE_SYNC_EVENT_LOG_KIND,
+  };
+}
+
+function createSceneEventLogResponsePayloads(payload = {}, clockState = null) {
+  const logs = [];
+  const requestedTimelines = Array.isArray(payload.timelines) ? payload.timelines : [];
+  const physicsTimelineState = scenePhysicsRuntime.getTimelineState?.() || {};
+  const physicsRequest = getRequestedSceneEventTimeline(
+    payload,
+    'physics',
+    physicsTimelineState.timelineId,
+    'default',
+  );
+  if (shouldRespondToSceneEventTimelineRequest(physicsRequest, physicsTimelineState, 'default')) {
+    const physicsLog = createScenePhysicsInputLogPayload(
+      clockState,
+      createSceneEventLogResponseMeta(payload, physicsRequest, 'default'),
+    );
+    if (physicsLog) logs.push(physicsLog);
+  }
+
+  const playerTimelineState = playerInteractionEventTimeline.getTimelineState();
+  const playerRequest = getRequestedSceneEventTimeline(
+    payload,
+    'player-shell',
+    playerTimelineState.timelineId,
+    PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+  );
+  if (shouldRespondToSceneEventTimelineRequest(
+    playerRequest,
+    playerTimelineState,
+    PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+    { strictTimelineId: requestedTimelines.length > 0 },
+  )) {
+    const playerInteractionLog = createPlayerInteractionEventLogPayload(
+      clockState,
+      createSceneEventLogResponseMeta(
+        payload,
+        playerRequest,
+        playerTimelineState.timelineId || PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+        { preferFallbackTimelineId: requestedTimelines.length === 0 },
+      ),
+    );
+    if (playerInteractionLog) logs.push(playerInteractionLog);
+  }
+
+  return logs;
+}
+
 function createScenePhysicsInputLogPayload(clockState = null, extra = {}) {
   const log = scenePhysicsRuntime.createInputLogReport?.();
   if (!log || log.kind !== 'scene-physics-input-log') return null;
@@ -5957,8 +6088,8 @@ function createPlayerInteractionEventLogPayload(clockState = null, extra = {}) {
     ? sceneClockState.sharedRevision
     : null;
   return {
-    kind: 'scene-event-log',
-    eventLogKind: 'scene-event-log',
+    kind: SCENE_SYNC_EVENT_LOG_KIND,
+    eventLogKind: SCENE_SYNC_EVENT_LOG_KIND,
     source: 'player-shell',
     timelineVersion: timelineState.timelineVersion,
     timelineId: timelineState.timelineId || PLAYER_INTERACTION_EVENT_TIMELINE_ID,
@@ -7271,9 +7402,10 @@ function handleHandoff(data) {
     payload.kind === 'scene-remove' ||
     payload.kind === 'scene-physics' ||
     payload.kind === 'scene-physics-input-log-clear' ||
-    payload.kind === 'scene-physics-input-log-request' ||
+    payload.kind === SCENE_PHYSICS_INPUT_LOG_REQUEST_KIND ||
+    payload.kind === SCENE_SYNC_EVENT_LOG_REQUEST_KIND ||
     payload.kind === 'scene-physics-input-log' ||
-    payload.kind === 'scene-event-log' ||
+    payload.kind === SCENE_SYNC_EVENT_LOG_KIND ||
     payload.kind === 'scene-event' ||
     payload.kind === 'scene-physics-input'
   ) {
@@ -7337,19 +7469,9 @@ function handleHandoff(data) {
       }
       notifySceneStateChanged('scene-state-handoff');
       publishSharedObjectClockBaselines('scene-state-baseline');
-      const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
-      const inputLogRequest = {
-        kind: 'scene-physics-input-log-request',
-        timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
-        timelineId: timelineState.timelineId || 'default',
-        timelineRevision: timelineState.timelineRevision,
-        timelineForkTick: timelineState.timelineForkTick,
-        timelineClearRevision: timelineState.timelineClearRevision,
-        lastEventRevision: timelineState.lastEventRevision,
-        requestId: createScenePhysicsRequestId(),
-        reason: 'scene-state-handoff',
-        sentAt: Date.now(),
-      };
+      const inputLogRequest = createSceneEventLogRequestPayload('scene-state-handoff', {
+        kind: SCENE_PHYSICS_INPUT_LOG_REQUEST_KIND,
+      });
       if (data.from?.id) {
         sendHandoff({ targetId: data.from.id, payload: inputLogRequest });
       } else {
@@ -7629,31 +7751,11 @@ function handleHandoff(data) {
       }
       break;
     }
-    case 'scene-physics-input-log-request': {
+    case SCENE_PHYSICS_INPUT_LOG_REQUEST_KIND:
+    case SCENE_SYNC_EVENT_LOG_REQUEST_KIND: {
       if (isOwn) break;
-      const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
-      const requestedTimelineId = payload.timelineId || 'default';
-      if (timelineState.timelineId && requestedTimelineId !== timelineState.timelineId) break;
       const logClockState = getSceneClockStateForLoomlet(performance.now());
-      const requestMeta = {
-        requestId: payload.requestId,
-        requestTimelineId: requestedTimelineId,
-        requestTimelineRevision: payload.timelineRevision,
-        requestTimelineClearRevision: payload.timelineClearRevision,
-        requestReason: payload.reason || 'input-log-request',
-      };
-      const inputLog = createScenePhysicsInputLogPayload(
-        logClockState,
-        requestMeta,
-      );
-      const playerInteractionLog = createPlayerInteractionEventLogPayload(
-        logClockState,
-        {
-          ...requestMeta,
-          requestTimelineId: PLAYER_INTERACTION_EVENT_TIMELINE_ID,
-        },
-      );
-      const logs = [inputLog, playerInteractionLog].filter(Boolean);
+      const logs = createSceneEventLogResponsePayloads(payload, logClockState);
       if (logs.length === 0) break;
       for (const logPayload of logs) {
         if (data.from?.id) {

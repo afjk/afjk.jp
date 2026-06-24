@@ -156,7 +156,7 @@ export function getActiveLink(linkId) {
 }
 
 // Cleanup expired pairing codes periodically
-setInterval(() => {
+const cleanupExpiredLinkTokensInterval = setInterval(() => {
   const now = Date.now();
   for (const [code, entry] of pairingCodes) {
     if (now > entry.expiresAt) {
@@ -175,3 +175,4 @@ setInterval(() => {
     }
   }
 }, 60000); // Every minute
+cleanupExpiredLinkTokensInterval.unref?.();

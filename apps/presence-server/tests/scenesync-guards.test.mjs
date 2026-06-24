@@ -141,6 +141,165 @@ describe('Scene Sync guard helpers', () => {
     assert.equal(validateSceneSyncPayload({ kind: 'ai-link-revoked', linkId: 'l1' }).ok, true);
   });
 
+  it('accepts scene event log protocol messages', () => {
+    const playerEvent = {
+      kind: 'scene-event',
+      timelineVersion: 1,
+      timelineId: 'player-interaction',
+      timelineRevision: 0,
+      timelineClearRevision: 0,
+      eventRevision: 1,
+      eventId: 'drag-1:event:000001',
+      interactionId: 'drag-1',
+      sequence: 1,
+      applyTick: 12,
+      channel: 'pointer.drag.start',
+      source: 'player-shell',
+      phase: 'grab-start',
+      target: 'live-box',
+      timestamp: 1.2,
+      sourcePeerId: 'peer-web',
+      payload: {
+        pointerId: 1,
+        pointerType: 'mouse',
+        button: 0,
+        clientX: 100,
+        clientY: 120,
+      },
+      sentAt: Date.now(),
+    };
+
+    assert.equal(validateSceneSyncPayload(playerEvent).ok, true);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-event-log-request',
+      eventLogKind: 'scene-event-log',
+      requestId: 'request-1',
+      reason: 'scene-state-handoff',
+      timelineVersion: 'SceneSyncPhysicsTimelineV1',
+      timelineId: 'default',
+      timelines: [
+        {
+          source: 'physics',
+          timelineVersion: 'SceneSyncPhysicsTimelineV1',
+          timelineId: 'default',
+          timelineRevision: 0,
+          timelineClearRevision: 0,
+          lastEventRevision: 1,
+        },
+        {
+          source: 'player-shell',
+          timelineVersion: 1,
+          timelineId: 'player-interaction',
+          timelineRevision: 0,
+          timelineClearRevision: 0,
+          lastEventRevision: 1,
+        },
+      ],
+      sentAt: Date.now(),
+    }).ok, true);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-input-log-request',
+      eventLogKind: 'scene-event-log',
+      requestId: 'legacy-compatible-request-1',
+      reason: 'scene-state-handoff',
+      timelineVersion: 'SceneSyncPhysicsTimelineV1',
+      timelineId: 'default',
+      timelines: [
+        {
+          source: 'physics',
+          timelineVersion: 'SceneSyncPhysicsTimelineV1',
+          timelineId: 'default',
+        },
+        {
+          source: 'player-shell',
+          timelineVersion: 1,
+          timelineId: 'player-interaction',
+        },
+      ],
+      sentAt: Date.now(),
+    }).ok, true);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-event-log',
+      eventLogKind: 'scene-event-log',
+      source: 'player-shell',
+      timelineVersion: 1,
+      timelineId: 'player-interaction',
+      timelineRevision: 0,
+      timelineForkTick: 0,
+      timelineClearRevision: 0,
+      lastEventRevision: 1,
+      eventCount: 1,
+      events: [playerEvent],
+      sceneClockRevision: 1,
+      controller: { id: 'peer-web', nickname: 'Web' },
+      clock: { sharedEpochTime: 2.5 },
+      sentAt: Date.now(),
+    }).ok, true);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-physics-input-log',
+      eventLogKind: 'scene-event-log',
+      source: 'physics',
+      timelineVersion: 'SceneSyncPhysicsTimelineV1',
+      timelineId: 'default',
+      timelineRevision: 0,
+      timelineForkTick: 0,
+      timelineClearRevision: 0,
+      lastEventRevision: 1,
+      eventCount: 1,
+      events: [{
+        kind: 'scene-event',
+        timelineVersion: 'SceneSyncPhysicsTimelineV1',
+        timelineId: 'default',
+        timelineRevision: 0,
+        timelineClearRevision: 0,
+        eventRevision: 1,
+        eventId: 'physics-drag:000001',
+        applyTick: 12,
+        channel: 'physics.body-state',
+        source: 'physics',
+        target: 'live-box',
+        timestamp: 0.2,
+        payload: {},
+      }],
+      inputCount: 1,
+      inputs: [{
+        kind: 'scene-physics-input',
+        inputType: 'set-body-state',
+        inputId: 'physics-drag:000001',
+        timelineVersion: 'SceneSyncPhysicsTimelineV1',
+        timelineId: 'default',
+        timelineRevision: 0,
+        timelineClearRevision: 0,
+        eventRevision: 1,
+        objectId: 'live-box',
+        applyTick: 12,
+        position: [1, 2, 3],
+        rotation: [0, 0, 0, 1],
+        velocity: [0, 0, 0],
+        angularVelocity: [0, 0, 0],
+      }],
+      sentAt: Date.now(),
+    }).ok, true);
+  });
+
+  it('rejects invalid scene event log protocol messages', () => {
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-event',
+      timelineId: 'player-interaction',
+    }).ok, false);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-event-log',
+      events: 'not-events',
+    }).ok, false);
+    assert.equal(validateSceneSyncPayload({
+      kind: 'scene-event-log-request',
+      timelines: [{
+        source: 'physics',
+        timelineRevision: -1,
+      }],
+    }).ok, false);
+  });
+
   it('rejects invalid scene-clock numbers', () => {
     const result = validateSceneSyncPayload({
       kind: 'scene-clock',
