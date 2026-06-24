@@ -13,6 +13,46 @@ function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function compareStrings(left, right) {
+  return String(left || '').localeCompare(String(right || ''));
+}
+
+export function compareLoomletRuntimeScopeKeys(left, right) {
+  if (left === right) return 0;
+  if (left === 'scene') return -1;
+  if (right === 'scene') return 1;
+  return compareStrings(left, right);
+}
+
+export function compareLoomletRuntimeEvents(left, right) {
+  return finiteNumber(left?.tick, 0) - finiteNumber(right?.tick, 0)
+    || finiteNumber(left?.applyTick, 0) - finiteNumber(right?.applyTick, 0)
+    || finiteNumber(left?.eventRevision, 0) - finiteNumber(right?.eventRevision, 0)
+    || finiteNumber(left?.sequence, 0) - finiteNumber(right?.sequence, 0)
+    || compareStrings(left?.channel ?? left?.type, right?.channel ?? right?.type)
+    || compareStrings(left?.eventId, right?.eventId);
+}
+
+export function resolveLoomletRuntimeDeltaTime(clockState = null, fallback = 0) {
+  if (Number.isFinite(Number(clockState?.deltaTime))) {
+    return Math.max(0, Number(clockState.deltaTime));
+  }
+  if (Number.isFinite(Number(clockState?.delta))) {
+    return Math.max(0, Number(clockState.delta));
+  }
+  return Math.max(0, finiteNumber(fallback, 0));
+}
+
+export function resolveLoomletRuntimeTick(clockState = null) {
+  const tick = Number(clockState?.tick);
+  return Number.isFinite(tick) ? Math.max(0, Math.floor(tick)) : undefined;
+}
+
 export function normalizeLoomletHostEventsForRuntime(hostEvents, {
   target = null,
   timestamp = 0,
@@ -53,7 +93,7 @@ export function normalizeLoomletHostEventsForRuntime(hostEvents, {
     if (normalized.time === undefined) normalized.time = normalized.timestamp;
     if (target && normalized.objectId === undefined) normalized.objectId = target;
     return normalized;
-  }).filter(Boolean);
+  }).filter(Boolean).sort(compareLoomletRuntimeEvents);
 }
 
 function scopeKey(scope) {
@@ -395,6 +435,8 @@ function createRuntimeManager({
 
     // Build host inputs for object-scoped evaluations
     const inputs = entry.scopeObjectId ? buildHostInputsForObject(entry.scopeObjectId, time, clockState, { getInputRoutingMode }) : {};
+    const deltaTime = resolveLoomletRuntimeDeltaTime(clockState);
+    const tick = resolveLoomletRuntimeTick(clockState);
 
     // Gather host events for object-scoped evaluations
     let events = [];
@@ -405,14 +447,18 @@ function createRuntimeManager({
       });
     }
 
-    entry.runtime.evaluateAt({
+    const env = {
       time,
+      deltaTime,
       scope: entry.scopeObjectId
         ? { type: 'object', id: entry.scopeObjectId }
         : { type: 'scene' },
       inputs,
       events,
-    }, now);
+    };
+    if (tick !== undefined) env.tick = tick;
+
+    entry.runtime.evaluateAt(env, Number.isFinite(time) ? time * 1000 : now);
 
     // Clear events after evaluation
     if (entry.scopeObjectId && clearLoomletHostEvents) {
@@ -438,7 +484,7 @@ function createRuntimeManager({
     tick(clockState = null, now = performance.now()) {
       // clockState: Scene Clock state from host
       // If not provided, fall back to host-provided time
-      for (const [key, entry] of runtimes) {
+      for (const [key, entry] of Array.from(runtimes.entries()).sort(([left], [right]) => compareLoomletRuntimeScopeKeys(left, right))) {
         evaluateRuntime(key, entry, clockState, now);
       }
     },
