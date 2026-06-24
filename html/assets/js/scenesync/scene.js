@@ -5715,6 +5715,9 @@ function applyScenePhysicsInputLogPayload(payload = {}, fromPeer = null) {
   console.debug('[scene-physics] input log received', {
     fromId: fromPeer?.id || null,
     accepted: report.accepted,
+    eventCount: report.eventCount,
+    handledEventCount: report.handledEventCount,
+    ignoredEventCount: report.ignoredEventCount,
     inputCount: report.inputCount,
     queuedCount: report.queuedCount,
     skippedCoveredCount: report.skippedCoveredCount,
@@ -5723,7 +5726,10 @@ function applyScenePhysicsInputLogPayload(payload = {}, fromPeer = null) {
     timelineClearRevision: report.timelineClearRevision ?? payload.timelineClearRevision ?? null,
     snapshotMatched,
   });
-  return snapshotMatched || report.accepted === true;
+  const processedPhysicsInputs = report.queuedCount > 0 ||
+    report.skippedCoveredCount > 0 ||
+    (payload.kind === 'scene-physics-input-log' && report.accepted === true);
+  return snapshotMatched || processedPhysicsInputs;
 }
 
 function requestScenePhysicsSnapshotForHashMismatch(payload = {}, fromPeer = null, report = null) {
@@ -6994,6 +7000,8 @@ function handleHandoff(data) {
     payload.kind === 'scene-physics-input-log-clear' ||
     payload.kind === 'scene-physics-input-log-request' ||
     payload.kind === 'scene-physics-input-log' ||
+    payload.kind === 'scene-event-log' ||
+    payload.kind === 'scene-event' ||
     payload.kind === 'scene-physics-input'
   ) {
     console.debug('[handoff] scene mutation received', {
@@ -7340,6 +7348,12 @@ function handleHandoff(data) {
       notifySceneStateChanged('scene-physics-input');
       break;
     }
+    case 'scene-event': {
+      if (scenePhysicsRuntime.queueInput(payload)) {
+        notifySceneStateChanged('scene-event');
+      }
+      break;
+    }
     case 'scene-physics-input-log-request': {
       if (isOwn) break;
       const timelineState = scenePhysicsRuntime.getTimelineState?.() || {};
@@ -7367,6 +7381,13 @@ function handleHandoff(data) {
       if (isOwn) break;
       if (applyScenePhysicsInputLogPayload(payload, data.from)) {
         notifySceneStateChanged('scene-physics-input-log');
+      }
+      break;
+    }
+    case 'scene-event-log': {
+      if (isOwn) break;
+      if (applyScenePhysicsInputLogPayload(payload, data.from)) {
+        notifySceneStateChanged('scene-event-log');
       }
       break;
     }

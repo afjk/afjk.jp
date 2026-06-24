@@ -8,6 +8,8 @@ import {
   isScenePhysicsZeroTime,
   normalizeObjectPhysics,
   normalizeScenePhysics,
+  SCENE_SYNC_EVENT_LOG_KIND,
+  SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL,
   SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
   SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
   SCENE_SYNC_RAPIER_PROFILE,
@@ -169,6 +171,160 @@ test('queues scene physics input and applies it at the requested tick', () => {
   assert.ok(object.position.toArray()[0] > 3);
 
   runtime.dispose();
+});
+
+test('queues physics body-state scene events and applies them at the requested tick', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  assert.equal(runtime.queueInput({
+    kind: 'scene-event',
+    channel: SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL,
+    eventId: 'scene-event-drag:000001',
+    target: 'ball',
+    applyTick: 1,
+    payload: {
+      position: [3, 2, 0],
+      rotation: [0, 0, 0, 1],
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  }), true);
+
+  const result = runtime.update({ t: 3 / 60, transportActive: true });
+  assert.equal(result.active, true);
+  assert.ok(object.position.toArray()[0] > 3);
+
+  runtime.dispose();
+});
+
+test('scene-event-log reports ignored events and keeps legacy physics inputs', () => {
+  const makeBall = (objectId = 'ball') => makeObject({
+    objectId,
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = {
+    enabled: true,
+    worldOptions: {
+      gravity: [0, 0, 0],
+      ground: null,
+      timestep: 1 / 60,
+    },
+  };
+  const nonPhysicsEvent = {
+    kind: 'scene-event',
+    channel: 'pointer.click',
+    eventId: 'pointer-click:000001',
+    applyTick: 1,
+    payload: { button: 0 },
+  };
+  const physicsEvent = {
+    kind: 'scene-event',
+    channel: SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL,
+    eventId: 'scene-event-log-drag:000001',
+    target: 'ball',
+    applyTick: 1,
+    payload: {
+      position: [3, 2, 0],
+      rotation: [0, 0, 0, 1],
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  };
+
+  const eventObject = makeBall();
+  const eventRuntime = makeRuntime({ scenePhysics, entries: [makeEntry(eventObject)] });
+  eventRuntime.update({ t: 0, transportActive: true });
+  const eventReport = eventRuntime.applyInputLogReport({
+    kind: SCENE_SYNC_EVENT_LOG_KIND,
+    timelineId: 'default',
+    timelineRevision: 0,
+    timelineClearRevision: 0,
+    events: [nonPhysicsEvent, physicsEvent],
+  });
+  assert.equal(eventReport.accepted, true);
+  assert.equal(eventReport.eventCount, 2);
+  assert.equal(eventReport.handledEventCount, 1);
+  assert.equal(eventReport.ignoredEventCount, 1);
+  assert.equal(eventReport.inputCount, 1);
+  assert.equal(eventReport.queuedCount, 1);
+  eventRuntime.update({ t: 3 / 60, transportActive: true });
+  assert.ok(eventObject.position.toArray()[0] > 3);
+
+  const legacyObject = makeBall();
+  const legacyRuntime = makeRuntime({ scenePhysics, entries: [makeEntry(legacyObject)] });
+  legacyRuntime.update({ t: 0, transportActive: true });
+  const legacyReport = legacyRuntime.applyInputLogReport({
+    kind: SCENE_SYNC_EVENT_LOG_KIND,
+    timelineId: 'default',
+    timelineRevision: 0,
+    timelineClearRevision: 0,
+    events: [nonPhysicsEvent],
+    inputs: [{
+      kind: 'scene-physics-input',
+      inputType: 'set-body-state',
+      inputId: 'legacy-scene-event-log-drag:000001',
+      objectId: 'ball',
+      applyTick: 1,
+      position: [4, 2, 0],
+      rotation: [0, 0, 0, 1],
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    }],
+  });
+  assert.equal(legacyReport.accepted, true);
+  assert.equal(legacyReport.eventCount, 1);
+  assert.equal(legacyReport.handledEventCount, 0);
+  assert.equal(legacyReport.ignoredEventCount, 1);
+  assert.equal(legacyReport.inputCount, 1);
+  assert.equal(legacyReport.queuedCount, 1);
+  legacyRuntime.update({ t: 3 / 60, transportActive: true });
+  assert.ok(legacyObject.position.toArray()[0] > 4);
+
+  const ignoredReport = legacyRuntime.applyInputLogReport({
+    kind: SCENE_SYNC_EVENT_LOG_KIND,
+    timelineId: 'default',
+    timelineRevision: 0,
+    timelineClearRevision: 0,
+    events: [nonPhysicsEvent],
+  });
+  assert.equal(ignoredReport.accepted, false);
+  assert.equal(ignoredReport.handledEventCount, 0);
+  assert.equal(ignoredReport.ignoredEventCount, 1);
+  assert.equal(ignoredReport.queuedCount, 0);
+
+  eventRuntime.dispose();
+  legacyRuntime.dispose();
 });
 
 test('scene physics runtime applies a newer remote physics snapshot', () => {
@@ -567,13 +723,20 @@ test('exports and applies scene physics input logs for late join replay', () => 
   follower.update({ t: 0, transportActive: true });
   const log = authority.createInputLogReport({ requestId: 'late-join-request' });
   assert.equal(log.kind, 'scene-physics-input-log');
+  assert.equal(log.eventLogKind, SCENE_SYNC_EVENT_LOG_KIND);
+  assert.equal(log.eventCount, 2);
   assert.equal(log.inputCount, 2);
   assert.equal(log.lastEventRevision, 2);
+  assert.equal(log.events[0].kind, 'scene-event');
+  assert.equal(log.events[0].channel, SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL);
+  assert.equal(log.events[0].target, 'ball');
+  assert.deepEqual(log.events[0].payload.position, [2, 2, 0]);
   assert.equal(log.inputs[0].inputId, 'late-join-drag-1');
   assert.equal(log.inputs[1].inputId, 'late-join-drag-2');
 
   const report = follower.applyInputLogReport(log);
   assert.equal(report.accepted, true);
+  assert.equal(report.eventCount, 2);
   assert.equal(report.inputCount, 2);
   assert.equal(report.queuedCount, 2);
   follower.update({ t: 4 / 60, transportActive: true });
@@ -582,6 +745,29 @@ test('exports and applies scene physics input logs for late join replay', () => 
   const followerSnapshot = follower.createSnapshotReport({ t: 4 / 60, transportActive: true });
   assert.equal(followerSnapshot.hash, authoritySnapshot.hash);
   assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  const eventFollowerObject = makeBall();
+  const eventFollower = makeRuntime({ scenePhysics, entries: [makeEntry(eventFollowerObject)] });
+  eventFollower.update({ t: 0, transportActive: true });
+  const eventLogReport = eventFollower.applyInputLogReport({
+    kind: SCENE_SYNC_EVENT_LOG_KIND,
+    source: 'physics',
+    timelineId: log.timelineId,
+    timelineRevision: log.timelineRevision,
+    timelineForkTick: log.timelineForkTick,
+    timelineClearRevision: log.timelineClearRevision,
+    lastEventRevision: log.lastEventRevision,
+    eventCount: log.eventCount,
+    events: log.events,
+  });
+  assert.equal(eventLogReport.accepted, true);
+  assert.equal(eventLogReport.eventCount, 2);
+  assert.equal(eventLogReport.inputCount, 2);
+  assert.equal(eventLogReport.queuedCount, 2);
+  eventFollower.update({ t: 4 / 60, transportActive: true });
+  const eventFollowerSnapshot = eventFollower.createSnapshotReport({ t: 4 / 60, transportActive: true });
+  assert.equal(eventFollowerSnapshot.hash, authoritySnapshot.hash);
+  assertVectorClose(eventFollowerObject.position.toArray(), authorityObject.position.toArray());
 
   const snapshotFollowerObject = makeBall();
   const snapshotFollower = makeRuntime({ scenePhysics, entries: [makeEntry(snapshotFollowerObject)] });
@@ -603,6 +789,7 @@ test('exports and applies scene physics input logs for late join replay', () => 
 
   authority.dispose();
   follower.dispose();
+  eventFollower.dispose();
   snapshotFollower.dispose();
 });
 
