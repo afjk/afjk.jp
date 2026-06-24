@@ -135,8 +135,7 @@ namespace Afjk.SceneSync.Rapier
         public int PreparePhysicsTimelineBranch(int branchTick)
         {
             var normalizedBranchTick = Mathf.Max(0, branchTick);
-            if (HasFutureBodyStateInputs(normalizedBranchTick))
-                AdvancePhysicsTimeline(timelineRevision + 1, normalizedBranchTick);
+            AdvancePhysicsTimeline(timelineRevision + 1, normalizedBranchTick);
             return timelineRevision;
         }
         public bool AutoRun

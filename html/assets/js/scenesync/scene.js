@@ -1381,6 +1381,7 @@ const SAMPLE_CUBE_OBJECT_ID = 'sample-cube';
 const SAMPLE_CUBE_COLOR = '#4488ff';
 const SCENE_PHYSICS_HASH_BROADCAST_TICK_INTERVAL = 30;
 const SCENE_PHYSICS_SNAPSHOT_BROADCAST_TICK_INTERVAL = 120;
+const SCENE_PHYSICS_SNAPSHOT_REQUEST_COOLDOWN_MS = 1000;
 const PLAYER_PHYSICS_DRAG_INPUT_INTERVAL_MS = 50;
 const PLAYER_PHYSICS_DRAG_INPUT_LEAD_TICKS = 8;
 const PLAYER_PHYSICS_DRAG_THROW_VELOCITY_SCALE = 1.2;
@@ -1417,6 +1418,8 @@ let lastScenePhysicsSnapshotBroadcastTick = null;
 let lastScenePhysicsSnapshotBroadcastHash = null;
 let lastScenePhysicsSnapshotBroadcastRevision = null;
 let lastScenePhysicsSnapshotBroadcastClearRevision = null;
+let lastScenePhysicsSnapshotRequestTick = null;
+let lastScenePhysicsSnapshotRequestAt = 0;
 const scenePhysicsRuntime = createScenePhysicsRuntime({
   getScenePhysics: () => scenePhysicsState,
   getObjectEntries: () => Array.from(managedObjects.entries()).map(([objectId, object]) => ({
@@ -5648,6 +5651,100 @@ function createScenePhysicsSnapshotPayload(clockState = null, extra = {}) {
   };
 }
 
+function applyScenePhysicsSnapshotPayload(payload = {}, fromPeer = null) {
+  const report = scenePhysicsRuntime.applySnapshotReport?.(
+    payload,
+    getSceneClockStateForLoomlet(performance.now()),
+    {
+      latestSceneClockRevision: sceneClockState.sharedRevision,
+    },
+  );
+  if (!report) return false;
+  console.debug('[scene-physics] snapshot received', {
+    fromId: fromPeer?.id || null,
+    tick: report.tick,
+    localTick: report.localTick,
+    applied: report.applied,
+    matched: report.matched,
+    bodyCount: report.bodyCount,
+    dynamicBodyCount: report.dynamicBodyCount,
+    appliedBodyCount: report.appliedBodyCount,
+    missingBodyCount: report.missingBodyCount,
+  });
+  if (report.matched) {
+    notifySceneSyncShellStateChanged('scene-physics-snapshot');
+  }
+  return report.matched === true;
+}
+
+function requestScenePhysicsSnapshotForHashMismatch(payload = {}, fromPeer = null, report = null) {
+  if (isSceneClockControllerSelf()) return false;
+  if (!report?.tickMatched || !report?.hashVersionMatched || !report?.profileMatched || !report?.timelineMatched) {
+    return false;
+  }
+  if (!Number.isInteger(report.tick) || report.tick < 0) return false;
+
+  const now = performance.now();
+  if (
+    lastScenePhysicsSnapshotRequestTick === report.tick &&
+    now - lastScenePhysicsSnapshotRequestAt < SCENE_PHYSICS_SNAPSHOT_REQUEST_COOLDOWN_MS
+  ) {
+    return false;
+  }
+  lastScenePhysicsSnapshotRequestTick = report.tick;
+  lastScenePhysicsSnapshotRequestAt = now;
+
+  const request = {
+    kind: 'scene-physics-snapshot-request',
+    source: 'physics',
+    phase: 'postPhysics',
+    snapshotVersion: SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION,
+    profile: payload.profile || SCENE_SYNC_RAPIER_PROFILE,
+    hashVersion: payload.hashVersion,
+    timelineVersion: payload.timelineVersion,
+    timelineId: payload.timelineId || 'default',
+    timelineRevision: payload.timelineRevision,
+    timelineForkTick: payload.timelineForkTick,
+    timelineClearRevision: payload.timelineClearRevision,
+    lastEventRevision: payload.lastEventRevision,
+    requestId: typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID().replace(/-/g, '')
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`,
+    reason: 'hash-mismatch',
+    tick: report.tick,
+    localTick: report.localTick,
+    remoteHash: report.remoteHash,
+    localHash: report.localHash,
+    sceneClockRevision: payload.sceneClockRevision,
+    sentAt: Date.now(),
+  };
+
+  if (fromPeer?.id) {
+    sendHandoff({ targetId: fromPeer.id, payload: request });
+  } else {
+    broadcast(request);
+  }
+  return true;
+}
+
+function applyScenePhysicsHashPayload(payload = {}, fromPeer = null) {
+  const report = scenePhysicsRuntime.compareHashReport?.(payload);
+  if (!report) return false;
+  if (report.matched) return true;
+
+  console.debug('[scene-physics] hash mismatch', {
+    fromId: fromPeer?.id || null,
+    tick: report.tick,
+    localTick: report.localTick,
+    remoteHash: report.remoteHash,
+    localHash: report.localHash,
+    hashVersionMatched: report.hashVersionMatched,
+    profileMatched: report.profileMatched,
+    timelineMatched: report.timelineMatched,
+  });
+  return requestScenePhysicsSnapshotForHashMismatch(payload, fromPeer, report);
+}
+
 function applyScenePhysicsInputLogClear(payload = {}, now = performance.now()) {
   const cleared = scenePhysicsRuntime.clearInputHistory?.(payload) === true;
   if (!cleared) return false;
@@ -7184,6 +7281,18 @@ function handleHandoff(data) {
       if (applyScenePhysicsInputLogClear(payload)) {
         notifySceneStateChanged('scene-physics-input-log-clear');
       }
+      break;
+    }
+    case 'scene-physics-snapshot': {
+      if (isOwn) break;
+      if (applyScenePhysicsSnapshotPayload(payload, data.from)) {
+        notifySceneStateChanged('scene-physics-snapshot');
+      }
+      break;
+    }
+    case 'scene-physics-hash': {
+      if (isOwn) break;
+      applyScenePhysicsHashPayload(payload, data.from);
       break;
     }
     case 'scene-physics-snapshot-request': {

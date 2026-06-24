@@ -171,6 +171,276 @@ test('queues scene physics input and applies it at the requested tick', () => {
   runtime.dispose();
 });
 
+test('scene physics runtime applies a newer remote physics snapshot', () => {
+  const makeBall = () => makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = {
+    enabled: true,
+    worldOptions: {
+      gravity: [0, 0, 0],
+      ground: null,
+      timestep: 1 / 60,
+    },
+  };
+  const authorityObject = makeBall();
+  const followerObject = makeBall();
+  const authority = makeRuntime({
+    scenePhysics,
+    entries: [makeEntry(authorityObject)],
+  });
+  const follower = makeRuntime({
+    scenePhysics,
+    entries: [makeEntry(followerObject)],
+  });
+
+  authority.update({ t: 0, transportActive: true });
+  follower.update({ t: 0, transportActive: true });
+  authority.update({ t: 10 / 60 + 1e-8, transportActive: true });
+  follower.update({ t: 5 / 60 + 1e-8, transportActive: true });
+  assert.equal(authority.getTick(), 10);
+  assert.equal(follower.getTick(), 5);
+
+  const snapshot = authority.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true });
+  const report = follower.applySnapshotReport(snapshot, { t: 10 / 60 + 1e-8, transportActive: true });
+
+  assert.equal(report.applied, true);
+  assert.equal(report.matched, true);
+  assert.equal(follower.getTick(), 10);
+  assertVectorClose(
+    follower.getDynamicBodyState('ball').position,
+    authority.getDynamicBodyState('ball').position,
+  );
+  assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  authority.dispose();
+  follower.dispose();
+});
+
+test('scene physics runtime applies remote snapshots with default fixed ground', () => {
+  const makeBall = () => makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = {
+    enabled: true,
+    worldOptions: {
+      gravity: [0, 0, 0],
+      ground: {
+        y: 0,
+        restitution: 0.2,
+        friction: 0.5,
+      },
+      timestep: 1 / 60,
+    },
+  };
+  const authorityObject = makeBall();
+  const followerObject = makeBall();
+  const authority = makeRuntime({
+    scenePhysics,
+    entries: [makeEntry(authorityObject)],
+  });
+  const follower = makeRuntime({
+    scenePhysics,
+    entries: [makeEntry(followerObject)],
+  });
+
+  authority.update({ t: 0, transportActive: true });
+  follower.update({ t: 0, transportActive: true });
+  authority.update({ t: 10 / 60 + 1e-8, transportActive: true });
+  follower.update({ t: 5 / 60 + 1e-8, transportActive: true });
+
+  const snapshot = authority.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true });
+  assert.ok(snapshot.bodies.some((body) => body.id === '__scenesync_ground__' && body.type === 'fixed'));
+  const report = follower.applySnapshotReport(snapshot, { t: 10 / 60 + 1e-8, transportActive: true });
+
+  assert.equal(report.applied, true);
+  assert.equal(report.matched, true);
+  assert.equal(report.missingBodyCount, 0);
+  assert.equal(follower.getTick(), 10);
+  assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  authority.dispose();
+  follower.dispose();
+});
+
+test('scene physics runtime drops pending inputs covered by a matching snapshot', () => {
+  const makeBall = () => makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const scenePhysics = {
+    enabled: true,
+    worldOptions: {
+      gravity: [0, 0, 0],
+      ground: null,
+      timestep: 1 / 60,
+    },
+  };
+  const authorityObject = makeBall();
+  const followerObject = makeBall();
+  const authority = makeRuntime({
+    scenePhysics,
+    entries: [makeEntry(authorityObject)],
+  });
+  const follower = makeRuntime({
+    scenePhysics,
+    entries: [makeEntry(followerObject)],
+  });
+  const input = {
+    kind: 'scene-physics-input',
+    inputType: 'set-body-state',
+    inputId: 'covered-drag:000001',
+    timelineId: 'default',
+    timelineRevision: 0,
+    eventRevision: 1,
+    interactionId: 'covered-drag',
+    sequence: 1,
+    phase: 'grab-release',
+    objectId: 'ball',
+    applyTick: 8,
+    position: [8, 2, 0],
+    rotation: [0, 0, 0, 1],
+    velocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+  };
+
+  authority.update({ t: 0, transportActive: true });
+  follower.update({ t: 0, transportActive: true });
+  assert.equal(authority.queueInput(input), true);
+  assert.equal(follower.queueInput({
+    ...input,
+    position: [30, 2, 0],
+  }), true);
+  authority.update({ t: 10 / 60 + 1e-8, transportActive: true });
+
+  const snapshot = authority.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true });
+  assert.equal(snapshot.lastEventRevision, 1);
+  const report = follower.applySnapshotReport(snapshot, { t: 10 / 60 + 1e-8, transportActive: true });
+  assert.equal(report.applied, true);
+  assert.equal(report.matched, true);
+  assert.equal(follower.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).hash, snapshot.hash);
+
+  follower.update({ t: 10 / 60 + 1e-8, transportActive: true });
+  assert.equal(follower.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).hash, snapshot.hash);
+  assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  follower.update({ t: 5 / 60 + 1e-8, transportActive: true });
+  follower.update({ t: 10 / 60 + 1e-8, transportActive: true });
+  assert.equal(follower.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true }).hash, snapshot.hash);
+  assertVectorClose(followerObject.position.toArray(), authorityObject.position.toArray());
+
+  authority.dispose();
+  follower.dispose();
+});
+
+test('scene physics runtime restores snapshot sleeping state for canonical convergence', () => {
+  const object = makeObject({
+    objectId: 'box',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'box',
+      halfExtents: [0.5, 0.5, 0.5],
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  runtime.update({ t: 2 / 60 + 1e-8, transportActive: true });
+  const snapshot = runtime.createSnapshotReport({ t: 2 / 60 + 1e-8, transportActive: true });
+  const body = snapshot.bodies.find((item) => item.id === 'box');
+  body.sleeping = true;
+  body.velocity = [0, 0, 0];
+  body.angularVelocity = [0, 0, 0];
+  snapshot.hash = null;
+
+  const report = runtime.applySnapshotReport(snapshot, { t: 2 / 60 + 1e-8, transportActive: true });
+  snapshot.hash = report.localHash;
+  const matchedReport = runtime.applySnapshotReport(snapshot, { t: 2 / 60 + 1e-8, transportActive: true });
+
+  assert.equal(matchedReport.applied, true);
+  assert.equal(matchedReport.matched, true);
+  assert.equal(runtime.getDynamicBodyState('box').sleeping, true);
+
+  runtime.dispose();
+});
+
+test('scene physics runtime rejects stale remote physics snapshots', () => {
+  const object = makeObject({
+    objectId: 'ball',
+    position: [0, 2, 0],
+    physics: {
+      enabled: true,
+      bodyType: 'dynamic',
+      shape: 'sphere',
+      radius: 0.5,
+      velocity: [1, 0, 0],
+      angularVelocity: [0, 0, 0],
+    },
+  });
+  const runtime = makeRuntime({
+    scenePhysics: {
+      enabled: true,
+      worldOptions: {
+        gravity: [0, 0, 0],
+        ground: null,
+        timestep: 1 / 60,
+      },
+    },
+    entries: [makeEntry(object)],
+  });
+
+  runtime.update({ t: 0, transportActive: true });
+  runtime.update({ t: 10 / 60 + 1e-8, transportActive: true });
+  const staleSnapshot = runtime.createSnapshotReport({ t: 10 / 60 + 1e-8, transportActive: true });
+  staleSnapshot.tick = 5;
+  const report = runtime.applySnapshotReport(staleSnapshot, { t: 10 / 60 + 1e-8, transportActive: true });
+
+  assert.equal(report.applied, false);
+  assert.equal(runtime.getTick(), 10);
+
+  runtime.dispose();
+});
+
 test('rewinds and replays when a scene physics input arrives late', () => {
   const object = makeObject({
     objectId: 'ball',
@@ -1207,6 +1477,8 @@ test('scene physics runtime creates canonical snapshot reports on demand', () =>
     rotation: [0, 0, 0, 1],
     velocity: [0.25, 0, 0],
     angularVelocity: [0, 0, 0],
+    sleeping: false,
+    enabled: true,
   });
 });
 
