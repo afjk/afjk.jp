@@ -1158,7 +1158,7 @@ namespace Afjk.SceneSync.Rapier
                 }
 
                 dirty = true;
-                RequestPhysicsInputLog();
+                RequestPhysicsInputLog(message.FromPeerId);
                 return;
             }
 
@@ -1500,22 +1500,23 @@ namespace Afjk.SceneSync.Rapier
 
         private void ApplyScenePhysicsInputLog(string raw, string fromPeerId)
         {
-            var snapshotJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "snapshot");
+            var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload") ?? raw;
+            var snapshotJson = SceneSyncWireJson.ExtractTopLevelRawObject(payloadJson, "snapshot");
             var snapshotMatched = false;
             if (!string.IsNullOrWhiteSpace(snapshotJson))
                 snapshotMatched = ApplyScenePhysicsSnapshot(snapshotJson, fromPeerId, allowRewindSnapshot: true);
             var snapshotTick = ReadInt(snapshotJson, "tick", -1);
             var snapshotLastEventRevision = ReadLong(snapshotJson, "lastEventRevision", 0L);
 
-            var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(raw, "timelineId"));
+            var inputTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(payloadJson, "timelineId"));
             if (!string.Equals(inputTimelineId, timelineId, StringComparison.Ordinal))
                 return;
 
-            var inputTimelineClearRevision = ReadInt(raw, "timelineClearRevision", timelineClearRevision);
+            var inputTimelineClearRevision = ReadInt(payloadJson, "timelineClearRevision", timelineClearRevision);
             if (inputTimelineClearRevision != timelineClearRevision)
                 return;
 
-            foreach (var inputJson in ExtractObjectArrayEntries(raw, "inputs"))
+            foreach (var inputJson in ExtractObjectArrayEntries(payloadJson, "inputs"))
             {
                 if (snapshotMatched && InputJsonCoveredBySnapshot(inputJson, snapshotTick, snapshotLastEventRevision))
                     continue;
@@ -1724,7 +1725,7 @@ namespace Afjk.SceneSync.Rapier
             SceneSyncMessageBus.PublishOutgoing(payload, null, this);
         }
 
-        private void RequestPhysicsInputLog()
+        private void RequestPhysicsInputLog(string targetPeerId = null)
         {
             var requestId = Guid.NewGuid().ToString("N");
             var payload =
@@ -1738,17 +1739,18 @@ namespace Afjk.SceneSync.Rapier
                 ",\"requestId\":\"" + SceneSyncWireJson.JsonEscape(requestId) + "\"" +
                 ",\"reason\":\"scene-state-handoff\"" +
                 ",\"sentAt\":" + CurrentUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) + "}";
-            SceneSyncMessageBus.PublishOutgoing(payload, null, this);
+            SceneSyncMessageBus.PublishOutgoing(payload, targetPeerId, this);
         }
 
         private void PublishPhysicsInputLog(string requestRaw, string targetPeerId)
         {
-            var requestTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(requestRaw, "timelineId"));
+            var requestPayloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(requestRaw, "payload") ?? requestRaw;
+            var requestTimelineId = NormalizeTimelineId(SceneSyncWireJson.ExtractString(requestPayloadJson, "timelineId"));
             if (!string.Equals(requestTimelineId, timelineId, StringComparison.Ordinal))
                 return;
 
-            var requestId = SceneSyncWireJson.ExtractString(requestRaw, "requestId");
-            SceneSyncMessageBus.PublishOutgoing(BuildPhysicsInputLogJson(requestId, requestRaw), targetPeerId, this);
+            var requestId = SceneSyncWireJson.ExtractString(requestPayloadJson, "requestId");
+            SceneSyncMessageBus.PublishOutgoing(BuildPhysicsInputLogJson(requestId, requestPayloadJson), targetPeerId, this);
         }
 
         private string BuildPhysicsInputLogJson(string requestId, string requestRaw)
