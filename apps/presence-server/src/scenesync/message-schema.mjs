@@ -13,8 +13,12 @@ const KNOWN_KINDS = new Set([
   'scene-lock',
   'scene-unlock',
   'scene-physics-hash',
+  'scene-event',
+  'scene-event-log',
+  'scene-event-log-request',
   'scene-physics-input',
   'scene-physics-input-log-clear',
+  'scene-physics-input-log',
   'scene-physics-input-log-request',
   'scene-physics-snapshot',
   'scene-physics-snapshot-request',
@@ -116,6 +120,165 @@ function validateOptionalNonNegativeInteger(payload, key) {
   if (payload[key] === undefined || payload[key] === null) return { ok: true };
   if (!Number.isInteger(payload[key]) || payload[key] < 0) {
     return { ok: false, reason: `${key} must be a non-negative integer` };
+  }
+  return { ok: true };
+}
+
+function validateOptionalTimelineVersion(payload, key, maxStringLength = 128) {
+  if (payload[key] === undefined || payload[key] === null) return { ok: true };
+  if (isReasonableString(payload[key], maxStringLength)) return { ok: true };
+  if (Number.isInteger(payload[key]) && payload[key] >= 0) return { ok: true };
+  return { ok: false, reason: `${key} must be a reasonable string or non-negative integer` };
+}
+
+function validateOptionalObject(payload, key) {
+  if (payload[key] === undefined || payload[key] === null) return { ok: true };
+  if (typeof payload[key] !== 'object' || Array.isArray(payload[key])) {
+    return { ok: false, reason: `${key} must be an object` };
+  }
+  return { ok: true };
+}
+
+function validateSceneEventTimelineMetadata(payload, maxStringLength, prefix = '') {
+  const key = name => `${prefix}${name}`;
+  for (const field of ['eventLogKind', 'source', 'phase', 'timelineId', 'requestId', 'reason', 'requestKind', 'requestReason', 'requestTimelineId']) {
+    const result = validateOptionalReasonableString(payload, field, maxStringLength);
+    if (!result.ok) return { ok: false, reason: `${key(field)} must be a reasonable string` };
+  }
+  const timelineVersionResult = validateOptionalTimelineVersion(payload, 'timelineVersion', maxStringLength);
+  if (!timelineVersionResult.ok) {
+    return { ok: false, reason: `${key('timelineVersion')} must be a reasonable string or non-negative integer` };
+  }
+  for (const field of [
+    'timelineRevision',
+    'timelineForkTick',
+    'timelineClearRevision',
+    'lastEventRevision',
+    'eventCount',
+    'inputCount',
+    'requestTimelineRevision',
+    'requestTimelineClearRevision',
+  ]) {
+    const result = validateOptionalNonNegativeInteger(payload, field);
+    if (!result.ok) return { ok: false, reason: `${key(field)} must be a non-negative integer` };
+  }
+  for (const field of ['sceneClockRevision', 'sentAt']) {
+    const result = validateOptionalFiniteNumber(payload, field);
+    if (!result.ok) return { ok: false, reason: `${key(field)} must be finite` };
+  }
+  return { ok: true };
+}
+
+function validateSceneEventPayload(payload, maxStringLength) {
+  const channel = payload.channel ?? payload.type;
+  if (!isReasonableString(channel, maxStringLength)) {
+    return { ok: false, reason: 'scene-event.channel must be a reasonable string' };
+  }
+  for (const field of ['timelineId', 'eventId', 'inputId', 'interactionId', 'channel', 'type', 'source', 'phase', 'target', 'objectId', 'sourcePeerId', 'sourceUserId']) {
+    const result = validateOptionalReasonableString(payload, field, maxStringLength);
+    if (!result.ok) return result;
+  }
+  const timelineVersionResult = validateOptionalTimelineVersion(payload, 'timelineVersion', maxStringLength);
+  if (!timelineVersionResult.ok) return timelineVersionResult;
+  for (const field of ['timelineRevision', 'timelineClearRevision', 'eventRevision', 'sequence', 'applyTick', 'branchTick']) {
+    const result = validateOptionalNonNegativeInteger(payload, field);
+    if (!result.ok) return result;
+  }
+  for (const field of ['timestamp', 'time', 'sentAt']) {
+    const result = validateOptionalFiniteNumber(payload, field);
+    if (!result.ok) return result;
+  }
+  if (payload.position !== undefined && !hasFiniteNumberArray(payload.position, 3)) {
+    return { ok: false, reason: 'scene-event.position must be finite [x,y,z]' };
+  }
+  if (payload.rotation !== undefined && !hasFiniteNumberArray(payload.rotation, 4)) {
+    return { ok: false, reason: 'scene-event.rotation must be finite quaternion [x,y,z,w]' };
+  }
+  for (const field of ['velocity', 'linearVelocity', 'angularVelocity', 'angvel']) {
+    if (payload[field] !== undefined && !hasFiniteNumberArray(payload[field], 3)) {
+      return { ok: false, reason: `scene-event.${field} must be finite [x,y,z]` };
+    }
+  }
+  const payloadResult = validateOptionalObject(payload, 'payload');
+  if (!payloadResult.ok) return payloadResult;
+  return { ok: true };
+}
+
+function validateSceneEventLogPayload(payload, maxStringLength) {
+  const metadataResult = validateSceneEventTimelineMetadata(payload, maxStringLength);
+  if (!metadataResult.ok) return metadataResult;
+
+  if (payload.events !== undefined) {
+    if (!Array.isArray(payload.events)) {
+      return { ok: false, reason: 'scene-event-log.events must be an array' };
+    }
+    if (payload.events.length > 2000) {
+      return { ok: false, reason: 'scene-event-log.events is too large' };
+    }
+    for (const event of payload.events) {
+      if (!event || typeof event !== 'object' || Array.isArray(event)) {
+        return { ok: false, reason: 'scene-event-log.events entries must be objects' };
+      }
+      const result = validateSceneEventPayload(event, maxStringLength);
+      if (!result.ok) return { ok: false, reason: `invalid scene-event-log event: ${result.reason}` };
+    }
+  }
+
+  if (payload.inputs !== undefined) {
+    if (!Array.isArray(payload.inputs)) {
+      return { ok: false, reason: 'scene-event-log.inputs must be an array' };
+    }
+    if (payload.inputs.length > 2000) {
+      return { ok: false, reason: 'scene-event-log.inputs is too large' };
+    }
+    for (const input of payload.inputs) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        return { ok: false, reason: 'scene-event-log.inputs entries must be objects' };
+      }
+      const result = validateScenePhysicsInputPayload(input, maxStringLength);
+      if (!result.ok) return { ok: false, reason: `invalid scene-event-log input: ${result.reason}` };
+    }
+  }
+
+  const controllerValidation = validatePhysicsController(payload.controller, maxStringLength);
+  if (!controllerValidation.ok) return controllerValidation;
+  const clockValidation = validateObjectClock(payload.clock, 'scene-event-log.clock');
+  if (!clockValidation.ok) return clockValidation;
+
+  if (payload.snapshot !== undefined && payload.snapshot !== null) {
+    if (typeof payload.snapshot !== 'object' || Array.isArray(payload.snapshot)) {
+      return { ok: false, reason: 'scene-event-log.snapshot must be an object' };
+    }
+    const snapshotValidation = validateScenePhysicsSyncPayload(
+      { ...payload.snapshot, kind: 'scene-physics-snapshot' },
+      maxStringLength,
+    );
+    if (!snapshotValidation.ok) {
+      return { ok: false, reason: `invalid scene-event-log snapshot: ${snapshotValidation.reason}` };
+    }
+  }
+
+  return { ok: true };
+}
+
+function validateSceneEventLogRequestPayload(payload, maxStringLength) {
+  const metadataResult = validateSceneEventTimelineMetadata(payload, maxStringLength);
+  if (!metadataResult.ok) return metadataResult;
+  if (payload.timelines !== undefined) {
+    if (!Array.isArray(payload.timelines)) {
+      return { ok: false, reason: 'scene-event-log-request.timelines must be an array' };
+    }
+    if (payload.timelines.length > 32) {
+      return { ok: false, reason: 'scene-event-log-request.timelines is too large' };
+    }
+    for (let index = 0; index < payload.timelines.length; index += 1) {
+      const timeline = payload.timelines[index];
+      if (!timeline || typeof timeline !== 'object' || Array.isArray(timeline)) {
+        return { ok: false, reason: 'scene-event-log-request.timelines entries must be objects' };
+      }
+      const result = validateSceneEventTimelineMetadata(timeline, maxStringLength, `scene-event-log-request.timelines[${index}].`);
+      if (!result.ok) return result;
+    }
   }
   return { ok: true };
 }
@@ -441,6 +604,18 @@ export function validateSceneSyncPayload(payload, options = {}) {
 
   if (payload.kind === 'scene-physics') {
     return validateScenePhysicsPayload(payload.physics);
+  }
+
+  if (payload.kind === 'scene-event') {
+    return validateSceneEventPayload(payload, maxStringLength);
+  }
+
+  if (payload.kind === 'scene-event-log' || payload.kind === 'scene-physics-input-log') {
+    return validateSceneEventLogPayload(payload, maxStringLength);
+  }
+
+  if (payload.kind === 'scene-event-log-request' || payload.kind === 'scene-physics-input-log-request') {
+    return validateSceneEventLogRequestPayload(payload, maxStringLength);
   }
 
   if (payload.kind === 'scene-physics-input') {

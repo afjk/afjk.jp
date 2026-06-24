@@ -308,6 +308,13 @@ class WsConnection {
     } catch {}
   }
 
+  terminate() {
+    try {
+      this.socket.destroy();
+    } catch {}
+    this.#handleClose();
+  }
+
   #handleClose() {
     if (this.closed) return;
     this.closed = true;
@@ -827,6 +834,35 @@ function sendRoomSceneClock(client) {
   });
 }
 
+function getRequestedRoomPhysicsTimelineId(payload) {
+  if (payload?.kind === 'scene-physics-input-log-request') {
+    return payload.timelineId || null;
+  }
+  if (payload?.kind !== 'scene-event-log-request') {
+    return false;
+  }
+
+  const timelines = Array.isArray(payload.timelines) ? payload.timelines : [];
+  if (timelines.length > 0) {
+    const physicsTimeline = timelines.find(timeline => (
+      timeline &&
+      typeof timeline === 'object' &&
+      !Array.isArray(timeline) &&
+      (
+        timeline.source === 'physics' ||
+        (
+          timeline.source === undefined &&
+          timeline.timelineId !== undefined &&
+          normalizePhysicsTimelineId(timeline.timelineId) === normalizePhysicsTimelineId(payload.timelineId)
+        )
+      )
+    ));
+    return physicsTimeline ? (physicsTimeline.timelineId || null) : false;
+  }
+
+  return payload.timelineId || null;
+}
+
 function sendRoomPhysicsTimeline(client, timelineId = null) {
   const roomTimelines = roomPhysicsTimelines.get(client.roomId);
   if (!roomTimelines) return;
@@ -1235,10 +1271,13 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     });
   }
 
-  if (nextPayload?.kind === 'scene-physics-input-log-request') {
+  if (
+    nextPayload?.kind === 'scene-physics-input-log-request' ||
+    nextPayload?.kind === 'scene-event-log-request'
+  ) {
     return {
       status: 400,
-      body: { error: 'scene-physics-input-log-request requires a websocket client' },
+      body: { error: `${nextPayload.kind} requires a websocket client` },
     };
   }
 
@@ -1992,6 +2031,14 @@ function createPresenceServer() {
     res.writeHead(200, { 'content-type': 'text/plain' }).end('presence ok');
   });
 
+  const openSockets = new Set();
+  server.on('connection', socket => {
+    openSockets.add(socket);
+    socket.on('close', () => {
+      openSockets.delete(socket);
+    });
+  });
+
   server.on('upgrade', (req, socket) => {
     const url = getRequestUrl(req);
     if (url.pathname !== '/' && url.pathname !== '/ws') {
@@ -2132,6 +2179,13 @@ function createPresenceServer() {
                 return;
               }
 
+              if (data.payload.kind === 'scene-event-log-request') {
+                const requestedTimelineId = getRequestedRoomPhysicsTimelineId(data.payload);
+                if (requestedTimelineId !== false) {
+                  sendRoomPhysicsTimeline(client, requestedTimelineId);
+                }
+              }
+
               const objectLimit = applySceneObjectLimits(roomId, data.payload, actorId);
               if (!objectLimit.ok) {
                 safeSend(conn, {
@@ -2247,7 +2301,10 @@ function createPresenceServer() {
     });
   }, HEARTBEAT_MS);
 
-  server.on('close', () => {
+  let cleanupComplete = false;
+  const cleanupServerState = () => {
+    if (cleanupComplete) return;
+    cleanupComplete = true;
     clearInterval(blobCleanupInterval);
     clearInterval(heartbeatInterval);
     if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
@@ -2265,13 +2322,32 @@ function createPresenceServer() {
       resolve({ kind: 'ai-result', ok: false, error: 'server stopped' });
     });
     pendingAiCommandResults.clear();
-  });
+  };
+
+  server.on('close', cleanupServerState);
 
   server.stop = () => {
     rooms.forEach(room => {
-      room.forEach(client => client.conn.close());
+      room.forEach(client => client.conn.terminate());
     });
-    return new Promise(resolve => server.close(resolve));
+    openSockets.forEach(socket => {
+      try {
+        socket.destroy();
+      } catch {}
+    });
+    cleanupServerState();
+    return new Promise(resolve => {
+      let resolved = false;
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        resolve();
+      };
+      server.close(finish);
+      server.unref?.();
+      server.closeAllConnections?.();
+      setTimeout(finish, 100);
+    });
   };
 
   return server;
