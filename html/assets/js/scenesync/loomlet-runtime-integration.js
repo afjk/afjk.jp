@@ -13,6 +13,49 @@ function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+export function normalizeLoomletHostEventsForRuntime(hostEvents, {
+  target = null,
+  timestamp = 0,
+} = {}) {
+  if (!hostEvents) return [];
+
+  const source = Array.isArray(hostEvents)
+    ? hostEvents
+    : (typeof hostEvents[Symbol.iterator] === 'function' ? Array.from(hostEvents) : []);
+  return source.map((event) => {
+    if (typeof event === 'string') {
+      return {
+        channel: event,
+        type: event,
+        target,
+        timestamp,
+        time: timestamp,
+        ...(target ? { objectId: target } : {}),
+      };
+    }
+    if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+
+    const channel = typeof event.channel === 'string' && event.channel.trim()
+      ? event.channel.trim()
+      : (typeof event.type === 'string' && event.type.trim() ? event.type.trim() : '');
+    if (!channel) return null;
+
+    const eventTimestamp = Number.isFinite(Number(event.timestamp))
+      ? Number(event.timestamp)
+      : (Number.isFinite(Number(event.time)) ? Number(event.time) : timestamp);
+    const normalized = {
+      ...cloneJson(event),
+      channel,
+      type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : channel,
+      target: event.target || target,
+      timestamp: Number.isFinite(eventTimestamp) ? eventTimestamp : 0,
+    };
+    if (normalized.time === undefined) normalized.time = normalized.timestamp;
+    if (target && normalized.objectId === undefined) normalized.objectId = target;
+    return normalized;
+  }).filter(Boolean);
+}
+
 function scopeKey(scope) {
   if (scope === 'scene' || scope?.scene === true) return 'scene';
   if (scope && typeof scope === 'object' && typeof scope.object === 'string') {
@@ -356,14 +399,10 @@ function createRuntimeManager({
     // Gather host events for object-scoped evaluations
     let events = [];
     if (entry.scopeObjectId && getLoomletHostEvents) {
-      const eventNames = getLoomletHostEvents(entry.scopeObjectId);
-      if (eventNames && eventNames.size > 0) {
-        events = Array.from(eventNames).map((channel) => ({
-          channel,
-          target: entry.scopeObjectId,
-          timestamp: time,
-        }));
-      }
+      events = normalizeLoomletHostEventsForRuntime(getLoomletHostEvents(entry.scopeObjectId), {
+        target: entry.scopeObjectId,
+        timestamp: time,
+      });
     }
 
     entry.runtime.evaluateAt({
