@@ -2,12 +2,29 @@ import {
   createSceneSyncRuntime,
   LoomletSceneSyncRuntimeVersion,
 } from '../../vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js';
+import {
+  createSceneEventTimeline,
+  sceneEventToRuntimeEvent,
+} from './runtime/event-timeline.js';
 
 export const LOOMLET_RUNTIME_METADATA = Object.freeze({
   version: LoomletSceneSyncRuntimeVersion,
   graphVersion: 'scene-sync-graph-json-v1',
   adapter: 'scenesync',
 });
+
+export const LOOMLET_INTERACTION_TIMELINE_ID = 'player-interaction';
+export const LOOMLET_INTERACTION_EVENT_LOG_KIND = 'scene-event-log';
+export const LOOMLET_INTERACTION_EVENT_SOURCE = 'loomlet';
+export const LOOMLET_POINTER_INTERACTION_CHANNELS = Object.freeze([
+  'pointer.click',
+  'pointer.drag.start',
+  'pointer.drag.move',
+  'pointer.drag.end',
+  'pointer.drag.cancel',
+]);
+
+const DEFAULT_LOOMLET_INTERACTION_EVENT_CHANNELS = new Set(LOOMLET_POINTER_INTERACTION_CHANNELS);
 
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -53,15 +70,19 @@ export function resolveLoomletRuntimeTick(clockState = null) {
   return Number.isFinite(tick) ? Math.max(0, Math.floor(tick)) : undefined;
 }
 
+function toArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  return typeof value[Symbol.iterator] === 'function' ? Array.from(value) : [];
+}
+
 export function normalizeLoomletHostEventsForRuntime(hostEvents, {
   target = null,
   timestamp = 0,
 } = {}) {
   if (!hostEvents) return [];
 
-  const source = Array.isArray(hostEvents)
-    ? hostEvents
-    : (typeof hostEvents[Symbol.iterator] === 'function' ? Array.from(hostEvents) : []);
+  const source = toArray(hostEvents);
   return source.map((event) => {
     if (typeof event === 'string') {
       return {
@@ -94,6 +115,30 @@ export function normalizeLoomletHostEventsForRuntime(hostEvents, {
     if (target && normalized.objectId === undefined) normalized.objectId = target;
     return normalized;
   }).filter(Boolean).sort(compareLoomletRuntimeEvents);
+}
+
+function createInteractionChannelSet(channels) {
+  if (!channels) return new Set(DEFAULT_LOOMLET_INTERACTION_EVENT_CHANNELS);
+  return new Set(toArray(channels)
+    .filter(channel => typeof channel === 'string' && channel.trim())
+    .map(channel => channel.trim()));
+}
+
+function resolveInteractionEventChannel(event) {
+  return typeof event?.channel === 'string' && event.channel.trim()
+    ? event.channel.trim()
+    : (typeof event?.type === 'string' && event.type.trim() ? event.type.trim() : '');
+}
+
+function resolveInteractionEventTarget(event) {
+  return typeof event?.target === 'string' && event.target.trim()
+    ? event.target.trim()
+    : (typeof event?.objectId === 'string' && event.objectId.trim() ? event.objectId.trim() : '');
+}
+
+function normalizeInteractionTick(value, fallback = 0) {
+  const tick = Number(value);
+  return Number.isFinite(tick) ? Math.max(0, Math.floor(tick)) : fallback;
 }
 
 function scopeKey(scope) {
@@ -205,6 +250,10 @@ function createRuntimeManager({
   getInputRoutingMode,
   audioSource,
   enableDebug = false,
+  interactionTimelineId = LOOMLET_INTERACTION_TIMELINE_ID,
+  interactionEventChannels = null,
+  interactionMaxHistory = 1000,
+  interactionMaxPending = 1000,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
@@ -212,6 +261,232 @@ function createRuntimeManager({
   const lastEvaluations = new Map();
   const eventEvaluationHistory = new Map();
   const maxDebugEvaluationHistory = 50;
+  const interactionChannels = createInteractionChannelSet(interactionEventChannels);
+  const interactionEventTimeline = createSceneEventTimeline({
+    timelineId: interactionTimelineId,
+    maxHistory: interactionMaxHistory,
+    maxPending: interactionMaxPending,
+  });
+  const pendingInteractionRuntimeEvents = new Map();
+  const blockedInteractionReplayEventIds = new Set();
+  const deferredInteractionReplayEvents = [];
+  let lastInteractionTick = 0;
+
+  function currentInteractionTick(options = {}) {
+    if (Number.isFinite(Number(options.currentTick))) {
+      return normalizeInteractionTick(options.currentTick, lastInteractionTick);
+    }
+    const clockState = getSceneClockStateForLoomlet?.();
+    const tick = resolveLoomletRuntimeTick(clockState);
+    return tick ?? lastInteractionTick;
+  }
+
+  function enqueueInteractionRuntimeEvent(objectId, event) {
+    if (!objectId || !event) return;
+    if (!pendingInteractionRuntimeEvents.has(objectId)) {
+      pendingInteractionRuntimeEvents.set(objectId, []);
+    }
+    const events = pendingInteractionRuntimeEvents.get(objectId);
+    if (event.eventId) {
+      const index = events.findIndex(item => item?.eventId === event.eventId);
+      if (index >= 0) {
+        events[index] = event;
+        events.sort(compareLoomletRuntimeEvents);
+        return;
+      }
+    }
+    events.push(event);
+    events.sort(compareLoomletRuntimeEvents);
+    while (events.length > interactionMaxPending) events.shift();
+  }
+
+  function replacePendingInteractionRuntimeEvent(event) {
+    if (!event?.eventId) return false;
+    const nextObjectId = event.target || event.objectId;
+    if (!nextObjectId) return false;
+    for (const [objectId, events] of pendingInteractionRuntimeEvents) {
+      const index = events.findIndex(item => item?.eventId === event.eventId);
+      if (index < 0) continue;
+      events.splice(index, 1);
+      if (events.length === 0) pendingInteractionRuntimeEvents.delete(objectId);
+      enqueueInteractionRuntimeEvent(nextObjectId, event);
+      return true;
+    }
+    return false;
+  }
+
+  function appendDeferredInteractionReplayEvent(event, reason = 'replay-required') {
+    if (!event?.eventId) return;
+    deferredInteractionReplayEvents.push({
+      reason,
+      event: cloneJson(event),
+    });
+    while (deferredInteractionReplayEvents.length > maxDebugEvaluationHistory) {
+      deferredInteractionReplayEvents.shift();
+    }
+  }
+
+  function consumeInteractionTimelineEventWithoutDelivery(eventId, currentTick) {
+    if (!eventId) return false;
+    let consumed = false;
+    interactionEventTimeline.processDueEvents(currentTick, (event) => {
+      if (event.eventId !== eventId) return false;
+      consumed = true;
+      return { applied: true };
+    });
+    return consumed;
+  }
+
+  function getPendingInteractionRuntimeEvents(objectId) {
+    return pendingInteractionRuntimeEvents.get(objectId)?.slice() || [];
+  }
+
+  function clearPendingInteractionRuntimeEvents(objectId) {
+    pendingInteractionRuntimeEvents.delete(objectId);
+  }
+
+  function isInteractionSceneEvent(payload) {
+    const channel = resolveInteractionEventChannel(payload);
+    if (!channel || !interactionChannels.has(channel)) return false;
+    return resolveInteractionEventTarget(payload) !== '';
+  }
+
+  function processDueInteractionEvents(currentTick = lastInteractionTick) {
+    const tick = normalizeInteractionTick(currentTick, lastInteractionTick);
+    lastInteractionTick = tick;
+    return interactionEventTimeline.processDueEvents(tick, (event) => {
+      if (blockedInteractionReplayEventIds.has(event.eventId)) {
+        blockedInteractionReplayEventIds.delete(event.eventId);
+        appendDeferredInteractionReplayEvent(event);
+        return { applied: true };
+      }
+      const runtimeEvent = sceneEventToRuntimeEvent(event);
+      const objectId = runtimeEvent?.target || runtimeEvent?.objectId;
+      if (!objectId) return true;
+      enqueueInteractionRuntimeEvent(objectId, runtimeEvent);
+      return { applied: true };
+    });
+  }
+
+  function queueInteractionEvent(payload = {}, options = {}) {
+    if (!isInteractionSceneEvent(payload)) {
+      return { ok: false, reason: 'unsupported-interaction-event' };
+    }
+    const target = resolveInteractionEventTarget(payload);
+    const channel = resolveInteractionEventChannel(payload);
+    const tick = currentInteractionTick(options);
+    const result = interactionEventTimeline.queueEvent({
+      ...payload,
+      kind: 'scene-event',
+      channel,
+      target,
+      source: payload.source || LOOMLET_INTERACTION_EVENT_SOURCE,
+    }, { currentTick: tick });
+    if (!result.ok) return result;
+    if (result.replayRequired === true) {
+      const runtimeEvent = sceneEventToRuntimeEvent(result.event);
+      if (replacePendingInteractionRuntimeEvent(runtimeEvent)) {
+        consumeInteractionTimelineEventWithoutDelivery(result.event.eventId, tick);
+        return { ...result, replayRequired: false, replacedPendingRuntimeEvent: true };
+      }
+      blockedInteractionReplayEventIds.add(result.event.eventId);
+    }
+    if (options.processDue !== false) {
+      const processed = processDueInteractionEvents(tick);
+      return { ...result, processed };
+    }
+    return result;
+  }
+
+  function applyInteractionEventLog(payload = {}, options = {}) {
+    const events = Array.isArray(payload?.events) ? payload.events : [];
+    const acceptsLog = payload?.kind === LOOMLET_INTERACTION_EVENT_LOG_KIND ||
+      payload?.kind === 'scene-physics-input-log';
+    if (!acceptsLog || events.length === 0) {
+      return {
+        accepted: false,
+        eventCount: events.length,
+        queuedCount: 0,
+        ignoredCount: events.length,
+        replayRequired: false,
+      };
+    }
+
+    const tick = currentInteractionTick(options);
+    let queuedCount = 0;
+    let ignoredCount = 0;
+    let replayRequired = false;
+    for (const event of events) {
+      const result = queueInteractionEvent(event, {
+        ...options,
+        currentTick: tick,
+        processDue: false,
+      });
+      if (result.ok) {
+        queuedCount += 1;
+        replayRequired ||= result.replayRequired === true;
+      } else {
+        ignoredCount += 1;
+      }
+    }
+    let processed = { applied: false, replayRequired: false };
+    if (queuedCount > 0 && options.processDue !== false) {
+      processed = processDueInteractionEvents(tick);
+      replayRequired ||= processed.replayRequired === true;
+    }
+    return {
+      accepted: queuedCount > 0,
+      eventCount: events.length,
+      queuedCount,
+      ignoredCount,
+      replayRequired,
+      processed,
+    };
+  }
+
+  function createInteractionEventLog(clockState = null, extra = {}) {
+    const events = interactionEventTimeline.getEventHistory();
+    if (events.length === 0) return null;
+    const timelineState = interactionEventTimeline.getTimelineState();
+    return {
+      kind: LOOMLET_INTERACTION_EVENT_LOG_KIND,
+      eventLogKind: LOOMLET_INTERACTION_EVENT_LOG_KIND,
+      source: extra.source || LOOMLET_INTERACTION_EVENT_SOURCE,
+      timelineVersion: timelineState.timelineVersion,
+      timelineId: timelineState.timelineId || interactionTimelineId,
+      timelineRevision: timelineState.timelineRevision,
+      timelineForkTick: timelineState.timelineForkTick,
+      timelineClearRevision: timelineState.timelineClearRevision,
+      lastEventRevision: timelineState.lastEventRevision,
+      eventCount: events.length,
+      events,
+      ...extra,
+      clock: clockState,
+      sentAt: Date.now(),
+    };
+  }
+
+  function clearInteractionEvents(payload = {}) {
+    pendingInteractionRuntimeEvents.clear();
+    blockedInteractionReplayEventIds.clear();
+    const state = interactionEventTimeline.getTimelineState();
+    return interactionEventTimeline.clearEventHistory({
+      timelineId: state.timelineId || interactionTimelineId,
+      timelineRevision: normalizeInteractionTick(
+        payload.timelineRevision,
+        normalizeInteractionTick(state.timelineRevision, 0) + 1,
+      ),
+      timelineForkTick: normalizeInteractionTick(
+        payload.timelineForkTick,
+        lastInteractionTick,
+      ),
+      timelineClearRevision: normalizeInteractionTick(
+        payload.timelineClearRevision,
+        normalizeInteractionTick(state.timelineClearRevision, 0) + 1,
+      ),
+      ...payload,
+    });
+  }
 
   function routeAudioSourceEffect(effect) {
     if (!audioSource) return;
@@ -452,8 +727,12 @@ function createRuntimeManager({
 
     // Gather host events for object-scoped evaluations
     let events = [];
-    if (entry.scopeObjectId && getLoomletHostEvents) {
-      events = normalizeLoomletHostEventsForRuntime(getLoomletHostEvents(entry.scopeObjectId), {
+    if (entry.scopeObjectId) {
+      const hostEvents = getLoomletHostEvents
+        ? toArray(getLoomletHostEvents(entry.scopeObjectId))
+        : [];
+      const queuedEvents = getPendingInteractionRuntimeEvents(entry.scopeObjectId);
+      events = normalizeLoomletHostEventsForRuntime([...hostEvents, ...queuedEvents], {
         target: entry.scopeObjectId,
         timestamp: time,
       });
@@ -489,6 +768,9 @@ function createRuntimeManager({
     if (entry.scopeObjectId && clearLoomletHostEvents) {
       clearLoomletHostEvents(entry.scopeObjectId);
     }
+    if (entry.scopeObjectId) {
+      clearPendingInteractionRuntimeEvents(entry.scopeObjectId);
+    }
   }
 
   return {
@@ -509,9 +791,15 @@ function createRuntimeManager({
     tick(clockState = null, now = performance.now()) {
       // clockState: Scene Clock state from host
       // If not provided, fall back to host-provided time
+      const tick = resolveLoomletRuntimeTick(clockState);
+      if (tick !== undefined) {
+        lastInteractionTick = tick;
+      }
+      processDueInteractionEvents(lastInteractionTick);
       for (const [key, entry] of Array.from(runtimes.entries()).sort(([left], [right]) => compareLoomletRuntimeScopeKeys(left, right))) {
         evaluateRuntime(key, entry, clockState, now);
       }
+      pendingInteractionRuntimeEvents.clear();
     },
     exportState() {
       const state = { scene: null, objects: {} };
@@ -583,8 +871,18 @@ function createRuntimeManager({
       return {
         evaluations,
         eventEvaluations,
+        interactionTimeline: interactionEventTimeline.getTimelineState(),
+        pendingInteractionEvents: interactionEventTimeline.getPendingEvents(),
+        deferredInteractionReplayEvents: cloneJson(deferredInteractionReplayEvents),
       };
     },
+    queueInteractionEvent,
+    applyInteractionEventLog,
+    createInteractionEventLog,
+    clearInteractionEvents,
+    getInteractionTimelineState: () => interactionEventTimeline.getTimelineState(),
+    getPendingInteractionEvents: () => interactionEventTimeline.getPendingEvents(),
+    getInteractionEventHistory: () => interactionEventTimeline.getEventHistory(),
     clearObjectGraph(objectId) {
       if (objectId) clearGraph({ object: objectId });
     },
@@ -622,6 +920,10 @@ export function createSceneSyncLoomIntegration({
   getInputRoutingMode,
   audioSource,
   enableDebug = false,
+  interactionTimelineId,
+  interactionEventChannels,
+  interactionMaxHistory,
+  interactionMaxPending,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
@@ -639,6 +941,10 @@ export function createSceneSyncLoomIntegration({
     getInputRoutingMode,
     audioSource,
     enableDebug,
+    interactionTimelineId,
+    interactionEventChannels,
+    interactionMaxHistory,
+    interactionMaxPending,
   });
 
   function isSceneGraphMessage(payload) {
@@ -669,6 +975,13 @@ export function createSceneSyncLoomIntegration({
     }),
     importState: (state) => manager.importState(state),
     clearObjectGraph: (objectId) => manager.clearObjectGraph(objectId),
+    queueInteractionEvent: (payload, options) => manager.queueInteractionEvent(payload, options),
+    applyInteractionEventLog: (payload, options) => manager.applyInteractionEventLog(payload, options),
+    createInteractionEventLog: (clockState, extra) => manager.createInteractionEventLog(clockState, extra),
+    clearInteractionEvents: (payload) => manager.clearInteractionEvents(payload),
+    getInteractionTimelineState: () => manager.getInteractionTimelineState(),
+    getPendingInteractionEvents: () => manager.getPendingInteractionEvents(),
+    getInteractionEventHistory: () => manager.getInteractionEventHistory(),
     tickObjectGraphs: (clockState = null, now) => {
       if (typeof clockState === 'number' && now === undefined) {
         manager.tick(null, clockState);
