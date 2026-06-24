@@ -6563,6 +6563,7 @@ const loomIntegration = createSceneSyncLoomIntegration({
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
   audioSource: audioSourceHostApi,
+  enableDebug: isDevUiEnabled(),
 });
 
 // ── Scene Clock Debug UI 制御 ────────────────────────────
@@ -11678,6 +11679,58 @@ const sceneSyncDebugApi = {
 };
 
 if (isDevUiEnabled()) {
+  const debugObjectScreenBox = new THREE.Box3();
+  const debugObjectScreenCenter = new THREE.Vector3();
+  const debugObjectScreenWorld = new THREE.Vector3();
+
+  function getDebugObjectSnapshot(objectId) {
+    const object = managedObjects.get(objectId);
+    if (!object) return null;
+    object.updateMatrixWorld?.(true);
+    return {
+      objectId,
+      name: object.userData?.name || object.name || objectId,
+      position: object.position?.toArray?.() || null,
+      rotation: object.quaternion?.toArray?.() || null,
+      scale: object.scale?.toArray?.() || null,
+      worldPosition: object.getWorldPosition
+        ? object.getWorldPosition(debugObjectScreenWorld).toArray()
+        : null,
+      visible: object.visible !== false,
+      asset: cloneJsonSafe(object.userData?.asset || null),
+      physics: getObjectPhysicsForSerialize(object),
+    };
+  }
+
+  function getDebugObjectScreenPoint(objectId) {
+    const object = managedObjects.get(objectId);
+    if (!object) return null;
+    object.updateMatrixWorld?.(true);
+    debugObjectScreenBox.setFromObject(object);
+    if (debugObjectScreenBox.isEmpty()) {
+      if (!object.getWorldPosition) return null;
+      object.getWorldPosition(debugObjectScreenCenter);
+    } else {
+      debugObjectScreenBox.getCenter(debugObjectScreenCenter);
+    }
+    const projected = debugObjectScreenCenter.clone().project(camera);
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return {
+      objectId,
+      clientX: rect.left + ((projected.x + 1) / 2) * rect.width,
+      clientY: rect.top + ((1 - projected.y) / 2) * rect.height,
+      ndc: projected.toArray(),
+      visible: projected.z >= -1 && projected.z <= 1,
+      canvas: {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
+    };
+  }
+
   Object.assign(sceneSyncDebugApi, {
     presence: () => ({
       connected: presenceState.ws?.readyState === WebSocket.OPEN,
@@ -11715,6 +11768,22 @@ if (isDevUiEnabled()) {
         hasBodies: scenePhysicsRuntime.hasBodies(),
         scenePhysics: getScenePhysicsForSerialize({ enableWhenObjectsExist: false }),
         objectIds: Array.from(managedObjects.keys()),
+      }),
+    },
+    objects: {
+      list: () => Array.from(managedObjects.keys()),
+      get: getDebugObjectSnapshot,
+      screenPoint: getDebugObjectScreenPoint,
+    },
+    loomlet: {
+      state: () => loomIntegration.exportState(),
+      debug: () => loomIntegration.debugState?.() || { graphs: loomIntegration.exportState() },
+    },
+    playerInteraction: {
+      timeline: () => ({
+        state: playerInteractionEventTimeline.getTimelineState(),
+        pendingEvents: playerInteractionEventTimeline.getPendingEvents(),
+        eventHistory: playerInteractionEventTimeline.getEventHistory(),
       }),
     },
   });

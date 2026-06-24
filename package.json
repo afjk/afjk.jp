@@ -20,6 +20,7 @@
     "test:e2e:install-browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "test:e2e:scene-sync-export-import": "node scripts/scenesync-export-import-browser-e2e.mjs",
     "test:e2e:scene-sync-physics-live-room": "node scripts/scenesync-physics-live-room-smoke.mjs",
+    "test:e2e:scene-sync-loomlet-interaction": "node scripts/scenesync-loomlet-interaction-multipeer-smoke.mjs",
     "test:e2e:scene-sync-unity-physics-presence": "node scripts/scenesync-unity-physics-presence-smoke.mjs",
     "test:e2e:scene-sync-rapier-playerui-sample": "node scripts/scenesync-rapier-playerui-sample.mjs --verify",
     "test:e2e:scene-sync-rapier-playerui-browser": "node scripts/scenesync-rapier-playerui-sample.mjs --verify-playerui",

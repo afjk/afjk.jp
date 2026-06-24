@@ -204,10 +204,14 @@ function createRuntimeManager({
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
   audioSource,
+  enableDebug = false,
 }) {
   const runtimes = new Map();
   const definitions = new Map();
   const behaviorBases = new Map();
+  const lastEvaluations = new Map();
+  const eventEvaluationHistory = new Map();
+  const maxDebugEvaluationHistory = 50;
 
   function routeAudioSourceEffect(effect) {
     if (!audioSource) return;
@@ -361,6 +365,14 @@ function createRuntimeManager({
     }
   }
 
+  function appendDebugEventEvaluation(key, record) {
+    if (!Array.isArray(record.events) || record.events.length === 0) return;
+    if (!eventEvaluationHistory.has(key)) eventEvaluationHistory.set(key, []);
+    const history = eventEvaluationHistory.get(key);
+    history.push(cloneJson(record));
+    while (history.length > maxDebugEvaluationHistory) history.shift();
+  }
+
   function applySceneEffect(effect, key) {
     const objectId = effect?.objectId;
 
@@ -458,7 +470,20 @@ function createRuntimeManager({
     };
     if (tick !== undefined) env.tick = tick;
 
-    entry.runtime.evaluateAt(env, Number.isFinite(time) ? time * 1000 : now);
+    const result = entry.runtime.evaluateAt(env, Number.isFinite(time) ? time * 1000 : now);
+    if (enableDebug) {
+      const evaluationRecord = {
+        scopeKey: key,
+        scope: env.scope,
+        time,
+        deltaTime,
+        ...(tick !== undefined ? { tick } : {}),
+        events: cloneJson(events),
+        effects: cloneJson(result?.effects || []),
+      };
+      lastEvaluations.set(key, evaluationRecord);
+      appendDebugEventEvaluation(key, evaluationRecord);
+    }
 
     // Clear events after evaluation
     if (entry.scopeObjectId && clearLoomletHostEvents) {
@@ -519,6 +544,8 @@ function createRuntimeManager({
       runtimes.clear();
       definitions.clear();
       behaviorBases.clear();
+      lastEvaluations.clear();
+      eventEvaluationHistory.clear();
 
       if (state.bases && typeof state.bases === 'object') {
         for (const [key, base] of Object.entries(state.bases)) {
@@ -544,6 +571,20 @@ function createRuntimeManager({
         }
       }
     },
+    debugState() {
+      const evaluations = {};
+      for (const [key, value] of lastEvaluations) {
+        evaluations[key] = cloneJson(value);
+      }
+      const eventEvaluations = {};
+      for (const [key, value] of eventEvaluationHistory) {
+        eventEvaluations[key] = cloneJson(value);
+      }
+      return {
+        evaluations,
+        eventEvaluations,
+      };
+    },
     clearObjectGraph(objectId) {
       if (objectId) clearGraph({ object: objectId });
     },
@@ -557,6 +598,8 @@ function createRuntimeManager({
       runtimes.clear();
       definitions.clear();
       behaviorBases.clear();
+      lastEvaluations.clear();
+      eventEvaluationHistory.clear();
     },
   };
 }
@@ -578,6 +621,7 @@ export function createSceneSyncLoomIntegration({
   getSceneClockStateForLoomlet,
   getInputRoutingMode,
   audioSource,
+  enableDebug = false,
 }) {
   const manager = createRuntimeManager({
     resolveTarget: (targetId) => targetId ? getObjectById(targetId) : null,
@@ -594,6 +638,7 @@ export function createSceneSyncLoomIntegration({
     getSceneClockStateForLoomlet,
     getInputRoutingMode,
     audioSource,
+    enableDebug,
   });
 
   function isSceneGraphMessage(payload) {
@@ -618,6 +663,10 @@ export function createSceneSyncLoomIntegration({
   return {
     handlePayload,
     exportState: () => manager.exportState(),
+    debugState: () => ({
+      graphs: manager.exportState(),
+      ...manager.debugState(),
+    }),
     importState: (state) => manager.importState(state),
     clearObjectGraph: (objectId) => manager.clearObjectGraph(objectId),
     tickObjectGraphs: (clockState = null, now) => {
