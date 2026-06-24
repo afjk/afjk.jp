@@ -15,6 +15,8 @@ export const DEFAULT_SCENE_PHYSICS_DURATION = 10;
 export const SCENE_SYNC_RAPIER_PROFILE = 'SceneSyncRapierParity-0.30';
 export const SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION = 'SceneSyncPhysicsSnapshotV1';
 export const SCENE_SYNC_PHYSICS_TIMELINE_VERSION = 'SceneSyncPhysicsTimelineV1';
+export const SCENE_SYNC_EVENT_LOG_KIND = 'scene-event-log';
+export const SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL = 'physics.body.setState';
 export const DEFAULT_SCENE_PHYSICS_TIMELINE_ID = 'default';
 export const DEFAULT_SCENE_PHYSICS = Object.freeze({
   version: 1,
@@ -39,6 +41,10 @@ const MAX_BODY_STATE_INPUT_HISTORY = 512;
 
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function finiteNumber(value, fallback) {
@@ -484,35 +490,59 @@ export function createScenePhysicsRuntime({
   }
 
   function bodyStateEventFromInput(input) {
+    const payload = {
+      inputType: 'set-body-state',
+      objectId: input.objectId,
+      position: input.position.slice(),
+      rotation: input.rotation.slice(),
+      velocity: input.velocity.slice(),
+      angularVelocity: input.angularVelocity.slice(),
+    };
+    if (input.controlMode) payload.controlMode = input.controlMode;
     return {
       ...input,
       kind: 'scene-event',
-      channel: 'physics.body.setState',
+      channel: SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL,
+      type: SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL,
       eventId: input.inputId,
       target: input.objectId,
       source: 'physics',
       timestamp: input.applyTick * Math.max(0.000001, timestepSeconds),
+      payload,
     };
   }
 
   function bodyStateInputFromEvent(event) {
+    const payload = isRecord(event?.payload) ? event.payload : {};
     return {
-      inputId: event.inputId || event.eventId,
-      objectId: event.objectId || event.target,
-      applyTick: nonNegativeInteger(event.applyTick, 0),
-      timelineId: normalizeTimelineId(event.timelineId),
-      timelineRevision: nonNegativeInteger(event.timelineRevision, 0),
-      timelineClearRevision: nonNegativeInteger(event.timelineClearRevision, 0),
-      eventRevision: nonNegativeInteger(event.eventRevision, 0),
-      interactionId: normalizeOptionalString(event.interactionId),
-      sequence: nonNegativeInteger(event.sequence, 0),
-      phase: normalizeOptionalString(event.phase),
-      controlMode: normalizeOptionalString(event.controlMode),
-      branchTick: nonNegativeInteger(event.branchTick, event.applyTick),
-      position: readVec3(event.position, [0, 0, 0]),
-      rotation: readQuaternion(event.rotation, [0, 0, 0, 1]),
-      velocity: readVec3(event.velocity || event.linearVelocity, [0, 0, 0]),
-      angularVelocity: readVec3(event.angularVelocity || event.angvel, [0, 0, 0]),
+      inputId: event.inputId || payload.inputId || event.eventId,
+      objectId: event.objectId || payload.objectId || event.target || payload.target,
+      applyTick: nonNegativeInteger(event.applyTick ?? payload.applyTick, 0),
+      timelineId: normalizeTimelineId(event.timelineId ?? payload.timelineId),
+      timelineRevision: nonNegativeInteger(event.timelineRevision ?? payload.timelineRevision, 0),
+      timelineClearRevision: nonNegativeInteger(
+        event.timelineClearRevision ?? payload.timelineClearRevision,
+        0,
+      ),
+      eventRevision: nonNegativeInteger(event.eventRevision ?? payload.eventRevision, 0),
+      interactionId: normalizeOptionalString(event.interactionId ?? payload.interactionId),
+      sequence: nonNegativeInteger(event.sequence ?? payload.sequence, 0),
+      phase: normalizeOptionalString(event.phase ?? payload.phase),
+      controlMode: normalizeOptionalString(event.controlMode ?? payload.controlMode),
+      branchTick: nonNegativeInteger(
+        event.branchTick ?? payload.branchTick,
+        event.applyTick ?? payload.applyTick,
+      ),
+      position: readVec3(event.position ?? payload.position, [0, 0, 0]),
+      rotation: readQuaternion(event.rotation ?? payload.rotation, [0, 0, 0, 1]),
+      velocity: readVec3(
+        event.velocity ?? event.linearVelocity ?? payload.velocity ?? payload.linearVelocity,
+        [0, 0, 0],
+      ),
+      angularVelocity: readVec3(
+        event.angularVelocity ?? event.angvel ?? payload.angularVelocity ?? payload.angvel,
+        [0, 0, 0],
+      ),
     };
   }
 
@@ -520,6 +550,17 @@ export function createScenePhysicsRuntime({
     bodyStateInputHistory = bodyStateEventTimeline.getEventHistory().map(bodyStateInputFromEvent);
     pendingBodyStateInputs = bodyStateEventTimeline.getPendingEvents().map(bodyStateInputFromEvent);
     syncBodyStateTimelineState();
+  }
+
+  function isBodyStateSceneEvent(payload) {
+    const channel = normalizeOptionalString(payload?.channel ?? payload?.type);
+    return payload?.kind === 'scene-event' && channel === SCENE_SYNC_PHYSICS_BODY_STATE_EVENT_CHANNEL;
+  }
+
+  function hasBodyStateTransformPayload(payload) {
+    const eventPayload = isRecord(payload?.payload) ? payload.payload : {};
+    return Array.isArray(payload?.position ?? eventPayload.position) &&
+      Array.isArray(payload?.rotation ?? eventPayload.rotation);
   }
 
   function clear({ preserveInputs = false } = {}) {
@@ -718,32 +759,35 @@ export function createScenePhysicsRuntime({
   }
 
   function queueInput(payload = {}) {
-    if (payload.kind !== 'scene-physics-input' || payload.inputType !== 'set-body-state') {
-      return false;
-    }
+    const acceptsPhysicsInput = payload.kind === 'scene-physics-input' &&
+      payload.inputType === 'set-body-state';
+    const acceptsSceneEvent = isBodyStateSceneEvent(payload);
+    if (!acceptsPhysicsInput && !acceptsSceneEvent) return false;
+    if (acceptsSceneEvent && !hasBodyStateTransformPayload(payload)) return false;
 
-    const objectId = typeof payload.objectId === 'string' ? payload.objectId.trim() : '';
+    const source = acceptsSceneEvent ? bodyStateInputFromEvent(payload) : payload;
+    const objectId = typeof source.objectId === 'string' ? source.objectId.trim() : '';
     if (!objectId) return false;
 
-    const applyTickNumber = Number(payload.applyTick);
+    const applyTickNumber = Number(source.applyTick);
     const applyTick = Number.isFinite(applyTickNumber)
       ? Math.max(0, Math.floor(applyTickNumber))
       : (world?.tick || 0);
-    const payloadTimelineId = normalizeTimelineId(payload.timelineId);
-    const payloadTimelineRevision = nonNegativeInteger(payload.timelineRevision, timelineRevision);
-    const branchTick = nonNegativeInteger(payload.branchTick, applyTick);
-    const payloadTimelineClearRevision = nonNegativeInteger(payload.timelineClearRevision, 0);
+    const payloadTimelineId = normalizeTimelineId(source.timelineId);
+    const payloadTimelineRevision = nonNegativeInteger(source.timelineRevision, timelineRevision);
+    const branchTick = nonNegativeInteger(source.branchTick, applyTick);
+    const payloadTimelineClearRevision = nonNegativeInteger(source.timelineClearRevision, 0);
 
-    const interactionId = normalizeOptionalString(payload.interactionId);
-    const sequence = nonNegativeInteger(payload.sequence, 0);
-    const phase = normalizeOptionalString(payload.phase);
-    const controlMode = normalizeControlMode(payload);
-    const eventRevision = nonNegativeInteger(payload.eventRevision, 0);
-    const inputId = typeof payload.inputId === 'string' && payload.inputId.trim()
-      ? payload.inputId.trim()
+    const interactionId = normalizeOptionalString(source.interactionId);
+    const sequence = nonNegativeInteger(source.sequence, 0);
+    const phase = normalizeOptionalString(source.phase);
+    const controlMode = normalizeControlMode(source);
+    const eventRevision = nonNegativeInteger(source.eventRevision, 0);
+    const inputId = typeof source.inputId === 'string' && source.inputId.trim()
+      ? source.inputId.trim()
       : (interactionId ? `${interactionId}:${sequence}` : `${objectId}:${applyTick}`);
 
-    if (!Array.isArray(payload.position) || !Array.isArray(payload.rotation)) {
+    if (!Array.isArray(source.position) || !Array.isArray(source.rotation)) {
       return false;
     }
 
@@ -760,31 +804,31 @@ export function createScenePhysicsRuntime({
       phase,
       controlMode,
       branchTick,
-      position: readVec3(payload.position, [0, 0, 0]),
-      rotation: readQuaternion(payload.rotation, [0, 0, 0, 1]),
-      velocity: readVec3(payload.velocity || payload.linearVelocity, [0, 0, 0]),
-      angularVelocity: readVec3(payload.angularVelocity || payload.angvel, [0, 0, 0]),
-      };
+      position: readVec3(source.position, [0, 0, 0]),
+      rotation: readQuaternion(source.rotation, [0, 0, 0, 1]),
+      velocity: readVec3(source.velocity || source.linearVelocity, [0, 0, 0]),
+      angularVelocity: readVec3(source.angularVelocity || source.angvel, [0, 0, 0]),
+    };
 
-      const previousTimelineRevision = timelineRevision;
-      const result = bodyStateEventTimeline.queueEvent(bodyStateEventFromInput(input), {
-        currentTick: world?.tick,
-        isReplayRelevantChange: (previousEvent, nextEvent) => {
-          const previousInput = previousEvent ? bodyStateInputFromEvent(previousEvent) : null;
-          const nextInput = bodyStateInputFromEvent(nextEvent);
-          const physicalStateChanged = !previousInput ||
-            !bodyStateInputPhysicalStateEquals(previousInput, nextInput);
-          const orderChangedWithPeer = Boolean(
-            previousInput &&
-            compareBodyStateInputs(previousInput, nextInput) !== 0 &&
-            hasSameTickInputPeer(nextInput),
-          );
-          return physicalStateChanged || orderChangedWithPeer;
-        },
-      });
-      if (!result.ok) return false;
+    const previousTimelineRevision = timelineRevision;
+    const result = bodyStateEventTimeline.queueEvent(bodyStateEventFromInput(input), {
+      currentTick: world?.tick,
+      isReplayRelevantChange: (previousEvent, nextEvent) => {
+        const previousInput = previousEvent ? bodyStateInputFromEvent(previousEvent) : null;
+        const nextInput = bodyStateInputFromEvent(nextEvent);
+        const physicalStateChanged = !previousInput ||
+          !bodyStateInputPhysicalStateEquals(previousInput, nextInput);
+        const orderChangedWithPeer = Boolean(
+          previousInput &&
+          compareBodyStateInputs(previousInput, nextInput) !== 0 &&
+          hasSameTickInputPeer(nextInput),
+        );
+        return physicalStateChanged || orderChangedWithPeer;
+      },
+    });
+    if (!result.ok) return false;
 
-      syncBodyStateInputListsFromTimeline();
+    syncBodyStateInputListsFromTimeline();
     if (timelineRevision > previousTimelineRevision) {
       authoritativeSnapshotBaseline = null;
       activeBodyStateHolds = new Map();
@@ -794,15 +838,15 @@ export function createScenePhysicsRuntime({
     if (result.replayRequired && world && rewindBodyStateInputsToInitialSnapshot()) {
       return true;
     }
-      if (world && input.applyTick === world.tick && result.replayRelevantChange === true) {
-        applyDueBodyStateInputs(world.tick);
-      }
+    if (world && input.applyTick === world.tick && result.replayRelevantChange === true) {
+      applyDueBodyStateInputs(world.tick);
+    }
     return true;
   }
 
-    function numberArrayEquals(left, right) {
-      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
-      return left.every((value, index) => value === right[index]);
+  function numberArrayEquals(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
   }
 
   function bodyStateInputPhysicalStateEquals(left, right) {
@@ -821,7 +865,7 @@ export function createScenePhysicsRuntime({
       || pendingBodyStateInputs.some(item => item.inputId !== input.inputId && item.applyTick === input.applyTick);
   }
 
-    function compareBodyStateInputs(left, right) {
+  function compareBodyStateInputs(left, right) {
     return left.applyTick - right.applyTick
       || left.timelineRevision - right.timelineRevision
       || left.eventRevision - right.eventRevision
@@ -1132,7 +1176,7 @@ export function createScenePhysicsRuntime({
     return true;
   }
 
-    function serializeBodyStateInput(input) {
+  function serializeBodyStateInput(input) {
     return {
       kind: 'scene-physics-input',
       inputType: 'set-body-state',
@@ -1156,18 +1200,26 @@ export function createScenePhysicsRuntime({
     };
   }
 
+  function serializeBodyStateEvent(input) {
+    return cloneJson(bodyStateEventFromInput(input));
+  }
+
   function createInputLogReport(extra = {}) {
     const inputs = bodyStateInputHistory.map(serializeBodyStateInput);
+    const events = bodyStateInputHistory.map(serializeBodyStateEvent);
     return {
       kind: 'scene-physics-input-log',
       source: 'physics',
       phase: 'postPhysics',
+      eventLogKind: SCENE_SYNC_EVENT_LOG_KIND,
       timelineVersion: SCENE_SYNC_PHYSICS_TIMELINE_VERSION,
       timelineId,
       timelineRevision,
       timelineForkTick,
       timelineClearRevision,
       lastEventRevision,
+      eventCount: events.length,
+      events,
       inputCount: inputs.length,
       inputs,
       ...extra,
@@ -1189,14 +1241,23 @@ export function createScenePhysicsRuntime({
     const payloadTimelineId = normalizeTimelineId(payload.timelineId);
     const payloadTimelineClearRevision = nonNegativeInteger(payload.timelineClearRevision, timelineClearRevision);
     const inputs = Array.isArray(payload.inputs) ? payload.inputs : [];
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    const bodyStateEvents = events.filter(isBodyStateSceneEvent);
+    const acceptsInputLog = payload?.kind === 'scene-physics-input-log' ||
+      payload?.kind === SCENE_SYNC_EVENT_LOG_KIND;
     if (
-      payload?.kind !== 'scene-physics-input-log' ||
+      !acceptsInputLog ||
       payloadTimelineId !== timelineId ||
       payloadTimelineClearRevision !== timelineClearRevision
     ) {
       return {
-        kind: 'scene-physics-input-log',
+        kind: payload?.kind === SCENE_SYNC_EVENT_LOG_KIND
+          ? SCENE_SYNC_EVENT_LOG_KIND
+          : 'scene-physics-input-log',
         accepted: false,
+        eventCount: events.length,
+        handledEventCount: bodyStateEvents.length,
+        ignoredEventCount: Math.max(0, events.length - bodyStateEvents.length),
         inputCount: inputs.length,
         queuedCount: 0,
       };
@@ -1207,17 +1268,33 @@ export function createScenePhysicsRuntime({
     const snapshotTick = nonNegativeInteger(payload.snapshot?.tick, -1);
     const snapshotLastEventRevision = nonNegativeInteger(payload.snapshot?.lastEventRevision, 0);
     const skipCoveredInputs = options.skipInputsCoveredBySnapshot === true && snapshotTick >= 0;
-    for (const input of inputs) {
-      if (skipCoveredInputs && inputPayloadCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
-        skippedCoveredCount += 1;
-        continue;
+    const eventRecords = bodyStateEvents.map(event => ({
+      payload: event,
+      input: bodyStateInputFromEvent(event),
+    }));
+    const eventInputIds = new Set(eventRecords
+      .map(record => record.input?.inputId)
+      .filter(Boolean));
+    const inputRecords = [
+      ...eventRecords,
+      ...inputs
+        .filter(input => !eventInputIds.has(input?.inputId))
+        .map(input => ({ payload: input, input })),
+    ];
+      for (const { payload: inputPayload, input } of inputRecords) {
+        if (skipCoveredInputs && inputPayloadCoveredBySnapshot(input, snapshotTick, snapshotLastEventRevision)) {
+          skippedCoveredCount += 1;
+          continue;
+        }
+        if (queueInput(inputPayload)) queuedCount += 1;
       }
-      if (queueInput(input)) queuedCount += 1;
-    }
     return {
-      kind: 'scene-physics-input-log',
-      accepted: true,
-      inputCount: inputs.length,
+      kind: payload.kind,
+      accepted: payload.kind === 'scene-physics-input-log' || inputRecords.length > 0,
+      eventCount: events.length,
+      handledEventCount: bodyStateEvents.length,
+      ignoredEventCount: Math.max(0, events.length - bodyStateEvents.length),
+      inputCount: inputRecords.length,
       queuedCount,
       skippedCoveredCount,
       timelineId,
