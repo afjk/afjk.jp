@@ -416,3 +416,46 @@ test('Loomlet interaction queue defers replay-required late updates', () => {
   assert.equal(debug.deferredInteractionReplayEvents.at(-1).event.eventId, 'late-click-1');
   assert.equal(debug.deferredInteractionReplayEvents.at(-1).event.payload.clientX, 20);
 });
+
+test('Loomlet interaction queue delivers first-seen late events once for compatibility', () => {
+  const object = createPositionObject();
+  const integration = createSceneSyncLoomIntegration({
+    getObjectById: (objectId) => (objectId === 'box-1' ? object : null),
+    getObjectRuntimeTime: () => 1,
+    enableDebug: true,
+  });
+  integration.handlePayload({
+    type: 'scene-graph-set',
+    scope: { object: 'box-1' },
+    graph: {
+      nodes: [
+        { id: 'click', type: 'onEvent', params: { channel: 'pointer.click' } },
+        { id: 'count', type: 'list.length' },
+        { id: 'move', type: 'scene.setPosition', params: { objectId: 'box-1', y: 0, z: 0 } },
+      ],
+      edges: [
+        { from: 'click.event', to: 'count.list' },
+        { from: 'count.out', to: 'move.x' },
+      ],
+    },
+  });
+
+  const queued = integration.queueInteractionEvent({
+    kind: 'scene-event',
+    timelineId: LOOMLET_INTERACTION_TIMELINE_ID,
+    channel: 'pointer.click',
+    eventId: 'first-late-click-1',
+    target: 'box-1',
+    applyTick: 1,
+    payload: { clientX: 10 },
+  }, { currentTick: 3 });
+
+  assert.equal(queued.ok, true);
+  assert.equal(queued.replayRequired, true);
+  integration.tickObjectGraphs({ t: 3, deltaTime: 0, tick: 3 }, 3000);
+
+  assert.equal(object.position.x, 1);
+  const debug = integration.debugState();
+  assert.equal(debug.eventEvaluations['object:box-1'].at(-1).events[0].eventId, 'first-late-click-1');
+  assert.equal(debug.deferredInteractionReplayEvents.length, 0);
+});
