@@ -6,6 +6,12 @@ import {
   createSceneEventTimeline,
   sceneEventToRuntimeEvent,
 } from './runtime/event-timeline.js';
+import {
+  PLAYER_INTERACTION_EVENT_LOG_KIND,
+  PLAYER_INTERACTION_EVENT_SOURCE,
+  PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+  PLAYER_POINTER_INTERACTION_CHANNELS,
+} from './runtime/player-interaction-events.js';
 
 export const LOOMLET_RUNTIME_METADATA = Object.freeze({
   version: LoomletSceneSyncRuntimeVersion,
@@ -13,16 +19,10 @@ export const LOOMLET_RUNTIME_METADATA = Object.freeze({
   adapter: 'scenesync',
 });
 
-export const LOOMLET_INTERACTION_TIMELINE_ID = 'player-interaction';
-export const LOOMLET_INTERACTION_EVENT_LOG_KIND = 'scene-event-log';
-export const LOOMLET_INTERACTION_EVENT_SOURCE = 'loomlet';
-export const LOOMLET_POINTER_INTERACTION_CHANNELS = Object.freeze([
-  'pointer.click',
-  'pointer.drag.start',
-  'pointer.drag.move',
-  'pointer.drag.end',
-  'pointer.drag.cancel',
-]);
+export const LOOMLET_INTERACTION_TIMELINE_ID = PLAYER_INTERACTION_EVENT_TIMELINE_ID;
+export const LOOMLET_INTERACTION_EVENT_LOG_KIND = PLAYER_INTERACTION_EVENT_LOG_KIND;
+export const LOOMLET_INTERACTION_EVENT_SOURCE = PLAYER_INTERACTION_EVENT_SOURCE;
+export const LOOMLET_POINTER_INTERACTION_CHANNELS = PLAYER_POINTER_INTERACTION_CHANNELS;
 
 const DEFAULT_LOOMLET_INTERACTION_EVENT_CHANNELS = new Set(LOOMLET_POINTER_INTERACTION_CHANNELS);
 
@@ -351,6 +351,12 @@ function createRuntimeManager({
     return resolveInteractionEventTarget(payload) !== '';
   }
 
+  function hasQueuedInteractionEvent(eventId) {
+    if (!eventId) return false;
+    return interactionEventTimeline.getEventHistory().some(event => event.eventId === eventId) ||
+      interactionEventTimeline.getPendingEvents().some(event => event.eventId === eventId);
+  }
+
   function processDueInteractionEvents(currentTick = lastInteractionTick) {
     const tick = normalizeInteractionTick(currentTick, lastInteractionTick);
     lastInteractionTick = tick;
@@ -375,6 +381,7 @@ function createRuntimeManager({
     const target = resolveInteractionEventTarget(payload);
     const channel = resolveInteractionEventChannel(payload);
     const tick = currentInteractionTick(options);
+    const hadExistingEvent = hasQueuedInteractionEvent(payload.eventId ?? payload.inputId);
     const result = interactionEventTimeline.queueEvent({
       ...payload,
       kind: 'scene-event',
@@ -383,7 +390,7 @@ function createRuntimeManager({
       source: payload.source || LOOMLET_INTERACTION_EVENT_SOURCE,
     }, { currentTick: tick });
     if (!result.ok) return result;
-    if (result.replayRequired === true) {
+    if (result.replayRequired === true && hadExistingEvent) {
       const runtimeEvent = sceneEventToRuntimeEvent(result.event);
       if (replacePendingInteractionRuntimeEvent(runtimeEvent)) {
         consumeInteractionTimelineEventWithoutDelivery(result.event.eventId, tick);

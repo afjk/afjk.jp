@@ -61,6 +61,13 @@ import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './uti
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
 import { shouldFreezeObjectForEditorRuntime } from './runtime/editing-state.js';
 import { createSceneEventTimeline, sceneEventToRuntimeEvent } from './runtime/event-timeline.js';
+import {
+  createPlayerInteractionPointerPayload,
+  isPlayerInteractionSceneEvent as isPlayerInteractionSceneEventPayload,
+  normalizePlayerInteractionSceneEvent,
+  PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+  PLAYER_POINTER_INTERACTION_CHANNELS,
+} from './runtime/player-interaction-events.js';
 import { calculateScenePlaybackDuration } from './runtime/playback-duration.js';
 import {
   CLOCK_MODE_LABELS,
@@ -1390,15 +1397,8 @@ const PLAYER_PHYSICS_DRAG_MAX_THROW_SPEED = 18;
 const SCENE_SYNC_EVENT_LOG_KIND = 'scene-event-log';
 const SCENE_SYNC_EVENT_LOG_REQUEST_KIND = 'scene-event-log-request';
 const SCENE_PHYSICS_INPUT_LOG_REQUEST_KIND = 'scene-physics-input-log-request';
-const PLAYER_INTERACTION_EVENT_TIMELINE_ID = 'player-interaction';
 const PLAYER_INTERACTION_CLICK_DISTANCE_SQUARED = 25;
-const PLAYER_INTERACTION_EVENT_CHANNELS = new Set([
-  'pointer.drag.start',
-  'pointer.drag.move',
-  'pointer.drag.end',
-  'pointer.drag.cancel',
-  'pointer.click',
-]);
+const PLAYER_INTERACTION_EVENT_CHANNELS = new Set(PLAYER_POINTER_INTERACTION_CHANNELS);
 
 function createSampleCube() {
   const sampleGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -3197,6 +3197,7 @@ const playerPhysicsDragState = {
 
 let currentHoveredObjectId = null;
 const loomletHostEvents = new Map(); // objectId -> Array<eventName | event>
+let loomIntegration = null;
 const tmpViewerPosition = new THREE.Vector3();
 const tmpViewerForward = new THREE.Vector3();
 
@@ -3704,24 +3705,12 @@ function getPlayerInteractionEventTick(fallback = 0) {
 }
 
 function isPlayerInteractionSceneEvent(payload) {
-  const channel = typeof payload?.channel === 'string'
-    ? payload.channel
-    : (typeof payload?.type === 'string' ? payload.type : '');
-  return payload?.kind === 'scene-event' && PLAYER_INTERACTION_EVENT_CHANNELS.has(channel);
+  return isPlayerInteractionSceneEventPayload(payload);
 }
 
 function queuePlayerInteractionSceneEvent(payload = {}, { fromPeer = null, processDue = true } = {}) {
-  if (!isPlayerInteractionSceneEvent(payload)) return null;
-  const target = typeof payload.target === 'string' && payload.target.trim()
-    ? payload.target.trim()
-    : (typeof payload.objectId === 'string' && payload.objectId.trim() ? payload.objectId.trim() : '');
-  if (!target) return null;
-
-  const eventPayload = {
-    ...payload,
-    target,
-    sourcePeerId: payload.sourcePeerId || fromPeer?.id || undefined,
-  };
+  const eventPayload = normalizePlayerInteractionSceneEvent(payload, { fromPeer });
+  if (!eventPayload) return null;
   const currentTick = getPlayerInteractionEventTick();
   const result = playerInteractionEventTimeline.queueEvent(eventPayload, { currentTick });
   if (!result.ok) return null;
@@ -3756,6 +3745,12 @@ function resetPlayerInteractionEventTimeline(reason = 'player-interaction-reset'
     timelineForkTick: getPlayerInteractionEventTick(),
     timelineClearRevision,
   });
+  loomIntegration?.clearInteractionEvents?.({
+    timelineId: state.timelineId || PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+    timelineRevision,
+    timelineForkTick: getPlayerInteractionEventTick(),
+    timelineClearRevision,
+  });
   loomletHostEvents.clear();
   if (isPlayerPhysicsDragging()) {
     clearPlayerPhysicsDragState();
@@ -3765,6 +3760,9 @@ function resetPlayerInteractionEventTimeline(reason = 'player-interaction-reset'
 
 function processDuePlayerInteractionEvents(currentTick = getPlayerInteractionEventTick()) {
   const processed = playerInteractionEventTimeline.processDueEvents(currentTick, (event) => {
+    const queuedForLoomlet = loomIntegration?.queueInteractionEvent?.(event, { currentTick });
+    if (queuedForLoomlet?.ok) return { applied: true };
+
     const runtimeEvent = sceneEventToRuntimeEvent(event);
     const objectId = runtimeEvent?.target || runtimeEvent?.objectId;
     if (!objectId) return true;
@@ -3791,7 +3789,7 @@ function createPlayerInteractionEventPayload({
   const clockState = getSceneClockStateForLoomlet(now);
   const resolvedClientX = Number.isFinite(Number(clientX)) ? Number(clientX) : playerPhysicsDragState.startClientX;
   const resolvedClientY = Number.isFinite(Number(clientY)) ? Number(clientY) : playerPhysicsDragState.startClientY;
-  const payload = {
+  const payload = createPlayerInteractionPointerPayload({
     pointerId: pointerEvent?.pointerId ?? playerPhysicsDragState.pointerId,
     pointerType: pointerEvent?.pointerType || playerPhysicsDragState.pointerType || 'mouse',
     button: pointerEvent?.button ?? playerPhysicsDragState.button ?? 0,
@@ -3800,14 +3798,8 @@ function createPlayerInteractionEventPayload({
     startClientX: playerPhysicsDragState.startClientX,
     startClientY: playerPhysicsDragState.startClientY,
     maxPointerDistanceSquared: playerPhysicsDragState.maxPointerDistanceSquared,
-  };
-  if (physicsInput) {
-    payload.physicsInputId = physicsInput.inputId;
-    payload.physicsPhase = physicsInput.phase;
-    payload.controlMode = physicsInput.controlMode;
-    payload.position = physicsInput.position;
-    payload.velocity = physicsInput.velocity;
-  }
+    physicsInput,
+  });
 
   return {
     kind: 'scene-event',
@@ -6676,7 +6668,7 @@ const audioSourceHostApi = {
   unsync: (objectId, name) => audioSourceController.unsync(objectId, name),
 };
 
-const loomIntegration = createSceneSyncLoomIntegration({
+loomIntegration = createSceneSyncLoomIntegration({
   getObjectById: (objectId) => managedObjects.get(objectId) || null,
   send: (payload) => broadcast(payload),
   getHostTime: () => Date.now() / 1000,
@@ -6695,6 +6687,8 @@ const loomIntegration = createSceneSyncLoomIntegration({
   getInputRoutingMode,
   audioSource: audioSourceHostApi,
   enableDebug: isDevUiEnabled(),
+  interactionTimelineId: PLAYER_INTERACTION_EVENT_TIMELINE_ID,
+  interactionEventChannels: PLAYER_POINTER_INTERACTION_CHANNELS,
 });
 
 // ── Scene Clock Debug UI 制御 ────────────────────────────
