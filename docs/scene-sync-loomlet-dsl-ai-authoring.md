@@ -87,6 +87,9 @@ The Scene Sync client currently allows these Behavior Graph node types:
 - `cosine`
 - `add`
 - `multiply`
+- `onEvent`
+- `list.length`
+- `list.at`
 - `sceneSetPosition`
 - `sceneOffsetPosition`
 - `sceneSetRotation`
@@ -97,6 +100,18 @@ The Scene Sync client currently allows these Behavior Graph node types:
 Use `clock` for time-driven Loomlet behavior. For shared behavior, Scene Sync should provide a suitable room time as `env.time`; Loomlet itself does not synchronize clocks.
 
 Loomlet DSL authoring should map to those runtime nodes through the compiler/adapter.
+
+For synchronized Player Shell interactions, use `onEvent(channel: "pointer.click")`
+in Loomlet DSL or emit this graph node directly:
+
+```json
+{ "id": "click", "type": "onEvent", "params": { "channel": "pointer.click" } }
+```
+
+Supported synchronized pointer channels are `pointer.click`,
+`pointer.drag.start`, `pointer.drag.move`, `pointer.drag.end`, and
+`pointer.drag.cancel`. Use `list.length` or `list.at` to consume the
+frame-local event list emitted by `onEvent.event`.
 
 ---
 
