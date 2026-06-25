@@ -86,12 +86,29 @@ Clear the room-level **Scene Behavior Graph**.
 - `add`
 - `multiply`
 - `constant`
+- `onEvent`
+- `list.length`
+- `list.at`
 - `sceneSetPosition`
 - `sceneOffsetPosition`
 - `sceneSetRotation`
 - `sceneSetScale`
 - `sceneSetColor`
 - `sceneSetVisible`
+
+## Pointer Event Graphs
+
+Use `onEvent` for synchronized Player Shell pointer interactions. Graph JSON
+should use:
+
+```json
+{ "id": "click", "type": "onEvent", "params": { "channel": "pointer.click" } }
+```
+
+The supported pointer channels are `pointer.click`, `pointer.drag.start`,
+`pointer.drag.move`, `pointer.drag.end`, and `pointer.drag.cancel`. `onEvent`
+outputs an event list on `event`; use `list.length` or `list.at` to turn that
+frame-local event list into graph values.
 
 ## Dry run
 

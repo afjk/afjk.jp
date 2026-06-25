@@ -98,6 +98,9 @@ SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. 
 - `cosine` — cosine wave oscillator
 - `add` — addition
 - `multiply` — multiplication
+- `onEvent` — read synchronized frame-local events. Use this for Player Shell pointer interactions. Graph JSON uses `{ "type": "onEvent", "params": { "channel": "pointer.click" } }`; Loomlet DSL should use `onEvent(channel: "pointer.click")`.
+- `list.length` — count events from an `onEvent.event` list
+- `list.at` — select one event from an `onEvent.event` list by index
 - `sceneSetPosition` — set object position (absolute coordinates)
 - `sceneOffsetPosition` — apply x/y/z offsets relative to the object position captured when the Behavior Graph starts evaluating. When the graph is cleared or replaced, Scene Sync restores the captured base position.
 - `sceneSetRotation` — set object rotation
@@ -106,6 +109,14 @@ SceneSync Behavior Graph execution supports a **whitelist** of Loom node types. 
 - `sceneSetVisible` — set object visibility
 
 Use `clock` for time-driven Loomlet behavior. For shared behavior, Scene Sync should provide a suitable room time as `env.time`; Loomlet itself does not synchronize clocks.
+
+Supported synchronized Player Shell event channels are:
+
+- `pointer.click`
+- `pointer.drag.start`
+- `pointer.drag.move`
+- `pointer.drag.end`
+- `pointer.drag.cancel`
 
 ### Forbidden node types:
 
@@ -116,7 +127,7 @@ Use `clock` for time-driven Loomlet behavior. For shared behavior, Scene Sync sh
 - `setAttr` — DOM attribute manipulation
 - `log` — console logging
 
-**Input/Event nodes (not allowed):**
+**Raw local input nodes (not allowed):**
 
 - `pointerClick` — pointer/click events
 - `pointerPosition` — pointer position tracking
@@ -128,7 +139,7 @@ Use `clock` for time-driven Loomlet behavior. For shared behavior, Scene Sync sh
 
 **Reason for restrictions:**
 
-Remote room messages must be safe. DOM and input nodes could introduce security vulnerabilities or break client isolation. SceneSync Behavior Graph execution is intentionally restricted to transformation and visibility control only.
+Remote room messages must be safe. DOM and raw local input nodes could introduce security vulnerabilities or break client isolation. SceneSync Behavior Graph execution only exposes synchronized `scene-event` input through `onEvent`, not direct browser input streams.
 
 ---
 

@@ -11,13 +11,16 @@ const store = new SessionStore()
 const GRAPH_TOOL_PATCHED = Symbol.for('scene-sync-mcp.scene-graph-tools.patched')
 const GRAPH_TOOLS_REGISTERED = Symbol.for('scene-sync-mcp.scene-graph-tools.registered')
 
-const supportedGraphNodeTypes = [
+export const supportedGraphNodeTypes = [
   'clock',
   'sine',
   'cosine',
   'add',
   'multiply',
   'constant',
+  'onEvent',
+  'list.length',
+  'list.at',
   'sceneSetPosition',
   'sceneOffsetPosition',
   'sceneSetRotation',
@@ -37,7 +40,7 @@ const graphEdgeSchema = z.object({
   to: z.string().min(1).describe('Destination endpoint, for example "sine.t"')
 }).passthrough()
 
-const graphSchema = z.object({
+export const graphSchema = z.object({
   nodes: z.array(graphNodeSchema).max(100).describe('Scene Sync graph nodes'),
   edges: z.array(graphEdgeSchema).max(300).describe('Scene Sync graph edges')
 }).passthrough()
@@ -47,7 +50,7 @@ function endpointNodeId(endpoint) {
   return index === -1 ? endpoint : endpoint.slice(0, index)
 }
 
-function validateGraph(graph) {
+export function validateGraph(graph) {
   if (!graph || typeof graph !== 'object') {
     throw new ValidationError('graph must be an object with nodes and edges arrays.')
   }
