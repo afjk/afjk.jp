@@ -95,6 +95,8 @@ services:
       - MEDIAMTX_API_URL=http://mediamtx:9997
       # Scene Sync GLB upload limit (500 MiB = 524,288,000 bytes)
       - SCENE_SYNC_MAX_UPLOAD_BYTES=${SCENE_SYNC_MAX_UPLOAD_BYTES:-524288000}
+      # Scene Sync room object limit
+      - SCENE_SYNC_MAX_OBJECTS_PER_ROOM=${SCENE_SYNC_MAX_OBJECTS_PER_ROOM:-500}
       # Scene Sync GLB backup driver (local or s3)
       - SCENE_SYNC_GLB_BACKUP_DRIVER=${SCENE_SYNC_GLB_BACKUP_DRIVER:-local}
       - SCENE_SYNC_GLB_BACKUP_S3_ENDPOINT=${SCENE_SYNC_GLB_BACKUP_S3_ENDPOINT:-}
