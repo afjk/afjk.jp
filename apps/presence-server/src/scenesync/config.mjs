@@ -17,7 +17,7 @@ export function createSceneSyncConfig(env = process.env) {
     maxUploadBytes: parseIntEnv(env.SCENE_SYNC_MAX_UPLOAD_BYTES, 524_288_000, 1),
     maxJsonBytes: parseIntEnv(env.SCENE_SYNC_MAX_JSON_BYTES, 1_048_576, 1),
     maxRoomConnections: parseIntEnv(env.SCENE_SYNC_MAX_ROOM_CONNECTIONS, 20, 1),
-    maxObjectsPerRoom: parseIntEnv(env.SCENE_SYNC_MAX_OBJECTS_PER_ROOM, 200, 1),
+    maxObjectsPerRoom: parseIntEnv(env.SCENE_SYNC_MAX_OBJECTS_PER_ROOM, 500, 1),
     logEnabled: parseBoolEnv(env.SCENE_SYNC_LOG_ENABLED, true),
     logDir: env.SCENE_SYNC_LOG_DIR || './logs',
     logMaxLineBytes: parseIntEnv(env.SCENE_SYNC_LOG_MAX_LINE_BYTES, 4096, 256),

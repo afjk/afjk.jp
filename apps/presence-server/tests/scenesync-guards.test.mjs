@@ -10,6 +10,7 @@ import { createPerActorRateLimiter } from '../src/scenesync/rate-limit.mjs';
 import { validateSceneSyncPayload } from '../src/scenesync/message-schema.mjs';
 import { createSceneSyncLogger } from '../src/scenesync/logger.mjs';
 import { createGlbBackupManager, cleanupOldBackups } from '../src/scenesync/glb-backup.mjs';
+import { createSceneSyncConfig } from '../src/scenesync/config.mjs';
 
 const tmpRoot = mkdtempSync(path.join(tmpdir(), 'scenesync-guards-'));
 const logDir = path.join(tmpRoot, 'logs');
@@ -58,6 +59,14 @@ after(async () => {
 });
 
 describe('Scene Sync guard helpers', () => {
+  it('defaults to 500 objects per room', () => {
+    assert.equal(createSceneSyncConfig({}).maxObjectsPerRoom, 500);
+  });
+
+  it('allows object count limit override from env', () => {
+    assert.equal(createSceneSyncConfig({ SCENE_SYNC_MAX_OBJECTS_PER_ROOM: '2' }).maxObjectsPerRoom, 2);
+  });
+
   it('GLB magic check accepts valid glTF header', () => {
     assert.equal(hasValidGlbMagic(Buffer.from('glTFtest')), true);
   });
