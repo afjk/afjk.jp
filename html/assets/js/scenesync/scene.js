@@ -14473,6 +14473,14 @@ function hasSnapshotRestorableObjects() {
   return false;
 }
 
+function hasRestorableSnapshotLoomGraphs(snapshot) {
+  const loomGraphs = snapshot?.loomGraphs;
+  if (!loomGraphs || typeof loomGraphs !== 'object') return false;
+  if (loomGraphs.scene && typeof loomGraphs.scene === 'object') return true;
+  if (!loomGraphs.objects || typeof loomGraphs.objects !== 'object') return false;
+  return Object.values(loomGraphs.objects).some(graph => graph && typeof graph === 'object');
+}
+
 function createCurrentSceneSnapshot() {
   // Persistence stores the initial physics pose, but reading it must NOT disturb the
   // live simulation/visuals (otherwise an in-progress drag visibly snaps back).
@@ -14525,6 +14533,11 @@ function createCurrentSceneSnapshot() {
   const physicsState = getScenePhysicsForSerialize();
   if (physicsState) {
     snapshot.physics = physicsState;
+  }
+
+  const loomGraphState = loomIntegration.exportState();
+  if (loomGraphState.scene !== null || Object.keys(loomGraphState.objects).length > 0) {
+    snapshot.loomGraphs = loomGraphState;
   }
 
   return snapshot;
@@ -14623,7 +14636,9 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
 
   const record = await roomSnapshotCache.getSnapshot(roomId);
   const snapshot = record?.snapshot;
-  if (!snapshot?.objects?.length) {
+  const snapshotObjectCount = Array.isArray(snapshot?.objects) ? snapshot.objects.length : 0;
+  const hasLoomGraphs = hasRestorableSnapshotLoomGraphs(snapshot);
+  if (snapshotObjectCount === 0 && !hasLoomGraphs) {
     console.debug('[scene-snapshot] no snapshot to restore', { roomId, reason });
     ensureSampleCubeForEmptyRoom('snapshot-empty');
     return;
@@ -14631,7 +14646,8 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
 
   console.info('[scene-snapshot] restoring local snapshot', {
     roomId,
-    objectCount: snapshot.objects.length,
+    objectCount: snapshotObjectCount,
+    hasLoomGraphs,
     savedAt: record.savedAt,
     reason,
   });
@@ -14645,6 +14661,7 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
 async function applyRoomSnapshot(snapshot, options = {}) {
   let restored = 0;
   let failed = 0;
+  let restoredLoomGraphs = false;
 
   isRestoringRoomSnapshot = true;
 
@@ -14678,6 +14695,16 @@ async function applyRoomSnapshot(snapshot, options = {}) {
         });
       }
     }
+
+    if (hasRestorableSnapshotLoomGraphs(snapshot)) {
+      try {
+        loomIntegration.importState(snapshot.loomGraphs);
+        restoredLoomGraphs = true;
+      } catch (error) {
+        console.warn('[scene-snapshot] loom graph restore failed:', error);
+        showToast?.('Loom graph restore failed');
+      }
+    }
   } finally {
     isRestoringRoomSnapshot = false;
   }
@@ -14685,12 +14712,17 @@ async function applyRoomSnapshot(snapshot, options = {}) {
   console.info('[scene-snapshot] restore complete', {
     restored,
     failed,
+    restoredLoomGraphs,
   });
 
-  if (restored > 0) {
+  if (restored > 0 || restoredLoomGraphs) {
     removeSampleCube('snapshot-restored');
-    showToast?.(`前回のシーンの復元を開始しました（${restored}件）`);
-    if (hasSnapshotRestorableObjects()) {
+    if (restored > 0) {
+      showToast?.(`前回のシーンの復元を開始しました（${restored}件）`);
+    } else {
+      showToast?.('前回のLoom graphを復元しました');
+    }
+    if (hasSnapshotRestorableObjects() || restoredLoomGraphs) {
       notifySceneStateChanged('snapshot-restore');
     }
   } else {
