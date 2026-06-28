@@ -1605,6 +1605,9 @@ namespace Afjk.SceneSync
 
         private string GetRemoteSceneClockControllerId(string payloadJson, string fromId)
         {
+            if (IsLocalClientId(fromId))
+                return null;
+
             var hasControllerField = SceneSyncWireJson.HasTopLevelField(payloadJson, "controller");
             var controllerJson = SceneSyncWireJson.ExtractTopLevelRawObject(payloadJson, "controller");
             var controllerId = SceneSyncWireJson.ExtractString(controllerJson, "id");
@@ -1645,6 +1648,7 @@ namespace Afjk.SceneSync
         private void BroadcastSharedPlaybackClock(string action, double currentTime)
         {
             if (_client == null || !_client.IsConnected) return;
+            if (string.IsNullOrWhiteSpace(_client.Id)) return;
 
             var revision = Math.Max(1, _sharedSceneClockRevision + 1);
             _sharedSceneClockRevision = revision;
@@ -1666,7 +1670,7 @@ namespace Afjk.SceneSync
                 roomNow,
                 sentAt);
 
-            var controllerId = !string.IsNullOrWhiteSpace(_client.Id) ? _client.Id : "unity-runtime";
+            var controllerId = _client.Id;
             var controllerName = string.IsNullOrWhiteSpace(_nickname) ? "Unity" : _nickname;
             var payload =
                 "{\"kind\":\"scene-clock\"" +
@@ -1694,6 +1698,7 @@ namespace Afjk.SceneSync
         private void BroadcastSharedPlaybackControlRelease(double currentTime)
         {
             if (_client == null || !_client.IsConnected) return;
+            if (string.IsNullOrWhiteSpace(_client.Id)) return;
 
             var revision = Math.Max(1, _sharedSceneClockRevision + 1);
             _sharedSceneClockRevision = revision;
