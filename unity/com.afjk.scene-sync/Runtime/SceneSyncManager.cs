@@ -7,6 +7,13 @@ using UnityEngine;
 
 namespace Afjk.SceneSync
 {
+    public enum SceneSyncPlaybackClockMode
+    {
+        Local,
+        SharedPlaybackFollow,
+        SharedPlaybackControl
+    }
+
     public class SceneSyncManager : MonoBehaviour
     {
         [SerializeField] private string _presenceUrl = "wss://afjk.jp/presence";
@@ -14,6 +21,8 @@ namespace Afjk.SceneSync
         [SerializeField] private string _room = "";
         [SerializeField] private string _nickname = "Unity";
         [SerializeField] private bool _autoConnect = true;
+        [SerializeField] private SceneSyncPlaybackClockMode _playbackClockMode = SceneSyncPlaybackClockMode.Local;
+        [SerializeField] private float _sharedPlaybackClockBroadcastInterval = 0.25f;
         [SerializeField] private bool _syncHierarchy = true;
         [SerializeField] private Transform _syncRoot;
         [SerializeField] private bool includeManagerChildren = true;
@@ -52,6 +61,12 @@ namespace Afjk.SceneSync
         private string _activeOutgoingTransferId = null;
         private readonly HashSet<string> _remoteRemovedUnityObjectIds = new HashSet<string>();
         private string _envId = null;
+        private SceneSyncPlaybackClockMode _lastAppliedPlaybackClockMode = (SceneSyncPlaybackClockMode)(-1);
+        private SceneClockState _sharedSceneClock = SceneClockState.Inactive;
+        private int _sharedSceneClockRevision;
+        private double _sharedPlaybackControlStartedAt;
+        private double _lastSharedPlaybackClockBroadcastAt = double.NegativeInfinity;
+        private Dictionary<string, double> _sharedObjectEpochTimes = new Dictionary<string, double>();
 
         private const double RECOVERY_TIMEOUT_MS = 30000;
         private const double PEER_RETRY_INTERVAL_MS = 4000;
@@ -92,6 +107,16 @@ namespace Afjk.SceneSync
             get => _autoConnect;
             set => _autoConnect = value;
         }
+        public SceneSyncPlaybackClockMode PlaybackClockMode
+        {
+            get => _playbackClockMode;
+            set => _playbackClockMode = value;
+        }
+        public float SharedPlaybackClockBroadcastInterval
+        {
+            get => _sharedPlaybackClockBroadcastInterval;
+            set => _sharedPlaybackClockBroadcastInterval = Mathf.Max(0.05f, value);
+        }
         public bool SyncHierarchy
         {
             get => _syncHierarchy;
@@ -123,6 +148,7 @@ namespace Afjk.SceneSync
             _client.OnConnected += () =>
             {
                 _connected = true;
+                _lastAppliedPlaybackClockMode = (SceneSyncPlaybackClockMode)(-1);
                 OnConnected?.Invoke();
                 Debug.Log("[SceneSync] Connected");
             };
@@ -696,11 +722,14 @@ namespace Afjk.SceneSync
         private void Update()
         {
             if (_isShuttingDown || !_connected || !gameObject.activeInHierarchy) return;
-            if (!_syncHierarchy) return;
 
             var currentTime = Time.realtimeSinceStartup;
             var deltaTime = currentTime - _lastTime;
             _lastTime = currentTime;
+
+            UpdatePlaybackClock(currentTime);
+
+            if (!_syncHierarchy) return;
 
             // ロック状態の更新
             string selectionId = null;
@@ -1040,6 +1069,10 @@ namespace Afjk.SceneSync
             {
                 HandleScenePhysics(raw);
             }
+            else if (raw.Contains("\"kind\":\"scene-clock\""))
+            {
+                HandleSceneClock(raw);
+            }
             else if (raw.Contains("\"kind\":\"scene-batch\""))
             {
                 HandleSceneBatch(raw, fromId);
@@ -1362,6 +1395,7 @@ namespace Afjk.SceneSync
 
             foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(raw, "objects"))
             {
+                ApplyObjectClockBaseline(entry.Key, entry.Value);
                 var fakeJson = "{\"kind\":\"scene-add\",\"objectId\":\"" + SceneSyncWireJson.JsonEscape(entry.Key) + "\"," + entry.Value.Trim().TrimStart('{');
                 Debug.Log("[SceneSync] Restore scene-state object as scene-add: " + fakeJson);
                 HandleSceneAdd(fakeJson);
@@ -1510,6 +1544,148 @@ namespace Afjk.SceneSync
         private void HandleScenePhysics(string raw)
         {
             ApplyScenePhysicsMetadata(raw);
+        }
+
+        private void HandleSceneClock(string raw)
+        {
+            var mode = SceneSyncWireJson.ExtractString(raw, "mode") ?? "shared-playback";
+            if (!string.Equals(mode, "shared-playback", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var revisionValue = ReadTopLevelDouble(raw, "revision", double.NaN);
+            if (IsFinite(revisionValue))
+            {
+                var revision = Mathf.FloorToInt((float)revisionValue);
+                if (revision <= _sharedSceneClockRevision)
+                    return;
+                _sharedSceneClockRevision = revision;
+            }
+
+            if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+                return;
+
+            _sharedSceneClock = SceneClockState.Parse(raw, _sharedSceneClock);
+            ApplyObjectClockBaselines(raw);
+        }
+
+        private void BroadcastSharedPlaybackClockIfNeeded(double currentTime)
+        {
+            var interval = Math.Max(0.05d, _sharedPlaybackClockBroadcastInterval);
+            if (currentTime - _lastSharedPlaybackClockBroadcastAt < interval)
+                return;
+
+            BroadcastSharedPlaybackClock("mode", currentTime);
+        }
+
+        private void BroadcastSharedPlaybackClock(string action, double currentTime)
+        {
+            if (_client == null || !_client.IsConnected) return;
+
+            var revision = Math.Max(1, _sharedSceneClockRevision + 1);
+            _sharedSceneClockRevision = revision;
+            _lastSharedPlaybackClockBroadcastAt = currentTime;
+
+            var roomNow = GetUnixTimeSeconds();
+            var rate = 1d;
+            var activeTime = GetPlaybackClockTime(currentTime);
+            var offset = activeTime - roomNow * rate;
+            var sentAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            _sharedSceneClock = new SceneClockState(
+                true,
+                "room",
+                offset,
+                false,
+                double.NaN,
+                rate,
+                roomNow,
+                sentAt);
+
+            var controllerId = !string.IsNullOrWhiteSpace(_client.Id) ? _client.Id : "unity-runtime";
+            var controllerName = string.IsNullOrWhiteSpace(_nickname) ? "Unity" : _nickname;
+            var payload =
+                "{\"kind\":\"scene-clock\"" +
+                ",\"action\":\"" + SceneSyncWireJson.JsonEscape(action) + "\"" +
+                ",\"mode\":\"shared-playback\"" +
+                ",\"source\":\"room\"" +
+                ",\"offset\":" + FormatDouble(offset) +
+                ",\"paused\":false" +
+                ",\"rate\":" + FormatDouble(rate) +
+                ",\"controller\":{\"id\":\"" + SceneSyncWireJson.JsonEscape(controllerId) +
+                "\",\"nickname\":\"" + SceneSyncWireJson.JsonEscape(controllerName) + "\"}" +
+                ",\"revision\":" + revision +
+                ",\"roomNow\":" + FormatDouble(roomNow) +
+                ",\"sentAt\":" + sentAt +
+                (ShouldIncludeSharedObjectClockPayload(action)
+                    ? ",\"time\":" + FormatDouble(activeTime) +
+                      ",\"targetTime\":" + FormatDouble(activeTime) +
+                      ",\"objectClocks\":" + BuildSharedObjectClockPayload(activeTime, updateEpochs: true)
+                    : "") +
+                "}";
+
+            _ = _client.Broadcast(payload);
+        }
+
+        private static bool ShouldIncludeSharedObjectClockPayload(string action)
+        {
+            return string.Equals(action, "mode", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, "tick", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string BuildSharedObjectClockPayload(double sharedEpochTime, bool updateEpochs)
+        {
+            var first = true;
+            var result = "{";
+            foreach (var objectId in _managedObjects.Keys)
+            {
+                if (string.IsNullOrWhiteSpace(objectId)) continue;
+                if (updateEpochs && !_sharedObjectEpochTimes.ContainsKey(objectId))
+                {
+                    _sharedObjectEpochTimes[objectId] = sharedEpochTime;
+                }
+
+                var epoch = _sharedObjectEpochTimes.TryGetValue(objectId, out var existingEpoch)
+                    ? existingEpoch
+                    : sharedEpochTime;
+                if (!first) result += ",";
+                first = false;
+                result += "\"" + SceneSyncWireJson.JsonEscape(objectId) +
+                    "\":{\"sharedEpochTime\":" + FormatDouble(epoch) + "}";
+            }
+            result += "}";
+            return result;
+        }
+
+        private void ApplyObjectClockBaselines(string raw)
+        {
+            foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(raw, "objectClocks"))
+            {
+                ApplyObjectClockBaseline(entry.Key, entry.Value);
+            }
+        }
+
+        private void ApplyObjectClockBaseline(string objectId, string objectJson)
+        {
+            if (string.IsNullOrWhiteSpace(objectId) || string.IsNullOrWhiteSpace(objectJson))
+                return;
+
+            var clockJson = SceneSyncWireJson.ExtractRawObject(objectJson, "clock");
+            var sharedEpoch = ReadTopLevelDouble(
+                !string.IsNullOrWhiteSpace(clockJson) ? clockJson : objectJson,
+                "sharedEpochTime",
+                double.NaN);
+            if (!IsFinite(sharedEpoch))
+            {
+                sharedEpoch = ReadTopLevelDouble(
+                    !string.IsNullOrWhiteSpace(clockJson) ? clockJson : objectJson,
+                    "sharedEpoch",
+                    double.NaN);
+            }
+
+            if (IsFinite(sharedEpoch))
+            {
+                _sharedObjectEpochTimes[objectId] = sharedEpoch;
+            }
         }
 
         private void ApplyScenePhysicsMetadata(string raw)
@@ -1768,6 +1944,7 @@ namespace Afjk.SceneSync
             var objectId = objectIdMatch.Groups[1].Value;
             var hasPhysics = SceneSyncWireJson.HasTopLevelField(raw, "physics");
             var physicsJson = hasPhysics ? ExtractObjectPhysicsJson(raw) : null;
+            ApplyObjectClockBaseline(objectId, raw);
 
             // 既に存在する場合はスキップ
             if (_managedObjects.ContainsKey(objectId))
@@ -2871,7 +3048,132 @@ namespace Afjk.SceneSync
             identity.ConfigureRemoteTemporary(objectId, meshPath, assetId);
         }
 
-        private static void PlayImportedAnimations(GameObject go)
+        private void PlayImportedAnimations(GameObject go)
+        {
+            if (go == null) return;
+
+            if (UsesSharedPlaybackClock())
+            {
+                var identity = go.GetComponent<SceneSyncIdentity>();
+                var objectId = identity != null ? identity.ObjectId : null;
+                var sharedTime = GetPlaybackClockTime(Time.realtimeSinceStartup);
+                SampleImportedAnimations(go, GetObjectPlaybackRuntimeTime(objectId, sharedTime));
+                return;
+            }
+
+            PlayImportedAnimationsLocally(go);
+        }
+
+        private bool UsesSharedPlaybackClock()
+        {
+            return _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow
+                || _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl;
+        }
+
+        private void UpdatePlaybackClock(double currentTime)
+        {
+            if (_lastAppliedPlaybackClockMode != _playbackClockMode)
+            {
+                ApplyPlaybackClockModeChange(currentTime);
+            }
+
+            if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                BroadcastSharedPlaybackClockIfNeeded(currentTime);
+            }
+
+            if (UsesSharedPlaybackClock())
+            {
+                SampleAllRemoteImportedAnimations(GetPlaybackClockTime(currentTime));
+            }
+        }
+
+        private void ApplyPlaybackClockModeChange(double currentTime)
+        {
+            _lastAppliedPlaybackClockMode = _playbackClockMode;
+
+            if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                _sharedPlaybackControlStartedAt = currentTime;
+                _lastSharedPlaybackClockBroadcastAt = double.NegativeInfinity;
+                _sharedObjectEpochTimes.Clear();
+                BroadcastSharedPlaybackClock("mode", currentTime);
+            }
+            else if (_playbackClockMode == SceneSyncPlaybackClockMode.Local)
+            {
+                PlayAllRemoteImportedAnimationsLocally();
+            }
+        }
+
+        private double GetPlaybackClockTime(double currentTime)
+        {
+            if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                if (_sharedPlaybackControlStartedAt <= 0d)
+                    _sharedPlaybackControlStartedAt = currentTime;
+                return Math.Max(0d, currentTime - _sharedPlaybackControlStartedAt);
+            }
+
+            if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow && _sharedSceneClock.Active)
+            {
+                return _sharedSceneClock.GetTime();
+            }
+
+            return Math.Max(0d, currentTime);
+        }
+
+        private void PlayAllRemoteImportedAnimationsLocally()
+        {
+            foreach (var go in GetRemoteManagedObjects())
+            {
+                PlayImportedAnimationsLocally(go);
+            }
+        }
+
+        private void SampleAllRemoteImportedAnimations(double time)
+        {
+            foreach (var entry in GetRemoteManagedObjectEntries())
+            {
+                SampleImportedAnimations(entry.Value, GetObjectPlaybackRuntimeTime(entry.Key, time));
+            }
+        }
+
+        private IEnumerable<GameObject> GetRemoteManagedObjects()
+        {
+            foreach (var entry in GetRemoteManagedObjectEntries())
+            {
+                yield return entry.Value;
+            }
+        }
+
+        private IEnumerable<KeyValuePair<string, GameObject>> GetRemoteManagedObjectEntries()
+        {
+            foreach (var entry in _managedObjects)
+            {
+                var go = entry.Value;
+                if (go == null) continue;
+                if (!IsTemporaryObject(go)) continue;
+                yield return entry;
+            }
+        }
+
+        private double GetObjectPlaybackRuntimeTime(string objectId, double sharedTime)
+        {
+            if (UsesSharedPlaybackClock() && !string.IsNullOrWhiteSpace(objectId))
+            {
+                if (_sharedObjectEpochTimes.TryGetValue(objectId, out var epoch) && IsFinite(epoch))
+                {
+                    return Math.Max(0d, sharedTime - epoch);
+                }
+
+                _sharedObjectEpochTimes[objectId] = sharedTime;
+                return 0d;
+            }
+
+            return Math.Max(0d, sharedTime);
+        }
+
+        private static void PlayImportedAnimationsLocally(GameObject go)
         {
             if (go == null) return;
 
@@ -2886,8 +3188,74 @@ namespace Afjk.SceneSync
             {
                 animation.enabled = true;
                 animation.playAutomatically = true;
+                foreach (AnimationState state in animation)
+                {
+                    if (state != null) state.speed = 1f;
+                }
                 animation.Play();
             }
+        }
+
+        private static void SampleImportedAnimations(GameObject go, double time)
+        {
+            if (go == null) return;
+
+            foreach (var animator in go.GetComponentsInChildren<Animator>(true))
+            {
+                animator.enabled = false;
+            }
+
+            foreach (var animation in go.GetComponentsInChildren<Animation>(true))
+            {
+                SampleAnimation(animation, time);
+            }
+        }
+
+        private static void SampleAnimation(Animation animation, double time)
+        {
+            if (animation == null) return;
+
+            var primary = GetPrimaryAnimationState(animation);
+            if (primary == null) return;
+
+            animation.enabled = true;
+            animation.playAutomatically = false;
+            foreach (AnimationState state in animation)
+            {
+                if (state == null) continue;
+                var isPrimary = state == primary;
+                state.enabled = isPrimary;
+                state.weight = isPrimary ? 1f : 0f;
+                state.speed = 0f;
+            }
+
+            primary.time = WrapAnimationTime(time, primary.length);
+            animation.Sample();
+        }
+
+        private static AnimationState GetPrimaryAnimationState(Animation animation)
+        {
+            if (animation == null) return null;
+            if (animation.clip != null)
+            {
+                var state = animation[animation.clip.name];
+                if (state != null) return state;
+            }
+
+            foreach (AnimationState state in animation)
+            {
+                if (state != null) return state;
+            }
+
+            return null;
+        }
+
+        private static float WrapAnimationTime(double time, float length)
+        {
+            if (length <= 0f) return 0f;
+            var wrapped = time % length;
+            if (wrapped < 0d) wrapped += length;
+            return (float)wrapped;
         }
 
         private void EnsureManagedObjectsList()
@@ -3325,6 +3693,7 @@ namespace Afjk.SceneSync
             _lastSnapshots.Remove(objectId);
             _meshPaths.Remove(objectId);
             _locks.Remove(objectId);
+            _sharedObjectEpochTimes.Remove(objectId);
             SceneSyncLoomletBehaviour.ClearObjectGraph(go);
 
             if (go != null)
@@ -3347,6 +3716,119 @@ namespace Afjk.SceneSync
             foreach (var key in stale)
             {
                 _instanceToObjectId.Remove(key);
+            }
+        }
+
+        private static double ReadTopLevelDouble(string raw, string fieldName, double fallback)
+        {
+            var value = SceneSyncWireJson.ExtractTopLevelRawValue(raw, fieldName);
+            if (string.IsNullOrWhiteSpace(value)) return fallback;
+
+            value = value.Trim().Trim('"');
+            return double.TryParse(
+                value,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsed)
+                ? parsed
+                : fallback;
+        }
+
+        private static bool ReadTopLevelBool(string raw, string fieldName, bool fallback)
+        {
+            var value = SceneSyncWireJson.ExtractTopLevelRawValue(raw, fieldName);
+            if (string.IsNullOrWhiteSpace(value)) return fallback;
+
+            value = value.Trim();
+            if (string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)) return false;
+            return fallback;
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        private static double GetUnixTimeSeconds()
+        {
+            return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d;
+        }
+
+        private static string FormatDouble(double value)
+        {
+            return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private struct SceneClockState
+        {
+            public SceneClockState(
+                bool active,
+                string source,
+                double offset,
+                bool paused,
+                double pausedTime,
+                double rate,
+                double roomNow,
+                double sentAtMilliseconds)
+            {
+                Active = active;
+                Source = string.IsNullOrWhiteSpace(source) ? "room" : source;
+                Offset = IsFinite(offset) ? offset : 0d;
+                Paused = paused;
+                PausedTime = IsFinite(pausedTime) ? pausedTime : double.NaN;
+                Rate = IsFinite(rate) && rate >= 0d ? rate : 1d;
+                RoomNow = IsFinite(roomNow) ? roomNow : 0d;
+                SentAtMilliseconds = IsFinite(sentAtMilliseconds) ? sentAtMilliseconds : 0d;
+            }
+
+            public bool Active { get; }
+            private string Source { get; }
+            private double Offset { get; }
+            private bool Paused { get; }
+            private double PausedTime { get; }
+            private double Rate { get; }
+            private double RoomNow { get; }
+            private double SentAtMilliseconds { get; }
+
+            public static SceneClockState Inactive => new SceneClockState(false, "room", 0d, false, double.NaN, 1d, 0d, 0d);
+
+            public static SceneClockState Parse(string raw, SceneClockState previous)
+            {
+                return new SceneClockState(
+                    true,
+                    SceneSyncWireJson.ExtractString(raw, "source") ?? previous.Source ?? "room",
+                    ReadTopLevelDouble(raw, "offset", previous.Offset),
+                    ReadTopLevelBool(raw, "paused", previous.Paused),
+                    ReadTopLevelDouble(raw, "pausedTime", double.NaN),
+                    ReadTopLevelDouble(raw, "rate", previous.Rate),
+                    ReadTopLevelDouble(raw, "roomNow", previous.RoomNow),
+                    ReadTopLevelDouble(raw, "sentAt", previous.SentAtMilliseconds));
+            }
+
+            public double GetTime()
+            {
+                if (Paused && IsFinite(PausedTime))
+                    return Math.Max(0d, PausedTime);
+
+                var sourceNow = string.Equals(Source, "room", StringComparison.OrdinalIgnoreCase)
+                    ? GetRoomNow()
+                    : Time.realtimeSinceStartup;
+                var time = sourceNow * Rate + Offset;
+                return Math.Max(0d, IsFinite(time) ? time : 0d);
+            }
+
+            private double GetRoomNow()
+            {
+                if (!IsFinite(RoomNow) || RoomNow <= 0d)
+                    return 0d;
+                if (!IsFinite(SentAtMilliseconds) || SentAtMilliseconds <= 0d)
+                    return RoomNow;
+
+                var elapsedSeconds = Math.Max(
+                    0d,
+                    (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - SentAtMilliseconds) / 1000d);
+                return RoomNow + elapsedSeconds;
             }
         }
 
