@@ -1145,14 +1145,15 @@ namespace Afjk.SceneSync.Rapier
         {
             var raw = message.RawJson;
             if (string.IsNullOrWhiteSpace(raw)) return;
+            var payloadJson = ExtractSceneSyncPayloadJson(raw);
 
-            if (raw.Contains("\"kind\":\"scene-state\""))
+            if (payloadJson.Contains("\"kind\":\"scene-state\""))
             {
                 latestSceneClockRevision = int.MinValue;
-                if (SceneSyncWireJson.HasTopLevelField(raw, "physics"))
-                    scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics"));
+                if (SceneSyncWireJson.HasTopLevelField(payloadJson, "physics"))
+                    scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(payloadJson, "physics"));
 
-                foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(raw, "objects"))
+                foreach (var entry in SceneSyncWireJson.ExtractObjectMapEntries(payloadJson, "objects"))
                 {
                     ApplyObjectPhysicsJson(entry.Key, entry.Value);
                 }
@@ -1162,69 +1163,69 @@ namespace Afjk.SceneSync.Rapier
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-clock\""))
+            if (payloadJson.Contains("\"kind\":\"scene-clock\""))
             {
-                ApplySceneClock(raw);
+                ApplySceneClock(payloadJson);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics-snapshot\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics-snapshot\""))
             {
-                ApplyScenePhysicsSnapshot(raw, message.FromPeerId);
+                ApplyScenePhysicsSnapshot(payloadJson, message.FromPeerId);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics-hash\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics-hash\""))
             {
-                ApplyScenePhysicsHash(raw, message.FromPeerId);
+                ApplyScenePhysicsHash(payloadJson, message.FromPeerId);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics-input-log-request\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics-input-log-request\""))
             {
-                PublishPhysicsInputLog(raw, message.FromPeerId);
+                PublishPhysicsInputLog(payloadJson, message.FromPeerId);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics-input-log\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics-input-log\""))
             {
-                ApplyScenePhysicsInputLog(raw, message.FromPeerId);
+                ApplyScenePhysicsInputLog(payloadJson, message.FromPeerId);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics-input\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics-input\""))
             {
-                ApplyScenePhysicsInput(raw);
+                ApplyScenePhysicsInput(payloadJson);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics-input-log-clear\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics-input-log-clear\""))
             {
-                ApplyScenePhysicsInputLogClear(raw);
+                ApplyScenePhysicsInputLogClear(payloadJson);
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-physics\""))
+            if (payloadJson.Contains("\"kind\":\"scene-physics\""))
             {
-                scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(raw, "physics"));
+                scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(payloadJson, "physics"));
                 dirty = true;
                 return;
             }
 
-            if (raw.Contains("\"kind\":\"scene-remove\"") || raw.Contains("\"kind\":\"scene-delete\""))
+            if (payloadJson.Contains("\"kind\":\"scene-remove\"") || payloadJson.Contains("\"kind\":\"scene-delete\""))
             {
-                var objectId = SceneSyncWireJson.ExtractString(raw, "objectId");
+                var objectId = SceneSyncWireJson.ExtractString(payloadJson, "objectId");
                 if (!string.IsNullOrWhiteSpace(objectId) && objectPhysicsJson.Remove(objectId))
                     dirty = true;
                 return;
             }
 
-            if (!raw.Contains("\"kind\":\"scene-add\"") && !raw.Contains("\"kind\":\"scene-delta\""))
+            if (!payloadJson.Contains("\"kind\":\"scene-add\"") && !payloadJson.Contains("\"kind\":\"scene-delta\""))
                 return;
 
-            var id = SceneSyncWireJson.ExtractString(raw, "objectId");
+            var id = SceneSyncWireJson.ExtractString(payloadJson, "objectId");
             if (string.IsNullOrWhiteSpace(id)) return;
-            if (ApplyObjectPhysicsJson(id, raw))
+            if (ApplyObjectPhysicsJson(id, payloadJson))
                 dirty = true;
         }
 
@@ -1875,11 +1876,12 @@ namespace Afjk.SceneSync.Rapier
 
         private void ApplySceneClock(string raw)
         {
-            var mode = SceneSyncWireJson.ExtractString(raw, "mode") ?? "shared-playback";
+            var payloadJson = ExtractSceneSyncPayloadJson(raw);
+            var mode = SceneSyncWireJson.ExtractString(payloadJson, "mode") ?? "shared-playback";
             if (!string.Equals(mode, "shared-playback", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var revisionValue = ReadDouble(raw, "revision", double.NaN);
+            var revisionValue = ReadDouble(payloadJson, "revision", double.NaN);
             if (IsFinite(revisionValue))
             {
                 var revision = Mathf.FloorToInt((float)revisionValue);
@@ -1888,12 +1890,18 @@ namespace Afjk.SceneSync.Rapier
                 latestSceneClockRevision = revision;
             }
 
-            sceneClock = SceneClockState.Parse(raw, sceneClock);
+            sceneClock = SceneClockState.Parse(payloadJson, sceneClock);
             var activeTime = sceneClock.GetTime();
-            if (ShouldResetPhysicsForSceneClockPayload(raw, activeTime))
+            if (ShouldResetPhysicsForSceneClockPayload(payloadJson, activeTime))
             {
-                ApplyPhysicsResetBaseline(raw, activeTime);
+                ApplyPhysicsResetBaseline(payloadJson, activeTime);
             }
+        }
+
+        private static string ExtractSceneSyncPayloadJson(string raw)
+        {
+            var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload");
+            return string.IsNullOrWhiteSpace(payloadJson) ? raw : payloadJson;
         }
 
         private void ApplyPhysicsResetBaseline(string raw, double activeTime)
