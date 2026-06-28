@@ -3259,8 +3259,12 @@ namespace Afjk.SceneSync
                 state.speed = 0f;
             }
 
-            primary.time = WrapAnimationTime(time, primary.length);
-            animation.Sample();
+            var wrappedTime = WrapAnimationTime(time, primary.length);
+            primary.time = wrappedTime;
+            if (primary.clip != null)
+                primary.clip.SampleAnimation(animation.gameObject, wrappedTime);
+            else
+                animation.Sample();
         }
 
         private static AnimationState GetPrimaryAnimationState(Animation animation)
