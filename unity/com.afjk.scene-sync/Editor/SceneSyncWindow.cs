@@ -89,6 +89,7 @@ namespace Afjk.SceneSync.Editor
         private Vector2 _scrollPosition;
         private bool _isSceneSwitching = false;
         private bool _isManualDisconnect = false;
+        private int _remoteImportGeneration;
         private bool _publishInProgress = false;
         private string _envId = null;
         private static bool _rapierBridgeTypeResolved;
@@ -147,6 +148,7 @@ namespace Afjk.SceneSync.Editor
 
             EditorApplication.update += EditorUpdate;
             EditorApplication.hierarchyChanged += OnHierarchyChanged;
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             EditorSceneManager.sceneClosing += OnSceneClosing;
             EditorSceneManager.sceneOpened += OnSceneOpened;
 
@@ -157,11 +159,118 @@ namespace Afjk.SceneSync.Editor
         {
             EditorApplication.update -= EditorUpdate;
             EditorApplication.hierarchyChanged -= OnHierarchyChanged;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             EditorSceneManager.sceneClosing -= OnSceneClosing;
             EditorSceneManager.sceneOpened -= OnSceneOpened;
+            if (EditorApplication.isPlayingOrWillChangePlaymode && !EditorApplication.isPlaying)
+            {
+                DisconnectEditorSessionBeforePlayMode();
+                return;
+            }
+
             _isManualDisconnect = true;
             _client?.Disconnect();
             _isManualDisconnect = false;
+        }
+
+        private void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.ExitingEditMode)
+            {
+                DisconnectEditorSessionBeforePlayMode();
+            }
+        }
+
+        private void DisconnectEditorSessionBeforePlayMode()
+        {
+            if (EditorApplication.isPlaying) return;
+
+            var wasConnected = _connected || (_client != null && _client.IsConnected);
+            var hadTemporaryObjects = HasRemoteTemporaryObjects();
+
+            InvalidateRemoteImportSession();
+
+            if (!wasConnected && !hadTemporaryObjects)
+            {
+                return;
+            }
+
+            Debug.Log("[SceneSync] Disconnecting edit-mode session before Play Mode; runtime will reload room objects.");
+
+            _connected = false;
+            ClearTemporaryObjects();
+
+            _isManualDisconnect = true;
+            try
+            {
+                _client?.Disconnect();
+            }
+            finally
+            {
+                _isManualDisconnect = false;
+            }
+
+            _peers.Clear();
+            _knownObjectIds.Clear();
+            _managedObjects.Clear();
+            _instanceToObjectId.Clear();
+            _meshPaths.Clear();
+            _locks.Clear();
+            _pendingObjectLoomGraphs.Clear();
+            _currentlyLockedObjectId = null;
+            _sceneReceived = false;
+            _firstPeersReceived = false;
+            _lastSnapshots.Clear();
+            _envId = null;
+
+            Repaint();
+        }
+
+        private void InvalidateRemoteImportSession()
+        {
+            unchecked
+            {
+                _remoteImportGeneration++;
+            }
+        }
+
+        private bool IsRemoteImportSessionCurrent(int generation)
+        {
+            return generation == _remoteImportGeneration
+                && !EditorApplication.isPlayingOrWillChangePlaymode
+                && !EditorApplication.isPlaying;
+        }
+
+        private static IEnumerable<SceneSyncIdentity> FindRemoteTemporaryIdentities()
+        {
+#if UNITY_2023_1_OR_NEWER
+            var identities = UnityEngine.Object.FindObjectsByType<SceneSyncIdentity>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None
+            );
+#else
+            var identities = UnityEngine.Object.FindObjectsOfType<SceneSyncIdentity>(true);
+#endif
+
+            foreach (var identity in identities)
+            {
+                if (identity == null) continue;
+                if (!identity.Temporary && identity.Origin != SceneSyncOrigin.Remote) continue;
+                yield return identity;
+            }
+        }
+
+        private bool HasRemoteTemporaryObjects()
+        {
+            var temporaryRoot = FindTemporaryRoot();
+            if (temporaryRoot != null && temporaryRoot.transform.childCount > 0) return true;
+
+            foreach (var identity in FindRemoteTemporaryIdentities())
+            {
+                if (identity != null && identity.gameObject != null) return true;
+            }
+
+            return false;
         }
 
         private string GetBlobUrl()
@@ -1482,6 +1591,7 @@ namespace Afjk.SceneSync.Editor
         {
             Debug.Log("[SceneSync] OnSceneClosing: scene=" + scene.name + ", connected=" + _connected);
             _isSceneSwitching = true;
+            InvalidateRemoteImportSession();
 
             if (!_connected)
             {
@@ -3443,6 +3553,9 @@ namespace Afjk.SceneSync.Editor
             float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null,
             string assetJson = null, string metadataJson = null, bool? visible = null, string physicsJson = null)
         {
+            var importGeneration = _remoteImportGeneration;
+            if (!IsRemoteImportSessionCurrent(importGeneration)) return;
+
             try
             {
                 if (!string.IsNullOrEmpty(meshPath))
@@ -3470,10 +3583,12 @@ namespace Afjk.SceneSync.Editor
 
                     var http = new HttpClient();
                     var response = await http.GetAsync(url);
+                    if (!IsRemoteImportSessionCurrent(importGeneration)) return;
 
                     if (!response.IsSuccessStatusCode)
                     {
                         Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
+                        if (!IsRemoteImportSessionCurrent(importGeneration)) return;
                         var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                         ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
                         if (effectivePhysicsJson != null)
@@ -3490,9 +3605,11 @@ namespace Afjk.SceneSync.Editor
                     }
 
                     glbBytes = await response.Content.ReadAsByteArrayAsync();
+                    if (!IsRemoteImportSessionCurrent(importGeneration)) return;
                     StorePersistentCachedGlb(glbBytes, assetId, meshPath);
                 }
 
+                if (!IsRemoteImportSessionCurrent(importGeneration)) return;
                 var tempFileName = !string.IsNullOrEmpty(meshPath) ? meshPath : objectId;
                 var tempPath = System.IO.Path.Combine(
                     Application.temporaryCachePath, tempFileName + ".glb");
@@ -3508,6 +3625,7 @@ namespace Afjk.SceneSync.Editor
                     downloadProvider: null,
                     deferAgent: deferAgent);
                 var success = await gltf.Load("file://" + tempPath, importSettings);
+                if (!IsRemoteImportSessionCurrent(importGeneration)) return;
 
                 if (success)
                 {
@@ -3538,6 +3656,11 @@ namespace Afjk.SceneSync.Editor
                         + ", importedGlbRoot.localEulerAngles=" + importedGlbRoot.transform.localEulerAngles);
 
                     await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
+                    if (!IsRemoteImportSessionCurrent(importGeneration) || go == null)
+                    {
+                        DestroyRemoteImportObject(go);
+                        return;
+                    }
                     ApplyTransform(go, position, rotation, scale);
                     _managedObjects[objectId] = go;
                     _knownObjectIds.Add(objectId);
@@ -3548,6 +3671,7 @@ namespace Afjk.SceneSync.Editor
                 else
                 {
                     Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
+                    if (!IsRemoteImportSessionCurrent(importGeneration)) return;
                     var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
                     ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
                     if (effectivePhysicsJson != null)
@@ -3614,31 +3738,76 @@ namespace Afjk.SceneSync.Editor
 
         private void ClearTemporaryObjects()
         {
+            InvalidateRemoteImportSession();
+
             var root = FindTemporaryRoot()?.transform;
-            if (root == null) return;
+            var destroyedAny = false;
+            var destroyedRootChildren = new HashSet<GameObject>();
 
-            for (var i = root.childCount - 1; i >= 0; i--)
+            if (root != null)
             {
-                var child = root.GetChild(i).gameObject;
-                ForgetSceneSyncObject(child);
-
-                if (Application.isPlaying)
+                for (var i = root.childCount - 1; i >= 0; i--)
                 {
-                    Destroy(child);
-                }
-                else
-                {
-                    DestroyImmediate(child);
+                    var child = root.GetChild(i).gameObject;
+                    destroyedRootChildren.Add(child);
+                    DestroyRemoteImportObject(child);
+                    destroyedAny = true;
                 }
             }
 
-            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            foreach (var identity in FindRemoteTemporaryIdentities())
+            {
+                var go = identity.gameObject;
+                if (go == null) continue;
+                if (destroyedRootChildren.Contains(go)) continue;
+                if (root != null && go.transform.IsChildOf(root)) continue;
+
+                DestroyRemoteImportObject(go);
+                destroyedAny = true;
+            }
+
+            if (destroyedAny)
+            {
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            }
+        }
+
+        private void DestroyRemoteImportObject(GameObject go)
+        {
+            if (go == null) return;
+
+            ForgetSceneSyncObject(go);
+
+            if (Application.isPlaying)
+            {
+                Destroy(go);
+            }
+            else
+            {
+                DestroyImmediate(go);
+            }
         }
 
         private void ForgetSceneSyncObject(GameObject go)
         {
             var identity = go.GetComponent<SceneSyncIdentity>();
-            if (identity == null || !identity.Temporary || string.IsNullOrEmpty(identity.ObjectId))
+            if (identity == null)
+            {
+                foreach (var childIdentity in go.GetComponentsInChildren<SceneSyncIdentity>(true))
+                {
+                    if (childIdentity == null) continue;
+                    if (!childIdentity.Temporary && childIdentity.Origin != SceneSyncOrigin.Remote) continue;
+                    ForgetObject(childIdentity.ObjectId, childIdentity.gameObject);
+                }
+                return;
+            }
+
+            if (!identity.Temporary && identity.Origin != SceneSyncOrigin.Remote)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(identity.ObjectId))
             {
                 return;
             }
