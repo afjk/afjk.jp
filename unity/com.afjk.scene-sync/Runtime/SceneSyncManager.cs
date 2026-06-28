@@ -3070,6 +3070,12 @@ namespace Afjk.SceneSync
                 || _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl;
         }
 
+        private bool UsesSharedObjectEpochClock()
+        {
+            return _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl
+                || (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow && _sharedSceneClock.Active);
+        }
+
         private void UpdatePlaybackClock(double currentTime)
         {
             if (_lastAppliedPlaybackClockMode != _playbackClockMode)
@@ -3159,7 +3165,7 @@ namespace Afjk.SceneSync
 
         private double GetObjectPlaybackRuntimeTime(string objectId, double sharedTime)
         {
-            if (UsesSharedPlaybackClock() && !string.IsNullOrWhiteSpace(objectId))
+            if (UsesSharedObjectEpochClock() && !string.IsNullOrWhiteSpace(objectId))
             {
                 if (_sharedObjectEpochTimes.TryGetValue(objectId, out var epoch) && IsFinite(epoch))
                 {
@@ -3188,6 +3194,7 @@ namespace Afjk.SceneSync
             {
                 animation.enabled = true;
                 animation.playAutomatically = true;
+                animation.cullingType = AnimationCullingType.AlwaysAnimate;
                 foreach (AnimationState state in animation)
                 {
                     if (state != null) state.speed = 1f;
@@ -3220,6 +3227,22 @@ namespace Afjk.SceneSync
 
             animation.enabled = true;
             animation.playAutomatically = false;
+            animation.cullingType = AnimationCullingType.AlwaysAnimate;
+            if (animation.clip == null && primary.clip != null)
+            {
+                animation.clip = primary.clip;
+            }
+
+            var clipName = primary.clip != null ? primary.clip.name : null;
+            if (!string.IsNullOrEmpty(clipName) && animation.GetClip(clipName) != null)
+            {
+                animation.Play(clipName);
+            }
+            else
+            {
+                animation.Play();
+            }
+
             foreach (AnimationState state in animation)
             {
                 if (state == null) continue;
