@@ -110,7 +110,7 @@ namespace Afjk.SceneSync
         public SceneSyncPlaybackClockMode PlaybackClockMode
         {
             get => _playbackClockMode;
-            set => _playbackClockMode = value;
+            set => SetPlaybackClockMode(value);
         }
         public float SharedPlaybackClockBroadcastInterval
         {
@@ -141,6 +141,32 @@ namespace Afjk.SceneSync
         public event Action<List<PeerInfo>> OnPeersUpdated;
         public event Action<string, GameObject> OnObjectAdded;
         public event Action<string> OnObjectRemoved;
+
+        public void SetPlaybackClockMode(SceneSyncPlaybackClockMode mode)
+        {
+            if (_playbackClockMode == mode) return;
+
+            _playbackClockMode = mode;
+            if (Application.isPlaying && _connected && gameObject.activeInHierarchy)
+            {
+                ApplyPlaybackClockModeChange(Time.realtimeSinceStartup, _lastAppliedPlaybackClockMode);
+            }
+        }
+
+        public void UseLocalPlaybackClock()
+        {
+            SetPlaybackClockMode(SceneSyncPlaybackClockMode.Local);
+        }
+
+        public void FollowSharedPlaybackClock()
+        {
+            SetPlaybackClockMode(SceneSyncPlaybackClockMode.SharedPlaybackFollow);
+        }
+
+        public void ControlSharedPlaybackClock()
+        {
+            SetPlaybackClockMode(SceneSyncPlaybackClockMode.SharedPlaybackControl);
+        }
 
         private void Awake()
         {
@@ -1071,7 +1097,7 @@ namespace Afjk.SceneSync
             }
             else if (raw.Contains("\"kind\":\"scene-clock\""))
             {
-                HandleSceneClock(raw);
+                HandleSceneClock(raw, fromId);
             }
             else if (raw.Contains("\"kind\":\"scene-batch\""))
             {
@@ -1546,13 +1572,14 @@ namespace Afjk.SceneSync
             ApplyScenePhysicsMetadata(raw);
         }
 
-        private void HandleSceneClock(string raw)
+        private void HandleSceneClock(string raw, string fromId = null)
         {
-            var mode = SceneSyncWireJson.ExtractString(raw, "mode") ?? "shared-playback";
+            var payloadJson = ExtractSceneSyncPayloadJson(raw);
+            var mode = SceneSyncWireJson.ExtractString(payloadJson, "mode") ?? "shared-playback";
             if (!string.Equals(mode, "shared-playback", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var revisionValue = ReadTopLevelDouble(raw, "revision", double.NaN);
+            var revisionValue = ReadTopLevelDouble(payloadJson, "revision", double.NaN);
             if (IsFinite(revisionValue))
             {
                 var revision = Mathf.FloorToInt((float)revisionValue);
@@ -1562,10 +1589,51 @@ namespace Afjk.SceneSync
             }
 
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
-                return;
+            {
+                var remoteControllerId = GetRemoteSceneClockControllerId(payloadJson, fromId);
+                if (string.IsNullOrWhiteSpace(remoteControllerId))
+                    return;
 
-            _sharedSceneClock = SceneClockState.Parse(raw, _sharedSceneClock);
-            ApplyObjectClockBaselines(raw);
+                _playbackClockMode = SceneSyncPlaybackClockMode.SharedPlaybackFollow;
+                _lastAppliedPlaybackClockMode = SceneSyncPlaybackClockMode.SharedPlaybackFollow;
+                Debug.Log("[SceneSync] Shared Playback control transferred to " + remoteControllerId + "; switching to Follow");
+            }
+
+            _sharedSceneClock = SceneClockState.Parse(payloadJson, _sharedSceneClock);
+            ApplyObjectClockBaselines(payloadJson);
+        }
+
+        private string GetRemoteSceneClockControllerId(string payloadJson, string fromId)
+        {
+            if (IsLocalClientId(fromId))
+                return null;
+
+            var hasControllerField = SceneSyncWireJson.HasTopLevelField(payloadJson, "controller");
+            var controllerJson = SceneSyncWireJson.ExtractTopLevelRawObject(payloadJson, "controller");
+            var controllerId = SceneSyncWireJson.ExtractString(controllerJson, "id");
+            if (!string.IsNullOrWhiteSpace(controllerId))
+            {
+                return IsLocalClientId(controllerId) ? null : controllerId;
+            }
+
+            if (hasControllerField)
+                return null;
+
+            return !string.IsNullOrWhiteSpace(fromId) && !IsLocalClientId(fromId) ? fromId : null;
+        }
+
+        private bool IsLocalClientId(string clientId)
+        {
+            return !string.IsNullOrWhiteSpace(clientId)
+                && _client != null
+                && !string.IsNullOrWhiteSpace(_client.Id)
+                && string.Equals(clientId, _client.Id, StringComparison.Ordinal);
+        }
+
+        private static string ExtractSceneSyncPayloadJson(string raw)
+        {
+            var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload");
+            return string.IsNullOrWhiteSpace(payloadJson) ? raw : payloadJson;
         }
 
         private void BroadcastSharedPlaybackClockIfNeeded(double currentTime)
@@ -1580,6 +1648,7 @@ namespace Afjk.SceneSync
         private void BroadcastSharedPlaybackClock(string action, double currentTime)
         {
             if (_client == null || !_client.IsConnected) return;
+            if (string.IsNullOrWhiteSpace(_client.Id)) return;
 
             var revision = Math.Max(1, _sharedSceneClockRevision + 1);
             _sharedSceneClockRevision = revision;
@@ -1601,7 +1670,7 @@ namespace Afjk.SceneSync
                 roomNow,
                 sentAt);
 
-            var controllerId = !string.IsNullOrWhiteSpace(_client.Id) ? _client.Id : "unity-runtime";
+            var controllerId = _client.Id;
             var controllerName = string.IsNullOrWhiteSpace(_nickname) ? "Unity" : _nickname;
             var payload =
                 "{\"kind\":\"scene-clock\"" +
@@ -1626,9 +1695,54 @@ namespace Afjk.SceneSync
             _ = _client.Broadcast(payload);
         }
 
+        private void BroadcastSharedPlaybackControlRelease(double currentTime)
+        {
+            if (_client == null || !_client.IsConnected) return;
+            if (string.IsNullOrWhiteSpace(_client.Id)) return;
+
+            var revision = Math.Max(1, _sharedSceneClockRevision + 1);
+            _sharedSceneClockRevision = revision;
+            _lastSharedPlaybackClockBroadcastAt = currentTime;
+
+            var roomNow = GetUnixTimeSeconds();
+            var rate = 1d;
+            var activeTime = _sharedPlaybackControlStartedAt > 0d
+                ? Math.Max(0d, currentTime - _sharedPlaybackControlStartedAt)
+                : GetPlaybackClockTime(currentTime);
+            var offset = activeTime - roomNow * rate;
+            var sentAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            _sharedSceneClock = new SceneClockState(
+                true,
+                "room",
+                offset,
+                false,
+                double.NaN,
+                rate,
+                roomNow,
+                sentAt);
+
+            var payload =
+                "{\"kind\":\"scene-clock\"" +
+                ",\"action\":\"controller-release\"" +
+                ",\"mode\":\"shared-playback\"" +
+                ",\"source\":\"room\"" +
+                ",\"offset\":" + FormatDouble(offset) +
+                ",\"paused\":false" +
+                ",\"rate\":" + FormatDouble(rate) +
+                ",\"controller\":null" +
+                ",\"revision\":" + revision +
+                ",\"roomNow\":" + FormatDouble(roomNow) +
+                ",\"sentAt\":" + sentAt +
+                "}";
+
+            _ = _client.Broadcast(payload);
+        }
+
         private static bool ShouldIncludeSharedObjectClockPayload(string action)
         {
             return string.Equals(action, "mode", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, "controller", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(action, "tick", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -3070,11 +3184,17 @@ namespace Afjk.SceneSync
                 || _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl;
         }
 
+        private bool UsesSharedObjectEpochClock()
+        {
+            return _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl
+                || (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow && _sharedSceneClock.Active);
+        }
+
         private void UpdatePlaybackClock(double currentTime)
         {
             if (_lastAppliedPlaybackClockMode != _playbackClockMode)
             {
-                ApplyPlaybackClockModeChange(currentTime);
+                ApplyPlaybackClockModeChange(currentTime, _lastAppliedPlaybackClockMode);
             }
 
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
@@ -3088,16 +3208,22 @@ namespace Afjk.SceneSync
             }
         }
 
-        private void ApplyPlaybackClockModeChange(double currentTime)
+        private void ApplyPlaybackClockModeChange(double currentTime, SceneSyncPlaybackClockMode previousMode)
         {
             _lastAppliedPlaybackClockMode = _playbackClockMode;
+
+            if (previousMode == SceneSyncPlaybackClockMode.SharedPlaybackControl
+                && _playbackClockMode != SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                BroadcastSharedPlaybackControlRelease(currentTime);
+            }
 
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
             {
                 _sharedPlaybackControlStartedAt = currentTime;
                 _lastSharedPlaybackClockBroadcastAt = double.NegativeInfinity;
                 _sharedObjectEpochTimes.Clear();
-                BroadcastSharedPlaybackClock("mode", currentTime);
+                BroadcastSharedPlaybackClock("controller", currentTime);
             }
             else if (_playbackClockMode == SceneSyncPlaybackClockMode.Local)
             {
@@ -3159,7 +3285,7 @@ namespace Afjk.SceneSync
 
         private double GetObjectPlaybackRuntimeTime(string objectId, double sharedTime)
         {
-            if (UsesSharedPlaybackClock() && !string.IsNullOrWhiteSpace(objectId))
+            if (UsesSharedObjectEpochClock() && !string.IsNullOrWhiteSpace(objectId))
             {
                 if (_sharedObjectEpochTimes.TryGetValue(objectId, out var epoch) && IsFinite(epoch))
                 {
@@ -3188,6 +3314,7 @@ namespace Afjk.SceneSync
             {
                 animation.enabled = true;
                 animation.playAutomatically = true;
+                animation.cullingType = AnimationCullingType.AlwaysAnimate;
                 foreach (AnimationState state in animation)
                 {
                     if (state != null) state.speed = 1f;
@@ -3220,6 +3347,22 @@ namespace Afjk.SceneSync
 
             animation.enabled = true;
             animation.playAutomatically = false;
+            animation.cullingType = AnimationCullingType.AlwaysAnimate;
+            if (animation.clip == null && primary.clip != null)
+            {
+                animation.clip = primary.clip;
+            }
+
+            var clipName = primary.clip != null ? primary.clip.name : null;
+            if (!string.IsNullOrEmpty(clipName) && animation.GetClip(clipName) != null)
+            {
+                animation.Play(clipName);
+            }
+            else
+            {
+                animation.Play();
+            }
+
             foreach (AnimationState state in animation)
             {
                 if (state == null) continue;
@@ -3229,8 +3372,12 @@ namespace Afjk.SceneSync
                 state.speed = 0f;
             }
 
-            primary.time = WrapAnimationTime(time, primary.length);
-            animation.Sample();
+            var wrappedTime = WrapAnimationTime(time, primary.length);
+            primary.time = wrappedTime;
+            if (primary.clip != null)
+                primary.clip.SampleAnimation(animation.gameObject, wrappedTime);
+            else
+                animation.Sample();
         }
 
         private static AnimationState GetPrimaryAnimationState(Animation animation)
