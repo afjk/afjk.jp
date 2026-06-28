@@ -1548,11 +1548,12 @@ namespace Afjk.SceneSync
 
         private void HandleSceneClock(string raw)
         {
-            var mode = SceneSyncWireJson.ExtractString(raw, "mode") ?? "shared-playback";
+            var payloadJson = ExtractSceneSyncPayloadJson(raw);
+            var mode = SceneSyncWireJson.ExtractString(payloadJson, "mode") ?? "shared-playback";
             if (!string.Equals(mode, "shared-playback", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var revisionValue = ReadTopLevelDouble(raw, "revision", double.NaN);
+            var revisionValue = ReadTopLevelDouble(payloadJson, "revision", double.NaN);
             if (IsFinite(revisionValue))
             {
                 var revision = Mathf.FloorToInt((float)revisionValue);
@@ -1564,8 +1565,14 @@ namespace Afjk.SceneSync
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
                 return;
 
-            _sharedSceneClock = SceneClockState.Parse(raw, _sharedSceneClock);
-            ApplyObjectClockBaselines(raw);
+            _sharedSceneClock = SceneClockState.Parse(payloadJson, _sharedSceneClock);
+            ApplyObjectClockBaselines(payloadJson);
+        }
+
+        private static string ExtractSceneSyncPayloadJson(string raw)
+        {
+            var payloadJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "payload");
+            return string.IsNullOrWhiteSpace(payloadJson) ? raw : payloadJson;
         }
 
         private void BroadcastSharedPlaybackClockIfNeeded(double currentTime)
