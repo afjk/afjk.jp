@@ -2703,7 +2703,10 @@ namespace Afjk.SceneSync
                 var deferAgent = gameObject.AddComponent<TimeBudgetPerFrameDeferAgent>();
                 var importSettings = new ImportSettings
                 {
-                    AnimationMethod = AnimationMethod.Mecanim,
+                    // glTFast runtime Mecanim import creates clips and an Animator, but no
+                    // runtime AnimatorController. Legacy attaches clips to an Animation
+                    // component, which Scene Sync can immediately play for remote GLBs.
+                    AnimationMethod = AnimationMethod.Legacy,
                 };
                 var gltf = new GltfImport(
                     downloadProvider: null,
@@ -3252,7 +3255,8 @@ namespace Afjk.SceneSync
                 var deferAgent = gameObject.AddComponent<TimeBudgetPerFrameDeferAgent>();
                 var importSettings = new ImportSettings
                 {
-                    AnimationMethod = AnimationMethod.Mecanim,
+                    // Match normal runtime imports so recovered GLBs auto-play animations.
+                    AnimationMethod = AnimationMethod.Legacy,
                 };
                 var gltf = new GltfImport(downloadProvider: null, deferAgent: deferAgent);
                 var success = await gltf.Load("file://" + tempPath, importSettings);
