@@ -233,6 +233,15 @@ ICE サーバー設定は `GET /presence/api/ice-config` から動的取得す�
 
 **デフォルト STUN サーバー:** `stun.l.google.com:19302`
 
+### PeerConnection 事前ウォームアップ
+
+P2P 送信開始の遅い部分は `RTCPeerConnection` 生成＋ICE 収集（WAN では STUN 往復）。ファイル選択時（`setFiles`）に `prewarmSendSession()` で PC・DataChannel 生成と ICE 収集を先行実行しておき、「転送開始」時（`initSendRtcSession`）に再利用することで、実送信は piping シグナリング往復だけで済む。
+
+- 完全にクライアント側のみ。送信が実際に始まるまで piping-server へは何も POST しないため、中継サーバ負荷は増えない（STUN 問い合わせのみ）。
+- 事前生成した候補は `PREWARM_TTL`（25 秒）で失効。失効・ファイル変更・リセット・離脱時は破棄する。
+- ファイルを差し替えると signaling パスが変わるため、古いウォームアップは破棄して新しいパスで作り直す（並走時は最後の 1 つだけが有効）。
+- ウォームアップが間に合わない／失効した場合は従来どおりその場で生成するフォールバック。
+
 ### 単一セッションでの複数ファイル転送プロトコル
 
 1本の DataChannel で全ファイルを順次転送する（`trySendWebRTCFiles`）。
