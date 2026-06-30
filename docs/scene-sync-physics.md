@@ -276,6 +276,17 @@ Snapshot bodies use Scene Sync wire coordinates. Followers should only apply a
 snapshot when the snapshot version, hash version, physics profile, and dynamic
 body set match the local world.
 
+In addition to the periodic cadence, the Shared Playback controller forces an
+out-of-cadence `scene-physics-snapshot` at transport convergence points
+(pause and seek). Because deterministic replay can leave followers a few ticks
+ahead of or behind the controller, freezing on a local pause would otherwise
+reveal that drift — the lagging controller's paused time pulls an ahead follower
+backward, so it visibly rewinds to an earlier pose. The forced snapshot lands all
+clients on the controller's exact authoritative pose at the moment of the pause.
+While the local clock is paused, followers also accept a snapshot that sits a few
+ticks behind their drifted local tick (a small rewind), since there is no forward
+simulation left to reconcile.
+
 When Unity receives a `scene-physics-hash` for the same tick and hash version but
 the local hash differs, the bridge publishes a
 `scene-physics-snapshot-request` through the Unity Scene Sync outbound message
