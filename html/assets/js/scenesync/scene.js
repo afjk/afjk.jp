@@ -5867,6 +5867,39 @@ function maybeBroadcastScenePhysicsSnapshot(physicsTick, clockState = null) {
   broadcast(snapshot);
 }
 
+// Force an authoritative physics snapshot outside the periodic 120-tick cadence.
+// Used at transport convergence points (pause/seek) so followers that drifted a
+// few ticks adopt the controller's exact pose instead of freezing on their own
+// slightly-different (often visibly rewound) state.
+function broadcastScenePhysicsSnapshotNow(reason = 'transport', now = performance.now()) {
+  if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return false;
+  if (!isSceneClockControllerSelf()) return false;
+
+  // Advance the world to the current (post-transport) clock before sampling. The
+  // render loop only re-steps next frame, so without this a seek would broadcast
+  // the stale pre-seek tick/pose; pausing would capture up to a frame of drift.
+  const clockState = getSceneClockStateForLoomlet(now);
+  scenePhysicsRuntime.update(clockState);
+
+  const snapshot = createScenePhysicsSnapshotPayload(clockState, { snapshotReason: reason });
+  if (!snapshot) return false;
+
+  const tick = Number(snapshot.tick);
+  const hash = typeof snapshot.hash === 'string' ? snapshot.hash : null;
+  if (Number.isInteger(tick) && tick >= 0 && typeof hash === 'string' && hash.length > 0) {
+    lastScenePhysicsSnapshotBroadcastTick = tick;
+    lastScenePhysicsSnapshotBroadcastHash = hash;
+    lastScenePhysicsSnapshotBroadcastRevision = Number.isFinite(sceneClockState.sharedRevision)
+      ? sceneClockState.sharedRevision
+      : null;
+    lastScenePhysicsSnapshotBroadcastClearRevision = Number.isFinite(snapshot.timelineClearRevision)
+      ? snapshot.timelineClearRevision
+      : null;
+  }
+  broadcast(snapshot);
+  return true;
+}
+
 function createScenePhysicsSnapshotPayload(clockState = null, extra = {}) {
   const snapshot = scenePhysicsRuntime.createSnapshotReport(clockState);
   if (!snapshot || snapshot.snapshotVersion !== SCENE_SYNC_PHYSICS_SNAPSHOT_VERSION) {
@@ -5885,12 +5918,18 @@ function createScenePhysicsSnapshotPayload(clockState = null, extra = {}) {
 }
 
 function applyScenePhysicsSnapshotPayload(payload = {}, fromPeer = null, options = {}) {
+  // While the shared clock is paused there is no forward simulation to reconcile,
+  // so a follower that drifted ahead must adopt the controller's authoritative pose
+  // even when it sits a few ticks behind the local (paused) tick. Otherwise the two
+  // tabs stay frozen on different poses after a pause.
+  const allowSnapshotRewind = options.allowSnapshotRewind === true || sceneClockState.paused === true;
   const report = scenePhysicsRuntime.applySnapshotReport?.(
     payload,
     getSceneClockStateForLoomlet(performance.now()),
     {
       latestSceneClockRevision: sceneClockState.sharedRevision,
       ...options,
+      allowSnapshotRewind,
     },
   );
   if (!report) return false;
@@ -6404,6 +6443,7 @@ function pauseSceneClock(now = performance.now()) {
   pauseClockState(sceneClockState, getSceneClockSources(now));
   updateClockLegacyFields(now);
   broadcastSceneClockEvent('pause');
+  broadcastScenePhysicsSnapshotNow('scene-clock-pause', now);
   notifySceneSyncShellStateChanged('scene-clock-paused');
 }
 
@@ -6444,6 +6484,7 @@ function seekSceneClock(t, now = performance.now(), options = {}) {
         physicsBaseline,
       } : {}),
     });
+    broadcastScenePhysicsSnapshotNow('scene-clock-seek', now);
   }
   notifySceneSyncShellStateChanged('scene-clock-seek');
 }
