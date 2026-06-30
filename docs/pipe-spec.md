@@ -279,10 +279,17 @@ sequenceDiagram
 | `HASH_MAX_BYTES` | 256 MB | これを超えるファイルは整合性 SHA-256 をスキップ（大容量ファイルのメモリ枯渇回避）|
 | `MAX_CHUNK_SZ` | 262,144 B (256 KB) | チャンクサイズ上限（Chromium 基準）|
 | `MIN_CHUNK_SZ` | 65,536 B (64 KB) | チャンクサイズ下限（Safari 対応）|
-| `FLOW_HIGH_MULT` | 32 | bufferedAmount の上限 = chunkSize × 32 |
-| `FLOW_LOW_MULT` | 8 | bufferedAmountLow 閾値 = chunkSize × 8 |
+| `FLOW_HIGH_MULT` | 48 | bufferedAmount の上限 = chunkSize × 48（256KB 時 ≈ 12 MiB。Chrome の 16 MiB 上限に余裕をもたせる）|
+| `FLOW_LOW_MULT` | 12 | bufferedAmountLow 閾値 = chunkSize × 12 |
+| `PROGRESS_THROTTLE_MS` | 100ms | 進捗 UI 更新の最小間隔（送受信とも）|
 
 実際のチャンクサイズはブラウザプロファイルに応じて決定される（Safari: 64 KB / Firefox: 128 KB / Chromium: 512 KB、ただし `MAX_CHUNK_SZ` および `pc.sctp.maxMessageSize` で上限される）。
+
+### 送信スループット最適化（特に同一 LAN）
+
+- **1 メッセージ = chunkSize**: 送信は `File.slice(pos, pos+chunkSize).arrayBuffer()` で chunkSize ちょうどのスライスを読み、1 回の `dc.send()` で送る。`Blob.stream()` は Chromium で約 64 KB ずつ chunk を返すため、stream をそのまま送るとメッセージが 256 KB 設定でも 64 KB に細切れになり、メッセージ数・SCTP/JS オーバーヘッドが約 4 倍になっていた。
+- **フロー制御バッファを拡大**: `FLOW_HIGH_MULT` を 32 → 48 に引き上げ、送信バッファをより深く保ってパイプを埋める。ただし Chrome の `bufferedAmount` 上限 16 MiB を超えると `dc.send()` が例外を投げてチャネルが落ちるため、`flowHigh + chunkSize` が 16 MiB を超えない範囲に収める。
+- **進捗 UI のスロットル**: 送受信とも進捗表示（プログレスバー / ステータス）の DOM 更新を `PROGRESS_THROTTLE_MS`（100ms）間隔に制限する。高速 LAN ではチャンクごとの DOM 書き込みがメインスレッドを占有して律速になるため。バイト計数自体は毎チャンク行い、完了時に最終値で 100% に更新する。
 
 ### 大容量ファイルの信頼性
 

@@ -569,8 +569,13 @@ const ICE_TIMEOUT      = 3000;   // ms: max ICE gathering time
 const DC_TIMEOUT       = 5000;   // ms: wait for DataChannel open
 const MAX_CHUNK_SZ     = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
 const MIN_CHUNK_SZ     = 65536;  // Safari 16.x では 64 KB 程度が安全
-const FLOW_HIGH_MULT   = 32;     // bufferedAmount を chunkSize * 32 まで許容
-const FLOW_LOW_MULT    = 8;      // bufferedamountlow が発火する閾値倍率
+const FLOW_HIGH_MULT   = 48;     // bufferedAmount を chunkSize * 48 まで許容（LAN でパイプを埋める）
+const FLOW_LOW_MULT    = 12;     // bufferedamountlow が発火する閾値倍率
+// Chrome の RTCDataChannel.bufferedAmount 上限。これを超えて send すると例外が
+// 投げられチャネルが落ちる。flowHigh はここから chunkSize 分の余裕を引いて導出する
+// ので、FLOW_HIGH_MULT や MAX_CHUNK_SZ を上げても自動的に安全側に収まる。
+const MAX_BUFFERED     = 16 * 1024 * 1024;
+const PROGRESS_THROTTLE_MS = 100; // 進捗 UI 更新の最小間隔（高速 LAN で DOM 更新が律速になるのを防ぐ）
 const CHUNK_PROFILE = (() => {
   const ua = navigator.userAgent || '';
   const isiOS = /iP(hone|ad|od)/.test(ua);
@@ -2664,6 +2669,17 @@ function _showRecvPreview(blob, filename) {
   area.appendChild(card);
 }
 
+// Returns a throttle gate for progress UI: invokes fn at most once per
+// PROGRESS_THROTTLE_MS unless force=true. Per-chunk DOM writes otherwise throttle
+// the main thread and become the transfer bottleneck on a fast LAN.
+function makeProgressThrottle(intervalMs = PROGRESS_THROTTLE_MS) {
+  let last = 0;
+  return (fn, force = false) => {
+    const now = performance.now();
+    if (force || now - last >= intervalMs) { last = now; fn(); }
+  };
+}
+
 function resolveChunking(pc) {
   const rawMax = pc.sctp?.maxMessageSize;
   let target = MAX_CHUNK_SZ;
@@ -2672,11 +2688,16 @@ function resolveChunking(pc) {
   else if (CHUNK_PROFILE === 'chromium') target = 512 * 1024;
   const limit  = Number.isFinite(rawMax) && rawMax > 0 ? Math.min(rawMax, target) : target;
   const chunk  = Math.max(MIN_CHUNK_SZ, Math.min(limit, MAX_CHUNK_SZ));
-  return {
-    chunkSize: chunk,
-    flowHigh : chunk * FLOW_HIGH_MULT,
-    flowLow  : chunk * FLOW_LOW_MULT
-  };
+  return { chunkSize: chunk, ...flowFromChunk(chunk) };
+}
+
+// Derive flow-control watermarks from the chunk size, clamped so that even after
+// the pre-send gate (bufferedAmount <= flowHigh) one more chunkSize send cannot
+// exceed MAX_BUFFERED. flowLow stays strictly below flowHigh.
+function flowFromChunk(chunk) {
+  const flowHigh = Math.min(chunk * FLOW_HIGH_MULT, MAX_BUFFERED - chunk);
+  const flowLow  = Math.min(chunk * FLOW_LOW_MULT, Math.floor(flowHigh / 2));
+  return { flowHigh, flowLow };
 }
 
 function shrinkChunk(session) {
@@ -2684,8 +2705,9 @@ function shrinkChunk(session) {
   const next = Math.max(MIN_CHUNK_SZ, Math.floor(session.chunkSize / 2));
   if (next === session.chunkSize) return false;
   session.chunkSize = next;
-  session.flowHigh = next * FLOW_HIGH_MULT;
-  session.flowLow = next * FLOW_LOW_MULT;
+  const flow = flowFromChunk(next);
+  session.flowHigh = flow.flowHigh;
+  session.flowLow = flow.flowLow;
   return true;
 }
 
@@ -3015,47 +3037,29 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
         });
       } catch { resumeOffset = 0; }
 
-      let fileSent = resumeOffset;
-      const feed = async view => {
-        let offset = 0;
-        while (offset < view.byteLength) {
-          if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
-          if (dc.bufferedAmount > flowHigh) {
-            const stallStart = performance.now();
-            await waitForBufferDrain(dc, flowHigh, flowLow);
-            const stall = performance.now() - stallStart;
-            if (stall > FLOW_STALL_MS && shrinkChunk(session)) {
-              refreshChunks();
-              dc.bufferedAmountLowThreshold = flowLow;
-            }
-          }
-          const size  = Math.min(chunkSize, view.byteLength - offset);
-          const chunk = view.subarray(offset, offset + size);
-          dc.send(chunk);
-          offset   += size;
-          fileSent += size;
-          totalSent += size;
-          onProgress(i, fileSent, total);
-        }
-      };
-
-      const reader = file.stream().getReader();
-      let skipped = 0;
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (skipped < resumeOffset) {
-            const remaining = resumeOffset - skipped;
-            skipped += value.byteLength;
-            if (value.byteLength <= remaining) continue;
-            await feed(value.subarray(remaining));
-          } else {
-            await feed(value);
+      // Read the file in chunkSize-sized slices and send each as one DataChannel
+      // message. Reading via Blob.slice (not Blob.stream) lets us emit full
+      // chunkSize messages instead of the ~64 KB segments Blob.stream() yields,
+      // cutting message count (and per-message SCTP/JS overhead) ~4× on LAN.
+      let pos = resumeOffset;
+      const tick = makeProgressThrottle();
+      while (pos < total) {
+        if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
+        if (dc.bufferedAmount > flowHigh) {
+          const stallStart = performance.now();
+          await waitForBufferDrain(dc, flowHigh, flowLow);
+          const stall = performance.now() - stallStart;
+          if (stall > FLOW_STALL_MS && shrinkChunk(session)) {
+            refreshChunks();
+            dc.bufferedAmountLowThreshold = flowLow;
           }
         }
-      } finally {
-        reader.releaseLock?.();
+        const end = Math.min(pos + chunkSize, total);
+        const buf = await file.slice(pos, end).arrayBuffer();
+        dc.send(buf);
+        totalSent += end - pos;
+        pos = end;
+        tick(() => onProgress(i, pos, total), pos >= total);
       }
 
       await sendDoneFrame(dc, file);
@@ -3096,6 +3100,7 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
     await new Promise((resolve, reject) => {
       let meta = null, recvd = 0;
       let t0 = null, isMulti = false;
+      const tick = makeProgressThrottle();
       // Bound memory: fold incoming ArrayBuffers into disk-backed Blobs as we go
       // instead of holding the whole file in RAM (peak ~2× file size used to OOM
       // large receives, especially on mobile).
@@ -3134,7 +3139,10 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
             t0 = null;
             isMulti = (msg.count > 1);
             onStatus(t('p2pReceiving')(meta.name));
+            // Reset the bar to 0% for the new file (multi-file transfers).
+            if (onProgress) tick(() => onProgress(0, meta.size), true);
           } else if (msg.t === 'done') {
+            if (!meta) { fail(new Error('done before meta')); return; }
             const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
             const blob    = assembleBlob(meta.mime);
@@ -3146,6 +3154,7 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
                 }
               }).catch(() => {});
             }
+            if (onProgress) tick(() => onProgress(recvd, meta.size), true); // ensure bar hits 100%
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
             if (!isMulti) done();
           } else if (msg.t === 'all-done') {
@@ -3158,8 +3167,12 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
           recvd += e.data.byteLength;
           if (pendingBytes >= RECV_FOLD_BYTES) foldPending();
           if (meta) {
-            onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
-            if (onProgress) onProgress(recvd, meta.size);
+            // Throttle progress UI so per-message DOM writes don't throttle the
+            // receive loop on a fast LAN.
+            tick(() => {
+              onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
+              if (onProgress) onProgress(recvd, meta.size);
+            });
           }
         }
       };
