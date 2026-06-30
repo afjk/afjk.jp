@@ -587,7 +587,9 @@ const RTC_IDLE_TIMEOUT = 30000;  // ms: 再利用セッションのアイドル�
 const RTC_DRAIN_DELAY  = 1500;   // ms: 正常終了時に接続を閉じるまで待つ
 const FLOW_STALL_MS    = 1500;   // ms: bufferedAmount が減らないとみなす閾値
 const DRAIN_TIMEOUT    = 30000;  // ms: bufferedAmount が全く減らない場合に転送を諦める閾値
-const RECV_INACTIVITY  = 30000;  // ms: P2P 受信でデータが途絶えたら諦めてフォールバックする
+// 受信側は送信側の諦め閾値 (DRAIN_TIMEOUT) より長くとる。送信側がフロー制御で
+// 一時停止している間に受信側が先に誤検知してフォールバックするのを防ぐ。
+const RECV_INACTIVITY  = 45000;  // ms: P2P 受信でデータが途絶えたら諦めてフォールバックする
 const RECV_FOLD_BYTES  = 16 * 1024 * 1024; // 受信チャンクを Blob にまとめてメモリを解放する単位
 const HASH_MAX_BYTES   = 256 * 1024 * 1024; // これを超えるファイルは整合性ハッシュをスキップ（メモリ枯渇回避）
 
@@ -613,6 +615,16 @@ async function hashBlob(blob) {
 async function maybeHashBlob(blob) {
   if (!blob || typeof blob.size !== 'number' || blob.size > HASH_MAX_BYTES) return null;
   try { return await hashBlob(blob); } catch { return null; }
+}
+
+// Send the end-of-file frame, attaching a SHA-256 only when it was cheap to
+// compute (small files). Shared by the single- and multi-file send paths so the
+// frame shape can't drift between them.
+async function sendDoneFrame(dc, blob) {
+  const fileHash = await maybeHashBlob(blob);
+  const doneMsg = { t: 'done' };
+  if (fileHash) doneMsg.sha256 = fileHash;
+  dc.send(JSON.stringify(doneMsg));
 }
 
 function base32ToHex(str) {
@@ -2241,6 +2253,9 @@ async function startSend() {
       if (st)   st.textContent = '…';
       try {
         await sendHTTP(file, path, i, selFiles.length);
+        // sendHTTP resolves quietly on user-cancel (xhr abort); don't mark the
+        // aborted file as sent.
+        if (document.getElementById('cancel-send-btn').style.display === 'none') return;
         if (item) { item.classList.remove('sending'); item.classList.add('done'); }
         if (st)   st.textContent = '✓';
         totalSent += file.size;
@@ -2925,10 +2940,7 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
       await feed(raw);
     }
 
-    const fileHash = await maybeHashBlob(body);
-    const doneMsg = { t: 'done' };
-    if (fileHash) doneMsg.sha256 = fileHash;
-    dc.send(JSON.stringify(doneMsg));
+    await sendDoneFrame(dc, body);
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
@@ -3012,7 +3024,10 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
             const stallStart = performance.now();
             await waitForBufferDrain(dc, flowHigh, flowLow);
             const stall = performance.now() - stallStart;
-            if (stall > FLOW_STALL_MS && shrinkChunk(session)) refreshChunks();
+            if (stall > FLOW_STALL_MS && shrinkChunk(session)) {
+              refreshChunks();
+              dc.bufferedAmountLowThreshold = flowLow;
+            }
           }
           const size  = Math.min(chunkSize, view.byteLength - offset);
           const chunk = view.subarray(offset, offset + size);
@@ -3043,10 +3058,7 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
         reader.releaseLock?.();
       }
 
-      const fileHash = await maybeHashBlob(file);
-      const doneMsg = { t: 'done' };
-      if (fileHash) doneMsg.sha256 = fileHash;
-      dc.send(JSON.stringify(doneMsg));
+      await sendDoneFrame(dc, file);
       onFileDone(i);
     }
 

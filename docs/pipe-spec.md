@@ -274,7 +274,7 @@ sequenceDiagram
 | `RTC_DRAIN_DELAY` | 1,500ms | 最終チャンク送信後の DC クローズ猶予時間 |
 | `FLOW_STALL_MS` | 1,500ms | `bufferedAmount` が下がらない場合のストール検出閾値（チャンク縮小の判定）|
 | `DRAIN_TIMEOUT` | 30,000ms | `bufferedAmount` が全く減らない場合に送信を諦める閾値（相手消失時のハング防止 → HTTP フォールバック）|
-| `RECV_INACTIVITY` | 30,000ms | P2P 受信でデータが途絶えた場合に諦める閾値（ハング防止 → HTTP フォールバック）|
+| `RECV_INACTIVITY` | 45,000ms | P2P 受信でデータが途絶えた場合に諦める閾値（ハング防止 → HTTP フォールバック）。送信側が `DRAIN_TIMEOUT` まで一時停止している間に受信側が先に誤検知しないよう、送信側の閾値より長くとる |
 | `RECV_FOLD_BYTES` | 16 MB | 受信チャンクを Blob にまとめてメモリを解放する単位 |
 | `HASH_MAX_BYTES` | 256 MB | これを超えるファイルは整合性 SHA-256 をスキップ（大容量ファイルのメモリ枯渇回避）|
 | `MAX_CHUNK_SZ` | 262,144 B (256 KB) | チャンクサイズ上限（Chromium 基準）|
