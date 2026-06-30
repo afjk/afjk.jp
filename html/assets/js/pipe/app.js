@@ -567,6 +567,7 @@ let _txtRecvAC = null;                 // text receive
 const SIG_TIMEOUT      = 8000;   // ms: wait for WebRTC signaling peer
 const ICE_TIMEOUT      = 3000;   // ms: max ICE gathering time
 const DC_TIMEOUT       = 5000;   // ms: wait for DataChannel open
+const PREWARM_TTL      = 25000;  // ms: 事前生成した PC/ICE 候補の鮮度上限
 const MAX_CHUNK_SZ     = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
 const MIN_CHUNK_SZ     = 65536;  // Safari 16.x では 64 KB 程度が安全
 const FLOW_HIGH_MULT   = 48;     // bufferedAmount を chunkSize * 48 まで許容（LAN でパイプを埋める）
@@ -2146,6 +2147,9 @@ function setFiles(files) {
   selFiles = files.map(f => ({ file: f, path: randPath() }));
   if (!selFiles.length) return;
 
+  // Warm up the PeerConnection now so "Start Transfer" only pays for signaling.
+  prewarmSendSession(selFiles[0].path);
+
   renderFileList();
 
   // For a single file show URL + QR; for multiple files hide them
@@ -2345,6 +2349,7 @@ function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
 }
 
 function resetSend() {
+  discardPrewarm();
   selFiles = []; fi.value = '';
   const fileList = document.getElementById('file-list');
   if (fileList) {
@@ -2804,17 +2809,70 @@ function disposeRtcSession(session, opts = {}) {
   performClose();
 }
 
+// ── Send-side PeerConnection pre-warming ──────────────────────────────────────
+// Building the PeerConnection + DataChannel and finishing ICE gathering is the
+// slow part of starting a P2P send (a STUN round-trip on WAN). Doing it as soon
+// as files are chosen — before the user hits "Start" — means the actual send only
+// pays for the piping signaling exchange. Purely client-side: nothing is POSTed
+// to the relay until a real transfer begins, so it adds no server/relay traffic.
+let _prewarm = null; // { sigPath, pc, dc, createdAt, ready }
+
+function discardPrewarm() {
+  if (!_prewarm) return;
+  const p = _prewarm;
+  _prewarm = null;
+  try { p.dc?.close(); } catch {}
+  try { p.pc?.close(); } catch {}
+}
+
+async function prewarmSendSession(sigPath) {
+  if (!sigPath || (_prewarm && _prewarm.sigPath === sigPath)) return;
+  discardPrewarm();
+  const entry = { sigPath, pc: null, dc: null, createdAt: performance.now(), ready: false };
+  _prewarm = entry;
+  try {
+    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+    if (_prewarm !== entry) { try { pc.close(); } catch {} return; } // superseded while awaiting
+    entry.pc = pc;
+    entry.dc = pc.createDataChannel('pipe', { ordered: true });
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitForIce(pc);
+    if (_prewarm !== entry) { try { pc.close(); } catch {} return; }
+    entry.ready = true;
+  } catch {
+    if (_prewarm === entry) discardPrewarm();
+  }
+}
+
+// Hand a fresh, fully-gathered prewarm to the caller (ownership transfers), or null.
+function takePrewarm(sigPath) {
+  const e = _prewarm;
+  if (!e || !e.ready || e.sigPath !== sigPath || !e.pc?.localDescription) return null;
+  if (performance.now() - e.createdAt > PREWARM_TTL) { discardPrewarm(); return null; }
+  _prewarm = null;
+  return e;
+}
+
 async function initSendRtcSession(path) {
+  const warm = takePrewarm(path);
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), SIG_TIMEOUT);
-  const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+  let pc, dc;
+  if (warm) {
+    pc = warm.pc; dc = warm.dc;
+  } else {
+    discardPrewarm(); // drop any stale/half-ready prewarm; we're going fresh
+    pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+    dc = pc.createDataChannel('pipe', { ordered: true });
+  }
   _sendPC = pc;
-  const dc = pc.createDataChannel('pipe', { ordered: true });
   const session = { kind: 'send', ac, pc, dc, startedAt: performance.now(), chunkSize: 0 };
   try {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForIce(pc);
+    if (!warm) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await waitForIce(pc);
+    }
 
     fetch(`${PIPE}/${path}.__offer`, {
       method: 'POST', signal: ac.signal,
@@ -3359,4 +3417,5 @@ Object.assign(window, {
 window.addEventListener('beforeunload', () => {
   unregisterAllLocalSeeders();
   cleanupStream();
+  discardPrewarm();
 });
