@@ -14,10 +14,11 @@ export function isObjectActivelyEdited({
   transformObject = null,
   xrTwoHand = null,
   grabbers = [],
+  ignoreTransformObject = false,
 } = {}) {
   if (!objectId) return false;
 
-  if (getSceneObjectId(transformObject) === objectId) {
+  if (!ignoreTransformObject && getSceneObjectId(transformObject) === objectId) {
     return true;
   }
 
@@ -41,10 +42,11 @@ export function shouldFreezeObjectForEditorRuntime({
   xrTwoHand = null,
   grabbers = [],
   transportActive = false,
+  ignoreTransformObject = false,
 } = {}) {
   if (!objectId) return false;
 
-  if (isObjectActivelyEdited({ objectId, transformObject, xrTwoHand, grabbers })) {
+  if (isObjectActivelyEdited({ objectId, transformObject, xrTwoHand, grabbers, ignoreTransformObject })) {
     return true;
   }
 

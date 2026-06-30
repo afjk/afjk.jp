@@ -1815,6 +1815,10 @@ function shouldFreezeRuntimeForEditor(objectId, clockState = null) {
     transformObject: transformCtrl.object,
     xrTwoHand: xrState.twoHand,
     grabbers: xrState.grabbers,
+    // TransformControls can remain attached to the selected object when entering
+    // WebXR, but the desktop gizmo is not an active XR edit. Keep Loomlet/GLB
+    // runtime motion alive in Quest/WebAR unless the object is actually grabbed.
+    ignoreTransformObject: xrState.active === true,
     transportActive: clockState?.transportActive === true,
   });
 }
