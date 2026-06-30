@@ -5875,10 +5875,13 @@ function broadcastScenePhysicsSnapshotNow(reason = 'transport', now = performanc
   if (sceneClockState.mode !== CLOCK_MODES.SHARED_PLAYBACK) return false;
   if (!isSceneClockControllerSelf()) return false;
 
-  const snapshot = createScenePhysicsSnapshotPayload(
-    { t: getSceneClockTime(now) },
-    { snapshotReason: reason },
-  );
+  // Advance the world to the current (post-transport) clock before sampling. The
+  // render loop only re-steps next frame, so without this a seek would broadcast
+  // the stale pre-seek tick/pose; pausing would capture up to a frame of drift.
+  const clockState = getSceneClockStateForLoomlet(now);
+  scenePhysicsRuntime.update(clockState);
+
+  const snapshot = createScenePhysicsSnapshotPayload(clockState, { snapshotReason: reason });
   if (!snapshot) return false;
 
   const tick = Number(snapshot.tick);
