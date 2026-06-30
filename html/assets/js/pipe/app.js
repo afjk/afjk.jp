@@ -569,8 +569,11 @@ const ICE_TIMEOUT      = 3000;   // ms: max ICE gathering time
 const DC_TIMEOUT       = 5000;   // ms: wait for DataChannel open
 const MAX_CHUNK_SZ     = 262144; // Upper bound per message (Chrome 126 ≈ 256 KB)
 const MIN_CHUNK_SZ     = 65536;  // Safari 16.x では 64 KB 程度が安全
-const FLOW_HIGH_MULT   = 32;     // bufferedAmount を chunkSize * 32 まで許容
-const FLOW_LOW_MULT    = 8;      // bufferedamountlow が発火する閾値倍率
+// chunkSize * 48 ≈ 12 MiB（256KB chunk 時）。Chrome の bufferedAmount 上限 16 MiB
+// に対し、チェック後に最大 chunkSize 分上乗せされても超えない余裕をもたせる。
+const FLOW_HIGH_MULT   = 48;     // bufferedAmount を chunkSize * 48 まで許容（LAN でパイプを埋める）
+const FLOW_LOW_MULT    = 12;     // bufferedamountlow が発火する閾値倍率
+const PROGRESS_THROTTLE_MS = 100; // 進捗 UI 更新の最小間隔（高速 LAN で DOM 更新が律速になるのを防ぐ）
 const CHUNK_PROFILE = (() => {
   const ua = navigator.userAgent || '';
   const isiOS = /iP(hone|ad|od)/.test(ua);
@@ -3015,47 +3018,35 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
         });
       } catch { resumeOffset = 0; }
 
-      let fileSent = resumeOffset;
-      const feed = async view => {
-        let offset = 0;
-        while (offset < view.byteLength) {
-          if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
-          if (dc.bufferedAmount > flowHigh) {
-            const stallStart = performance.now();
-            await waitForBufferDrain(dc, flowHigh, flowLow);
-            const stall = performance.now() - stallStart;
-            if (stall > FLOW_STALL_MS && shrinkChunk(session)) {
-              refreshChunks();
-              dc.bufferedAmountLowThreshold = flowLow;
-            }
-          }
-          const size  = Math.min(chunkSize, view.byteLength - offset);
-          const chunk = view.subarray(offset, offset + size);
-          dc.send(chunk);
-          offset   += size;
-          fileSent += size;
-          totalSent += size;
-          onProgress(i, fileSent, total);
-        }
-      };
-
-      const reader = file.stream().getReader();
-      let skipped = 0;
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (skipped < resumeOffset) {
-            const remaining = resumeOffset - skipped;
-            skipped += value.byteLength;
-            if (value.byteLength <= remaining) continue;
-            await feed(value.subarray(remaining));
-          } else {
-            await feed(value);
+      // Read the file in chunkSize-sized slices and send each as one DataChannel
+      // message. Reading via Blob.slice (not Blob.stream) lets us emit full
+      // chunkSize messages instead of the ~64 KB segments Blob.stream() yields,
+      // cutting message count (and per-message SCTP/JS overhead) ~4× on LAN.
+      let pos = resumeOffset;
+      let lastProg = 0;
+      while (pos < total) {
+        if (pc.connectionState === 'closed' || pc.connectionState === 'failed') throw new Error('cancelled');
+        if (dc.bufferedAmount > flowHigh) {
+          const stallStart = performance.now();
+          await waitForBufferDrain(dc, flowHigh, flowLow);
+          const stall = performance.now() - stallStart;
+          if (stall > FLOW_STALL_MS && shrinkChunk(session)) {
+            refreshChunks();
+            dc.bufferedAmountLowThreshold = flowLow;
           }
         }
-      } finally {
-        reader.releaseLock?.();
+        const end = Math.min(pos + chunkSize, total);
+        const buf = await file.slice(pos, end).arrayBuffer();
+        dc.send(buf);
+        totalSent += end - pos;
+        pos = end;
+        // Throttle progress UI: per-chunk DOM writes throttle the main thread and
+        // become the bottleneck on a fast LAN.
+        const now = performance.now();
+        if (now - lastProg >= PROGRESS_THROTTLE_MS || pos >= total) {
+          lastProg = now;
+          onProgress(i, pos, total);
+        }
       }
 
       await sendDoneFrame(dc, file);
@@ -3095,7 +3086,7 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
 
     await new Promise((resolve, reject) => {
       let meta = null, recvd = 0;
-      let t0 = null, isMulti = false;
+      let t0 = null, isMulti = false, lastProg = 0;
       // Bound memory: fold incoming ArrayBuffers into disk-backed Blobs as we go
       // instead of holding the whole file in RAM (peak ~2× file size used to OOM
       // large receives, especially on mobile).
@@ -3146,6 +3137,7 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
                 }
               }).catch(() => {});
             }
+            if (onProgress && meta) onProgress(recvd, meta.size); // ensure bar hits 100%
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
             if (!isMulti) done();
           } else if (msg.t === 'all-done') {
@@ -3158,8 +3150,14 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
           recvd += e.data.byteLength;
           if (pendingBytes >= RECV_FOLD_BYTES) foldPending();
           if (meta) {
-            onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
-            if (onProgress) onProgress(recvd, meta.size);
+            // Throttle progress UI so per-message DOM writes don't throttle the
+            // receive loop on a fast LAN.
+            const now = performance.now();
+            if (now - lastProg >= PROGRESS_THROTTLE_MS) {
+              lastProg = now;
+              onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
+              if (onProgress) onProgress(recvd, meta.size);
+            }
           }
         }
       };
