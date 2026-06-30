@@ -586,6 +586,10 @@ const ENABLE_RTC_POOL  = false;  // 予備: ピアごとの PC/DC を再利用�
 const RTC_IDLE_TIMEOUT = 30000;  // ms: 再利用セッションのアイドル期限（将来利用）
 const RTC_DRAIN_DELAY  = 1500;   // ms: 正常終了時に接続を閉じるまで待つ
 const FLOW_STALL_MS    = 1500;   // ms: bufferedAmount が減らないとみなす閾値
+const DRAIN_TIMEOUT    = 30000;  // ms: bufferedAmount が全く減らない場合に転送を諦める閾値
+const RECV_INACTIVITY  = 30000;  // ms: P2P 受信でデータが途絶えたら諦めてフォールバックする
+const RECV_FOLD_BYTES  = 16 * 1024 * 1024; // 受信チャンクを Blob にまとめてメモリを解放する単位
+const HASH_MAX_BYTES   = 256 * 1024 * 1024; // これを超えるファイルは整合性ハッシュをスキップ（メモリ枯渇回避）
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const randPath = () => {
@@ -601,6 +605,14 @@ async function hashBlob(blob) {
   const buf = await blob.arrayBuffer();
   const hash = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Compute a SHA-256 only for reasonably-sized blobs. hashBlob() loads the whole
+// blob into a single ArrayBuffer, which throws (RangeError) or OOMs for multi-GB
+// files — the main reason large P2P transfers used to fail. Skip it instead.
+async function maybeHashBlob(blob) {
+  if (!blob || typeof blob.size !== 'number' || blob.size > HASH_MAX_BYTES) return null;
+  try { return await hashBlob(blob); } catch { return null; }
 }
 
 function base32ToHex(str) {
@@ -2220,6 +2232,8 @@ async function startSend() {
     let anyError = false;
     for (let i = 0; i < selFiles.length; i++) {
       if (anyError) break;
+      // Stop the queue if the user cancelled (cancelSend hides this button).
+      if (document.getElementById('cancel-send-btn').style.display === 'none') return;
       const { file, path } = selFiles[i];
       const item = document.getElementById(`fli-${i}`);
       const st   = document.getElementById(`fli-status-${i}`);
@@ -2244,75 +2258,70 @@ async function startSend() {
   }
 }
 
-async function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
-  const controller = new AbortController();
-  _sendXHR = controller;
-  const total = body.size || 0;
-  let uploaded = 0;
-  const t0 = performance.now();
+// Upload via piping-server relay. Uses XHR (not fetch) because a streaming
+// ReadableStream fetch body requires `duplex: 'half'` + HTTP/2 and throws on
+// Chromium otherwise — which silently broke every HTTP fallback. XHR streams the
+// File straight from disk (low memory, any size) and gives real upload progress.
+function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    _sendXHR = xhr;
+    const total = body.size || 0;
+    const t0 = performance.now();
 
-  const updateProgress = () => {
-    if (!total) return;
-    const p = Math.round(uploaded / total * 100);
-    document.getElementById('prog-bar').style.width = p + '%';
-    const elapsed = (performance.now() - t0) / 1000;
-    const speed   = elapsed > 0 ? uploaded / elapsed : 0;
-    const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
-    document.getElementById('prog-text').textContent =
-      `${prefix}${p}%  (${fmt(uploaded)} / ${fmt(total)})  ${fmt(speed)}/s`;
-    if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
-  };
+    xhr.open('POST', `${PIPE}/${path}`);
+    xhr.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
+    xhr.setRequestHeader('Content-Disposition',
+      `attachment; filename="${encodeURIComponent(body.name || 'file')}"`);
 
-  let requestBody = body;
-  if (typeof body.stream === 'function' && typeof ReadableStream === 'function') {
-    const reader = body.stream().getReader();
-    requestBody = new ReadableStream({
-      async pull(ctrl) {
-        const { value, done } = await reader.read();
-        if (done) { ctrl.close(); return; }
-        uploaded += value.byteLength;
-        updateProgress();
-        ctrl.enqueue(value);
-      },
-      cancel() {
-        reader.releaseLock?.();
+    xhr.upload.onprogress = e => {
+      if (!total || !e.lengthComputable) return;
+      const p = Math.round(e.loaded / total * 100);
+      document.getElementById('prog-bar').style.width = p + '%';
+      const elapsed = (performance.now() - t0) / 1000;
+      const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
+      const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
+      document.getElementById('prog-text').textContent =
+        `${prefix}${p}%  (${fmt(e.loaded)} / ${fmt(total)})  ${fmt(speed)}/s`;
+      if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
+    };
+
+    xhr.onload = () => {
+      _sendXHR = null;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        setStatus('send-status', t('transferFail'), 'err');
+        _sendEnd();
+        reject(new Error('HTTP upload failed: ' + xhr.status));
+        return;
       }
-    });
-  }
+      const elapsed = (performance.now() - t0) / 1000;
+      const speed   = elapsed > 0 ? total / elapsed : 0;
+      document.getElementById('prog-bar').style.width = '100%';
+      document.getElementById('prog-text').textContent = totalFiles > 1
+        ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%'
+        : '100%';
+      if (totalFiles === 1) {
+        setStatus('send-status', t('transferDone')(fmt(total), elapsed.toFixed(2), fmt(speed)), 'ok');
+      }
+      reportTransfer('pipe', total, {
+        transport: 'http',
+        files: totalFiles,
+        transferMs: Math.round(elapsed * 1000)
+      });
+      resolve();
+    };
 
-  try {
-    const res = await fetch(`${PIPE}/${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': body.type || 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(body.name || 'file')}"`
-      },
-      body: requestBody,
-      signal: controller.signal,
-    });
-    _sendXHR = null;
-    if (!res.ok) throw new Error('HTTP upload failed');
-    const elapsed = (performance.now() - t0) / 1000;
-    const speed   = elapsed > 0 ? total / elapsed : 0;
-    document.getElementById('prog-bar').style.width = '100%';
-    document.getElementById('prog-text').textContent = totalFiles > 1
-      ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%'
-      : '100%';
-    if (totalFiles === 1) {
-      setStatus('send-status', t('transferDone')(fmt(total), elapsed.toFixed(2), fmt(speed)), 'ok');
-    }
-    reportTransfer('pipe', total, {
-      transport: 'http',
-      files: totalFiles,
-      transferMs: Math.round(elapsed * 1000)
-    });
-  } catch (err) {
-    _sendXHR = null;
-    if (controller.signal.aborted) return;
-    setStatus('send-status', t('transferFail'), 'err');
-    _sendEnd();
-    throw err;
-  }
+    // Abort is a user cancel — resolve quietly so the multi-file loop stops cleanly.
+    xhr.onabort = () => { _sendXHR = null; resolve(); };
+    xhr.onerror = () => {
+      _sendXHR = null;
+      setStatus('send-status', t('transferFail'), 'err');
+      _sendEnd();
+      reject(new Error('HTTP upload error'));
+    };
+
+    xhr.send(body);
+  });
 }
 
 function resetSend() {
@@ -2668,7 +2677,9 @@ function shrinkChunk(session) {
 function waitForBufferDrain(dc, highWater, lowWater) {
   if (dc.bufferedAmount <= highWater) return Promise.resolve();
   return new Promise((resolve, reject) => {
+    let timer = null;
     const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
       dc.removeEventListener('bufferedamountlow', onLow);
       dc.removeEventListener('close', onClose);
       dc.removeEventListener('error', onClose);
@@ -2683,6 +2694,12 @@ function waitForBufferDrain(dc, highWater, lowWater) {
       cleanup();
       reject(err instanceof Error ? err : new Error('DataChannel closed'));
     };
+    // If the buffer never drains (peer stalled/gone), give up so the caller can
+    // fall back to HTTP instead of hanging on the progress bar forever.
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('drain timeout'));
+    }, DRAIN_TIMEOUT);
     dc.addEventListener('bufferedamountlow', onLow);
     dc.addEventListener('close', onClose);
     dc.addEventListener('error', onClose);
@@ -2874,7 +2891,10 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
           const stallStart = performance.now();
           await waitForBufferDrain(dc, flowHigh, flowLow);
           const stall = performance.now() - stallStart;
-          if (stall > FLOW_STALL_MS && shrinkChunk(session)) refreshChunks();
+          if (stall > FLOW_STALL_MS && shrinkChunk(session)) {
+            refreshChunks();
+            dc.bufferedAmountLowThreshold = flowLow;
+          }
         }
         const size  = Math.min(chunkSize, view.byteLength - offset);
         const chunk = view.subarray(offset, offset + size);
@@ -2905,8 +2925,10 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
       await feed(raw);
     }
 
-    const fileHash = await hashBlob(body);
-    dc.send(JSON.stringify({ t: 'done', sha256: fileHash }));
+    const fileHash = await maybeHashBlob(body);
+    const doneMsg = { t: 'done' };
+    if (fileHash) doneMsg.sha256 = fileHash;
+    dc.send(JSON.stringify(doneMsg));
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
@@ -3021,8 +3043,10 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
         reader.releaseLock?.();
       }
 
-      const fileHash = await hashBlob(file);
-      dc.send(JSON.stringify({ t: 'done', sha256: fileHash }));
+      const fileHash = await maybeHashBlob(file);
+      const doneMsg = { t: 'done' };
+      if (fileHash) doneMsg.sha256 = fileHash;
+      dc.send(JSON.stringify(doneMsg));
       onFileDone(i);
     }
 
@@ -3057,19 +3081,42 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
     _recvAC = session.ac;
     onStatus(t('p2pConnected'));
 
-    await new Promise(resolve => {
-      let meta = null, chunks = [], recvd = 0;
+    await new Promise((resolve, reject) => {
+      let meta = null, recvd = 0;
       let t0 = null, isMulti = false;
+      // Bound memory: fold incoming ArrayBuffers into disk-backed Blobs as we go
+      // instead of holding the whole file in RAM (peak ~2× file size used to OOM
+      // large receives, especially on mobile).
+      let parts = [];        // Array<Blob> already folded
+      let pending = [];       // Array<ArrayBuffer> not yet folded
+      let pendingBytes = 0;
+      const foldPending = () => {
+        if (pending.length) { parts.push(new Blob(pending)); pending = []; pendingBytes = 0; }
+      };
+      const resetBuffers = () => { parts = []; pending = []; pendingBytes = 0; recvd = 0; };
+      const assembleBlob = type => { foldPending(); return new Blob(parts, { type }); };
+
+      // Inactivity watchdog: if the stream stalls (peer gone) give up so the
+      // caller falls back to HTTP instead of freezing forever.
+      let watchdog = null;
+      const clearWatch = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
+      const arm  = () => { clearWatch(); watchdog = setTimeout(() => { clearWatch(); reject(new Error('p2p stalled')); }, RECV_INACTIVITY); };
+      const done = () => { clearWatch(); resolve(); };
+      const fail = err => { clearWatch(); reject(err instanceof Error ? err : new Error('p2p error')); };
+      arm();
+
       dc.onmessage = e => {
+        arm();
         if (typeof e.data === 'string') {
-          const msg = JSON.parse(e.data);
+          let msg;
+          try { msg = JSON.parse(e.data); } catch { return; }
           if (msg.t === 'meta') {
             // If we have leftover chunks from a previous attempt for
             // the same file name + index, keep them for resume
             if (meta && meta.name === msg.name && meta.index === msg.index && recvd > 0 && msg.resumable) {
               dc.send(JSON.stringify({ t: 'resume', index: msg.index, offset: recvd }));
             } else {
-              chunks = []; recvd = 0;
+              resetBuffers();
             }
             meta = msg;
             t0 = null;
@@ -3078,8 +3125,8 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
           } else if (msg.t === 'done') {
             const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
             const speed   = elapsed > 0 ? recvd / elapsed : 0;
-            const blob    = new Blob(chunks, { type: meta.mime });
-            // Verify integrity if sender provided a hash
+            const blob    = assembleBlob(meta.mime);
+            // Verify integrity if sender provided a hash (small files only)
             if (msg.sha256) {
               hashBlob(blob).then(recvHash => {
                 if (recvHash !== msg.sha256) {
@@ -3088,21 +3135,26 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
               }).catch(() => {});
             }
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
-            if (!isMulti) resolve();
+            if (!isMulti) done();
           } else if (msg.t === 'all-done') {
-            resolve();
+            done();
           }
         } else {
           if (!t0) t0 = performance.now();
-          chunks.push(e.data);
+          pending.push(e.data);
+          pendingBytes += e.data.byteLength;
           recvd += e.data.byteLength;
+          if (pendingBytes >= RECV_FOLD_BYTES) foldPending();
           if (meta) {
             onStatus(t('p2pProgress')(fmt(recvd), fmt(meta.size)));
             if (onProgress) onProgress(recvd, meta.size);
           }
         }
       };
-      dc.onerror = resolve;
+      dc.onerror = () => fail(new Error('datachannel error'));
+      session.pc.onconnectionstatechange = () => {
+        if (session.pc.connectionState === 'failed') fail(new Error('connection failed'));
+      };
     });
     success = true;
     return true;
