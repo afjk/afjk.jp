@@ -272,13 +272,24 @@ sequenceDiagram
 | `ICE_TIMEOUT` | 3,000ms | ICE 収集の最大待機時間 |
 | `DC_TIMEOUT` | 5,000ms | DataChannel open 待機時間 |
 | `RTC_DRAIN_DELAY` | 1,500ms | 最終チャンク送信後の DC クローズ猶予時間 |
-| `FLOW_STALL_MS` | 1,500ms | `bufferedAmount` が下がらない場合のストール検出閾値 |
+| `FLOW_STALL_MS` | 1,500ms | `bufferedAmount` が下がらない場合のストール検出閾値（チャンク縮小の判定）|
+| `DRAIN_TIMEOUT` | 30,000ms | `bufferedAmount` が全く減らない場合に送信を諦める閾値（相手消失時のハング防止 → HTTP フォールバック）|
+| `RECV_INACTIVITY` | 45,000ms | P2P 受信でデータが途絶えた場合に諦める閾値（ハング防止 → HTTP フォールバック）。送信側が `DRAIN_TIMEOUT` まで一時停止している間に受信側が先に誤検知しないよう、送信側の閾値より長くとる |
+| `RECV_FOLD_BYTES` | 16 MB | 受信チャンクを Blob にまとめてメモリを解放する単位 |
+| `HASH_MAX_BYTES` | 256 MB | これを超えるファイルは整合性 SHA-256 をスキップ（大容量ファイルのメモリ枯渇回避）|
 | `MAX_CHUNK_SZ` | 262,144 B (256 KB) | チャンクサイズ上限（Chromium 基準）|
 | `MIN_CHUNK_SZ` | 65,536 B (64 KB) | チャンクサイズ下限（Safari 対応）|
 | `FLOW_HIGH_MULT` | 32 | bufferedAmount の上限 = chunkSize × 32 |
 | `FLOW_LOW_MULT` | 8 | bufferedAmountLow 閾値 = chunkSize × 8 |
 
-実際のチャンクサイズはブラウザプロファイルに応じて決定される（Safari: 64 KB / Firefox: 128 KB / Chromium: 256 KB）。`pc.sctp.maxMessageSize` が利用可能な場合はそちらを優先する。
+実際のチャンクサイズはブラウザプロファイルに応じて決定される（Safari: 64 KB / Firefox: 128 KB / Chromium: 512 KB、ただし `MAX_CHUNK_SZ` および `pc.sctp.maxMessageSize` で上限される）。
+
+### 大容量ファイルの信頼性
+
+- **送信**: `File.stream()` でディスクから逐次読み出してチャンク送信するため、送信側はファイル全体をメモリに載せない。整合性ハッシュ（SHA-256）は `HASH_MAX_BYTES` を超えるファイルではスキップする（`crypto.subtle.digest` がファイル全体を 1 個の ArrayBuffer に載せるため、数 GB で `RangeError` / OOM になり転送自体が失敗していた）。
+- **受信**: 受信チャンクは `RECV_FOLD_BYTES` ごとにディスクバックされた Blob へ畳み込み、ピークメモリをファイルサイズの約 2 倍から一定量に抑える。
+- **HTTP フォールバック**: ファイルのアップロードは `XMLHttpRequest`（`upload.onprogress`）で行う。ストリーミング `fetch`（`ReadableStream` ボディ）は Chromium で `duplex: 'half'` 必須かつ HTTP/2 依存のため、指定なしでは例外となりフォールバックが機能しなかった。XHR は任意サイズの `File` をディスクから直接ストリーミングし、進捗も取得できる。
+- **ハング防止**: DataChannel 確立後に相手が消失しても、送信側 (`DRAIN_TIMEOUT`) / 受信側 (`RECV_INACTIVITY`) のウォッチドッグで転送を打ち切り、HTTP 中継へフォールバックする。
 
 ---
 
