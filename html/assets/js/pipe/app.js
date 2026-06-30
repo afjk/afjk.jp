@@ -2817,6 +2817,14 @@ function disposeRtcSession(session, opts = {}) {
 // to the relay until a real transfer begins, so it adds no server/relay traffic.
 let _prewarm = null; // { sigPath, pc, dc, createdAt, ready }
 
+// Build a send-side PeerConnection + ordered DataChannel. Single seam so the
+// prewarm and inline paths can't drift in PC/DC config.
+async function buildSendPc() {
+  const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+  const dc = pc.createDataChannel('pipe', { ordered: true });
+  return { pc, dc };
+}
+
 function discardPrewarm() {
   if (!_prewarm) return;
   const p = _prewarm;
@@ -2831,10 +2839,10 @@ async function prewarmSendSession(sigPath) {
   const entry = { sigPath, pc: null, dc: null, createdAt: performance.now(), ready: false };
   _prewarm = entry;
   try {
-    const pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
+    const { pc, dc } = await buildSendPc();
     if (_prewarm !== entry) { try { pc.close(); } catch {} return; } // superseded while awaiting
     entry.pc = pc;
-    entry.dc = pc.createDataChannel('pipe', { ordered: true });
+    entry.dc = dc;
     await pc.setLocalDescription(await pc.createOffer());
     await waitForIce(pc);
     if (_prewarm !== entry) { try { pc.close(); } catch {} return; }
@@ -2862,8 +2870,7 @@ async function initSendRtcSession(path) {
     pc = warm.pc; dc = warm.dc;
   } else {
     discardPrewarm(); // drop any stale/half-ready prewarm; we're going fresh
-    pc = new RTCPeerConnection({ iceServers: await fetchIceServers() });
-    dc = pc.createDataChannel('pipe', { ordered: true });
+    ({ pc, dc } = await buildSendPc());
   }
   _sendPC = pc;
   const session = { kind: 'send', ac, pc, dc, startedAt: performance.now(), chunkSize: 0 };
