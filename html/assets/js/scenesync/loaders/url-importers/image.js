@@ -1,3 +1,9 @@
+import {
+  resolveMediaFormat,
+  stereoMediaLabel,
+  DEFAULT_VR180_EYE_HEIGHT,
+} from '../stereo-media.js';
+
 /**
  * Fetch API を使用して画像を Blob として CORS 付きで取得。
  * Skybox 生成用。
@@ -150,14 +156,35 @@ export async function importImageUrl(url, ctx) {
       ? ctx.placementRotation
       : spawnTransform.rotation;
 
+    // 立体視 / VR180: UI からの明示指定（ctx.mediaFormat）優先、なければファイル名から自動判定
+    const mediaFormat = resolveMediaFormat(ctx.mediaFormat, url);
+    if (mediaFormat?.detected) {
+      ctx.showToast?.({ message: `立体視形式を自動判定: ${stereoMediaLabel(mediaFormat)}` });
+    }
+    // VR180 ドームは中心が視点高さに来るように持ち上げる
+    const position = mediaFormat?.projection === 'vr180'
+      ? [
+        spawnTransform.position[0],
+        Math.max(spawnTransform.position[1], DEFAULT_VR180_EYE_HEIGHT),
+        spawnTransform.position[2],
+      ]
+      : spawnTransform.position;
+
     const payload = {
       kind: 'scene-add',
       objectId,
       name: displayName,
-      position: spawnTransform.position,
+      position,
       rotation: placementRotation,
       scale: spawnTransform.scale,
-      asset: { type: 'image', source: 'url', url },
+      asset: {
+        type: 'image',
+        source: 'url',
+        url,
+        ...(mediaFormat
+          ? { projection: mediaFormat.projection, stereoLayout: mediaFormat.stereoLayout }
+          : {}),
+      },
       metadata: {
         ...existingMetadata,
         role: 'media-panel',

@@ -9,6 +9,7 @@
     "test:expired-glb-recovery": "node --test html/assets/js/scenesync/assets/expired-glb-recovery.test.js",
     "test:mesh-blob-fetch": "node --test html/assets/js/scenesync/assets/mesh-blob-fetch.test.js",
     "test:glb-normalizer": "node --test html/assets/js/scenesync/loaders/glb-normalizer.test.js",
+    "test:stereo-media": "node --test html/assets/js/scenesync/loaders/stereo-media.test.js",
     "test:playback-duration": "node --test html/assets/js/scenesync/runtime/playback-duration.test.js",
     "test:physics": "node --test html/assets/js/scenesync/physics/rapier-world.test.js html/assets/js/scenesync/physics/rapier-parity-fixture.test.js html/assets/js/scenesync/scene-physics.test.js html/assets/js/scenesync/history/history-manager.test.js html/assets/js/scenesync/shells/player/player-physics-drag-input.test.js",
     "test:loomlet-runtime": "node --test html/assets/js/scenesync/loomlet-runtime-integration.test.js html/assets/js/scenesync/loomlet-interaction-replay.test.js",

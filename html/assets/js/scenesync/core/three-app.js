@@ -15,6 +15,9 @@ export function createThreeApp() {
     1000
   );
   camera.position.set(5, 5, 5);
+  // 立体視メディアの左目メッシュ（layer 1）を非XR表示でも見せる。
+  // WebXR 中は three.js が左目カメラに layer 1、右目カメラに layer 2 を割り当てる。
+  camera.layers.enable(1);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);

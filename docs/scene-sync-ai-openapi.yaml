@@ -590,6 +590,19 @@ components:
           $ref: '#/components/schemas/Quat'
         scale:
           $ref: '#/components/schemas/Vec3'
+        projection:
+          type: string
+          enum: [flat, vr180]
+          description: >
+            Stereo projection for addImageFromUrl / addVideoFromUrl.
+            `vr180` renders a half-dome. Omit to auto-detect from the filename.
+        stereoLayout:
+          type: string
+          enum: [mono, sbs, tb]
+          description: >
+            Stereo eye layout for addImageFromUrl / addVideoFromUrl.
+            `sbs` = side-by-side (left eye left), `tb` = top-bottom (left eye top).
+            Omit to auto-detect from the filename.
       example:
         url: https://example.com/reference.jpg
         objectId: ref-image-1

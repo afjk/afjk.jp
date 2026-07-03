@@ -33,6 +33,21 @@ Scene Sync Web は、軽量な共有 3D editor / DevTool として扱う。
 
 ---
 
+## メディアURL登録ダイアログ
+
+動画 / 画像 URL を表示形式付きで登録する UI。
+
+- desktop: settings panel の 🎬 `メディアURL` chip から開く。
+- mobile: 追加シートの `メディアURLを追加（VR180 / 3D）` から開く。
+- 入力: URL、表示形式 select（自動判定 / 2D / 3D SBS / 3D TB / VR180 系）。
+- 「自動判定」選択中は、URL のファイル名から推定した形式をダイアログ内にライブ表示する。
+- 明示指定は自動判定より優先。明示的な 2D 指定は自動判定を抑止する。
+- URL drop / clipboard 経由の追加でも同じ自動判定が走り、判定時は toast で形式を通知する。
+
+詳細は [Asset / Blob / Cache](./scene-sync-assets-and-cache.md) の「Stereo / VR180 media」を参照。
+
+---
+
 ## Drag and Drop placement
 
 ### Hit placement

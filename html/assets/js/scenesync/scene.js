@@ -21,6 +21,11 @@ import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
 import { buildImageSkySphereGlb } from './loaders/image-to-sky-sphere.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
+import {
+  normalizeStereoMedia,
+  buildStereoPlaneGroup,
+  buildVr180DomeGroup,
+} from './loaders/stereo-media.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { resolveDroppedUrl } from './loaders/url-resolver.js';
 import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL, estimateTextPanelLayout } from './components/text-panel-renderer.js';
@@ -28,6 +33,7 @@ import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom, mountSceneSyncShellFromDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
+import { initMediaUrlDialog } from './ui/media-url-dialog.js';
 import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
 import { applySceneSyncDeviceMode, isSceneSyncMobileDevice } from './ui/device-mode.js';
 import { normalizeDisplayName } from './utils/display-name.js';
@@ -8432,6 +8438,7 @@ function createSceneUrlImportContext(options = {}) {
     rotationOverride = null,
     scaleOverride = null,
     extraImporterContext = {},
+    mediaFormat = null,
   } = options;
 
   const position = positionArray;
@@ -8439,6 +8446,8 @@ function createSceneUrlImportContext(options = {}) {
   const scale = scaleOverride || [1, 1, 1];
 
   return {
+    // 立体視 / VR180 の明示指定（{ projection, stereoLayout }）。null なら自動判定に任せる。
+    mediaFormat: mediaFormat || sourceContext?.mediaFormat || null,
     addOrUpdateObject,
     broadcastSceneAdd: broadcast,
     applySceneBgm,
@@ -8551,6 +8560,9 @@ function createAiUrlImportContext(params = {}, context = {}) {
     placementPosition: context.placementPosition || null,
     targetKind: context?.targetKind || 'scene',
     sourceContext: context,
+    mediaFormat: (params.projection || params.stereoLayout)
+      ? { projection: params.projection, stereoLayout: params.stereoLayout }
+      : null,
     generateObjectIdOverride: (prefix) => {
       if (!customObjectIdUsed && typeof params.objectId === 'string' && params.objectId.trim()) {
         customObjectIdUsed = true;
@@ -9472,6 +9484,26 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   })();
 }
 
+/**
+ * projection / stereoLayout 付き image / video asset 用の group を作る。
+ * flat + sbs/tb は左右目 plane、vr180 は半球ドームになる。
+ */
+function buildStereoMediaGroup({ stereo, aspect, createEyeTexture }) {
+  if (stereo.projection === 'vr180') {
+    return buildVr180DomeGroup({
+      THREE,
+      createEyeTexture,
+      stereoLayout: stereo.stereoLayout,
+    });
+  }
+  return buildStereoPlaneGroup({
+    THREE,
+    createEyeTexture,
+    aspect,
+    stereoLayout: stereo.stereoLayout,
+  });
+}
+
 function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const promise = prebuilt
@@ -9480,19 +9512,42 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
 
   promise.then((bundle) => {
     removeLoadingOverlay(objectId);
-    const { group, material, texture } = createVideoPlaneGroup(bundle, THREE);
+    const stereo = normalizeStereoMedia(info.asset);
+    let group;
+    if (!stereo.isDefault) {
+      const built = buildStereoMediaGroup({
+        stereo,
+        aspect: bundle.aspect,
+        createEyeTexture: () => {
+          const eyeTexture = new THREE.VideoTexture(bundle.video);
+          eyeTexture.colorSpace = THREE.SRGBColorSpace;
+          eyeTexture.minFilter = THREE.LinearFilter;
+          eyeTexture.magFilter = THREE.LinearFilter;
+          return eyeTexture;
+        },
+      });
+      group = built.group;
+      group.userData.disposable = () => {
+        bundle.video?.pause?.();
+        bundle.video && (bundle.video.src = '');
+        bundle.texture?.dispose?.();
+        built.disposables.forEach((item) => item.dispose?.());
+      };
+    } else {
+      const { group: planeGroup, material, texture } = createVideoPlaneGroup(bundle, THREE);
+      group = planeGroup;
+      group.userData.disposable = () => {
+        bundle.video?.pause?.();
+        bundle.video && (bundle.video.src = '');
+        texture.dispose();
+        material.dispose();
+      };
+    }
     group.userData.objectId = objectId;
     group.userData.name = info.name;
     group.userData.video = bundle.video;
     group.userData.assetType = 'video';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
-
-    group.userData.disposable = () => {
-      bundle.video?.pause?.();
-      bundle.video && (bundle.video.src = '');
-      texture.dispose();
-      material.dispose();
-    };
 
     if (existing) {
       group.position.copy(existing.position);
@@ -9543,34 +9598,53 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
   promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const { texture, width, height } = bundle;
+    const stereo = normalizeStereoMedia(info.asset);
+    let group;
 
-    const geometry = new THREE.PlaneGeometry(width, height);
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      alphaTest: 0.01,
-      depthWrite: true,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    });
+    if (!stereo.isDefault) {
+      const built = buildStereoMediaGroup({
+        stereo,
+        aspect: bundle.aspect,
+        createEyeTexture: () => {
+          const eyeTexture = texture.clone();
+          eyeTexture.needsUpdate = true;
+          return eyeTexture;
+        },
+      });
+      group = built.group;
+      group.userData.disposable = () => {
+        texture.dispose();
+        built.disposables.forEach((item) => item.dispose?.());
+      };
+    } else {
+      const geometry = new THREE.PlaneGeometry(width, height);
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        alphaTest: 0.01,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
 
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.y = height / 2;
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.y = height / 2;
 
-    const group = new THREE.Group();
-    group.add(mesh);
+      group = new THREE.Group();
+      group.add(mesh);
+
+      // Store for disposal
+      group.userData.disposable = () => {
+        texture.dispose();
+        geometry.dispose();
+        material.dispose();
+      };
+    }
 
     group.userData.objectId = objectId;
     group.userData.name = info.name;
     group.userData.assetType = 'image';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
-
-    // Store for disposal
-    group.userData.disposable = () => {
-      texture.dispose();
-      geometry.dispose();
-      material.dispose();
-    };
 
     if (existing) {
       group.position.copy(existing.position);
@@ -12049,6 +12123,25 @@ const mobileDeleteSkyboxBtn = document.getElementById('mobile-delete-skybox-btn'
 const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
 const mobileHelpBtn = document.getElementById('mobile-help-btn');
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
+const mediaUrlBtn = document.getElementById('media-url-btn');
+const mobileAddMediaUrlBtn = document.getElementById('mobile-add-media-url-btn');
+
+// ── メディアURL登録ダイアログ（VR180 / 3D 立体視対応） ────────────────
+const mediaUrlDialog = initMediaUrlDialog({
+  showToast,
+  onSubmit: (url, mediaFormat) =>
+    urlImporterCallback(url, getDefaultImportPosition(), { mediaFormat })
+      .catch((error) => {
+        console.warn('[media-url-dialog] import failed:', error);
+        showToast(error?.message || 'メディアURLの追加に失敗しました');
+      }),
+});
+
+mediaUrlBtn?.addEventListener('click', () => mediaUrlDialog.open());
+mobileAddMediaUrlBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  mediaUrlDialog.open();
+});
 
 function closePasteSheet() {
   blurActiveEditableElement();
