@@ -21,6 +21,12 @@ import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
 import { buildImageSkySphereGlb } from './loaders/image-to-sky-sphere.js';
 import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
+import {
+  normalizeStereoMedia,
+  detectStereoMediaFromName,
+  buildStereoPlaneGroup,
+  buildVr180DomeGroup,
+} from './loaders/stereo-media.js';
 import { classifyUrl, URL_KIND } from './loaders/url-classifier.js';
 import { resolveDroppedUrl } from './loaders/url-resolver.js';
 import { normalizeTextAsset, renderTextPanelCanvas, DEFAULT_TEXT_LAYOUT, DEFAULT_TEXT_SCROLL, estimateTextPanelLayout } from './components/text-panel-renderer.js';
@@ -28,6 +34,7 @@ import { dispatchUrlImport } from './loaders/url-importers/index.js';
 import { getSceneSyncDom, mountSceneSyncShellFromDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
+import { initMediaUrlDialog } from './ui/media-url-dialog.js';
 import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
 import { applySceneSyncDeviceMode, isSceneSyncMobileDevice } from './ui/device-mode.js';
 import { normalizeDisplayName } from './utils/display-name.js';
@@ -4904,6 +4911,8 @@ function deleteObjectById(objectId, options = {}) {
   const audioSources = getObjectAudioSourcesForSerialize(attached);
 
   scene.remove(attached);
+  // media object はテクスチャ解放・video 停止を disposable に集約している
+  attached.userData?.disposable?.();
   attached.traverse(child => {
     if (child.geometry) child.geometry.dispose();
     if (child.material) {
@@ -8432,6 +8441,7 @@ function createSceneUrlImportContext(options = {}) {
     rotationOverride = null,
     scaleOverride = null,
     extraImporterContext = {},
+    mediaFormat = null,
   } = options;
 
   const position = positionArray;
@@ -8439,6 +8449,8 @@ function createSceneUrlImportContext(options = {}) {
   const scale = scaleOverride || [1, 1, 1];
 
   return {
+    // 立体視 / VR180 の明示指定（{ projection, stereoLayout }）。null なら自動判定に任せる。
+    mediaFormat: mediaFormat || sourceContext?.mediaFormat || null,
     addOrUpdateObject,
     broadcastSceneAdd: broadcast,
     applySceneBgm,
@@ -8551,6 +8563,9 @@ function createAiUrlImportContext(params = {}, context = {}) {
     placementPosition: context.placementPosition || null,
     targetKind: context?.targetKind || 'scene',
     sourceContext: context,
+    mediaFormat: (params.projection || params.stereoLayout)
+      ? { projection: params.projection, stereoLayout: params.stereoLayout }
+      : null,
     generateObjectIdOverride: (prefix) => {
       if (!customObjectIdUsed && typeof params.objectId === 'string' && params.objectId.trim()) {
         customObjectIdUsed = true;
@@ -8979,6 +8994,8 @@ async function handleAiCommand(from, payload) {
             source: 'url',
             url,
             name,
+            ...(params.projection ? { projection: params.projection } : {}),
+            ...(params.stereoLayout ? { stereoLayout: params.stereoLayout } : {}),
           });
 
           const targetObj = managedObjects.get(targetObjectId);
@@ -9472,6 +9489,27 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
   })();
 }
 
+/**
+ * projection / stereoLayout 付き image / video asset 用の group を作る。
+ * flat + sbs/tb は左右目 plane、vr180 は半球ドームになる。
+ * texture は両目で共有され、所有権（dispose）は呼び出し側に残る。
+ */
+function buildStereoMediaGroup({ stereo, aspect, texture }) {
+  if (stereo.projection === 'vr180') {
+    return buildVr180DomeGroup({
+      THREE,
+      texture,
+      stereoLayout: stereo.stereoLayout,
+    });
+  }
+  return buildStereoPlaneGroup({
+    THREE,
+    texture,
+    aspect,
+    stereoLayout: stereo.stereoLayout,
+  });
+}
+
 function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const promise = prebuilt
@@ -9480,19 +9518,36 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
 
   promise.then((bundle) => {
     removeLoadingOverlay(objectId);
-    const { group, material, texture } = createVideoPlaneGroup(bundle, THREE);
+    const stereo = normalizeStereoMedia(info.asset);
+    let group;
+    if (!stereo.isDefault) {
+      const built = buildStereoMediaGroup({
+        stereo,
+        aspect: bundle.aspect,
+        texture: bundle.texture,
+      });
+      group = built.group;
+      group.userData.disposable = () => {
+        bundle.video?.pause?.();
+        bundle.video && (bundle.video.src = '');
+        bundle.texture?.dispose?.();
+        built.disposables.forEach((item) => item.dispose?.());
+      };
+    } else {
+      const { group: planeGroup, material, texture } = createVideoPlaneGroup(bundle, THREE);
+      group = planeGroup;
+      group.userData.disposable = () => {
+        bundle.video?.pause?.();
+        bundle.video && (bundle.video.src = '');
+        texture.dispose();
+        material.dispose();
+      };
+    }
     group.userData.objectId = objectId;
     group.userData.name = info.name;
     group.userData.video = bundle.video;
     group.userData.assetType = 'video';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
-
-    group.userData.disposable = () => {
-      bundle.video?.pause?.();
-      bundle.video && (bundle.video.src = '');
-      texture.dispose();
-      material.dispose();
-    };
 
     if (existing) {
       group.position.copy(existing.position);
@@ -9543,34 +9598,49 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
   promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const { texture, width, height } = bundle;
+    const stereo = normalizeStereoMedia(info.asset);
+    let group;
 
-    const geometry = new THREE.PlaneGeometry(width, height);
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      alphaTest: 0.01,
-      depthWrite: true,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    });
+    if (!stereo.isDefault) {
+      const built = buildStereoMediaGroup({
+        stereo,
+        aspect: bundle.aspect,
+        texture,
+      });
+      group = built.group;
+      group.userData.disposable = () => {
+        texture.dispose();
+        built.disposables.forEach((item) => item.dispose?.());
+      };
+    } else {
+      const geometry = new THREE.PlaneGeometry(width, height);
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        alphaTest: 0.01,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
 
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.y = height / 2;
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.y = height / 2;
 
-    const group = new THREE.Group();
-    group.add(mesh);
+      group = new THREE.Group();
+      group.add(mesh);
+
+      // Store for disposal
+      group.userData.disposable = () => {
+        texture.dispose();
+        geometry.dispose();
+        material.dispose();
+      };
+    }
 
     group.userData.objectId = objectId;
     group.userData.name = info.name;
     group.userData.assetType = 'image';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
-
-    // Store for disposal
-    group.userData.disposable = () => {
-      texture.dispose();
-      geometry.dispose();
-      material.dispose();
-    };
 
     if (existing) {
       group.position.copy(existing.position);
@@ -9838,13 +9908,19 @@ function getReplaceTarget(inputKind, hitObjectId = null) {
 
 function findPrimaryMediaMesh(root) {
   let found = null;
+  let fallback = null;
   root.traverse((child) => {
     if (found) return;
     if (child.isMesh && child.geometry) {
-      found = child;
+      if (!fallback) fallback = child;
+      // 立体視 group では layer 1/2 の目メッシュが先に来るため、
+      // フルサイズの layer 0 メッシュ（通常メッシュ / hit proxy）を優先する
+      if ((child.layers.mask & 1) !== 0) {
+        found = child;
+      }
     }
   });
-  return found;
+  return found || fallback;
 }
 
 async function showLocalImageReplacementPreview(objectId, file) {
@@ -9961,6 +10037,31 @@ async function replaceObjectContent(objectId, input, options = {}) {
   let metaRole, metaAccepts, metaFit;
 
   if (input.kind === 'image' || input.kind === 'video') {
+    // 立体視 / VR180 の扱い: 明示指定 > ファイル名自動判定 > 既存 asset の形式を維持。
+    // 明示的な 2D 指定（flat/mono）は既存の立体視形式を意図的に解除する。
+    let stereoFields = null;
+    if (input.projection || input.stereoLayout) {
+      const explicit = normalizeStereoMedia(input);
+      stereoFields = { projection: explicit.projection, stereoLayout: explicit.stereoLayout };
+    } else {
+      const detected = input.source === 'url' || !input.source
+        ? detectStereoMediaFromName(input.url)
+        : null;
+      if (detected) {
+        stereoFields = detected;
+      } else {
+        const existingStereo = normalizeStereoMedia(existing.userData?.asset);
+        if (!existingStereo.isDefault) {
+          stereoFields = {
+            projection: existingStereo.projection,
+            stereoLayout: existingStereo.stereoLayout,
+          };
+        }
+      }
+    }
+    const keepStereoFields = stereoFields
+      && !(stereoFields.projection === 'flat' && stereoFields.stereoLayout === 'mono');
+
     newAsset = {
       type: input.kind,
       source: input.source || 'url',
@@ -9969,6 +10070,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
       ...(input.width ? { width: input.width } : {}),
       ...(input.height ? { height: input.height } : {}),
       ...(input.assetId ? { assetId: input.assetId } : {}),
+      ...(keepStereoFields ? stereoFields : {}),
     };
     metaRole = existingMeta.role || 'media-panel';
     metaAccepts = existingMeta.accepts || ['image', 'video'];
@@ -11658,6 +11760,13 @@ async function urlImporterCallback(url, position, context = {}) {
           kind: inputKind,
           source: 'url',
           url: normalizedUrl,
+          // メディアURLダイアログ等での明示指定を replace 経路にも反映する
+          ...(context.mediaFormat && (inputKind === 'image' || inputKind === 'video')
+            ? {
+              projection: context.mediaFormat.projection,
+              stereoLayout: context.mediaFormat.stereoLayout,
+            }
+            : {}),
           ...(inputKind === 'text' && /\.(md|markdown)(?:$|[?#])/i.test(normalizedUrl)
             ? { format: 'markdown' }
             : {}),
@@ -11704,7 +11813,9 @@ const dragDropManager = new DragDropManager({
   getPlacementTargets: () => {
     const targets = [];
     for (const obj of managedObjects.values()) {
-      if (!isSkySphereThreeObject(obj) && obj.visible !== false) {
+      // VR180 ドームは skybox と同様、drop の配置先にしない（中に居ると全 drop を拾ってしまう）
+      const isVr180Dome = obj.userData?.asset?.projection === 'vr180';
+      if (!isSkySphereThreeObject(obj) && !isVr180Dome && obj.visible !== false) {
         targets.push(obj);
       }
     }
@@ -12049,6 +12160,25 @@ const mobileDeleteSkyboxBtn = document.getElementById('mobile-delete-skybox-btn'
 const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
 const mobileHelpBtn = document.getElementById('mobile-help-btn');
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
+const mediaUrlBtn = document.getElementById('media-url-btn');
+const mobileAddMediaUrlBtn = document.getElementById('mobile-add-media-url-btn');
+
+// ── メディアURL登録ダイアログ（VR180 / 3D 立体視対応） ────────────────
+const mediaUrlDialog = initMediaUrlDialog({
+  showToast,
+  onSubmit: (url, mediaFormat) =>
+    urlImporterCallback(url, getDefaultImportPosition(), { mediaFormat })
+      .catch((error) => {
+        console.warn('[media-url-dialog] import failed:', error);
+        showToast(error?.message || 'メディアURLの追加に失敗しました');
+      }),
+});
+
+mediaUrlBtn?.addEventListener('click', () => mediaUrlDialog.open());
+mobileAddMediaUrlBtn?.addEventListener('click', () => {
+  closeMobileActionSheet();
+  mediaUrlDialog.open();
+});
 
 function closePasteSheet() {
   blurActiveEditableElement();

@@ -91,6 +91,15 @@ Optional params for `addImageFromUrl`, `addVideoFromUrl`, and `addTextFromUrl`:
 - `rotation`
 - `scale`
 
+Optional stereo / VR180 params for `addImageFromUrl` and `addVideoFromUrl`:
+
+- `projection`: `flat`（既定） | `vr180`
+- `stereoLayout`: `mono`（既定） | `sbs` | `tb`
+
+省略時はファイル名の `vr180` / `sbs` / `tb` 等のトークンから自動判定する。
+詳細は [Asset / Blob / Cache](./scene-sync-assets-and-cache.md) の
+「Stereo / VR180 media」を参照。
+
 `setSkyboxFromImageUrl` currently only requires `params.url`.
 
 ## Required and Optional Parameters

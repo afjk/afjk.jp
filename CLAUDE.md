@@ -38,6 +38,30 @@ curl -s "http://localhost:8787/api/room/{room}/scene?name=Claude"
 
 asset.primitive の選択肢: `box`, `sphere`, `cylinder`, `cone`, `plane`, `torus`
 
+image / video asset（URL 直接指定、CORS 必須）:
+
+```json
+{ "type": "image", "source": "url", "url": "https://example.com/photo.jpg" }
+{ "type": "video", "source": "url", "url": "https://example.com/clip.mp4" }
+```
+
+立体視 / VR180 は optional metadata で指定（省略時は 2D plane）:
+
+```json
+{
+  "type": "video",
+  "source": "url",
+  "url": "https://example.com/tour_vr180_sbs.mp4",
+  "projection": "vr180",
+  "stereoLayout": "sbs"
+}
+```
+
+- `projection`: `flat`（既定・plane 表示） | `vr180`（半球ドーム、中心=視点位置）
+- `stereoLayout`: `mono`（既定） | `sbs`（左右） | `tb`（上下・左目が上）
+- VR180 ドームは position を視点高さ（y=1.6 目安）に置く
+- 詳細: `docs/scene-sync-assets-and-cache.md` の「Stereo / VR180 media」
+
 #### scene-delta
 ```json
 {

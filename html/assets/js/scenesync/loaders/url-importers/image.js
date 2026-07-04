@@ -1,3 +1,5 @@
+import { prepareStereoMediaImport, stereoPlaneSize } from '../stereo-media.js';
+
 /**
  * Fetch API を使用して画像を Blob として CORS 付きで取得。
  * Skybox 生成用。
@@ -105,19 +107,7 @@ export async function loadImageTextureFromUrl(url, { timeoutMs = 15000, THREE } 
  * @returns {object} { width, height }
  */
 export function planeSizeFromAspect(aspect, maxEdgeMeters = 2) {
-  const minEdge = 0.1;
-  const safeAspect = (aspect && aspect > 0) ? aspect : 1;
-  let width, height;
-
-  if (safeAspect >= 1) {
-    width = Math.max(maxEdgeMeters, minEdge);
-    height = Math.max(maxEdgeMeters / safeAspect, minEdge);
-  } else {
-    height = Math.max(maxEdgeMeters, minEdge);
-    width = Math.max(maxEdgeMeters * safeAspect, minEdge);
-  }
-
-  return { width, height };
+  return stereoPlaneSize(aspect, 'mono', maxEdgeMeters);
 }
 
 /**
@@ -150,14 +140,22 @@ export async function importImageUrl(url, ctx) {
       ? ctx.placementRotation
       : spawnTransform.rotation;
 
+    // 立体視 / VR180: UI からの明示指定（ctx.mediaFormat）優先、なければファイル名から自動判定
+    const { position, assetFields } = prepareStereoMediaImport({
+      explicitFormat: ctx.mediaFormat,
+      url,
+      spawnPosition: spawnTransform.position,
+      showToast: ctx.showToast,
+    });
+
     const payload = {
       kind: 'scene-add',
       objectId,
       name: displayName,
-      position: spawnTransform.position,
+      position,
       rotation: placementRotation,
       scale: spawnTransform.scale,
-      asset: { type: 'image', source: 'url', url },
+      asset: { type: 'image', source: 'url', url, ...assetFields },
       metadata: {
         ...existingMetadata,
         role: 'media-panel',

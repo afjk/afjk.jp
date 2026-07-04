@@ -782,6 +782,38 @@
       line-height: 1.5;
       color: #cfcfcf !important;
     }
+    .media-url-content {
+      width: min(92vw, 360px);
+      max-width: none;
+    }
+    .media-url-input {
+      display: block;
+      width: 100%;
+      margin: 12px 0;
+      padding: 8px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      font-size: 13px;
+      font-family: monospace;
+    }
+    .media-url-format-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      margin: 8px 0;
+    }
+    .media-url-format-row select {
+      flex: 1;
+      min-width: 0;
+    }
+    .media-url-hint {
+      min-height: 1.4em;
+      font-size: 12px;
+      color: #8fc7ff !important;
+    }
 
     body.scene-sync-device-desktop #mobile-toolbar {
       display: none !important;
@@ -1391,6 +1423,12 @@
       </button>
     </div>
     <div class="row mobile-collapsible-row">
+      <button id="media-url-btn" class="chip" type="button" title="動画・画像URLを追加（VR180 / 3D対応）">
+        <span>🎬</span>
+        <span>メディアURL</span>
+      </button>
+    </div>
+    <div class="row mobile-collapsible-row">
       <button id="link-btn" class="chip" type="button" title="AI とリンク">
         <span id="link-icon">🔗</span>
         <span id="link-label">AIにリンク</span>
@@ -1458,6 +1496,37 @@
       <div class="pairing-actions">
         <button id="btn-room-full-retry" class="chip" type="button">もう一度試す</button>
         <button id="btn-room-full-new" class="chip primary" type="button">新しいルームを作る</button>
+      </div>
+    </div>
+  </div>
+  <div id="media-url-dialog" class="pairing-dialog" style="display:none;">
+    <div class="pairing-content media-url-content" role="dialog" aria-modal="true" aria-labelledby="media-url-dialog-title">
+      <h3 id="media-url-dialog-title">メディアURLを追加</h3>
+      <p>動画 / 画像の直接 URL を入力してください（CORS 許可が必要）。</p>
+      <input
+        id="media-url-input"
+        class="media-url-input"
+        type="url"
+        placeholder="https://example.com/video_vr180.mp4"
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <label class="media-url-format-row">
+        <span>表示形式</span>
+        <select id="media-url-format" class="chip">
+          <option value="auto">自動判定（ファイル名から）</option>
+          <option value="flat:mono">通常 (2D)</option>
+          <option value="flat:sbs">3D 左右 (SBS)</option>
+          <option value="flat:tb">3D 上下 (TB)</option>
+          <option value="vr180:mono">VR180 (2D)</option>
+          <option value="vr180:sbs">VR180 3D 左右 (SBS)</option>
+          <option value="vr180:tb">VR180 3D 上下 (TB)</option>
+        </select>
+      </label>
+      <p id="media-url-hint" class="media-url-hint"></p>
+      <div class="pairing-buttons">
+        <button id="media-url-cancel-btn" class="chip" type="button">キャンセル</button>
+        <button id="media-url-add-btn" class="chip primary" type="button">追加</button>
       </div>
     </div>
   </div>
@@ -1763,6 +1832,7 @@
       <div class="mobile-sheet-actions">
         <button id="mobile-add-image-btn" class="chip primary" type="button">画像を追加</button>
         <button id="mobile-add-glb-btn" class="chip" type="button">ファイルを追加</button>
+        <button id="mobile-add-media-url-btn" class="chip" type="button">メディアURLを追加（VR180 / 3D）</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
         <button id="mobile-room-open-btn" class="chip" type="button">ルーム設定</button>
         <button id="mobile-env-open-btn" class="chip" type="button">背景</button>

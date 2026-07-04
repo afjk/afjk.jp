@@ -1,4 +1,5 @@
 import { loadVideoTextureFromUrl } from '../video-url-importer.js';
+import { prepareStereoMediaImport } from '../stereo-media.js';
 
 /**
  * URL から動画をロードし、scene-add を broadcast してローカルに配置。
@@ -15,14 +16,22 @@ export async function importVideoUrl(url, ctx) {
     const displayName = (ctx.nameOverride || `video: ${filename}`).slice(0, 60);
     const spawnTransform = ctx.getSpawnTransform();
 
+    // 立体視 / VR180: UI からの明示指定（ctx.mediaFormat）優先、なければファイル名から自動判定
+    const { position, assetFields } = prepareStereoMediaImport({
+      explicitFormat: ctx.mediaFormat,
+      url,
+      spawnPosition: spawnTransform.position,
+      showToast: ctx.showToast,
+    });
+
     const payload = {
       kind: 'scene-add',
       objectId,
       name: displayName,
-      position: spawnTransform.position,
+      position,
       rotation: spawnTransform.rotation,
       scale: spawnTransform.scale,
-      asset: { type: 'video', source: 'url', url },
+      asset: { type: 'video', source: 'url', url, ...assetFields },
       metadata: {
         role: 'media-panel',
         accepts: ['image', 'video'],
