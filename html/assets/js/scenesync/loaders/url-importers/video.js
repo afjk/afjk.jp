@@ -1,9 +1,5 @@
 import { loadVideoTextureFromUrl } from '../video-url-importer.js';
-import {
-  resolveMediaFormat,
-  stereoMediaLabel,
-  DEFAULT_VR180_EYE_HEIGHT,
-} from '../stereo-media.js';
+import { prepareStereoMediaImport } from '../stereo-media.js';
 
 /**
  * URL から動画をロードし、scene-add を broadcast してローカルに配置。
@@ -21,18 +17,12 @@ export async function importVideoUrl(url, ctx) {
     const spawnTransform = ctx.getSpawnTransform();
 
     // 立体視 / VR180: UI からの明示指定（ctx.mediaFormat）優先、なければファイル名から自動判定
-    const mediaFormat = resolveMediaFormat(ctx.mediaFormat, url);
-    if (mediaFormat?.detected) {
-      ctx.showToast?.({ message: `立体視形式を自動判定: ${stereoMediaLabel(mediaFormat)}` });
-    }
-    // VR180 ドームは中心が視点高さに来るように持ち上げる
-    const position = mediaFormat?.projection === 'vr180'
-      ? [
-        spawnTransform.position[0],
-        Math.max(spawnTransform.position[1], DEFAULT_VR180_EYE_HEIGHT),
-        spawnTransform.position[2],
-      ]
-      : spawnTransform.position;
+    const { position, assetFields } = prepareStereoMediaImport({
+      explicitFormat: ctx.mediaFormat,
+      url,
+      spawnPosition: spawnTransform.position,
+      showToast: ctx.showToast,
+    });
 
     const payload = {
       kind: 'scene-add',
@@ -41,14 +31,7 @@ export async function importVideoUrl(url, ctx) {
       position,
       rotation: spawnTransform.rotation,
       scale: spawnTransform.scale,
-      asset: {
-        type: 'video',
-        source: 'url',
-        url,
-        ...(mediaFormat
-          ? { projection: mediaFormat.projection, stereoLayout: mediaFormat.stereoLayout }
-          : {}),
-      },
+      asset: { type: 'video', source: 'url', url, ...assetFields },
       metadata: {
         role: 'media-panel',
         accepts: ['image', 'video'],

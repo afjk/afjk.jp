@@ -23,6 +23,7 @@ import { buildTextPlaneGlb } from './loaders/text-to-plane.js';
 import { loadVideoTextureFromUrl, createVideoPlaneGroup } from './loaders/video-url-importer.js';
 import {
   normalizeStereoMedia,
+  detectStereoMediaFromName,
   buildStereoPlaneGroup,
   buildVr180DomeGroup,
 } from './loaders/stereo-media.js';
@@ -4910,6 +4911,8 @@ function deleteObjectById(objectId, options = {}) {
   const audioSources = getObjectAudioSourcesForSerialize(attached);
 
   scene.remove(attached);
+  // media object はテクスチャ解放・video 停止を disposable に集約している
+  attached.userData?.disposable?.();
   attached.traverse(child => {
     if (child.geometry) child.geometry.dispose();
     if (child.material) {
@@ -8991,6 +8994,8 @@ async function handleAiCommand(from, payload) {
             source: 'url',
             url,
             name,
+            ...(params.projection ? { projection: params.projection } : {}),
+            ...(params.stereoLayout ? { stereoLayout: params.stereoLayout } : {}),
           });
 
           const targetObj = managedObjects.get(targetObjectId);
@@ -9487,18 +9492,19 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
 /**
  * projection / stereoLayout 付き image / video asset 用の group を作る。
  * flat + sbs/tb は左右目 plane、vr180 は半球ドームになる。
+ * texture は両目で共有され、所有権（dispose）は呼び出し側に残る。
  */
-function buildStereoMediaGroup({ stereo, aspect, createEyeTexture }) {
+function buildStereoMediaGroup({ stereo, aspect, texture }) {
   if (stereo.projection === 'vr180') {
     return buildVr180DomeGroup({
       THREE,
-      createEyeTexture,
+      texture,
       stereoLayout: stereo.stereoLayout,
     });
   }
   return buildStereoPlaneGroup({
     THREE,
-    createEyeTexture,
+    texture,
     aspect,
     stereoLayout: stereo.stereoLayout,
   });
@@ -9518,13 +9524,7 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
       const built = buildStereoMediaGroup({
         stereo,
         aspect: bundle.aspect,
-        createEyeTexture: () => {
-          const eyeTexture = new THREE.VideoTexture(bundle.video);
-          eyeTexture.colorSpace = THREE.SRGBColorSpace;
-          eyeTexture.minFilter = THREE.LinearFilter;
-          eyeTexture.magFilter = THREE.LinearFilter;
-          return eyeTexture;
-        },
+        texture: bundle.texture,
       });
       group = built.group;
       group.userData.disposable = () => {
@@ -9605,11 +9605,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
       const built = buildStereoMediaGroup({
         stereo,
         aspect: bundle.aspect,
-        createEyeTexture: () => {
-          const eyeTexture = texture.clone();
-          eyeTexture.needsUpdate = true;
-          return eyeTexture;
-        },
+        texture,
       });
       group = built.group;
       group.userData.disposable = () => {
@@ -9912,13 +9908,19 @@ function getReplaceTarget(inputKind, hitObjectId = null) {
 
 function findPrimaryMediaMesh(root) {
   let found = null;
+  let fallback = null;
   root.traverse((child) => {
     if (found) return;
     if (child.isMesh && child.geometry) {
-      found = child;
+      if (!fallback) fallback = child;
+      // 立体視 group では layer 1/2 の目メッシュが先に来るため、
+      // フルサイズの layer 0 メッシュ（通常メッシュ / hit proxy）を優先する
+      if ((child.layers.mask & 1) !== 0) {
+        found = child;
+      }
     }
   });
-  return found;
+  return found || fallback;
 }
 
 async function showLocalImageReplacementPreview(objectId, file) {
@@ -10035,6 +10037,31 @@ async function replaceObjectContent(objectId, input, options = {}) {
   let metaRole, metaAccepts, metaFit;
 
   if (input.kind === 'image' || input.kind === 'video') {
+    // 立体視 / VR180 の扱い: 明示指定 > ファイル名自動判定 > 既存 asset の形式を維持。
+    // 明示的な 2D 指定（flat/mono）は既存の立体視形式を意図的に解除する。
+    let stereoFields = null;
+    if (input.projection || input.stereoLayout) {
+      const explicit = normalizeStereoMedia(input);
+      stereoFields = { projection: explicit.projection, stereoLayout: explicit.stereoLayout };
+    } else {
+      const detected = input.source === 'url' || !input.source
+        ? detectStereoMediaFromName(input.url)
+        : null;
+      if (detected) {
+        stereoFields = detected;
+      } else {
+        const existingStereo = normalizeStereoMedia(existing.userData?.asset);
+        if (!existingStereo.isDefault) {
+          stereoFields = {
+            projection: existingStereo.projection,
+            stereoLayout: existingStereo.stereoLayout,
+          };
+        }
+      }
+    }
+    const keepStereoFields = stereoFields
+      && !(stereoFields.projection === 'flat' && stereoFields.stereoLayout === 'mono');
+
     newAsset = {
       type: input.kind,
       source: input.source || 'url',
@@ -10043,6 +10070,7 @@ async function replaceObjectContent(objectId, input, options = {}) {
       ...(input.width ? { width: input.width } : {}),
       ...(input.height ? { height: input.height } : {}),
       ...(input.assetId ? { assetId: input.assetId } : {}),
+      ...(keepStereoFields ? stereoFields : {}),
     };
     metaRole = existingMeta.role || 'media-panel';
     metaAccepts = existingMeta.accepts || ['image', 'video'];
@@ -11732,6 +11760,13 @@ async function urlImporterCallback(url, position, context = {}) {
           kind: inputKind,
           source: 'url',
           url: normalizedUrl,
+          // メディアURLダイアログ等での明示指定を replace 経路にも反映する
+          ...(context.mediaFormat && (inputKind === 'image' || inputKind === 'video')
+            ? {
+              projection: context.mediaFormat.projection,
+              stereoLayout: context.mediaFormat.stereoLayout,
+            }
+            : {}),
           ...(inputKind === 'text' && /\.(md|markdown)(?:$|[?#])/i.test(normalizedUrl)
             ? { format: 'markdown' }
             : {}),
@@ -11778,7 +11813,9 @@ const dragDropManager = new DragDropManager({
   getPlacementTargets: () => {
     const targets = [];
     for (const obj of managedObjects.values()) {
-      if (!isSkySphereThreeObject(obj) && obj.visible !== false) {
+      // VR180 ドームは skybox と同様、drop の配置先にしない（中に居ると全 drop を拾ってしまう）
+      const isVr180Dome = obj.userData?.asset?.projection === 'vr180';
+      if (!isSkySphereThreeObject(obj) && !isVr180Dome && obj.visible !== false) {
         targets.push(obj);
       }
     }

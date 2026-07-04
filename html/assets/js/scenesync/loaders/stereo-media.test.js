@@ -83,19 +83,36 @@ test('detect: flat SBS 画像', () => {
     projection: 'flat',
     stereoLayout: 'sbs',
   });
-  deepEqual(detectStereoMediaFromName('scan_LR.png'), {
-    projection: 'flat',
-    stereoLayout: 'sbs',
-  });
 });
 
 test('detect: flat TB 動画', () => {
-  deepEqual(detectStereoMediaFromName('movie_ou.mp4'), {
+  deepEqual(detectStereoMediaFromName('movie_overunder.mp4'), {
     projection: 'flat',
     stereoLayout: 'tb',
   });
   deepEqual(detectStereoMediaFromName('movie.topbottom.webm'), {
     projection: 'flat',
+    stereoLayout: 'tb',
+  });
+});
+
+test('detect: 曖昧な2文字トークンは単独では発火しない', () => {
+  strictEqual(detectStereoMediaFromName('scan_LR.png'), null);
+  strictEqual(detectStereoMediaFromName('movie_ou.mp4'), null);
+  strictEqual(detectStereoMediaFromName('notes_tb.mp4'), null);
+});
+
+test('detect: 曖昧トークンも立体視シグナル併記なら有効', () => {
+  deepEqual(detectStereoMediaFromName('scan_3d_LR.png'), {
+    projection: 'flat',
+    stereoLayout: 'sbs',
+  });
+  deepEqual(detectStereoMediaFromName('dive_180_ou.mp4'), {
+    projection: 'vr180',
+    stereoLayout: 'tb',
+  });
+  deepEqual(detectStereoMediaFromName('tour_vr180_tb.mp4'), {
+    projection: 'vr180',
     stereoLayout: 'tb',
   });
 });

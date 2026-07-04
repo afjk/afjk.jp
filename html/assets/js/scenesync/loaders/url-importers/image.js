@@ -1,8 +1,4 @@
-import {
-  resolveMediaFormat,
-  stereoMediaLabel,
-  DEFAULT_VR180_EYE_HEIGHT,
-} from '../stereo-media.js';
+import { prepareStereoMediaImport, stereoPlaneSize } from '../stereo-media.js';
 
 /**
  * Fetch API を使用して画像を Blob として CORS 付きで取得。
@@ -111,19 +107,7 @@ export async function loadImageTextureFromUrl(url, { timeoutMs = 15000, THREE } 
  * @returns {object} { width, height }
  */
 export function planeSizeFromAspect(aspect, maxEdgeMeters = 2) {
-  const minEdge = 0.1;
-  const safeAspect = (aspect && aspect > 0) ? aspect : 1;
-  let width, height;
-
-  if (safeAspect >= 1) {
-    width = Math.max(maxEdgeMeters, minEdge);
-    height = Math.max(maxEdgeMeters / safeAspect, minEdge);
-  } else {
-    height = Math.max(maxEdgeMeters, minEdge);
-    width = Math.max(maxEdgeMeters * safeAspect, minEdge);
-  }
-
-  return { width, height };
+  return stereoPlaneSize(aspect, 'mono', maxEdgeMeters);
 }
 
 /**
@@ -157,18 +141,12 @@ export async function importImageUrl(url, ctx) {
       : spawnTransform.rotation;
 
     // 立体視 / VR180: UI からの明示指定（ctx.mediaFormat）優先、なければファイル名から自動判定
-    const mediaFormat = resolveMediaFormat(ctx.mediaFormat, url);
-    if (mediaFormat?.detected) {
-      ctx.showToast?.({ message: `立体視形式を自動判定: ${stereoMediaLabel(mediaFormat)}` });
-    }
-    // VR180 ドームは中心が視点高さに来るように持ち上げる
-    const position = mediaFormat?.projection === 'vr180'
-      ? [
-        spawnTransform.position[0],
-        Math.max(spawnTransform.position[1], DEFAULT_VR180_EYE_HEIGHT),
-        spawnTransform.position[2],
-      ]
-      : spawnTransform.position;
+    const { position, assetFields } = prepareStereoMediaImport({
+      explicitFormat: ctx.mediaFormat,
+      url,
+      spawnPosition: spawnTransform.position,
+      showToast: ctx.showToast,
+    });
 
     const payload = {
       kind: 'scene-add',
@@ -177,14 +155,7 @@ export async function importImageUrl(url, ctx) {
       position,
       rotation: placementRotation,
       scale: spawnTransform.scale,
-      asset: {
-        type: 'image',
-        source: 'url',
-        url,
-        ...(mediaFormat
-          ? { projection: mediaFormat.projection, stereoLayout: mediaFormat.stereoLayout }
-          : {}),
-      },
+      asset: { type: 'image', source: 'url', url, ...assetFields },
       metadata: {
         ...existingMetadata,
         role: 'media-panel',

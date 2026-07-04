@@ -671,6 +671,17 @@ components:
         name:
           type: string
           description: Optional object name.
+        projection:
+          type: string
+          enum: [flat, vr180]
+          description: >
+            Optional stereo projection override. If omitted, the filename is
+            auto-detected and otherwise the existing asset's format is kept.
+            Pass flat + mono to explicitly downgrade to 2D.
+        stereoLayout:
+          type: string
+          enum: [mono, sbs, tb]
+          description: Optional stereo eye layout override (see projection).
       example:
         objectId: media-panel-1
         url: https://example.com/replacement.jpg

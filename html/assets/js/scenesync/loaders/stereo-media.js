@@ -43,11 +43,16 @@ export function normalizeStereoMedia(asset) {
 const VR180_TOKENS = new Set(['vr180', '180', '180x180']);
 const SBS_TOKENS = new Set([
   'sbs', 'hsbs', 'fsbs', 'halfsbs', 'fullsbs',
-  'lr', '3dh', 'leftright', 'sidebyside',
+  '3dh', 'leftright', 'sidebyside',
 ]);
 const TB_TOKENS = new Set([
-  'tb', 'htab', 'ftab', 'ou', 'overunder', 'topbottom', '3dv',
+  'htab', 'ftab', 'overunder', 'topbottom', '3dv',
 ]);
+// 2文字の曖昧トークンは誤爆しやすいので、別の立体視シグナル
+// （vr180 / 3d / stereo）が同居する場合だけ有効にする。
+const WEAK_SBS_TOKENS = new Set(['lr']);
+const WEAK_TB_TOKENS = new Set(['tb', 'ou']);
+const STEREO_CONTEXT_TOKENS = new Set(['3d', 'stereo']);
 
 function basenameFromUrlOrName(input) {
   if (!input || typeof input !== 'string') return '';
@@ -77,9 +82,12 @@ export function detectStereoMediaFromName(urlOrName) {
   const has = (set) => tokens.some((t) => set.has(t));
 
   const vr180 = has(VR180_TOKENS);
+  const hasStereoContext = vr180 || has(STEREO_CONTEXT_TOKENS);
   let layout = null;
   if (has(SBS_TOKENS)) layout = 'sbs';
   else if (has(TB_TOKENS)) layout = 'tb';
+  else if (hasStereoContext && has(WEAK_SBS_TOKENS)) layout = 'sbs';
+  else if (hasStereoContext && has(WEAK_TB_TOKENS)) layout = 'tb';
 
   // VR180 でレイアウト不明のまま '3d' が付く場合は SBS 慣行に合わせる
   if (vr180 && !layout && tokens.includes('3d')) layout = 'sbs';
@@ -182,11 +190,28 @@ export function stereoPlaneSize(aspect, stereoLayout, maxEdgeMeters = 2) {
   return { width, height };
 }
 
-function applyEyeTransformToTexture(texture, stereoLayout, eye) {
+/**
+ * 目ごとのテクスチャ領域をジオメトリの UV に焼き込む。
+ * texture.offset/repeat ではなく UV 側で切り出すことで、
+ * 左右の目が 1 枚のテクスチャ（GPU アップロード 1 回）を共有できる。
+ * 変換が恒等（mono）の場合は base geometry をそのまま共有する。
+ */
+function geometryForEye(baseGeometry, stereoLayout, eye) {
   const { offset, repeat } = eyeTextureTransform(stereoLayout, eye);
-  texture.offset.set(offset[0], offset[1]);
-  texture.repeat.set(repeat[0], repeat[1]);
-  return texture;
+  if (offset[0] === 0 && offset[1] === 0 && repeat[0] === 1 && repeat[1] === 1) {
+    return { geometry: baseGeometry, owned: false };
+  }
+  const geometry = baseGeometry.clone();
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(
+      i,
+      offset[0] + uv.getX(i) * repeat[0],
+      offset[1] + uv.getY(i) * repeat[1]
+    );
+  }
+  uv.needsUpdate = true;
+  return { geometry, owned: true };
 }
 
 function createInvisibleHitProxyMaterial(THREE) {
@@ -198,12 +223,30 @@ function createInvisibleHitProxyMaterial(THREE) {
   });
 }
 
+const EYES = [
+  { eye: 'left', layer: LAYER_LEFT_EYE },
+  { eye: 'right', layer: LAYER_RIGHT_EYE },
+];
+
+function addEyeMeshes({ THREE, group, baseGeometry, material, stereoLayout, namePrefix, positionY = 0, disposables }) {
+  for (const { eye, layer } of EYES) {
+    const { geometry, owned } = geometryForEye(baseGeometry, stereoLayout, eye);
+    if (owned) disposables.push(geometry);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = `${namePrefix}-${eye}`;
+    mesh.position.y = positionY;
+    mesh.layers.set(layer);
+    group.add(mesh);
+  }
+}
+
 /**
  * 左右目用の plane を重ねた group を作る（flat + sbs/tb 用）。
  * layer 0 には raycast / 選択用の不可視 hit proxy を置く。
+ * texture は呼び出し側が所有する（dispose は呼び出し側の責務）。
  * @param {object} params
  *   - THREE
- *   - createEyeTexture: () => THREE.Texture（呼ぶたびに新しいテクスチャを返す）
+ *   - texture: 素材全体のテクスチャ（両目で共有）
  *   - aspect: 素材全体の width / height
  *   - stereoLayout: 'sbs' | 'tb' | 'mono'
  *   - maxEdgeMeters
@@ -211,7 +254,7 @@ function createInvisibleHitProxyMaterial(THREE) {
  */
 export function buildStereoPlaneGroup({
   THREE,
-  createEyeTexture,
+  texture,
   aspect,
   stereoLayout,
   maxEdgeMeters = 2,
@@ -219,39 +262,34 @@ export function buildStereoPlaneGroup({
   if (!THREE) throw new Error('THREE is required');
 
   const { width, height } = stereoPlaneSize(aspect, stereoLayout, maxEdgeMeters);
-  const geometry = new THREE.PlaneGeometry(width, height);
-  const disposables = [geometry];
+  const baseGeometry = new THREE.PlaneGeometry(width, height);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    alphaTest: 0.01,
+    depthWrite: true,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  const proxyMaterial = createInvisibleHitProxyMaterial(THREE);
+  const disposables = [baseGeometry, material, proxyMaterial];
   const group = new THREE.Group();
 
-  const eyes = [
-    { eye: 'left', layer: LAYER_LEFT_EYE },
-    { eye: 'right', layer: LAYER_RIGHT_EYE },
-  ];
+  addEyeMeshes({
+    THREE,
+    group,
+    baseGeometry,
+    material,
+    stereoLayout,
+    namePrefix: 'stereo-plane',
+    positionY: height / 2,
+    disposables,
+  });
 
-  for (const { eye, layer } of eyes) {
-    const texture = applyEyeTransformToTexture(createEyeTexture(), stereoLayout, eye);
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      alphaTest: 0.01,
-      depthWrite: true,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `stereo-plane-${eye}`;
-    mesh.position.y = height / 2;
-    mesh.layers.set(layer);
-    group.add(mesh);
-    disposables.push(texture, material);
-  }
-
-  const proxyMaterial = createInvisibleHitProxyMaterial(THREE);
-  const proxy = new THREE.Mesh(geometry, proxyMaterial);
+  const proxy = new THREE.Mesh(baseGeometry, proxyMaterial);
   proxy.name = 'stereo-hit-proxy';
   proxy.position.y = height / 2;
   group.add(proxy);
-  disposables.push(proxyMaterial);
 
   return { group, width, height, disposables };
 }
@@ -259,17 +297,19 @@ export function buildStereoPlaneGroup({
 /**
  * VR180 半球ドームの group を作る。
  * 半球は -Z（正面）を向き、内側から見る前提。mono / sbs / tb に対応。
- * 中心に選択・移動用の小さな不可視 hit proxy 球を置く。
+ * layer 0 には選択・raycast 用の不可視な半球 hit proxy を重ねる
+ * （ドーム表面クリックで選択できる。配置 raycast からは scene.js 側で除外）。
+ * texture は呼び出し側が所有する（dispose は呼び出し側の責務）。
  * @param {object} params
  *   - THREE
- *   - createEyeTexture: () => THREE.Texture
+ *   - texture: 素材全体のテクスチャ（両目で共有）
  *   - stereoLayout
  *   - radius
  * @returns {{ group, radius, disposables: Array<{dispose: Function}> }}
  */
 export function buildVr180DomeGroup({
   THREE,
-  createEyeTexture,
+  texture,
   stereoLayout,
   radius = DEFAULT_VR180_RADIUS,
 }) {
@@ -277,37 +317,65 @@ export function buildVr180DomeGroup({
 
   // phiStart=PI, phiLength=PI + scale(-1,1,1) で
   // 半球正面が -Z、テクスチャ左端が視聴者の左（-X）になる。
-  const geometry = new THREE.SphereGeometry(radius, 64, 32, Math.PI, Math.PI);
-  geometry.scale(-1, 1, 1);
+  const baseGeometry = new THREE.SphereGeometry(radius, 64, 32, Math.PI, Math.PI);
+  baseGeometry.scale(-1, 1, 1);
 
-  const disposables = [geometry];
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.FrontSide,
+    toneMapped: false,
+  });
+  const proxyMaterial = createInvisibleHitProxyMaterial(THREE);
+  const disposables = [baseGeometry, material, proxyMaterial];
   const group = new THREE.Group();
 
-  const eyes = [
-    { eye: 'left', layer: LAYER_LEFT_EYE },
-    { eye: 'right', layer: LAYER_RIGHT_EYE },
-  ];
+  addEyeMeshes({
+    THREE,
+    group,
+    baseGeometry,
+    material,
+    stereoLayout,
+    namePrefix: 'vr180-dome',
+    disposables,
+  });
 
-  for (const { eye, layer } of eyes) {
-    const texture = applyEyeTransformToTexture(createEyeTexture(), stereoLayout, eye);
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      side: THREE.FrontSide,
-      toneMapped: false,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `vr180-dome-${eye}`;
-    mesh.layers.set(layer);
-    group.add(mesh);
-    disposables.push(texture, material);
-  }
-
-  const proxyGeometry = new THREE.SphereGeometry(0.15, 12, 8);
-  const proxyMaterial = createInvisibleHitProxyMaterial(THREE);
-  const proxy = new THREE.Mesh(proxyGeometry, proxyMaterial);
+  const proxy = new THREE.Mesh(baseGeometry, proxyMaterial);
   proxy.name = 'vr180-hit-proxy';
   group.add(proxy);
-  disposables.push(proxyGeometry, proxyMaterial);
 
   return { group, radius, disposables };
+}
+
+/**
+ * URL import 共通の立体視処理:
+ * 形式解決（明示指定 > ファイル名自動判定）、自動判定トースト、
+ * VR180 の視点高さ持ち上げ、asset に spread する fields をまとめて返す。
+ * @param {object} params
+ *   - explicitFormat: UI からの明示指定（ctx.mediaFormat）
+ *   - url
+ *   - spawnPosition: [x, y, z]
+ *   - showToast
+ * @returns {{ mediaFormat, position, assetFields }}
+ */
+export function prepareStereoMediaImport({ explicitFormat, url, spawnPosition, showToast }) {
+  const mediaFormat = resolveMediaFormat(explicitFormat, url);
+  if (mediaFormat?.detected) {
+    showToast?.({ message: `立体視形式を自動判定: ${stereoMediaLabel(mediaFormat)}` });
+  }
+  // VR180 ドームは中心が視点高さに来るように持ち上げる
+  const position = mediaFormat?.projection === 'vr180'
+    ? [
+      spawnPosition[0],
+      Math.max(spawnPosition[1], DEFAULT_VR180_EYE_HEIGHT),
+      spawnPosition[2],
+    ]
+    : spawnPosition;
+
+  return {
+    mediaFormat,
+    position,
+    assetFields: mediaFormat
+      ? { projection: mediaFormat.projection, stereoLayout: mediaFormat.stereoLayout }
+      : {},
+  };
 }

@@ -198,11 +198,16 @@ Web client は video URL を textured plane として表示する。
   HMD では左右の目に別画像が表示される。
 - 非XR（デスクトップ / モバイル）はメインカメラが layer 1 を有効化しており、
   左目画像のみ表示される。
+- テクスチャは両目で 1 枚を共有し、目ごとの切り出しはジオメトリの UV に
+  焼き込む（GPU アップロードは 1 回。4K 動画でも転送が倍にならない）。
 - `flat` + `sbs` / `tb` は片目分のアスペクト比で plane サイズを計算する
   （full SBS / full TB 前提。squashed half 形式は片目が横 / 縦に伸びる）。
 - `vr180` は半径 3m の半球ドーム。object の scale で拡大できる。
-  layer 0 には選択・raycast 用の不可視 hit proxy
-  （plane または中心の小さな球）を置く。
+- layer 0 には選択・raycast 用の不可視 hit proxy を重ねる。
+  flat はフルサイズ plane、vr180 はドーム表面そのもの
+  （ドームをクリックして選択・移動・削除できる）。
+  vr180 ドームは drop の配置 raycast ターゲットからは除外する
+  （skybox と同じ扱い。ドーム内から drop してもドーム表面に貼り付かない）。
 
 ### 登録 UI
 
@@ -210,13 +215,27 @@ Web client は video URL を textured plane として表示する。
   ファイル drop 画像（carrier GLB 化経路）は未対応。
 - ファイル名 / URL の basename をトークン分割して自動判定する:
   - `vr180`, `180`, `180x180` → `projection: vr180`
-  - `sbs`, `hsbs`, `fsbs`, `lr`, `3dh`, `sidebyside` 等 → `stereoLayout: sbs`
-  - `tb`, `ou`, `overunder`, `topbottom`, `3dv` 等 → `stereoLayout: tb`
+  - `sbs`, `hsbs`, `fsbs`, `3dh`, `sidebyside`, `leftright` 等 → `stereoLayout: sbs`
+  - `overunder`, `topbottom`, `htab`, `ftab`, `3dv` 等 → `stereoLayout: tb`
+  - 曖昧な 2 文字トークン `lr` / `ou` / `tb` は誤爆しやすいため、
+    `vr180` / `180` / `3d` / `stereo` のいずれかが同居する場合のみ有効
+    （例: `scan_lr.png` は 2D、`scan_3d_lr.png` は SBS）
   - `1080p` や `IMG_0180` のような番号は誤検出しない（完全一致トークンのみ）
 - 「メディアURLを追加」ダイアログ（desktop: settings chip 🎬 /
   mobile: 追加シート）では形式を明示選択できる。明示指定は自動判定より優先。
   明示的に 2D を選ぶと自動判定も抑止する。
 - `vr180` は追加時に position.y を視点高さ（1.6m）まで持ち上げる。
+
+### Content replacement
+
+media-panel への drop / メディアURLダイアログ / AI `replaceMediaFromUrl` で
+既存 object の内容を差し替える場合の立体視形式は次の優先順で決まる:
+
+1. 明示指定（ダイアログの形式選択、AI params の `projection` / `stereoLayout`）
+2. 新しい URL のファイル名からの自動判定
+3. どちらも無ければ既存 asset の形式を維持（差し替えで 2D に落ちない）
+
+明示的に 2D（flat / mono）を指定した場合のみ立体視形式を解除する。
 
 実装: `html/assets/js/scenesync/loaders/stereo-media.js`
 （テスト: `npm run test:stereo-media`）
