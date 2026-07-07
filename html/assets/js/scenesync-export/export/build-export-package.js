@@ -9,6 +9,10 @@ import {
 } from './export-thumbnail.js';
 import { normalizeExportMetadata } from './export-metadata.js';
 
+function stripSourceMappingUrl(source) {
+  return String(source).replace(/\r?\n?\/\/# sourceMappingURL=.*(?:\r?\n)?$/u, '\n');
+}
+
 // These viewer source files are fetched from the current origin and bundled into the ZIP
 export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/static-viewer-entry.js', dest: 'viewer/viewer.js' },
@@ -28,7 +32,9 @@ export const VIEWER_SOURCES = [
   {
     src: '/assets/js/scenesync/scene-physics.js',
     dest: 'viewer/scene-physics.js',
-    transform: (source) => source.replaceAll('./runtime/runtime-events.js', '../scenesync/runtime/runtime-events.js'),
+    transform: (source) => source
+      .replaceAll('./runtime/runtime-events.js', '../scenesync/runtime/runtime-events.js')
+      .replaceAll('./runtime/event-timeline.js', '../scenesync/runtime/event-timeline.js'),
   },
   { src: '/assets/js/scenesync/physics/index.js', dest: 'viewer/physics/index.js' },
   { src: '/assets/js/scenesync/physics/rapier-world.js', dest: 'viewer/physics/rapier-world.js' },
@@ -36,9 +42,14 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.js', dest: 'scenesync/plugins/scene-sync-loomlet-plugin.js' },
   { src: '/assets/js/scenesync/runtime/schedule-context.js', dest: 'scenesync/runtime/schedule-context.js' },
   { src: '/assets/js/scenesync/runtime/runtime-events.js', dest: 'scenesync/runtime/runtime-events.js' },
+  { src: '/assets/js/scenesync/runtime/event-timeline.js', dest: 'scenesync/runtime/event-timeline.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
   // deterministic-compat build — must match the build used by rapier-world.js
-  { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier.mjs', dest: 'viewer/rapier/rapier.js' },
+  {
+    src: '/assets/vendor/rapier-deterministic/0.19.3/rapier.mjs',
+    dest: 'viewer/rapier/rapier.js',
+    transform: stripSourceMappingUrl,
+  },
   { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier_wasm3d_bg.wasm', dest: 'viewer/rapier/rapier_wasm3d_bg.wasm', binary: true },
   // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
   {
