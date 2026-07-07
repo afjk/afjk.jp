@@ -102,16 +102,36 @@ test('export package construction', async (t) => {
       'viewer/static-asset-resolver.js',
       'viewer/scene-document.js',
       'viewer/export-behavior-runtime.js',
+      'viewer/rapier/rapier.js',
+      'viewer/rapier/rapier_wasm3d_bg.wasm',
       'scenesync/plugins/scene-sync-physics-plugin.js',
       'scenesync/plugins/scene-sync-loomlet-plugin.js',
       'scenesync/runtime/schedule-context.js',
       'scenesync/runtime/runtime-events.js',
+      'scenesync/runtime/event-timeline.js',
       'viewer/viewer.css',
     ];
     const destPaths = VIEWER_SOURCES.map(s => s.dest);
     for (const f of expectedPackageFiles) {
       assert.ok(destPaths.includes(f), `VIEWER_SOURCES should contain ${f}`);
     }
+  });
+
+  await t.test('Rapier runtime is bundled without dangling source map references', () => {
+    const rapierSource = VIEWER_SOURCES.find(s => s.dest === 'viewer/rapier/rapier.js');
+    const rapierWasm = VIEWER_SOURCES.find(s => s.dest === 'viewer/rapier/rapier_wasm3d_bg.wasm');
+
+    assert.ok(rapierSource, 'VIEWER_SOURCES should contain viewer/rapier/rapier.js');
+    assert.ok(rapierWasm, 'VIEWER_SOURCES should contain viewer/rapier/rapier_wasm3d_bg.wasm');
+    assert.equal(rapierWasm.binary, true, 'Rapier WASM must be bundled as binary');
+
+    const transformedSource = readViewerSource(rapierSource);
+    assert.doesNotMatch(transformedSource, /sourceMappingURL=/,
+      'exported Rapier JS should not request a sourcemap that is not included in the ZIP');
+
+    const wasmContent = readViewerSource(rapierWasm);
+    assert.ok(Buffer.isBuffer(wasmContent), 'Rapier WASM source should read as a Buffer');
+    assert.ok(wasmContent.byteLength > 0, 'Rapier WASM source should not be empty');
   });
 
   await t.test('VIEWER_SOURCES dest paths include the vendored Loomlet runtime bundle', () => {
