@@ -1,0 +1,52 @@
+name: CI - Scene Sync Export Static Viewer Smoke
+
+on:
+  pull_request:
+    paths:
+      - "html/assets/js/scenesync-export/export/**"
+      - "html/assets/js/scenesync-export/viewer/**"
+      - "html/assets/js/scenesync/scene-physics.js"
+      - "html/assets/js/scenesync/physics/**"
+      - "html/assets/js/scenesync/plugins/scene-sync-physics-plugin.js"
+      - "html/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.js"
+      - "html/assets/js/scenesync/runtime/**"
+      - "html/assets/js/scenesync/shells/player/player-actions.js"
+      - "html/assets/js/scenesync/shells/player/player-transport.js"
+      - "html/assets/js/scenesync/shells/player/player-shell.css"
+      - "html/assets/vendor/loomlet/**"
+      - "html/assets/vendor/rapier-deterministic/**"
+      - "scripts/scenesync-export-static-viewer-smoke.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci-scene-sync-export-static-viewer.yml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Static Viewer Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+
+      - name: Run static viewer smoke
+        run: npm run test:e2e:scene-sync-export-static-viewer
