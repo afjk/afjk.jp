@@ -5,8 +5,39 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  static-viewer-smoke:
+    name: Static Viewer Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+
+      - name: Run static viewer smoke
+        run: npm run test:e2e:scene-sync-export-static-viewer
+
   deploy:
+    needs: static-viewer-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Add host to known_hosts
