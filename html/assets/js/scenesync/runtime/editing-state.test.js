@@ -24,6 +24,28 @@ test('transport active keeps transform editing frozen', () => {
   }), true);
 });
 
+test('XR can ignore a stale desktop transform attachment while transport is active', () => {
+  assert.equal(shouldFreezeObjectForEditorRuntime({
+    objectId: 'object-1',
+    selectedObjectIds: new Set(['object-1']),
+    transformObject: objectWithId('object-1'),
+    ignoreTransformObject: true,
+    transportActive: true,
+  }), false);
+});
+
+test('XR still freezes an actively grabbed object even when transform attachment is ignored', () => {
+  assert.equal(shouldFreezeObjectForEditorRuntime({
+    objectId: 'object-1',
+    transformObject: objectWithId('object-1'),
+    ignoreTransformObject: true,
+    grabbers: [
+      { active: true, object: objectWithId('object-1') },
+    ],
+    transportActive: true,
+  }), true);
+});
+
 test('transport active keeps XR two-hand editing frozen', () => {
   assert.equal(shouldFreezeObjectForEditorRuntime({
     objectId: 'object-1',
