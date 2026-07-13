@@ -28,7 +28,7 @@
 
 ## Current Implementation Snapshot
 
-- Scene Sync Dev Tool / IDE: in-scene inspector、JSON copy、scene/object JSON prototype edit、standalone payload tester までは実装済み
+- Scene Sync Dev Tool / IDE: in-scene inspector、JSON copy、scene/object JSON prototype edit まで実装済み
 - AI Integration: tool contract docs、OpenAPI、examples、MCP server、structured error normalization は実装済み
 - Asset Pipeline / Carrier GLB: GLB upload に加えて image / text の browser-side carrier GLB、image / video / GLB URL import が実装済み
 - Loom Language / Node Graph: Scene Sync web runtime への graph message integration と export/import state は実装済み、editor UI は未着手
