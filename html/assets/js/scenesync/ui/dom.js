@@ -3,7 +3,14 @@ import { createSceneSyncShellRuntimeManager } from '../shells/shell-bootstrap.js
 let sceneSyncShellRuntimePromise = null;
 let sceneSyncShellRuntime = null;
 
+function removeRetiredPayloadTesterLink() {
+  const link = document.querySelector('#scene-inspector-panel a[href="/scenesync/dev-tool/"]');
+  link?.remove();
+}
+
 export function mountSceneSyncShellFromDom(core = {}) {
+  removeRetiredPayloadTesterLink();
+
   if (!sceneSyncShellRuntimePromise) {
     sceneSyncShellRuntimePromise = createSceneSyncShellRuntimeManager(core)
       .then((runtime) => {
