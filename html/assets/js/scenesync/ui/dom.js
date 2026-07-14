@@ -1,4 +1,5 @@
 import { createSceneSyncShellRuntimeManager } from '../shells/shell-bootstrap.js';
+import { createShellModeSwitcher } from '../shells/shell-mode-switcher.js';
 
 let sceneSyncShellRuntimePromise = null;
 let sceneSyncShellRuntime = null;
@@ -15,6 +16,13 @@ export function mountSceneSyncShellFromDom(core = {}) {
     sceneSyncShellRuntimePromise = createSceneSyncShellRuntimeManager(core)
       .then((runtime) => {
         sceneSyncShellRuntime = runtime;
+
+        // shell の mount/unmount サイクルの外で生存させる
+        try {
+          createShellModeSwitcher(runtime).mount({ root: document.body });
+        } catch (error) {
+          console.warn('[SceneSyncShell] failed to mount shell mode switcher:', error);
+        }
 
         if (typeof window !== 'undefined') {
           window.sceneSyncShell = {

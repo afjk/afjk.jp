@@ -856,6 +856,7 @@ function updateTwoHandGrab() {
 let xrSavedBackground = null;
 
 renderer.xr.addEventListener('sessionstart', async () => {
+  document.body.classList.add('scene-sync-xr-session');
   xrState.active = true;
   const session = renderer.xr.getSession();
   // requestXrSession 経由で開始した場合は xrCurrentMode が設定済み
@@ -912,6 +913,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
 });
 
 renderer.xr.addEventListener('sessionend', () => {
+  document.body.classList.remove('scene-sync-xr-session');
   // トグルボタンと床合わせボタンを隠す
   const xrToggleBtn = dom.xrToggleBtn;
   if (xrToggleBtn) xrToggleBtn.style.display = 'none';

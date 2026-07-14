@@ -231,6 +231,20 @@ State is read via `core.getSceneClockState()`:
 
 Player Shell runs a `requestAnimationFrame` loop for smooth time display. The loop is started on `mount()` and cancelled on `unmount()`.
 
+### Clock mode default & persistence
+
+On mount, Player Shell restores the clock mode from `localStorage` (key: `scene-sync-player-clock-mode`). Unknown values, missing values and storage errors fall back to `local-preview`; legacy values are normalized (`local` → `local-preview`, `host-follow` → `room-time`). When the restored mode is `local-preview`, the shell calls `resetSceneClock()` then `playSceneClock()` so entering Play always starts local playback from t=0 (local-preview never broadcasts to the room). Mode changes made in the transport panel are saved back to `localStorage`, so choosing Shared Playback once (e.g. for a second device or multi-user play) is remembered across Edit ↔ Play switches and reloads.
+
+## Shell mode switcher (Edit | Play)
+
+`shells/shell-mode-switcher.js` mounts a shell-independent segmented toggle at the top center of the screen so users can move between the Editor and Player shells without a reload.
+
+- Mounted once by `ui/dom.js` right after the shell runtime manager is created; it lives outside the shell mount/unmount cycle.
+- Clicking a segment calls `runtime.switchShell(id, { updateUrl: true })`, so the `?shell=` URL parameter stays in sync. Buttons are disabled while a switch is in flight.
+- The active segment follows `runtime.onShellChange` (added on the runtime manager, fired with reasons `initial` / `switch` / `fallback`), so programmatic switches via `window.sceneSyncShell.switchTo()` and `?shell=player` startup are reflected too.
+- The switcher is hidden when the current shell is not editor / player (minimal / studio / viewer keep using `?shell=`), and hidden during XR sessions (`body.scene-sync-xr-session`) to leave the top center to the XR buttons.
+- The switcher intentionally has no time-mode UI — clock mode is owned by the Player transport panel (see above).
+
 ## Editor Shell v4: Edit command + state API and chrome wiring migration
 
 The Editor Shell shell-ization is completed by exposing the remaining edit operations as commands and by moving editor chrome wiring out of `scene.js` into the layouts. The standard Editor Shell no longer exposes Edit/Interact switching; it mounts in `edit` input routing mode.

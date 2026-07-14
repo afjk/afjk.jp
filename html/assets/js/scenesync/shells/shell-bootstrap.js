@@ -152,6 +152,17 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
   let currentInputAdapters = [];
   let switchSerial = 0;
   let disposed = false;
+  const shellChangeListeners = new Set();
+
+  function notifyShellChange(shellId, reason) {
+    for (const listener of shellChangeListeners) {
+      try {
+        listener({ shellId, reason });
+      } catch (error) {
+        console.warn('[SceneSyncShell] shell change listener failed:', error);
+      }
+    }
+  }
 
   async function switchShell(nextShellId, options = {}) {
     if (disposed) {
@@ -203,6 +214,8 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
         history.replaceState(null, '', url);
       }
 
+      notifyShellChange(currentShellId, 'switch');
+
       if (core?.debug) {
         console.debug('[SceneSyncShell] switched to shell:', currentShellId);
       }
@@ -216,6 +229,7 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
           currentInputAdapters = mountInputAdaptersForShell(fallbackShell, core);
           currentShell = fallbackShell;
           currentShellId = fallbackShell.id || 'editor';
+          notifyShellChange(currentShellId, 'fallback');
           console.warn('[SceneSyncShell] fell back to editor shell');
         } catch (fallbackError) {
           console.error('[SceneSyncShell] fallback to editor shell failed:', fallbackError);
@@ -229,6 +243,7 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
   currentShell = initialShell;
   currentShellId = initialShell?.id || 'editor';
   currentInputAdapters = mountInputAdaptersForShell(initialShell, core);
+  notifyShellChange(currentShellId, 'initial');
 
   return {
     get core() {
@@ -249,9 +264,17 @@ export async function createSceneSyncShellRuntimeManager(extraCore = {}) {
       return listSceneSyncShellIds();
     },
 
+    onShellChange(listener) {
+      if (typeof listener !== 'function') return () => {};
+      shellChangeListeners.add(listener);
+      return () => shellChangeListeners.delete(listener);
+    },
+
     dispose() {
       if (disposed) return;
       disposed = true;
+
+      shellChangeListeners.clear();
 
       unmountInputAdapters(currentInputAdapters);
       currentInputAdapters = [];
