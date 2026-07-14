@@ -32,7 +32,7 @@ function formatTime(seconds) {
   return `${String(mins).padStart(2, '0')}:${secs}`;
 }
 
-function normalizeUiClockMode(mode) {
+export function normalizeUiClockMode(mode) {
   if (mode === 'local') return 'local-preview';
   if (mode === 'host-follow') return 'room-time';
   return CLOCK_MODES.includes(mode) ? mode : 'local-preview';
