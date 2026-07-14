@@ -1,21 +1,14 @@
-import { createPlayerTransportPanel } from './player-transport.js';
+import { createPlayerTransportPanel, normalizeUiClockMode } from './player-transport.js';
 
 const BODY_CLASS = 'scene-sync-shell-player';
 const CLOCK_MODE_STORAGE_KEY = 'scene-sync-player-clock-mode';
-const CLOCK_MODES = ['local-preview', 'shared-playback', 'room-time'];
-const DEFAULT_CLOCK_MODE = 'local-preview';
 
-function normalizePlayerClockMode(mode) {
-  if (mode === 'local') return 'local-preview';
-  if (mode === 'host-follow') return 'room-time';
-  return CLOCK_MODES.includes(mode) ? mode : null;
-}
-
+// 不正値・未保存・storage 例外は normalizeUiClockMode が 'local-preview' に落とす
 function readStoredClockMode() {
   try {
-    return normalizePlayerClockMode(localStorage.getItem(CLOCK_MODE_STORAGE_KEY)) || DEFAULT_CLOCK_MODE;
+    return normalizeUiClockMode(localStorage.getItem(CLOCK_MODE_STORAGE_KEY));
   } catch {
-    return DEFAULT_CLOCK_MODE;
+    return 'local-preview';
   }
 }
 
@@ -48,7 +41,6 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
 
       transport = createPlayerTransportPanel({
         title: 'SCENE SYNC · PLAYER',
-        activateOnMount: true,
       });
       await transport.mount({ core, root: root || document.body });
 
@@ -61,9 +53,14 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
       }
 
       let lastSavedMode = mode;
-      removeStateListener = core?.onStateChange?.(() => {
-        const nextMode = normalizePlayerClockMode(core?.getSceneClockState?.()?.mode);
-        if (!nextMode || nextMode === lastSavedMode) return;
+      removeStateListener = core?.onStateChange?.((event = {}) => {
+        // mode 変更は必ず scene-clock 系 reason で通知される。高頻度な
+        // scene-delta / physics 系イベントで O(N) の getSceneClockState を呼ばない
+        if (typeof event.reason === 'string' && !event.reason.startsWith('scene-clock')) return;
+        const state = core?.getSceneClockState?.();
+        if (!state) return;
+        const nextMode = normalizeUiClockMode(state.mode);
+        if (nextMode === lastSavedMode) return;
         lastSavedMode = nextMode;
         writeStoredClockMode(nextMode);
       }) ?? null;
