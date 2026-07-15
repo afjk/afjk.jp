@@ -488,6 +488,12 @@ sequenceDiagram
     M-->>V: メディアストリーム転送
 ```
 
+### WHEP 404 リトライ
+
+MediaMTX は WHIP の SDP answer を返した後、配信者との ICE/DTLS ハンドシェイクが完了するまでストリームを「利用可能」にしない。一方、配信者は WHIP answer 受信直後に presence hello（`streaming: true`）を送るため、それを見て即座に視聴を開始したクライアントの WHEP は **404（stream not available）** になることがある（LAN で数百 ms、WAN では数秒の窓）。
+
+このため視聴側は WHEP が 404 を返す間、`WHEP_RETRY_DELAY_MS`（1 秒）間隔で最大 `WHEP_MAX_RETRIES`（15 回）リトライする。リトライ中に視聴を中止した・自分が配信を開始した・配信者がいなくなった場合は静かに中断する。404 以外のエラーは従来どおり即座にエラー表示する。
+
 ### 機能
 
 | 機能 | 内容 |

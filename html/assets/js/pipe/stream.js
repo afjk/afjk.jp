@@ -294,6 +294,32 @@ export function stopBroadcast() {
 
 // ── WHEP — view ───────────────────────────────────────────────────────────────
 
+// MediaMTX answers WHEP with 404 until the publisher's media handshake
+// (ICE/DTLS) completes — the "streaming" presence hello is sent right after
+// the WHIP answer, before that point. Viewers that join immediately must
+// retry while the stream becomes ready.
+const WHEP_RETRY_DELAY_MS = 1000;
+const WHEP_MAX_RETRIES = 15;
+
+// Resolves with the WHEP response, or null when the watch attempt was
+// cancelled (watch stopped, broadcast started, or the streamer left).
+async function _postWhep(url, pc) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp,
+    });
+    if (_state.viewerPc !== pc) return null;
+    if (res.status !== 404 || attempt >= WHEP_MAX_RETRIES) return res;
+    await new Promise(resolve => setTimeout(resolve, WHEP_RETRY_DELAY_MS));
+    // broadcastMode is set as soon as a broadcast attempt begins, before
+    // isStreaming flips on WHIP success — check both to stop retrying early
+    if (_state.viewerPc !== pc || _state.isStreaming || _state.broadcastMode ||
+        !_state.activeStreamerNickname) return null;
+  }
+}
+
 export async function startWatch() {
   if (_state.isWatching || _state.isStreaming) return;
   const { t, fetchIceServers, getStreamBase } = _deps;
@@ -318,11 +344,18 @@ export async function startWatch() {
     await pc.setLocalDescription(offer);
     await _waitForIce(pc);
 
-    const res = await fetch(`${getStreamBase()}/room/${roomCode}/whep`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/sdp' },
-      body: pc.localDescription.sdp,
-    });
+    const res = await _postWhep(`${getStreamBase()}/room/${roomCode}/whep`, pc);
+    if (!res) {
+      // Cancelled; clean up only if this attempt still owns the connection,
+      // and don't wipe the status a concurrent broadcast attempt is showing
+      if (_state.viewerPc === pc) {
+        _cleanupViewer();
+        if (!_state.isStreaming && !_state.broadcastMode) _setStatus('', '');
+      }
+      pc.close();
+      _renderTab();
+      return;
+    }
     if (!res.ok) throw new Error(`WHEP ${res.status}`);
     await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
 
