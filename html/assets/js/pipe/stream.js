@@ -313,7 +313,10 @@ async function _postWhep(url, pc) {
     if (_state.viewerPc !== pc) return null;
     if (res.status !== 404 || attempt >= WHEP_MAX_RETRIES) return res;
     await new Promise(resolve => setTimeout(resolve, WHEP_RETRY_DELAY_MS));
-    if (_state.viewerPc !== pc || _state.isStreaming || !_state.activeStreamerNickname) return null;
+    // broadcastMode is set as soon as a broadcast attempt begins, before
+    // isStreaming flips on WHIP success — check both to stop retrying early
+    if (_state.viewerPc !== pc || _state.isStreaming || _state.broadcastMode ||
+        !_state.activeStreamerNickname) return null;
   }
 }
 
@@ -343,10 +346,11 @@ export async function startWatch() {
 
     const res = await _postWhep(`${getStreamBase()}/room/${roomCode}/whep`, pc);
     if (!res) {
-      // Cancelled; clean up only if this attempt still owns the connection
+      // Cancelled; clean up only if this attempt still owns the connection,
+      // and don't wipe the status a concurrent broadcast attempt is showing
       if (_state.viewerPc === pc) {
         _cleanupViewer();
-        _setStatus('', '');
+        if (!_state.isStreaming && !_state.broadcastMode) _setStatus('', '');
       }
       pc.close();
       _renderTab();
