@@ -5,9 +5,12 @@ let _deps = null;
 const _state = {
   isStreaming: false,
   isWatching: false,
+  isJoining: false,       // startWatch in progress (WHEP not yet accepted)
   localStream: null,
   publisherPc: null,
   viewerPc: null,
+  publisherSessionUrl: null, // WHIP session resource (Location) for DELETE
+  viewerSessionUrl: null,    // WHEP session resource (Location) for DELETE
   activeStreamerNickname: null,
   cameras: [],           // MediaDeviceInfo[]
   facingMode: null,      // 'user' | 'environment' | null
@@ -173,6 +176,51 @@ function _effectiveRoomCode() {
   return presence.replace(/\./g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 24) || null;
 }
 
+// ── Connection lifecycle helpers ──────────────────────────────────────────────
+
+// 'disconnected' is often transient (brief packet loss, Wi-Fi ↔ mobile switch)
+// and usually recovers to 'connected' within seconds — only treat the
+// connection as dead when it reaches 'failed', or when 'disconnected'
+// persists past this grace period.
+const DISCONNECT_GRACE_MS = 7000;
+
+function _monitorConnection(pc, isCurrent, onDead) {
+  let grace = null;
+  pc.onconnectionstatechange = () => {
+    if (!isCurrent()) { clearTimeout(grace); return; }
+    const st = pc.connectionState;
+    if (st === 'connected') {
+      clearTimeout(grace);
+      grace = null;
+    } else if (st === 'failed') {
+      clearTimeout(grace);
+      onDead();
+    } else if (st === 'disconnected' && grace === null) {
+      grace = setTimeout(() => {
+        grace = null;
+        if (isCurrent() && pc.connectionState !== 'connected') onDead();
+      }, DISCONNECT_GRACE_MS);
+    }
+  };
+}
+
+// WHIP/WHEP responses carry the session resource in Location (root-relative
+// to the media server, e.g. /room/{code}/whip/{secret}); DELETE it on
+// teardown so MediaMTX drops the session immediately instead of waiting for
+// an ICE timeout.
+function _sessionUrl(res) {
+  const loc = res.headers.get('Location');
+  if (!loc) return null;
+  return /^https?:/i.test(loc) ? loc : _deps.getStreamBase() + loc;
+}
+
+function _deleteSession(url) {
+  if (!url) return;
+  try {
+    fetch(url, { method: 'DELETE', keepalive: true }).catch(() => {});
+  } catch { /* ignore — server GCs the session by ICE timeout anyway */ }
+}
+
 // ── WHIP — publish ────────────────────────────────────────────────────────────
 
 // Shared WHIP publish logic (used by both camera and screen share)
@@ -196,6 +244,7 @@ async function _doPublish(stream) {
     body: pc.localDescription.sdp,
   });
   if (!res.ok) throw new Error(`WHIP ${res.status}`);
+  _state.publisherSessionUrl = _sessionUrl(res);
   await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
 
   _state.isStreaming = true;
@@ -205,11 +254,12 @@ async function _doPublish(stream) {
   _setStatus(t('streamStatusLive'), 'ok');
   _renderTab();
 
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+  _monitorConnection(pc,
+    () => _state.publisherPc === pc,
+    () => {
       stopBroadcast();
-    }
-  };
+      _setStatus(t('streamDisconnected'), 'err');
+    });
 }
 
 export async function startBroadcast() {
@@ -321,11 +371,15 @@ async function _postWhep(url, pc) {
 }
 
 export async function startWatch() {
-  if (_state.isWatching || _state.isStreaming) return;
+  // isJoining: a join is already in flight (possibly retrying WHEP for
+  // several seconds) — don't spawn a competing attempt on every peers
+  // update, tab entry, or button click.
+  if (_state.isJoining || _state.isWatching || _state.isStreaming) return;
   const { t, fetchIceServers, getStreamBase } = _deps;
   const roomCode = _effectiveRoomCode();
   if (!roomCode) return;
 
+  _state.isJoining = true;
   try {
     _setStatus(t('streamConnectingViewer'), 'waiting');
     const iceServers = await fetchIceServers();
@@ -357,21 +411,30 @@ export async function startWatch() {
       return;
     }
     if (!res.ok) throw new Error(`WHEP ${res.status}`);
+    _state.viewerSessionUrl = _sessionUrl(res);
     await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
 
     _state.isWatching = true;
     _setStatus(t('streamStatusViewing'), 'ok');
     _renderTab();
 
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+    _monitorConnection(pc,
+      () => _state.viewerPc === pc,
+      () => {
         stopWatch();
-      }
-    };
+        if (_state.activeStreamerNickname && !_state.isStreaming) {
+          // Streamer is still live — rejoin (WHEP retry absorbs the gap)
+          startWatch();
+        } else {
+          _setStatus(t('streamDisconnected'), 'err');
+        }
+      });
   } catch (e) {
     _setStatus(`${t('streamError')}: ${e.message}`, 'err');
     _cleanupViewer();
     _renderTab();
+  } finally {
+    _state.isJoining = false;
   }
 }
 
@@ -385,6 +448,8 @@ export function stopWatch() {
 // ── Cleanup helpers ───────────────────────────────────────────────────────────
 
 function _cleanupBroadcast() {
+  _deleteSession(_state.publisherSessionUrl);
+  _state.publisherSessionUrl = null;
   _state.localStream?.getTracks().forEach(t => t.stop());
   _state.localStream = null;
   _state.publisherPc?.close();
@@ -394,6 +459,8 @@ function _cleanupBroadcast() {
 }
 
 function _cleanupViewer() {
+  _deleteSession(_state.viewerSessionUrl);
+  _state.viewerSessionUrl = null;
   _state.viewerPc?.close();
   _state.viewerPc = null;
   const v = document.getElementById('stream-remote-video');
