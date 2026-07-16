@@ -194,6 +194,7 @@ function _monitorConnection(pc, isCurrent, onDead) {
       grace = null;
     } else if (st === 'failed') {
       clearTimeout(grace);
+      grace = null;
       onDead();
     } else if (st === 'disconnected' && grace === null) {
       grace = setTimeout(() => {
@@ -211,7 +212,18 @@ function _monitorConnection(pc, isCurrent, onDead) {
 function _sessionUrl(res) {
   const loc = res.headers.get('Location');
   if (!loc) return null;
-  return /^https?:/i.test(loc) ? loc : _deps.getStreamBase() + loc;
+  // Use only the path (+query) of Location: an absolute URL would carry the
+  // media server's internal origin instead of the public /stream proxy base.
+  let path = loc;
+  if (/^https?:/i.test(loc)) {
+    try {
+      const u = new URL(loc);
+      path = u.pathname + u.search;
+    } catch {
+      return null;
+    }
+  }
+  return _deps.getStreamBase() + path;
 }
 
 function _deleteSession(url) {
