@@ -52,6 +52,10 @@ function ensureSwitcherStylesheet() {
     body.scene-sync-xr-session #${CONTAINER_ID} {
       display: none;
     }
+    /* モバイルでは上部中央が nickname chip / status と横に重なるため 1 段下げる */
+    body.scene-sync-device-mobile #${CONTAINER_ID} {
+      top: calc(58px + var(--mobile-safe-top, 0px));
+    }
   `;
   document.head.appendChild(style);
 }
