@@ -73,6 +73,35 @@ export function calculateViewerPlaybackDuration({
   return Math.ceil(duration * 100) / 100;
 }
 
+// After a user seek, the scene clock stays authoritative until the audio
+// element has caught up (or the hold times out); otherwise the media clock
+// alignment would snap the timeline back to the pre-seek audio position.
+export function createMediaClockAlignmentHold({
+  toleranceSeconds = 0.5,
+  timeoutMs = 2000,
+} = {}) {
+  let heldSinceMs = null;
+
+  return {
+    noteUserSeek(nowMs) {
+      heldSinceMs = Number.isFinite(nowMs) ? nowMs : 0;
+    },
+    shouldAlign(clockTime, mediaTime, nowMs) {
+      if (heldSinceMs == null) return true;
+      const caughtUp = Number.isFinite(clockTime)
+        && Number.isFinite(mediaTime)
+        && Math.abs(mediaTime - clockTime) <= toleranceSeconds;
+      const timedOut = Number.isFinite(nowMs) && nowMs - heldSinceMs >= timeoutMs;
+      if (!caughtUp && !timedOut) return false;
+      heldSinceMs = null;
+      return true;
+    },
+    reset() {
+      heldSinceMs = null;
+    },
+  };
+}
+
 export function createViewerSceneClock({
   duration = DEFAULT_DURATION,
   now = () => performance.now(),

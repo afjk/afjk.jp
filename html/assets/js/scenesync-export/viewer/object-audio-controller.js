@@ -587,6 +587,17 @@ export function createObjectAudioController({
       };
     },
 
+    seekPlaybackTargets(clockState = null, nowMs = now()) {
+      for (const entry of getPlaybackTargetEntries()) {
+        if (entry.oneShotActive || entry.sync) continue;
+        entry.lastMediaClockTime = null;
+        const target = timelineTargetTime(entry, clockState, nowMs, startMs);
+        if (!Number.isFinite(target)) continue;
+        noteAutoSyncTarget(entry, target, nowMs, entry.source, clockState);
+        safeAutoSeek(entry, target, nowMs, { force: true });
+      }
+    },
+
     playPlaybackTargets(clockState = null, nowMs = now()) {
       return Promise.allSettled(getPlaybackTargetEntries().map((entry) => {
         entry.lastMediaClockTime = null;

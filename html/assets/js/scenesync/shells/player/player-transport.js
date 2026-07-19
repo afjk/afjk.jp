@@ -285,6 +285,9 @@ export function createPlayerTransportPanel({
       const seekEl = panel.querySelector('[data-player-seek]');
       disposers.push(
         addListener(seekEl, 'pointerdown', () => { isSeeking = true; }),
+        // タッチ操作が中断された場合でもシークバーの追従を再開させる
+        addListener(seekEl, 'pointerup', () => { isSeeking = false; }),
+        addListener(seekEl, 'pointercancel', () => { isSeeking = false; }),
         addListener(seekEl, 'input', (e) => {
           const value = parseFloat(e.target.value);
           if (!Number.isFinite(value)) return;
