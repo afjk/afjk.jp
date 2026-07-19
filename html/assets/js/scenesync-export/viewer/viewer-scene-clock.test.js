@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   calculateViewerPlaybackDuration,
   clipTimeForMode,
+  createMediaClockAlignmentHold,
   createViewerSceneClock,
 } from './viewer-scene-clock.js';
 
@@ -97,4 +98,42 @@ test('viewer playback duration includes animation and physics durations', () => 
 test('viewer clip time wraps loops and clamps once animations', () => {
   assert.equal(clipTimeForMode(3.5, 2, 'loop'), 1.5);
   assert.equal(clipTimeForMode(3.5, 2, 'once'), 2);
+});
+
+test('media clock alignment hold keeps the scene clock authoritative after a user seek', () => {
+  const hold = createMediaClockAlignmentHold({ toleranceSeconds: 0.5, timeoutMs: 2000 });
+
+  // No pending user seek: always align.
+  assert.equal(hold.shouldAlign(5, 5.1, 1000), true);
+
+  // User seeks to 30s while the audio is still at 5s: alignment is held.
+  hold.noteUserSeek(1000);
+  assert.equal(hold.shouldAlign(30, 5, 1016), false);
+  assert.equal(hold.shouldAlign(30.05, 5, 1032), false);
+
+  // Audio caught up near the seek target: alignment resumes and the hold clears.
+  assert.equal(hold.shouldAlign(30.2, 30.1, 1200), true);
+  assert.equal(hold.shouldAlign(30.3, 30.2, 1216), true);
+});
+
+test('media clock alignment hold times out when the audio never catches up', () => {
+  const hold = createMediaClockAlignmentHold({ toleranceSeconds: 0.5, timeoutMs: 2000 });
+
+  hold.noteUserSeek(1000);
+  assert.equal(hold.shouldAlign(30, 5, 2000), false);
+  assert.equal(hold.shouldAlign(31, 5, 3000), true);
+  assert.equal(hold.shouldAlign(31, 5, 3016), true);
+});
+
+test('media clock alignment hold can be reset and restarted per seek', () => {
+  const hold = createMediaClockAlignmentHold({ toleranceSeconds: 0.5, timeoutMs: 2000 });
+
+  hold.noteUserSeek(1000);
+  hold.reset();
+  assert.equal(hold.shouldAlign(30, 5, 1016), true);
+
+  // Consecutive seeks (e.g. dragging the seek bar) extend the hold window.
+  hold.noteUserSeek(1000);
+  hold.noteUserSeek(2900);
+  assert.equal(hold.shouldAlign(40, 5, 3100), false);
 });

@@ -193,3 +193,43 @@ test('forces auto seek when the player timeline jumps shortly after a resync', (
 
   assert.equal(audio.currentTime, 7);
 });
+
+test('seekPlaybackTargets force-seeks playing audio even mid-seek and within the throttle window', () => {
+  const { audio, controller } = createHarness({
+    audio: new FakeAudio({ duration: 60, currentTime: 0 }),
+  });
+
+  controller.tick(1000, { t: 5, isPaused: false, playing: true, rate: 1 });
+  assert.equal(audio.currentTime, 5);
+
+  audio.seeking = true;
+  controller.seekPlaybackTargets({ t: 30, time: 30, isPaused: false, playing: true, rate: 1 }, 1016);
+
+  assert.equal(audio.currentTime, 30);
+});
+
+test('seekPlaybackTargets wraps looping audio by its duration', () => {
+  const { audio, controller } = createHarness({
+    audio: new FakeAudio({ duration: 10, currentTime: 0 }),
+  });
+
+  controller.tick(1000, { t: 3, isPaused: false, playing: true, rate: 1 });
+  controller.seekPlaybackTargets({ t: 25, time: 25, isPaused: false, playing: true, rate: 1 }, 1016);
+
+  assert.equal(audio.currentTime, 5);
+});
+
+test('seekPlaybackTargets leaves animation-synced audio to the animation clock', () => {
+  const { audio, controller } = createHarness({
+    audio: new FakeAudio({ duration: 60, currentTime: 2 }),
+    source: { sync: { mode: 'animation' } },
+    getAnimationSample: () => ({ time: 2 }),
+  });
+
+  controller.tick(1000, { t: 2, isPaused: false, playing: true, rate: 1 });
+  const before = audio.currentTime;
+
+  controller.seekPlaybackTargets({ t: 30, time: 30, isPaused: false, playing: true, rate: 1 }, 1016);
+
+  assert.equal(audio.currentTime, before);
+});

@@ -15,6 +15,7 @@ import { createSceneSyncLoomletPlugin } from '../../scenesync/plugins/scene-sync
 import {
   calculateViewerPlaybackDuration,
   clipTimeForMode,
+  createMediaClockAlignmentHold,
   createViewerSceneClock,
 } from './viewer-scene-clock.js';
 import { createSceneSyncScheduleContext } from '../../scenesync/runtime/schedule-context.js';
@@ -485,9 +486,14 @@ export async function createViewerCore({
     objectAudioController.tick(now, clockState);
   }
 
+  const mediaClockAlignmentHold = createMediaClockAlignmentHold();
+
   function alignClockToObjectAudio(clockState, now = performance.now()) {
     const mediaClockState = objectAudioController.getMediaClockState(clockState);
     if (!mediaClockState) return clockState;
+    if (!mediaClockAlignmentHold.shouldAlign(clockState?.time, mediaClockState.time, now)) {
+      return clockState;
+    }
     sceneClock.syncPlaybackTime(mediaClockState.time, now);
     return mediaClockState;
   }
@@ -518,7 +524,14 @@ export async function createViewerCore({
     seekSceneClock(seconds) {
       const now = performance.now();
       sceneClock.seek(seconds, now);
-      evaluateAndSyncClock(sceneClock.getState(), now);
+      const clockState = sceneClock.getState();
+      if (!clockState.isPaused) {
+        // 再生中のシークはシーンクロックを正とし、オーディオを即座に追従させる。
+        // メディアクロックへの吸着はオーディオが追いつくまで保留する。
+        mediaClockAlignmentHold.noteUserSeek(now);
+        objectAudioController.seekPlaybackTargets(clockState, now);
+      }
+      evaluateAndSyncClock(clockState, now);
     },
     setSceneClockRate(rate) {
       const now = performance.now();
