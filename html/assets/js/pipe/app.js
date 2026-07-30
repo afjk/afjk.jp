@@ -603,6 +603,8 @@ const RECV_FOLD_BYTES  = 16 * 1024 * 1024; // 受信チャンクを Blob にま�
 // 待つ上限。RTCPeerConnection.close() は SCTP キューに残った未 ACK データを破棄するため、
 // ack を待たずに閉じると「送信側は完了と表示するが受信側は最後の数チャンクを取りこぼして
 // ハングする」（送信側は成功扱いのため HTTP フォールバックも起きない）事象が起こり得た。
+// ack 待ちは受信側が recv-caps で ack 対応を宣言した場合のみ行う。宣言なし（旧バージョンの
+// 受信側）では従来どおり即完了とし、無駄なタイムアウト→HTTP 中継への転落を起こさない。
 const ACK_TIMEOUT      = 10000;
 const HASH_MAX_BYTES   = 256 * 1024 * 1024; // これを超えるファイルは整合性ハッシュをスキップ（メモリ枯渇回避）
 
@@ -2933,6 +2935,17 @@ async function initSendRtcSession(path) {
     }), DC_TIMEOUT, 'DataChannel timeout');
 
     clearTimeout(timer);
+    // Learn whether the receiver acks the final frame (recv-caps, sent right
+    // after the channel opens). Attached before any message event can fire —
+    // this same task attaches it ahead of the first queued macrotask.
+    session.peerAcks = false;
+    dc.addEventListener('message', e => {
+      if (typeof e.data !== 'string') return;
+      try {
+        const m = JSON.parse(e.data);
+        if (m.t === 'recv-caps' && m.ack) session.peerAcks = true;
+      } catch {}
+    });
     const cfg = resolveChunking(pc);
     dc.bufferedAmountLowThreshold = cfg.flowLow;
     Object.assign(session, cfg);
@@ -3066,7 +3079,7 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
     await sendDoneFrame(dc, body);
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
-    await waitForAck(dc);
+    if (session.peerAcks) await waitForAck(dc);
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
     reportTransfer('p2p', sent, {
       chunkSize: session.chunkSize,
@@ -3170,7 +3183,7 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
 
     dc.send(JSON.stringify({ t: 'all-done' }));
     const elapsed = (performance.now() - t0) / 1000;
-    await waitForAck(dc);
+    if (session.peerAcks) await waitForAck(dc);
     onAllDone(totalSent, elapsed);
     reportTransfer('p2p', totalSent, {
       chunkSize: session.chunkSize,
@@ -3199,6 +3212,14 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
     const { dc } = session;
     _recvAC = session.ac;
     onStatus(t('p2pConnected'));
+
+    // Advertise that this receiver acks the final frame (recv-ack). The sender
+    // only waits for the ack when it has seen this frame, so pairing with an
+    // older sender (which ignores unknown string frames) stays harmless, and an
+    // older receiver never triggers a pointless ACK_TIMEOUT wait on the sender.
+    const sendCaps = () => { try { dc.send(JSON.stringify({ t: 'recv-caps', ack: 1 })); } catch {} };
+    if (dc.readyState === 'open') sendCaps();
+    else dc.addEventListener('open', sendCaps, { once: true });
 
     await new Promise((resolve, reject) => {
       let meta = null, recvd = 0;
