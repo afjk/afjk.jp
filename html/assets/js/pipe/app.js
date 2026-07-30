@@ -2939,13 +2939,17 @@ async function initSendRtcSession(path) {
     // after the channel opens). Attached before any message event can fire —
     // this same task attaches it ahead of the first queued macrotask.
     session.peerAcks = false;
-    dc.addEventListener('message', e => {
+    const onCaps = e => {
       if (typeof e.data !== 'string') return;
       try {
         const m = JSON.parse(e.data);
-        if (m.t === 'recv-caps' && m.ack) session.peerAcks = true;
+        if (m.t === 'recv-caps' && m.ack) {
+          session.peerAcks = true;
+          dc.removeEventListener('message', onCaps);
+        }
       } catch {}
-    });
+    };
+    dc.addEventListener('message', onCaps);
     const cfg = resolveChunking(pc);
     dc.bufferedAmountLowThreshold = cfg.flowLow;
     Object.assign(session, cfg);
