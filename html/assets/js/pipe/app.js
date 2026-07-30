@@ -599,6 +599,11 @@ const DRAIN_TIMEOUT    = 30000;  // ms: bufferedAmount が全く減らない場�
 // 一時停止している間に受信側が先に誤検知してフォールバックするのを防ぐ。
 const RECV_INACTIVITY  = 45000;  // ms: P2P 受信でデータが途絶えたら諦めてフォールバックする
 const RECV_FOLD_BYTES  = 16 * 1024 * 1024; // 受信チャンクを Blob にまとめてメモリを解放する単位
+// ms: 送信側が最終フレーム（done/all-done）送信後、受信側からの受信確認 (recv-ack) を
+// 待つ上限。RTCPeerConnection.close() は SCTP キューに残った未 ACK データを破棄するため、
+// ack を待たずに閉じると「送信側は完了と表示するが受信側は最後の数チャンクを取りこぼして
+// ハングする」（送信側は成功扱いのため HTTP フォールバックも起きない）事象が起こり得た。
+const ACK_TIMEOUT      = 10000;
 const HASH_MAX_BYTES   = 256 * 1024 * 1024; // これを超えるファイルは整合性ハッシュをスキップ（メモリ枯渇回避）
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -2750,6 +2755,35 @@ function waitForBufferDrain(dc, highWater, lowWater) {
   });
 }
 
+// Wait for the receiver's recv-ack confirming it actually got the final frame
+// (done/all-done). Without this, a sender that finishes queuing bytes locally
+// would declare success and tear down the PeerConnection even if the last
+// chunk(s) never actually reached the peer (e.g. a brief connectivity glitch
+// right at the end) — leaving the receiver stuck mid-progress with no way to
+// recover, since the sender no longer falls back to HTTP once it reports success.
+function waitForAck(dc, timeoutMs = ACK_TIMEOUT) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      dc.removeEventListener('message', onMsg);
+      dc.removeEventListener('close', onClose);
+      dc.removeEventListener('error', onClose);
+    };
+    const onMsg = e => {
+      if (typeof e.data !== 'string') return;
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.t === 'recv-ack') { cleanup(); resolve(); }
+    };
+    const onClose = err => { cleanup(); reject(err instanceof Error ? err : new Error('DataChannel closed')); };
+    timer = setTimeout(() => { cleanup(); reject(new Error('ack timeout')); }, timeoutMs);
+    dc.addEventListener('message', onMsg);
+    dc.addEventListener('close', onClose);
+    dc.addEventListener('error', onClose);
+  });
+}
+
 function payloadLength(payload) {
   if (payload instanceof ArrayBuffer) return payload.byteLength;
   if (ArrayBuffer.isView(payload)) return payload.byteLength;
@@ -3032,6 +3066,7 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
     await sendDoneFrame(dc, body);
     const elapsed = (performance.now() - t0) / 1000;
     const speed   = sent / elapsed;
+    await waitForAck(dc);
     onDone(t('p2pSendDone')(fmt(sent), elapsed.toFixed(2), fmt(speed)));
     reportTransfer('p2p', sent, {
       chunkSize: session.chunkSize,
@@ -3135,6 +3170,7 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
 
     dc.send(JSON.stringify({ t: 'all-done' }));
     const elapsed = (performance.now() - t0) / 1000;
+    await waitForAck(dc);
     onAllDone(totalSent, elapsed);
     reportTransfer('p2p', totalSent, {
       chunkSize: session.chunkSize,
@@ -3223,8 +3259,12 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
             }
             if (onProgress) tick(() => onProgress(recvd, meta.size), true); // ensure bar hits 100%
             onDone(t('p2pRecvDone')(fmt(recvd), elapsed.toFixed(2), fmt(speed)), blob, meta.name);
-            if (!isMulti) done();
+            if (!isMulti) {
+              try { dc.send(JSON.stringify({ t: 'recv-ack' })); } catch {}
+              done();
+            }
           } else if (msg.t === 'all-done') {
+            try { dc.send(JSON.stringify({ t: 'recv-ack' })); } catch {}
             done();
           }
         } else {

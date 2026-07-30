@@ -269,9 +269,19 @@ sequenceDiagram
         Note over B: ファイル1件をダウンロードトリガー
     end
     A->>B: { t:'all-done' }
+    B->>A: { t:'recv-ack' }
+    Note over A: ack 受信まで成功と見なさず PeerConnection を閉じない
 ```
 
 シグナリングパスには常に **先頭ファイルのパス** を使用。受信側は `all-done` フレームまでセッションを維持する。
+
+### 完了確認（recv-ack）
+
+送信側は最終フレーム（単一ファイルは `done`、複数ファイルは `all-done`）を送った後、受信側からの `{ t: 'recv-ack' }` を `ACK_TIMEOUT`（10秒）以内に受け取るまで完了扱いにしない。
+
+`dc.send()` はローカルの送信キューに積むだけで相手への到達を保証しないため、ack を待たずに `RTCPeerConnection.close()` すると、SCTP キューに残っていた未 ACK のデータ（終盤のチャンクや `done`/`all-done` 自体）が破棄されることがある。この場合、送信側は「送信完了」と表示して P2P 成功扱いのまま接続を閉じてしまう一方、受信側は最終フレームを受け取れず `RECV_INACTIVITY`（45秒）で P2P を諦めて piping-server への HTTP フォールバックに切り替える。しかし送信側はすでに成功と判断しているため対応する HTTP POST は行われず、受信側の GET は永久にブロックされたまま進捗が止まる（例: 送信側は100%完了と表示するのに受信側は `158.8MB/158.9MB` のように僅かに届かず、ダウンロードもトリガーされない）。
+
+ack 待ちがタイムアウトした場合、送信側は P2P 失敗として扱い（`trySendWebRTC` / `trySendWebRTCFiles` が `false` を返す）、呼び出し元が piping-server 経由の HTTP フォールバックへ切り替える。これにより受信側がすでに開始している HTTP フォールバック GET と辻褄が合う。
 
 ### フロー制御パラメータ
 
@@ -284,6 +294,7 @@ sequenceDiagram
 | `FLOW_STALL_MS` | 1,500ms | `bufferedAmount` が下がらない場合のストール検出閾値（チャンク縮小の判定）|
 | `DRAIN_TIMEOUT` | 30,000ms | `bufferedAmount` が全く減らない場合に送信を諦める閾値（相手消失時のハング防止 → HTTP フォールバック）|
 | `RECV_INACTIVITY` | 45,000ms | P2P 受信でデータが途絶えた場合に諦める閾値（ハング防止 → HTTP フォールバック）。送信側が `DRAIN_TIMEOUT` まで一時停止している間に受信側が先に誤検知しないよう、送信側の閾値より長くとる |
+| `ACK_TIMEOUT` | 10,000ms | 送信側が最終フレーム送信後、受信側の `recv-ack` を待つ上限。超過すると P2P 失敗として扱い HTTP フォールバックへ切り替える |
 | `RECV_FOLD_BYTES` | 16 MB | 受信チャンクを Blob にまとめてメモリを解放する単位 |
 | `HASH_MAX_BYTES` | 256 MB | これを超えるファイルは整合性 SHA-256 をスキップ（大容量ファイルのメモリ枯渇回避）|
 | `MAX_CHUNK_SZ` | 262,144 B (256 KB) | チャンクサイズ上限（Chromium 基準）|
