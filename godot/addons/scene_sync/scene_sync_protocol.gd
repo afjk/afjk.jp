@@ -40,7 +40,11 @@ static func make_scene_delta(
     obj_name: String = "",
     visible: Variant = null,
     asset: Dictionary = {},
-    metadata: Dictionary = {}
+    metadata: Dictionary = {},
+    animation: Variant = null,
+    physics: Variant = null,
+    include_physics: bool = false,
+    include_animation: bool = false
 ) -> Dictionary:
     var msg := {
         "kind": "scene-delta",
@@ -57,6 +61,14 @@ static func make_scene_delta(
         msg["asset"] = asset.duplicate(true)
     if not metadata.is_empty():
         msg["metadata"] = metadata.duplicate(true)
+    if animation is Dictionary:
+        msg["animation"] = (animation as Dictionary).duplicate(true)
+    elif include_animation:
+        msg["animation"] = null
+    if physics is Dictionary:
+        msg["physics"] = (physics as Dictionary).duplicate(true)
+    elif include_physics:
+        msg["physics"] = null
     return msg
 
 
@@ -72,7 +84,11 @@ static func make_scene_add(
     metadata: Dictionary = {},
     origin: String = "",
     unity_hierarchy_path: String = "",
-    visible: bool = true
+    visible: bool = true,
+    animation: Variant = null,
+    physics: Variant = null,
+    include_physics: bool = false,
+    include_animation: bool = false
 ) -> Dictionary:
     var msg := {
         "kind": "scene-add",
@@ -95,6 +111,14 @@ static func make_scene_add(
         msg["asset"] = asset.duplicate(true)
     if not metadata.is_empty():
         msg["metadata"] = metadata.duplicate(true)
+    if animation is Dictionary:
+        msg["animation"] = (animation as Dictionary).duplicate(true)
+    elif include_animation:
+        msg["animation"] = null
+    if physics is Dictionary:
+        msg["physics"] = (physics as Dictionary).duplicate(true)
+    elif include_physics:
+        msg["physics"] = null
     return msg
 
 
@@ -109,7 +133,11 @@ static func make_scene_mesh(
     asset: Dictionary = {},
     metadata: Dictionary = {},
     origin: String = "",
-    unity_hierarchy_path: String = ""
+    unity_hierarchy_path: String = "",
+    animation: Variant = null,
+    physics: Variant = null,
+    include_physics: bool = false,
+    include_animation: bool = false
 ) -> Dictionary:
     var msg := {"kind": "scene-mesh", "objectId": object_id, "meshPath": mesh_path}
     if asset_id != "":
@@ -122,6 +150,14 @@ static func make_scene_mesh(
         msg["asset"] = asset.duplicate(true)
     if not metadata.is_empty():
         msg["metadata"] = metadata.duplicate(true)
+    if animation is Dictionary:
+        msg["animation"] = (animation as Dictionary).duplicate(true)
+    elif include_animation:
+        msg["animation"] = null
+    if physics is Dictionary:
+        msg["physics"] = (physics as Dictionary).duplicate(true)
+    elif include_physics:
+        msg["physics"] = null
     return msg
 
 
@@ -137,12 +173,31 @@ static func make_scene_request() -> Dictionary:
     return {"kind": "scene-request"}
 
 
-static func make_scene_state(objects: Dictionary, loom_graphs: Dictionary = {}, env_id: String = "") -> Dictionary:
+static func make_scene_state(
+    objects: Dictionary,
+    loom_graphs: Dictionary = {},
+    env_id: String = "",
+    physics: Variant = null,
+    include_physics: bool = false
+) -> Dictionary:
     var msg := {"kind": "scene-state", "objects": objects}
     if env_id != "":
         msg["envId"] = env_id
     if not loom_graphs.is_empty():
         msg["loomGraphs"] = loom_graphs.duplicate(true)
+    if physics is Dictionary:
+        msg["physics"] = (physics as Dictionary).duplicate(true)
+    elif include_physics:
+        msg["physics"] = null
+    return msg
+
+
+static func make_scene_physics(physics: Variant, include_physics: bool = true) -> Dictionary:
+    var msg := {"kind": "scene-physics"}
+    if physics is Dictionary:
+        msg["physics"] = (physics as Dictionary).duplicate(true)
+    elif include_physics:
+        msg["physics"] = null
     return msg
 
 

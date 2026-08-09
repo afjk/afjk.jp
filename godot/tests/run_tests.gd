@@ -88,6 +88,44 @@ func _run_protocol_tests() -> void:
     _assert_eq(delta_with_metadata["asset"]["primitive"], "sphere", "make_scene_delta asset metadata")
     _assert_true(delta_with_metadata["metadata"].has("loomGraph"), "make_scene_delta loomGraph metadata")
 
+    var animation_policy := {
+        "enabled": true,
+        "clipName": "Survey",
+        "mode": "loop",
+        "speed": 0.75,
+        "offset": 1.25,
+    }
+    var delta_with_animation = SceneSyncProtocol.make_scene_delta(
+        "obj-anim",
+        Vector3.ZERO,
+        Quaternion.IDENTITY,
+        Vector3.ONE,
+        "",
+        null,
+        {},
+        {},
+        animation_policy
+    )
+    _assert_eq(delta_with_animation["animation"]["clipName"], "Survey", "make_scene_delta animation")
+    var delta_clear_animation = SceneSyncProtocol.make_scene_delta(
+        "obj-anim", Vector3.ZERO, Quaternion.IDENTITY, Vector3.ONE,
+        "", null, {}, {}, null, null, false, true
+    )
+    _assert_true(
+        delta_clear_animation.has("animation") and delta_clear_animation["animation"] == null,
+        "make_scene_delta animation null"
+    )
+    var delta_with_physics = SceneSyncProtocol.make_scene_delta(
+        "obj-physics", Vector3.ZERO, Quaternion.IDENTITY, Vector3.ONE,
+        "", null, {}, {}, null, {"bodyType": "dynamic"}, true
+    )
+    _assert_eq(delta_with_physics["physics"]["bodyType"], "dynamic", "make_scene_delta physics")
+    var delta_clear_physics = SceneSyncProtocol.make_scene_delta(
+        "obj-physics", Vector3.ZERO, Quaternion.IDENTITY, Vector3.ONE,
+        "", null, {}, {}, null, null, true
+    )
+    _assert_true(delta_clear_physics.has("physics") and delta_clear_physics["physics"] == null, "make_scene_delta physics null")
+
     var add = SceneSyncProtocol.make_scene_add(
         "obj-2",
         "Cube",
@@ -124,6 +162,28 @@ func _run_protocol_tests() -> void:
     _assert_eq(add_with_wire_metadata["asset"]["visualBasis"], "unity", "make_scene_add visualBasis")
     _assert_eq(add_with_wire_metadata["visible"], false, "make_scene_add visible")
 
+    var add_with_animation = SceneSyncProtocol.make_scene_add(
+        "obj-anim",
+        "Fox",
+        Vector3.ZERO,
+        Quaternion.IDENTITY,
+        Vector3.ONE,
+        "mesh-path",
+        {"type": "mesh", "meshPath": "mesh-path"},
+        "asset-anim",
+        {},
+        "",
+        "",
+        true,
+        animation_policy
+    )
+    _assert_eq(add_with_animation["animation"]["offset"], 1.25, "make_scene_add animation")
+    var add_with_physics = SceneSyncProtocol.make_scene_add(
+        "obj-physics", "Body", Vector3.ZERO, Quaternion.IDENTITY, Vector3.ONE,
+        "", {}, "", {}, "", "", true, null, {"shape": "box"}, true
+    )
+    _assert_eq(add_with_physics["physics"]["shape"], "box", "make_scene_add physics")
+
     var add2 = SceneSyncProtocol.make_scene_add(
         "obj-3",
         "Sphere",
@@ -149,6 +209,22 @@ func _run_protocol_tests() -> void:
     _assert_eq(mesh["assetId"], "asset-1", "make_scene_mesh assetId")
     _assert_eq(mesh["asset"]["visualBasis"], "unity", "make_scene_mesh visualBasis")
 
+    var mesh_with_animation = SceneSyncProtocol.make_scene_mesh(
+        "obj-anim",
+        "mesh-path",
+        "asset-anim",
+        {"type": "mesh", "meshPath": "mesh-path"},
+        {},
+        "",
+        "",
+        animation_policy
+    )
+    _assert_eq(mesh_with_animation["animation"]["mode"], "loop", "make_scene_mesh animation")
+    var mesh_with_physics = SceneSyncProtocol.make_scene_mesh(
+        "obj-physics", "mesh-path", "", {}, {}, "", "", null, {"mass": 2.0}, true
+    )
+    _assert_eq(mesh_with_physics["physics"]["mass"], 2.0, "make_scene_mesh physics")
+
     var state = SceneSyncProtocol.make_scene_state(
         {"obj-4": add_with_wire_metadata},
         {"objects": {"obj-4": {"nodes": []}}},
@@ -156,6 +232,10 @@ func _run_protocol_tests() -> void:
     )
     _assert_true(state.has("loomGraphs"), "make_scene_state loomGraphs")
     _assert_eq(state["envId"], "outdoor_night", "make_scene_state envId")
+    var state_with_physics = SceneSyncProtocol.make_scene_state({}, {}, "", {"gravity": [0, -9.8, 0]}, true)
+    _assert_true(state_with_physics.has("physics"), "make_scene_state physics")
+    var scene_physics_clear = SceneSyncProtocol.make_scene_physics(null, true)
+    _assert_true(scene_physics_clear.has("physics") and scene_physics_clear["physics"] == null, "make_scene_physics null")
 
     var env = SceneSyncProtocol.make_scene_env("studio")
     _assert_eq(env["kind"], "scene-env", "make_scene_env kind")
@@ -261,6 +341,200 @@ func _run_manager_tests() -> void:
     _assert_eq(manager.room, "test-headless", "manager room")
     _assert_eq(manager.nickname, "HeadlessTest", "manager nickname")
 
+    _assert_eq(
+        manager._visual_basis_from_payload({"asset": {"type": "mesh", "visualBasis": null}}),
+        "",
+        "manager nullable visualBasis"
+    )
+    _assert_eq(
+        manager._asset_id_from_payload({"assetId": null, "asset": {"assetId": null}}),
+        "",
+        "manager nullable assetId"
+    )
+    _assert_true(
+        manager._asset_needs_placeholder({"type": "mesh", "source": "url", "url": "https://example.test/a.glb"}),
+        "manager URL mesh route"
+    )
+    _assert_true(
+        not manager._asset_needs_placeholder({"type": "mesh", "source": "carrier", "meshPath": "carrier-path"}),
+        "manager carrier mesh route remains separate"
+    )
+    _assert_true(
+        not manager._has_remote_asset_url({
+            "type": "mesh", "source": "carrier", "meshPath": "carrier-path", "url": "https://stale.test/model.glb",
+        }),
+        "manager carrier source ignores stale URL"
+    )
+    var signature_asset := {"type": "image", "source": "url", "url": "https://example.test/a.png"}
+    _assert_eq(
+        manager._asset_signature(signature_asset),
+        manager._asset_signature(signature_asset.duplicate(true)),
+        "manager stable asset signature"
+    )
+    _assert_true(manager._is_sha256_asset_id("sha256-" + "0".repeat(64)), "manager accepts strict SHA-256 assetId")
+    _assert_true(not manager._is_sha256_asset_id("shared-friendly-id"), "manager rejects non-SHA URL cache key")
+    _assert_true(
+        not manager._is_sha256_asset_id("sha256-" + "A".repeat(64)),
+        "manager rejects uppercase URL cache key"
+    )
+
+    var animation_node := Node3D.new()
+    sync_root.add_child(animation_node)
+    animation_node.set_meta("scene_sync_object_id", "obj-anim")
+    manager._managed_objects["obj-anim"] = animation_node
+    manager._known_ids["obj-anim"] = true
+    var animation_player := AnimationPlayer.new()
+    animation_node.add_child(animation_player)
+    var animation_library := AnimationLibrary.new()
+    var survey_animation := Animation.new()
+    survey_animation.length = 2.0
+    animation_library.add_animation("Fox", survey_animation)
+    animation_player.add_animation_library("", animation_library)
+    manager._apply_payload_metadata(animation_node, "obj-anim", {
+        "animation": {
+            "enabled": true,
+            "clipName": "Fox",
+            "mode": "once",
+            "speed": 0.5,
+            "offset": 0.25,
+        },
+    }, true)
+    _assert_true(animation_node.has_meta("scene_sync_animation"), "manager stores animation metadata")
+    _assert_eq(manager.get_animation_policy("obj-anim")["clipName"], "Fox", "manager exposes animation policy")
+    _assert_eq(animation_player.current_animation, "Fox", "manager applies named animation clip")
+    _assert_true(is_equal_approx(animation_player.speed_scale, 0.5), "manager applies animation speed")
+    _assert_eq(
+        animation_player.get_animation("Fox").loop_mode,
+        Animation.LOOP_NONE,
+        "manager applies animation once mode"
+    )
+    var policy_copy := manager.get_animation_policy("obj-anim")
+    policy_copy["clipName"] = "Mutated"
+    _assert_eq(manager.get_animation_policy("obj-anim")["clipName"], "Fox", "manager policy getter deep copies")
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"name": "Animated"}, true)
+    _assert_eq(manager.get_animation_policy("obj-anim")["clipName"], "Fox", "manager preserves omitted animation")
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"animation": {"speed": 0.25}}, true)
+    var merged_animation := manager.get_animation_policy("obj-anim")
+    _assert_eq(merged_animation["clipName"], "Fox", "manager partial animation keeps clip")
+    _assert_eq(merged_animation["mode"], "once", "manager partial animation keeps mode")
+    _assert_eq(merged_animation["offset"], 0.25, "manager partial animation keeps offset")
+    _assert_eq(merged_animation["speed"], 0.25, "manager partial animation updates speed")
+    var indexed_animation := manager._merge_animation_policy(merged_animation, {"clip": 0})
+    _assert_true(not indexed_animation.has("clipName"), "manager clip index clears stale clipName")
+    var animation_roundtrip = SceneSyncProtocol.make_scene_add(
+        "obj-anim",
+        animation_node.name,
+        Vector3.ZERO,
+        Quaternion.IDENTITY,
+        Vector3.ONE,
+        "",
+        {},
+        "",
+        {},
+        "",
+        "",
+        true,
+        manager.get_animation_policy("obj-anim")
+    )
+    _assert_eq(animation_roundtrip["animation"]["offset"], 0.25, "manager animation wire roundtrip")
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"animation": null}, true)
+    _assert_true(not animation_node.has_meta("scene_sync_animation"), "manager clears explicit null animation")
+    _assert_true(not manager._animation_policies.has("obj-anim"), "manager clears animation dictionary")
+    _assert_eq(animation_player.current_animation, "Fox", "manager defaults to first clip after clear")
+    _assert_eq(
+        animation_player.get_animation("Fox").loop_mode,
+        Animation.LOOP_LINEAR,
+        "manager defaults to loop after clear"
+    )
+    var sampled_resource := animation_player.get_animation("Fox")
+    var sample_result := SceneSyncAnimationPolicy.sample(animation_node, {
+        "clipName": "Fox", "mode": "loop", "speed": 1.0, "offset": 0.25,
+    }, 2.0)
+    _assert_eq(sample_result["reason"], "sampled", "animation deterministic sample applies")
+    _assert_true(is_equal_approx(animation_player.current_animation_position, 0.25), "animation sample wraps loop time")
+    _assert_true(animation_player.get_animation("Fox") == sampled_resource, "animation sample reuses resource")
+
+    animation_node.set_meta("scene_sync_remote_object", true)
+    var authored_clock_node := Node3D.new()
+    sync_root.add_child(authored_clock_node)
+    authored_clock_node.set_meta("scene_sync_object_id", "authored-clock")
+    manager._managed_objects["authored-clock"] = authored_clock_node
+    manager._known_ids["authored-clock"] = true
+    var authored_clock_player := AnimationPlayer.new()
+    authored_clock_node.add_child(authored_clock_player)
+    var authored_clock_library := AnimationLibrary.new()
+    var authored_clock_animation := Animation.new()
+    authored_clock_animation.length = 2.0
+    authored_clock_library.add_animation("Authored", authored_clock_animation)
+    authored_clock_player.add_animation_library("", authored_clock_library)
+    authored_clock_player.play("Authored")
+    authored_clock_player.speed_scale = 0.75
+    authored_clock_player.seek(0.4, true)
+
+    manager.follow_shared_playback()
+    _assert_eq(manager.get_playback_clock_state()["modeName"], "shared-playback-follow", "manager follows shared clock")
+    manager._dispatch_scene_payload({
+        "kind": "scene-clock",
+        "mode": "shared-playback",
+        "paused": true,
+        "pausedTime": 1.5,
+        "revision": 1,
+        "objectClocks": {"obj-anim": {"sharedEpochTime": 0.0}},
+    }, {"id": "remote-controller"})
+    manager._update_playback_clock()
+    _assert_true(is_equal_approx(animation_player.current_animation_position, 1.5), "manager samples followed clock")
+    _assert_true(is_equal_approx(animation_player.speed_scale, 0.0), "shared clock freezes local animation advance")
+    _assert_true(is_equal_approx(authored_clock_player.speed_scale, 0.75), "shared clock leaves authored animation speed unchanged")
+    _assert_true(
+        is_equal_approx(authored_clock_player.current_animation_position, 0.4),
+        "shared clock leaves authored animation position unchanged"
+    )
+    manager.playback_clock_mode = SceneSyncPlaybackClock.LOCAL
+    manager._update_playback_clock()
+    _assert_eq(manager.get_playback_clock_state()["modeName"], "local", "manager returns to local clock")
+    _assert_true(is_equal_approx(animation_player.speed_scale, 1.0), "direct local clock setting resumes policy playback")
+
+    manager._apply_scene_physics_payload({"physics": {"gravity": [0, -9.8, 0]}}, true)
+    _assert_true(manager.has_meta("scene_sync_physics"), "manager stores scene physics metadata")
+    var scene_physics_copy := manager.get_scene_physics()
+    scene_physics_copy["gravity"] = []
+    _assert_eq(manager.get_scene_physics()["gravity"].size(), 3, "manager scene physics getter deep copies")
+    manager._apply_scene_physics_payload({"kind": "scene-state"}, true)
+    _assert_true(manager.get_scene_physics().has("gravity"), "manager preserves omitted scene physics")
+    manager._apply_scene_physics_payload({"physics": null}, true)
+    _assert_true(manager.get_scene_physics().is_empty(), "manager clears explicit null scene physics")
+    _assert_true(not manager.has_meta("scene_sync_physics"), "manager clears scene physics metadata")
+
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"physics": {"bodyType": "dynamic", "mass": 2.0}}, true)
+    var object_physics_copy := manager.get_object_physics("obj-anim")
+    object_physics_copy["mass"] = 99.0
+    _assert_eq(manager.get_object_physics("obj-anim")["mass"], 2.0, "manager object physics getter deep copies")
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"name": "PhysicsBody"}, true)
+    _assert_eq(manager.get_object_physics("obj-anim")["bodyType"], "dynamic", "manager preserves omitted object physics")
+    var physics_roundtrip = SceneSyncProtocol.make_scene_add(
+        "obj-anim", animation_node.name, Vector3.ZERO, Quaternion.IDENTITY, Vector3.ONE,
+        "", {}, "", {}, "", "", true, null,
+        manager.get_object_physics("obj-anim"), manager._has_object_physics("obj-anim")
+    )
+    _assert_eq(physics_roundtrip["physics"]["mass"], 2.0, "manager object physics wire roundtrip")
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"physics": null}, true)
+    _assert_true(not animation_node.has_meta("scene_sync_physics"), "manager clears explicit null object physics")
+
+    var failed_url_node := Node3D.new()
+    sync_root.add_child(failed_url_node)
+    failed_url_node.set_meta("scene_sync_object_id", "url-failure")
+    manager._managed_objects["url-failure"] = failed_url_node
+    manager._known_ids["url-failure"] = true
+    manager._remote_asset_contexts["url-failure"] = {
+        "signature": "sig-failure",
+        "nodeId": failed_url_node.get_instance_id(),
+        "asset": {"type": "mesh", "source": "url", "url": "https://example.test/failure.glb"},
+    }
+    manager._pending_recoveries.clear()
+    manager._on_remote_asset_failed("url-failure", "sig-failure", "mesh", {"reason": "transport"})
+    _assert_true(manager._pending_recoveries.is_empty(), "manager URL failure skips peer recovery")
+    _assert_true(not manager._remote_asset_contexts.has("url-failure"), "manager URL failure clears context")
+
     var graph := {"version": "loomlet.graph.v1", "nodes": [], "edges": []}
     manager._dispatch_scene_payload({
         "type": "scene-graph-set",
@@ -332,6 +606,9 @@ func _run_manager_tests() -> void:
     var mesh_existing := Node3D.new()
     mesh_existing.name = "MeshTarget"
     sync_root.add_child(mesh_existing)
+    var authored_mesh_child := Node3D.new()
+    authored_mesh_child.name = "AuthoredChild"
+    mesh_existing.add_child(authored_mesh_child)
     var mesh_child := MeshInstance3D.new()
     mesh_child.mesh = BoxMesh.new()
     var mesh_bytes = SceneSyncGltfHelper.export_glb(mesh_child)
@@ -349,10 +626,60 @@ func _run_manager_tests() -> void:
             "meshPath": "mesh-rebind",
             "assetId": "asset-rebind",
         },
+        "physics": {"bodyType": "fixed", "friction": 0.5},
     })
     _assert_true(manager._managed_objects.has("obj-mesh-rebind"), "manager scene-mesh rebind tracks object")
     _assert_true(manager._mesh_paths.has("obj-mesh-rebind"), "manager scene-mesh rebind stores meshPath")
-    _assert_true(manager._managed_objects["obj-mesh-rebind"] != mesh_existing, "manager scene-mesh rebind loads replacement mesh")
+    _assert_true(manager._managed_objects["obj-mesh-rebind"] == mesh_existing, "manager scene-mesh keeps authored root")
+    _assert_true(not mesh_existing.is_queued_for_deletion(), "manager scene-mesh does not delete authored root")
+    _assert_true(authored_mesh_child.get_parent() == mesh_existing, "manager scene-mesh preserves authored subtree")
+    var rebound_node := manager._managed_objects["obj-mesh-rebind"] as Node3D
+    _assert_eq(manager.get_object_physics("obj-mesh-rebind")["bodyType"], "fixed", "manager mesh replacement preserves physics")
+    _assert_true(not rebound_node.has_meta("scene_sync_remote_object"), "manager authored rebind remains non-remote")
+    manager._handle_scene_remove({"kind": "scene-remove", "objectId": "obj-mesh-rebind"})
+    _assert_true(not mesh_existing.is_queued_for_deletion(), "manager remove preserves authored bound node")
+    _assert_true(not manager._managed_objects.has("obj-mesh-rebind"), "manager remove unmanages authored bound node")
+    _assert_true(not mesh_existing.has_meta("scene_sync_object_id"), "manager remove unpublishes authored identity")
+    _assert_true(mesh_existing.has_meta("scene_sync_physics"), "manager remove preserves authored physics metadata")
+
+    var remote_remove := Node3D.new()
+    remote_remove.set_meta("scene_sync_object_id", "remote-remove")
+    remote_remove.set_meta("scene_sync_remote_object", true)
+    sync_root.add_child(remote_remove)
+    manager._managed_objects["remote-remove"] = remote_remove
+    manager._known_ids["remote-remove"] = true
+    manager._handle_scene_remove({"kind": "scene-delete", "objectId": "remote-remove"})
+    _assert_true(remote_remove.is_queued_for_deletion(), "manager remove deletes remote-owned node")
+    _assert_true(not manager._managed_objects.has("remote-remove"), "manager remove unmanages remote-owned node")
+
+    var remote_only := Node3D.new()
+    remote_only.set_meta("scene_sync_object_id", "remote-only")
+    remote_only.set_meta("scene_sync_remote_object", true)
+    sync_root.add_child(remote_only)
+    manager._managed_objects["remote-only"] = remote_only
+    manager._known_ids["remote-only"] = true
+    var authored_survivor := Node3D.new()
+    authored_survivor.set_meta("scene_sync_object_id", "authored-survivor")
+    authored_survivor.set_meta("scene_sync_animation", {"clipName": "Authored"})
+    authored_survivor.set_meta("scene_sync_physics", {"bodyType": "fixed"})
+    sync_root.add_child(authored_survivor)
+    manager._managed_objects["authored-survivor"] = authored_survivor
+    manager._known_ids["authored-survivor"] = true
+    manager.playback_clock_mode = SceneSyncPlaybackClock.SHARED_PLAYBACK_FOLLOW
+    manager._update_playback_clock()
+    _assert_eq(manager._playback_clock.mode, SceneSyncPlaybackClock.SHARED_PLAYBACK_FOLLOW, "manager syncs direct clock mode setting")
+    manager._on_disconnected()
+    _assert_true(remote_only.is_queued_for_deletion(), "manager disconnect deletes remote-only node")
+    _assert_true(not authored_survivor.is_queued_for_deletion(), "manager disconnect preserves authored node")
+    _assert_true(authored_survivor.has_meta("scene_sync_animation"), "manager disconnect preserves authored animation meta")
+    _assert_true(authored_survivor.has_meta("scene_sync_physics"), "manager disconnect preserves authored physics meta")
+    _assert_eq(
+        manager.playback_clock_mode,
+        SceneSyncPlaybackClock.SHARED_PLAYBACK_FOLLOW,
+        "manager disconnect preserves configured clock mode"
+    )
+    _assert_true(manager._managed_objects.is_empty(), "manager disconnect clears managed object map")
+    _assert_true(manager._mesh_data_by_asset_id.is_empty(), "manager disconnect clears asset cache")
 
     wrapped.free()
     manager.free()
