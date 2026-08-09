@@ -30,6 +30,18 @@ func _assert_true(condition: bool, test_name: String) -> void:
     _assert_eq(condition, true, test_name)
 
 
+func _assert_basis_orthogonal(basis: Basis, test_name: String) -> void:
+    var x := basis.x.normalized()
+    var y := basis.y.normalized()
+    var z := basis.z.normalized()
+    _assert_true(
+        absf(x.dot(y)) < 0.00001
+            and absf(x.dot(z)) < 0.00001
+            and absf(y.dot(z)) < 0.00001,
+        test_name
+    )
+
+
 func _assert_not_empty(value, test_name: String) -> void:
     var is_empty := value == null
     if value is String:
@@ -377,6 +389,100 @@ func _run_manager_tests() -> void:
         not manager._is_sha256_asset_id("sha256-" + "A".repeat(64)),
         "manager rejects uppercase URL cache key"
     )
+
+    var ramp_rotation := Quaternion(Vector3.FORWARD, deg_to_rad(-16.0))
+    var ramp_scale := Vector3(4.4, 0.18, 1.1)
+    manager._handle_scene_state({
+        "kind": "scene-state",
+        "objects": {
+            "trs-ramp": {
+                "name": "Ramp",
+                "position": SceneSyncProtocol.pos_to_wire(Vector3(1.0, 2.0, 3.0)),
+                "rotation": SceneSyncProtocol.rot_to_wire(ramp_rotation),
+                "scale": SceneSyncProtocol.scale_to_wire(ramp_scale),
+                "asset": {"type": "primitive", "primitive": "box"},
+            },
+        },
+    })
+    var ramp_node := manager._managed_objects["trs-ramp"] as Node3D
+    var expected_ramp_basis := Basis(ramp_rotation).scaled_local(ramp_scale)
+    _assert_true(
+        ramp_node.transform.basis.is_equal_approx(expected_ramp_basis),
+        "manager scene-state composes rotated non-uniform local scale"
+    )
+    _assert_basis_orthogonal(
+        ramp_node.transform.basis,
+        "manager scene-state rotated non-uniform basis stays orthogonal"
+    )
+
+    var domino_rotation := Quaternion(Vector3(0.3, 0.8, 0.5).normalized(), deg_to_rad(57.0))
+    var domino_scale := Vector3(0.12, 1.32, 0.52)
+    manager._handle_scene_delta({
+        "kind": "scene-delta",
+        "objectId": "trs-ramp",
+        "rotation": SceneSyncProtocol.rot_to_wire(domino_rotation),
+        "scale": SceneSyncProtocol.scale_to_wire(domino_scale),
+    })
+    var expected_domino_basis := Basis(domino_rotation).scaled_local(domino_scale)
+    _assert_true(
+        ramp_node.transform.basis.is_equal_approx(expected_domino_basis),
+        "manager scene-delta composes Domino-like dynamic rotation"
+    )
+    _assert_basis_orthogonal(
+        ramp_node.transform.basis,
+        "manager Domino-like dynamic rotation stays orthogonal"
+    )
+    var domino_snapshot := manager._snapshot_for_node(ramp_node)
+    var domino_roundtrip_basis := Basis(domino_snapshot["rotation"]).scaled_local(domino_snapshot["scale"])
+    _assert_true(
+        domino_roundtrip_basis.is_equal_approx(ramp_node.transform.basis),
+        "manager apply snapshot TRS roundtrip preserves basis"
+    )
+    _assert_true(
+        domino_snapshot["position"].is_equal_approx(Vector3(1.0, 2.0, 3.0)),
+        "manager scene-delta preserves omitted position"
+    )
+
+    var transform_regressions := [
+        {
+            "name": "identity rotation",
+            "rotation": Quaternion.IDENTITY,
+            "scale": Vector3(0.12, 1.32, 0.52),
+        },
+        {
+            "name": "uniform scale",
+            "rotation": ramp_rotation,
+            "scale": Vector3(2.0, 2.0, 2.0),
+        },
+        {
+            "name": "negative scale",
+            "rotation": ramp_rotation,
+            "scale": Vector3(-4.4, 0.18, 1.1),
+        },
+    ]
+    for regression in transform_regressions:
+        var regression_rotation: Quaternion = regression["rotation"]
+        var regression_scale: Vector3 = regression["scale"]
+        manager._apply_transform_to_node(ramp_node, {
+            "rotation": regression_rotation,
+            "scale": regression_scale,
+        })
+        var expected_basis := Basis(regression_rotation).scaled_local(regression_scale)
+        var case_name: String = regression["name"]
+        _assert_true(
+            ramp_node.transform.basis.is_equal_approx(expected_basis),
+            "manager %s uses local TRS order" % case_name
+        )
+        _assert_basis_orthogonal(
+            ramp_node.transform.basis,
+            "manager %s basis stays orthogonal" % case_name
+        )
+        var regression_snapshot := manager._snapshot_for_node(ramp_node)
+        var regression_roundtrip := Basis(regression_snapshot["rotation"]).scaled_local(regression_snapshot["scale"])
+        _assert_true(
+            regression_roundtrip.is_equal_approx(expected_basis),
+            "manager %s snapshot recomposes original basis" % case_name
+        )
 
     var animation_node := Node3D.new()
     sync_root.add_child(animation_node)
