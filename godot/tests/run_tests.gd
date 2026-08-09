@@ -62,6 +62,33 @@ func _assert_not_empty(value, test_name: String) -> void:
     print("  OK: %s" % test_name)
 
 
+func _make_animation_order_glb(names: Array[String]) -> PackedByteArray:
+    var animations: Array[Dictionary] = []
+    for animation_name in names:
+        animations.append({"name": animation_name, "channels": [], "samplers": []})
+    var document := {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "Root"}],
+        "animations": animations,
+    }
+    var json_bytes := JSON.stringify(document).to_utf8_buffer()
+    while json_bytes.size() % 4 != 0:
+        json_bytes.append(0x20)
+
+    var result := PackedByteArray()
+    result.resize(20 + json_bytes.size())
+    result.encode_u32(0, 0x46546C67)
+    result.encode_u32(4, 2)
+    result.encode_u32(8, result.size())
+    result.encode_u32(12, json_bytes.size())
+    result.encode_u32(16, 0x4E4F534A)
+    for index in range(json_bytes.size()):
+        result[20 + index] = json_bytes[index]
+    return result
+
+
 func _run_protocol_tests() -> void:
     print("\n--- SceneSyncProtocol Tests ---")
 
@@ -335,6 +362,27 @@ func _run_gltf_helper_tests() -> void:
 
     var empty_result = SceneSyncGltfHelper.import_glb(PackedByteArray())
     _assert_true(empty_result == null, "import_glb empty returns null")
+
+    var source_order := ["Zulu", "Alpha", "Middle"] as Array[String]
+    var ordered_import := SceneSyncGltfHelper.import_glb(_make_animation_order_glb(source_order))
+    _assert_true(ordered_import != null, "import_glb ordered animations returns Node3D")
+    if ordered_import != null:
+        root.add_child(ordered_import)
+        _assert_eq(
+            ordered_import.get_meta(SceneSyncAnimationPolicy.CLIP_ORDER_META, []),
+            source_order,
+            "import_glb preserves source animation order metadata"
+        )
+        var first_clip := SceneSyncAnimationPolicy.apply(ordered_import, {"clip": 0})
+        _assert_eq(first_clip["clipName"], "Zulu", "animation clip index zero uses GLB source order")
+        var second_clip := SceneSyncAnimationPolicy.apply(ordered_import, {"clip": 1})
+        _assert_eq(second_clip["clipName"], "Alpha", "animation clip index one uses GLB source order")
+        var named_clip := SceneSyncAnimationPolicy.apply(ordered_import, {
+            "clip": 0,
+            "clipName": "Middle",
+        })
+        _assert_eq(named_clip["clipName"], "Middle", "animation clipName still takes precedence")
+        ordered_import.free()
 
 
 func _run_manager_tests() -> void:

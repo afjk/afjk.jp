@@ -4,6 +4,7 @@ extends RefCounted
 const DEFAULT_MODE := "loop"
 const ONCE_MODE := "once"
 const RESET_ANIMATION_NAME := "RESET"
+const CLIP_ORDER_META := "scene_sync_animation_clip_order"
 
 
 static func normalize(raw: Variant) -> Dictionary:
@@ -224,8 +225,7 @@ static func _collect_candidates(players: Array) -> Array:
         var player := player_value as AnimationPlayer
         if player == null or not is_instance_valid(player):
             continue
-        var names := player.get_animation_list()
-        names.sort()
+        var names := _ordered_animation_names(player)
         for name_value in names:
             var qualified_name := String(name_value)
             var local_name := _local_animation_name(qualified_name)
@@ -237,6 +237,51 @@ static func _collect_candidates(players: Array) -> Array:
                 "local_name": local_name,
             })
     return candidates
+
+
+static func _ordered_animation_names(player: AnimationPlayer) -> Array[String]:
+    var remaining: Array[String] = []
+    for name_value in player.get_animation_list():
+        remaining.append(String(name_value))
+    remaining.sort()
+
+    var source_order := _source_clip_order(player)
+    if source_order.is_empty():
+        return remaining
+
+    var ordered: Array[String] = []
+    for source_name in source_order:
+        var match_index := _animation_name_index(remaining, source_name)
+        if match_index < 0:
+            continue
+        ordered.append(remaining[match_index])
+        remaining.remove_at(match_index)
+    ordered.append_array(remaining)
+    return ordered
+
+
+static func _source_clip_order(player: AnimationPlayer) -> Array[String]:
+    var current: Node = player
+    while current != null:
+        if current.has_meta(CLIP_ORDER_META):
+            var raw_order = current.get_meta(CLIP_ORDER_META)
+            if raw_order is Array:
+                var result: Array[String] = []
+                for name_value in raw_order:
+                    if name_value is String or name_value is StringName:
+                        var name := String(name_value)
+                        if name != "":
+                            result.append(name)
+                return result
+        current = current.get_parent()
+    return []
+
+
+static func _animation_name_index(names: Array[String], requested: String) -> int:
+    for index in range(names.size()):
+        if names[index] == requested or _local_animation_name(names[index]) == requested:
+            return index
+    return -1
 
 
 static func _select_candidate(candidates: Array, policy: Dictionary) -> Dictionary:
