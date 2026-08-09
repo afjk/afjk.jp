@@ -40,12 +40,26 @@ if [ ! -x "$GODOT" ]; then
   exit 1
 fi
 
+if ! command -v dotnet >/dev/null 2>&1; then
+  echo "dotnet SDK not found; Godot .NET integration tests require it"
+  exit 1
+fi
+
+echo "--- Building and importing Godot .NET assembly ---"
+dotnet build "$PROJECT_DIR/SceneSyncGodot.csproj" --nologo || exit 1
+cd "$PROJECT_DIR"
+"$GODOT" --headless --log-file "$TMP_DIR/logs/dotnet-import.log" \
+  --editor --import --quit || exit 1
+echo ""
+
 echo "--- Checking SceneSync scripts ---"
 cd "$PROJECT_DIR"
 "$GODOT" --headless --log-file "$TMP_DIR/logs/manager-check.log" \
   --check-only --script addons/scene_sync/scene_sync_manager.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/tests-check.log" \
   --check-only --script tests/run_tests.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/loom-runner-check.log" \
+  --check-only --script tests/test_loom_runner.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/wire-asset-visual-check.log" \
   --check-only --script tests/test_wire_asset_visual.gd || exit 1
 echo ""
@@ -92,6 +106,9 @@ run_test() {
 
 run_test "Unit Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/unit.log" -s tests/run_tests.gd
+
+run_test "Loomlet Runner Integration Tests" \
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/loom-runner.log" -s tests/test_loom_runner.gd
 
 run_test "Wire Asset Visual Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/wire-asset-visual.log" -s tests/test_wire_asset_visual.gd
