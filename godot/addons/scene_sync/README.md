@@ -51,6 +51,8 @@ Subscribe to `SceneSyncManager.asset_load_diagnostic(object_id, detail)` for loa
 
 The optional top-level `animation` object is preserved through add, delta, state, mesh replacement, cache/recovery, and locally built wire payloads. Supported fields are `clipName` (or `clip`), `mode` (`loop` or `once`), `speed`, `offset`, and `enabled`. With no policy, the first non-`RESET` clip is played automatically in a loop at normal speed. Explicit `animation: null` clears the stored policy and reapplies that default.
 
+`clipName` remains the preferred selector. Numeric `clip` values use the source order of the GLB `animations` array; imported Godot animation-library name ordering does not change that index. Authored Godot animations without GLB source metadata retain deterministic name-order fallback behavior.
+
 Use `SceneSyncManager.get_animation_policy(object_id)` to read a deep copy of the original wire policy. Managed nodes also expose it in the `scene_sync_animation` metadata key. The manager emits:
 
 - `animation_policy_changed(object_id, node, policy)` when stored policy changes

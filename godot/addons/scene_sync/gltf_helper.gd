@@ -35,6 +35,7 @@ static func import_glb(data: PackedByteArray) -> Node3D:
         state.meshes.size(), state.materials.size(),
         state.textures.size(), state.images.size()
     ])
+    var animation_clip_order := _animation_clip_order(state)
 
     print("[SceneSync] import_glb: calling generate_scene")
     var scene = doc.generate_scene(state)
@@ -57,8 +58,19 @@ static func import_glb(data: PackedByteArray) -> Node3D:
     # クライアント個別の見た目補正は wire rotation と二重化して不整合を生むため行わない。
     var container := Node3D.new()
     container.name = "ImportedGlb"
+    if not animation_clip_order.is_empty():
+        container.set_meta(SceneSyncAnimationPolicy.CLIP_ORDER_META, animation_clip_order)
     container.add_child(scene)
     return container
+
+
+static func _animation_clip_order(state: GLTFState) -> Array[String]:
+    var result: Array[String] = []
+    for name_value in state.get_unique_animation_names():
+        var name := String(name_value)
+        if name != "":
+            result.append(name)
+    return result
 
 
 static func _convert_importer_meshes(node: Node) -> void:
