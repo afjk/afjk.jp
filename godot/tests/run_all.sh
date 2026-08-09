@@ -6,6 +6,21 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$PROJECT_DIR")"
 TMP_DIR="${TMPDIR:-/tmp}/scenesync-godot-tests"
 TEST_PORT="${SCENESYNC_TEST_PORT:-18787}"
+REMOTE_ASSET_TEST_PORT="${SCENESYNC_REMOTE_ASSET_TEST_PORT:-18788}"
+PRESENCE_PID=""
+REMOTE_ASSET_PID=""
+
+cleanup() {
+  if [ -n "$REMOTE_ASSET_PID" ]; then
+    kill "$REMOTE_ASSET_PID" 2>/dev/null || true
+    wait "$REMOTE_ASSET_PID" 2>/dev/null || true
+  fi
+  if [ -n "$PRESENCE_PID" ]; then
+    kill "$PRESENCE_PID" 2>/dev/null || true
+    wait "$PRESENCE_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
 mkdir -p "$TMP_DIR/blobs"
 mkdir -p "$TMP_DIR/logs"
 
@@ -25,9 +40,14 @@ if [ ! -x "$GODOT" ]; then
   exit 1
 fi
 
-echo "--- Generating import cache ---"
+echo "--- Checking SceneSync scripts ---"
 cd "$PROJECT_DIR"
-"$GODOT" --headless --log-file "$TMP_DIR/logs/import.log" --editor --import --quit >/dev/null 2>&1 || true
+"$GODOT" --headless --log-file "$TMP_DIR/logs/manager-check.log" \
+  --check-only --script addons/scene_sync/scene_sync_manager.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/tests-check.log" \
+  --check-only --script tests/run_tests.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/wire-asset-visual-check.log" \
+  --check-only --script tests/test_wire_asset_visual.gd || exit 1
 echo ""
 
 echo "--- Starting presence-server ---"
@@ -36,10 +56,20 @@ PORT="$TEST_PORT" \
 STATS_FILE="$TMP_DIR/stats.json" \
 STATS_ARCHIVE_DIR="$TMP_DIR/archive" \
 BLOB_DIR="$TMP_DIR/blobs" \
+SCENE_SYNC_GLB_BACKUP_DIR="$TMP_DIR/glb-backups" \
 node src/server.mjs &
 PRESENCE_PID=$!
 sleep 2
 echo "presence-server PID: $PRESENCE_PID"
+echo ""
+
+echo "--- Starting remote asset fixture ---"
+cd "$PROJECT_DIR"
+SCENESYNC_REMOTE_ASSET_TEST_PORT="$REMOTE_ASSET_TEST_PORT" \
+node tests/remote_asset_fixture_server.mjs &
+REMOTE_ASSET_PID=$!
+sleep 1
+echo "remote asset fixture PID: $REMOTE_ASSET_PID"
 echo ""
 
 TOTAL_PASS=0
@@ -63,6 +93,16 @@ run_test() {
 run_test "Unit Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/unit.log" -s tests/run_tests.gd
 
+run_test "Wire Asset Visual Tests" \
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/wire-asset-visual.log" -s tests/test_wire_asset_visual.gd
+
+run_test "Playback Clock Tests" \
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/playback-clock.log" -s tests/test_playback_clock.gd
+
+run_test "Remote Asset Loader Tests" \
+  env SCENESYNC_REMOTE_ASSET_TEST_PORT="$REMOTE_ASSET_TEST_PORT" \
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/remote-asset.log" -s tests/test_remote_asset_loader.gd
+
 run_test "WebSocket Connection Test" \
   env SCENESYNC_PRESENCE_URL="ws://localhost:$TEST_PORT" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/connection.log" tests/test_connection.tscn
@@ -71,7 +111,8 @@ run_test "Blob Store Test" \
   env SCENESYNC_BLOB_URL="http://localhost:$TEST_PORT/blob" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/blob.log" tests/test_blob.tscn
 
-kill "$PRESENCE_PID" 2>/dev/null || true
+cleanup
+trap - EXIT INT TERM
 
 echo "========================================"
 echo "  TOTAL: PASS=$TOTAL_PASS  FAIL=$TOTAL_FAIL"

@@ -7,6 +7,12 @@ signal disconnected()
 signal peers_updated(peers: Array)
 signal object_added(object_id: String, node: Node3D)
 signal object_removed(object_id: String)
+signal asset_load_diagnostic(object_id: String, detail: Dictionary)
+signal animation_policy_changed(object_id: String, node: Node3D, policy: Dictionary)
+signal animation_policy_applied(object_id: String, node: Node3D, result: Dictionary)
+signal playback_clock_state_changed(state: Dictionary)
+signal scene_physics_changed(physics: Dictionary)
+signal object_physics_changed(object_id: String, node: Node3D, physics: Dictionary)
 
 @export var presence_url: String = "wss://afjk.jp/presence"
 @export var blob_url: String = ""
@@ -15,14 +21,24 @@ signal object_removed(object_id: String)
 @export var auto_connect: bool = true
 @export var sync_root: Node3D = null
 @export var hierarchy_poll_interval: float = 0.5
+@export_enum("Local", "Shared Playback Follow", "Shared Playback Control") var playback_clock_mode: int = 0
+@export var playback_clock_broadcast_interval: float = 0.25
 
 var _client: SceneSyncPresenceClient
 var _blob_client: SceneSyncBlobClient
+var _remote_asset_loader: SceneSyncRemoteAssetLoader
+var _playback_clock: SceneSyncPlaybackClock
 var _managed_objects: Dictionary = {}
 var _known_ids: Dictionary = {}
 var _mesh_paths: Dictionary = {}
 var _asset_ids: Dictionary = {}
 var _metadata: Dictionary = {}
+var _animation_policies: Dictionary = {}
+var _object_physics: Dictionary = {}
+var _scene_physics: Dictionary = {}
+var _scene_physics_present: bool = false
+var _remote_asset_contexts: Dictionary = {}
+var _carrier_load_signatures: Dictionary = {}
 var _origins: Dictionary = {}
 var _unity_hierarchy_paths: Dictionary = {}
 var _mesh_data_by_asset_id: Dictionary = {}
@@ -52,6 +68,9 @@ const OBJECT_ID_META := "scene_sync_object_id"
 const ASSET_META := "scene_sync_asset"
 const METADATA_META := "scene_sync_metadata"
 const ASSET_ID_META := "scene_sync_asset_id"
+const ANIMATION_META := "scene_sync_animation"
+const PHYSICS_META := "scene_sync_physics"
+const REMOTE_OBJECT_META := "scene_sync_remote_object"
 const ORIGIN_META := "scene_sync_origin"
 const UNITY_HIERARCHY_PATH_META := "scene_sync_unity_hierarchy_path"
 const RECEIVE_ROOT_NAME := "SceneSyncRoot"
@@ -63,6 +82,13 @@ func _ready() -> void:
     _blob_client = SceneSyncBlobClient.new()
     _blob_client.name = "SceneSyncBlobClient"
     add_child(_blob_client)
+    _remote_asset_loader = SceneSyncRemoteAssetLoader.new()
+    _remote_asset_loader.name = "SceneSyncRemoteAssetLoader"
+    add_child(_remote_asset_loader)
+    _remote_asset_loader.asset_loaded.connect(_on_remote_asset_loaded)
+    _remote_asset_loader.asset_failed.connect(_on_remote_asset_failed)
+    _remote_asset_loader.diagnostic.connect(_on_remote_asset_diagnostic)
+    _ensure_playback_clock()
     _ensure_loom_runner()
 
     _client.connected.connect(_on_connected)
@@ -83,6 +109,8 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
     if _client != null:
         _client.poll(delta)
+
+    _update_playback_clock()
 
     if not _connected:
         return
@@ -124,6 +152,73 @@ func get_status_text() -> String:
     return "Connected - %s - %d peers" % [_client.room, _client.peers.size()]
 
 
+func get_animation_policy(object_id: String) -> Dictionary:
+    var node := _get_managed_node(object_id)
+    if node != null and node.has_meta(ANIMATION_META):
+        var metadata_value = node.get_meta(ANIMATION_META)
+        if metadata_value is Dictionary:
+            return (metadata_value as Dictionary).duplicate(true)
+    var value = _animation_policies.get(object_id, {})
+    if value is Dictionary:
+        return (value as Dictionary).duplicate(true)
+    return {}
+
+
+func get_scene_physics() -> Dictionary:
+    return _scene_physics.duplicate(true)
+
+
+func get_object_physics(object_id: String) -> Dictionary:
+    var node := _get_managed_node(object_id)
+    if node != null and node.has_meta(PHYSICS_META):
+        var metadata_value = node.get_meta(PHYSICS_META)
+        if metadata_value is Dictionary:
+            return (metadata_value as Dictionary).duplicate(true)
+    var value = _object_physics.get(object_id, {})
+    return (value as Dictionary).duplicate(true) if value is Dictionary else {}
+
+
+func get_playback_clock_state() -> Dictionary:
+    return _ensure_playback_clock().get_state()
+
+
+func set_playback_clock_mode(mode: Variant) -> Dictionary:
+    var clock := _ensure_playback_clock()
+    var previous_mode := playback_clock_mode
+    var local_id := _client.id if _client != null else ""
+    var state := clock.set_mode(mode, local_id, nickname, _managed_objects.keys())
+    playback_clock_mode = int(state.get("mode", SceneSyncPlaybackClock.LOCAL))
+    if previous_mode != playback_clock_mode and playback_clock_mode == SceneSyncPlaybackClock.LOCAL:
+        _resume_remote_animation_policies()
+    return state
+
+
+func use_local_playback() -> Dictionary:
+    return set_playback_clock_mode(SceneSyncPlaybackClock.LOCAL)
+
+
+func follow_shared_playback() -> Dictionary:
+    return set_playback_clock_mode(SceneSyncPlaybackClock.SHARED_PLAYBACK_FOLLOW)
+
+
+func control_shared_playback() -> Dictionary:
+    return set_playback_clock_mode(SceneSyncPlaybackClock.SHARED_PLAYBACK_CONTROL)
+
+
+func _has_animation_policy(object_id: String) -> bool:
+    var node := _get_managed_node(object_id)
+    if node != null and node.has_meta(ANIMATION_META):
+        return node.get_meta(ANIMATION_META) is Dictionary
+    return _animation_policies.has(object_id)
+
+
+func _has_object_physics(object_id: String) -> bool:
+    var node := _get_managed_node(object_id)
+    if node != null and node.has_meta(PHYSICS_META):
+        return node.get_meta(PHYSICS_META) is Dictionary
+    return _object_physics.has(object_id)
+
+
 func select_object(node: Node3D) -> void:
     if node == null:
         deselect_object()
@@ -132,7 +227,7 @@ func select_object(node: Node3D) -> void:
         return
 
     var object_id := _get_or_assign_object_id(node)
-    var lock_owner := String(_locks.get(object_id, ""))
+    var lock_owner := _safe_string(_locks.get(object_id, ""))
     if lock_owner != "" and lock_owner != _client.id:
         push_warning("[SceneSync] Object is locked by another peer: %s" % object_id)
         return
@@ -163,6 +258,12 @@ func sync_all_meshes() -> void:
 func _on_connected(new_id: String, new_room: String) -> void:
     _connected = true
     room = new_room
+    if _playback_clock != null:
+        var configured_mode := playback_clock_mode
+        _playback_clock.clear()
+        playback_clock_mode = configured_mode
+        _playback_clock.broadcast_interval = playback_clock_broadcast_interval
+        _playback_clock.set_mode(configured_mode, new_id, nickname, _managed_objects.keys())
     connected.emit(new_id, new_room)
 
 
@@ -175,10 +276,39 @@ func _on_disconnected() -> void:
     _loom_graphs.clear()
     _mesh_data_by_asset_id.clear()
     _mesh_data_by_path.clear()
+    if _remote_asset_loader != null:
+        _remote_asset_loader.cancel_all()
+    _remote_asset_contexts.clear()
+    _carrier_load_signatures.clear()
+    for node_value in _managed_objects.values():
+        if node_value is Node3D and is_instance_valid(node_value):
+            var managed_node := node_value as Node3D
+            if bool(managed_node.get_meta(REMOTE_OBJECT_META, false)):
+                SceneSyncAnimationPolicy.stop(managed_node)
+                managed_node.queue_free()
+    if _playback_clock != null:
+        var configured_mode := playback_clock_mode
+        _playback_clock.clear()
+        playback_clock_mode = configured_mode
+    _managed_objects.clear()
+    _known_ids.clear()
+    _mesh_paths.clear()
+    _asset_ids.clear()
+    _metadata.clear()
+    _animation_policies.clear()
+    _object_physics.clear()
+    _scene_physics.clear()
+    _scene_physics_present = false
+    if has_meta(PHYSICS_META):
+        remove_meta(PHYSICS_META)
+    _origins.clear()
+    _unity_hierarchy_paths.clear()
+    _last_snapshots.clear()
     _pending_recoveries.clear()
     _responder_cooldowns.clear()
     _active_outgoing_transfer_id = ""
     _env_id = ""
+    _selected_object = null
     _currently_locked_id = ""
     disconnected.emit()
 
@@ -187,10 +317,10 @@ func _on_peers_updated(peers: Array) -> void:
     var live_peer_ids := {}
     for peer in peers:
         if peer is Dictionary:
-            live_peer_ids[String(peer.get("id", ""))] = true
+            live_peer_ids[_safe_string(peer.get("id", ""))] = true
 
     for object_id in _locks.keys():
-        var owner_id := String(_locks[object_id])
+        var owner_id := _safe_string(_locks[object_id])
         if owner_id != "" and owner_id != _client.id and not live_peer_ids.has(owner_id):
             _locks.erase(object_id)
 
@@ -207,7 +337,7 @@ func _request_scene_from_peer() -> void:
     for peer in peers:
         if not (peer is Dictionary):
             continue
-        var peer_id := String(peer.get("id", ""))
+        var peer_id := _safe_string(peer.get("id", ""))
         if peer_id == "" or peer_id == _client.id:
             continue
         _client.send_handoff(peer_id, SceneSyncProtocol.make_scene_request())
@@ -225,10 +355,10 @@ func _on_handoff_received(data: Dictionary) -> void:
 
 
 func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void:
-    var from_id := String(from_info.get("id", ""))
-    var kind := String(payload.get("kind", ""))
+    var from_id := _safe_string(from_info.get("id", ""))
+    var kind := _safe_string(payload.get("kind", ""))
     if kind == "":
-        kind = String(payload.get("type", ""))
+        kind = _safe_string(payload.get("type", ""))
 
     match kind:
         "scene-graph-set":
@@ -245,6 +375,14 @@ func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void
             _handle_scene_state(payload)
         "scene-env":
             _handle_scene_env(payload)
+        "scene-physics":
+            if _client == null or from_id != _client.id:
+                _apply_scene_physics_payload(payload, true)
+        "scene-clock":
+            var local_id := _client.id if _client != null else ""
+            if from_id != local_id and _playback_clock != null:
+                if _playback_clock.ingest(payload, from_id, local_id):
+                    playback_clock_mode = _playback_clock.mode
         "scene-delta":
             if from_id != _client.id:
                 _handle_scene_delta(payload)
@@ -320,13 +458,13 @@ func _handle_scene_graph_clear(payload: Dictionary) -> void:
 
 
 func _handle_scene_env(payload: Dictionary) -> void:
-    var env_id := String(payload.get("envId", ""))
+    var env_id := _safe_string(payload.get("envId", ""))
     if env_id != "":
         _env_id = env_id
 
 
 func _handle_scene_delta(payload: Dictionary) -> void:
-    var object_id := String(payload.get("objectId", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
     var node_value = _managed_objects.get(object_id)
     if node_value == null or not is_instance_valid(node_value):
         return
@@ -334,6 +472,7 @@ func _handle_scene_delta(payload: Dictionary) -> void:
     if node == null:
         return
     _apply_payload_metadata(node, object_id, payload, true)
+    _route_wire_asset(object_id, node, payload)
     if _selected_object != null and is_instance_valid(_selected_object):
         if _get_object_id(_selected_object) == object_id:
             return
@@ -352,12 +491,19 @@ func _handle_scene_request(from_id: String) -> void:
         var object_id := _get_or_assign_object_id(node)
         var entry := await _build_object_payload(node, object_id)
         objects[object_id] = entry
-    _client.send_handoff(from_id, SceneSyncProtocol.make_scene_state(objects, _loom_graphs, _env_id))
+    _client.send_handoff(from_id, SceneSyncProtocol.make_scene_state(
+        objects,
+        _loom_graphs,
+        _env_id,
+        get_scene_physics() if _scene_physics_present else null,
+        _scene_physics_present
+    ))
 
 
 func _handle_scene_state(payload: Dictionary) -> void:
     _scene_received = true
     _handle_scene_env(payload)
+    _apply_scene_physics_payload(payload, true)
     var loom_graphs = payload.get("loomGraphs", {})
     if loom_graphs is Dictionary:
         _loom_graphs = (loom_graphs as Dictionary).duplicate(true)
@@ -375,13 +521,14 @@ func _handle_scene_state(payload: Dictionary) -> void:
 
 
 func _handle_scene_add(payload: Dictionary) -> void:
-    var object_id := String(payload.get("objectId", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
     if object_id == "":
         return
     if _managed_objects.has(object_id) and is_instance_valid(_managed_objects[object_id]):
         var existing := _managed_objects[object_id] as Node3D
         if existing != null:
             _apply_payload_metadata(existing, object_id, payload, true)
+            _route_wire_asset(object_id, existing, payload)
             _apply_transform_to_node(existing, SceneSyncProtocol.extract_transform(payload))
         return
 
@@ -392,19 +539,36 @@ func _handle_scene_add(payload: Dictionary) -> void:
     if node != null:
         _bind_existing_managed_object(object_id, node)
         _apply_payload_metadata(node, object_id, payload, true)
+        _route_wire_asset(object_id, node, payload)
         _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
         if mesh_path != "":
             _mesh_paths[object_id] = mesh_path
         object_added.emit(object_id, node)
         return
 
-    if String(asset.get("type", "")) == "primitive":
-        node = _create_primitive(String(asset.get("primitive", "box")), String(asset.get("color", "#888888")))
-    elif String(asset.get("type", "")) == "mesh":
-        mesh_path = String(asset.get("meshPath", mesh_path))
+    var asset_type := _safe_string(asset.get("type", "")).to_lower()
+    if asset_type == "primitive":
+        node = _create_primitive(
+            _safe_string(asset.get("primitive", "box"), "box"),
+            _safe_string(asset.get("color", "#888888"), "#888888")
+        )
+        _mark_remote_object(node)
+    elif asset_type == "mesh":
+        mesh_path = _safe_string(asset.get("meshPath", mesh_path), mesh_path)
+
+    if node == null and _asset_needs_placeholder(asset):
+        node = _create_loading_placeholder(_safe_string(payload.get("name", object_id), object_id))
+        _mark_remote_object(node)
+        _register_managed_object(object_id, node)
+        _apply_payload_metadata(node, object_id, payload, true)
+        _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
+        _route_wire_asset(object_id, node, payload)
+        object_added.emit(object_id, node)
+        return
 
     if node == null and mesh_path != "":
-        node = _create_loading_placeholder(String(payload.get("name", object_id)))
+        node = _create_loading_placeholder(_safe_string(payload.get("name", object_id), object_id))
+        _mark_remote_object(node)
         _register_managed_object(object_id, node)
         _apply_payload_metadata(node, object_id, payload, true)
         _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
@@ -414,10 +578,12 @@ func _handle_scene_add(payload: Dictionary) -> void:
 
     if node == null:
         node = _create_primitive("box")
+        _mark_remote_object(node)
 
     _register_managed_object(object_id, node)
     _apply_payload_metadata(node, object_id, payload, true)
     _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
+    _route_wire_asset(object_id, node, payload)
 
     if not asset.is_empty():
         node.set_meta(ASSET_META, asset.duplicate(true))
@@ -429,7 +595,13 @@ func _handle_scene_add(payload: Dictionary) -> void:
 
 
 func _handle_scene_remove(payload: Dictionary) -> void:
-    var object_id := String(payload.get("objectId", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
+    if _playback_clock != null:
+        _playback_clock.forget_object(object_id)
+    _cancel_carrier_load(object_id)
+    if _remote_asset_loader != null:
+        _remote_asset_loader.cancel_object(object_id)
+    _remote_asset_contexts.erase(object_id)
     var node_value = _managed_objects.get(object_id)
     if node_value != null and is_instance_valid(node_value):
         var node := node_value as Node3D
@@ -437,13 +609,19 @@ func _handle_scene_remove(payload: Dictionary) -> void:
             if node == _selected_object:
                 _selected_object = null
                 _currently_locked_id = ""
-            node.queue_free()
+            if bool(node.get_meta(REMOTE_OBJECT_META, false)):
+                SceneSyncAnimationPolicy.stop(node)
+                node.queue_free()
+            elif _safe_string(node.get_meta(OBJECT_ID_META, "")) == object_id:
+                node.remove_meta(OBJECT_ID_META)
     _managed_objects.erase(object_id)
     _known_ids.erase(object_id)
     _unbind_loom_object(object_id)
     _mesh_paths.erase(object_id)
     _asset_ids.erase(object_id)
     _metadata.erase(object_id)
+    _animation_policies.erase(object_id)
+    _object_physics.erase(object_id)
     _origins.erase(object_id)
     _unity_hierarchy_paths.erase(object_id)
     _locks.erase(object_id)
@@ -452,7 +630,7 @@ func _handle_scene_remove(payload: Dictionary) -> void:
 
 
 func _handle_scene_mesh(payload: Dictionary) -> void:
-    var object_id := String(payload.get("objectId", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
     var mesh_path := _mesh_path_from_payload(payload)
     if object_id == "" or mesh_path == "":
         return
@@ -471,26 +649,36 @@ func _handle_scene_mesh(payload: Dictionary) -> void:
             transform_data = _snapshot_for_node(node)
         else:
             node = _create_loading_placeholder(object_id)
+            _mark_remote_object(node)
             _register_managed_object(object_id, node)
     _apply_payload_metadata(node, object_id, payload, true)
     _mesh_paths[object_id] = mesh_path
-    _load_mesh_for_object(object_id, {
+    var replacement_payload := {
         "objectId": object_id,
-        "name": String(payload.get("name", object_id)),
+        "name": _safe_string(payload.get("name", object_id), object_id),
         "position": SceneSyncProtocol.pos_to_wire(transform_data.get("position", Vector3.ZERO)),
         "rotation": SceneSyncProtocol.rot_to_wire(transform_data.get("rotation", Quaternion.IDENTITY)),
         "scale": SceneSyncProtocol.scale_to_wire(transform_data.get("scale", Vector3.ONE)),
         "asset": _asset_from_payload(payload),
         "metadata": _metadata_from_payload(payload),
-        "assetId": String(payload.get("assetId", "")),
-        "origin": String(payload.get("origin", "")),
-        "unityHierarchyPath": String(payload.get("unityHierarchyPath", "")),
-    }, mesh_path)
+        "assetId": _safe_string(payload.get("assetId", "")),
+        "origin": _safe_string(payload.get("origin", "")),
+        "unityHierarchyPath": _safe_string(payload.get("unityHierarchyPath", "")),
+    }
+    if payload.has("animation"):
+        replacement_payload["animation"] = payload.get("animation", null)
+    elif _has_animation_policy(object_id):
+        replacement_payload["animation"] = get_animation_policy(object_id)
+    if payload.has("physics"):
+        replacement_payload["physics"] = payload.get("physics", null)
+    elif _has_object_physics(object_id):
+        replacement_payload["physics"] = get_object_physics(object_id)
+    _load_mesh_for_object(object_id, replacement_payload, mesh_path)
 
 
 func _handle_scene_lock(payload: Dictionary, from_info: Dictionary) -> void:
-    var object_id := String(payload.get("objectId", ""))
-    var from_id := String(from_info.get("id", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
+    var from_id := _safe_string(from_info.get("id", ""))
     if object_id == "" or from_id == "":
         return
     _locks[object_id] = from_id
@@ -499,7 +687,7 @@ func _handle_scene_lock(payload: Dictionary, from_info: Dictionary) -> void:
 
 
 func _handle_scene_unlock(payload: Dictionary) -> void:
-    var object_id := String(payload.get("objectId", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
     if object_id != "":
         _locks.erase(object_id)
 
@@ -544,12 +732,20 @@ func _detect_hierarchy_changes() -> void:
             var node := node_value as Node3D
             if node != null and _is_node_within_sync_root(node):
                 continue
-        _client.broadcast(SceneSyncProtocol.make_scene_remove(String(object_id)))
+        _client.broadcast(SceneSyncProtocol.make_scene_remove(_safe_string(object_id)))
         _managed_objects.erase(object_id)
-        _unbind_loom_object(String(object_id))
+        _unbind_loom_object(_safe_string(object_id))
+        if _remote_asset_loader != null:
+            _remote_asset_loader.cancel_object(_safe_string(object_id))
+        _remote_asset_contexts.erase(object_id)
+        _cancel_carrier_load(_safe_string(object_id))
         _mesh_paths.erase(object_id)
         _asset_ids.erase(object_id)
         _metadata.erase(object_id)
+        _animation_policies.erase(object_id)
+        _object_physics.erase(object_id)
+        if _playback_clock != null:
+            _playback_clock.forget_object(_safe_string(object_id))
         _origins.erase(object_id)
         _unity_hierarchy_paths.erase(object_id)
         _locks.erase(object_id)
@@ -565,11 +761,14 @@ func _send_scene_add(node: Node3D, object_id: String) -> void:
 func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
     var snapshot := _snapshot_for_node(node)
     var asset := _detect_asset(node)
-    var mesh_path := String(_mesh_paths.get(object_id, ""))
+    var mesh_path := _safe_string(_mesh_paths.get(object_id, ""))
     var asset_id := _get_asset_id(node, object_id)
     var metadata := _get_metadata(node, object_id)
     var origin := _get_origin(node, object_id)
     var unity_hierarchy_path := _get_unity_hierarchy_path(node, object_id)
+    var animation: Variant = get_animation_policy(object_id) if _has_animation_policy(object_id) else null
+    var has_physics := _has_object_physics(object_id)
+    var physics: Variant = get_object_physics(object_id) if has_physics else null
 
     if mesh_path == "" and asset.is_empty() and _node_has_mesh(node):
         var glb := SceneSyncGltfHelper.export_glb(node)
@@ -594,7 +793,7 @@ func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
                 "source": "carrier",
                 "meshPath": mesh_path,
             }
-        elif String(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
+        elif _safe_string(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
             asset["meshPath"] = mesh_path
         if asset_id != "" and not asset.has("assetId"):
             asset["assetId"] = asset_id
@@ -611,7 +810,10 @@ func _build_object_payload(node: Node3D, object_id: String) -> Dictionary:
         metadata,
         origin,
         unity_hierarchy_path,
-        node.visible
+        node.visible,
+        animation,
+        physics,
+        has_physics
     )
     return payload
 
@@ -641,7 +843,7 @@ func _sync_mesh_for_node(node: Node3D) -> void:
             "source": "carrier",
             "meshPath": mesh_path,
         }
-    elif String(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
+    elif _safe_string(asset.get("type", "")) == "mesh" and not asset.has("meshPath"):
         asset["meshPath"] = mesh_path
     if asset_id != "" and not asset.has("assetId"):
         asset["assetId"] = asset_id
@@ -653,17 +855,33 @@ func _sync_mesh_for_node(node: Node3D) -> void:
         asset,
         _get_metadata(node, object_id),
         _get_origin(node, object_id),
-        _get_unity_hierarchy_path(node, object_id)
+        _get_unity_hierarchy_path(node, object_id),
+        get_animation_policy(object_id) if _has_animation_policy(object_id) else null,
+        get_object_physics(object_id) if _has_object_physics(object_id) else null,
+        _has_object_physics(object_id)
     ))
 
 
 func _load_mesh_for_object(object_id: String, payload: Dictionary, mesh_path: String) -> void:
+    var expected_node := _get_managed_node(object_id)
+    if expected_node == null:
+        return
+    var load_signature := "%s:%d:%d" % [mesh_path, expected_node.get_instance_id(), Time.get_ticks_usec()]
+    _carrier_load_signatures[object_id] = load_signature
     var asset_id := _asset_id_from_payload(payload)
     var data := _get_cached_mesh_data(mesh_path, asset_id)
     if data.is_empty():
         data = await _blob_client.download_glb(mesh_path)
         if not data.is_empty():
             _cache_mesh_data(mesh_path, asset_id, data)
+    if _safe_string(_carrier_load_signatures.get(object_id, "")) != load_signature:
+        return
+    var current_node := _get_managed_node(object_id)
+    if current_node == null or current_node.get_instance_id() != expected_node.get_instance_id():
+        return
+    if _safe_string(_mesh_paths.get(object_id, "")) != mesh_path:
+        return
+    _carrier_load_signatures.erase(object_id)
     if data.is_empty():
         _handle_missing_glb(object_id, mesh_path, null, asset_id)
     _replace_object_with_mesh_data(object_id, payload, data)
@@ -677,7 +895,7 @@ func _load_mesh_bytes_for_object(object_id: String, data: PackedByteArray, asset
 
     var snapshot := _snapshot_for_node(node)
     var asset := _get_asset(node, object_id)
-    var mesh_path := String(_mesh_paths.get(object_id, ""))
+    var mesh_path := _safe_string(_mesh_paths.get(object_id, ""))
     if mesh_path != "":
         asset["meshPath"] = mesh_path
     if asset_id != "":
@@ -694,6 +912,10 @@ func _load_mesh_bytes_for_object(object_id: String, data: PackedByteArray, asset
         "origin": _get_origin(node, object_id),
         "unityHierarchyPath": _get_unity_hierarchy_path(node, object_id),
     }
+    if _has_animation_policy(object_id):
+        payload["animation"] = get_animation_policy(object_id)
+    if _has_object_physics(object_id):
+        payload["physics"] = get_object_physics(object_id)
     if mesh_path != "":
         payload["meshPath"] = mesh_path
     if asset_id != "":
@@ -704,6 +926,16 @@ func _load_mesh_bytes_for_object(object_id: String, data: PackedByteArray, asset
 
 func _replace_object_with_mesh_data(object_id: String, payload: Dictionary, data: PackedByteArray) -> void:
     var old_node := _get_managed_node(object_id)
+    var retained_animation: Variant = get_animation_policy(object_id) if _has_animation_policy(object_id) else null
+    var retained_physics: Variant = get_object_physics(object_id) if _has_object_physics(object_id) else null
+    var old_was_remote := old_node != null and bool(old_node.get_meta(REMOTE_OBJECT_META, false))
+    if old_node != null and not old_was_remote:
+        old_node.set_meta(OBJECT_ID_META, object_id)
+        _managed_objects[object_id] = old_node
+        _known_ids[object_id] = true
+        _bind_loom_object_target(object_id, old_node)
+        object_added.emit(object_id, old_node)
+        return
     var replacement: Node3D = null
 
     if not data.is_empty():
@@ -722,7 +954,7 @@ func _replace_object_with_mesh_data(object_id: String, payload: Dictionary, data
     if Engine.is_editor_hint():
         _assign_editor_owner_recursive(replacement)
 
-    replacement.name = String(payload.get("name", object_id))
+    replacement.name = _safe_string(payload.get("name", object_id), object_id)
     replacement.set_meta(OBJECT_ID_META, object_id)
     _apply_payload_metadata(replacement, object_id, payload, true)
     _apply_transform_to_node(replacement, SceneSyncProtocol.extract_transform(payload))
@@ -734,7 +966,18 @@ func _replace_object_with_mesh_data(object_id: String, payload: Dictionary, data
 
     _managed_objects[object_id] = replacement
     _known_ids[object_id] = true
+    if old_was_remote:
+        _mark_remote_object(replacement)
+    if not payload.has("animation") and retained_animation is Dictionary and not replacement.has_meta(ANIMATION_META):
+        var retained_policy := (retained_animation as Dictionary).duplicate(true)
+        _animation_policies[object_id] = retained_policy
+        replacement.set_meta(ANIMATION_META, retained_policy.duplicate(true))
+    if not payload.has("physics") and retained_physics is Dictionary and not replacement.has_meta(PHYSICS_META):
+        var retained_object_physics := (retained_physics as Dictionary).duplicate(true)
+        _object_physics[object_id] = retained_object_physics
+        replacement.set_meta(PHYSICS_META, retained_object_physics.duplicate(true))
     _bind_loom_object_target(object_id, replacement)
+    _apply_animation_policy(object_id, replacement)
     object_added.emit(object_id, replacement)
 
 
@@ -746,7 +989,7 @@ func _register_managed_object(object_id: String, node: Node3D) -> void:
         parent.add_child(node)
     if Engine.is_editor_hint():
         _assign_editor_owner_recursive(node)
-    node.name = String(node.name if node.name != "" else object_id)
+    node.name = node.name if node.name != "" else object_id
     node.set_meta(OBJECT_ID_META, object_id)
     _managed_objects[object_id] = node
     _known_ids[object_id] = true
@@ -821,10 +1064,10 @@ func _asset_from_payload(payload: Dictionary) -> Dictionary:
     var asset = payload.get("asset", {})
     if asset is Dictionary:
         var result := (asset as Dictionary).duplicate(true)
-        var mesh_path := String(payload.get("meshPath", ""))
+        var mesh_path := _safe_string(payload.get("meshPath", ""))
         if mesh_path != "" and not result.has("meshPath"):
             result["meshPath"] = mesh_path
-        var asset_id := String(payload.get("assetId", ""))
+        var asset_id := _safe_string(payload.get("assetId", ""))
         if asset_id != "" and not result.has("assetId"):
             result["assetId"] = asset_id
         return result
@@ -839,30 +1082,227 @@ func _metadata_from_payload(payload: Dictionary) -> Dictionary:
 
 
 func _mesh_path_from_payload(payload: Dictionary) -> String:
-    var mesh_path := String(payload.get("meshPath", ""))
+    var mesh_path := _safe_string(payload.get("meshPath", ""))
     if mesh_path != "":
         return mesh_path
     var asset := _asset_from_payload(payload)
     if asset.is_empty():
         return ""
-    return String(asset.get("meshPath", ""))
+    return _safe_string(asset.get("meshPath", ""))
 
 
 func _asset_id_from_payload(payload: Dictionary) -> String:
-    var asset_id := String(payload.get("assetId", ""))
+    var asset_id := _safe_string(payload.get("assetId", ""))
     if asset_id != "":
         return asset_id
     var asset := _asset_from_payload(payload)
     if asset.is_empty():
         return ""
-    return String(asset.get("assetId", ""))
+    return _safe_string(asset.get("assetId", ""))
 
 
 func _visual_basis_from_payload(payload: Dictionary) -> String:
     var asset := _asset_from_payload(payload)
     if asset.is_empty():
         return ""
-    return String(asset.get("visualBasis", ""))
+    return _safe_string(asset.get("visualBasis", ""))
+
+
+func _asset_needs_placeholder(asset: Dictionary) -> bool:
+    var asset_type := _safe_string(asset.get("type", "")).to_lower()
+    if asset_type == "text":
+        return true
+    if asset_type == "mesh" or asset_type == "image":
+        return _has_remote_asset_url(asset)
+    return false
+
+
+func _has_remote_asset_url(asset: Dictionary) -> bool:
+    var url := _safe_string(asset.get("url", ""))
+    if url == "":
+        return false
+    var source := _safe_string(asset.get("source", "")).to_lower()
+    if source == "carrier":
+        return false
+    return source == "url" or source == ""
+
+
+func _asset_signature(asset: Dictionary) -> String:
+    if asset.is_empty():
+        return ""
+    return JSON.stringify(asset).sha256_text()
+
+
+func _route_wire_asset(object_id: String, node: Node3D, payload: Dictionary) -> void:
+    if object_id == "" or node == null or not is_instance_valid(node):
+        return
+    var asset := _asset_from_payload(payload)
+    if asset.is_empty():
+        return
+
+    var asset_type := _safe_string(asset.get("type", "")).to_lower()
+    if asset_type == "primitive":
+        _cancel_carrier_load(object_id)
+        _cancel_remote_asset_load(object_id)
+        var primitive_result := SceneSyncWireAssetVisual.apply_primitive(node, asset)
+        if not bool(primitive_result.get("ok", false)):
+            _emit_visual_failure(object_id, "primitive", primitive_result, 0)
+        return
+
+    if asset_type == "text" and not _has_remote_asset_url(asset):
+        _cancel_carrier_load(object_id)
+        _cancel_remote_asset_load(object_id)
+        var text_result := SceneSyncWireAssetVisual.apply_text(node, asset, asset.get("text", null))
+        if not bool(text_result.get("ok", false)):
+            _emit_visual_failure(object_id, "text", text_result, 0)
+        return
+
+    if asset_type in ["mesh", "image", "text"] and _has_remote_asset_url(asset):
+        _cancel_carrier_load(object_id)
+        _start_remote_asset_load(object_id, node, asset)
+        return
+    _cancel_remote_asset_load(object_id)
+    if not (asset_type == "mesh" and _mesh_path_from_payload(payload) != ""):
+        _cancel_carrier_load(object_id)
+
+
+func _start_remote_asset_load(object_id: String, node: Node3D, asset: Dictionary) -> void:
+    if _remote_asset_loader == null:
+        return
+    var signature := _asset_signature(asset)
+    if signature == "":
+        return
+    var previous_value = _remote_asset_contexts.get(object_id, {})
+    if previous_value is Dictionary:
+        var previous := previous_value as Dictionary
+        if (
+            _safe_string(previous.get("signature", "")) == signature
+            and int(previous.get("nodeId", 0)) == node.get_instance_id()
+        ):
+            return
+
+    _remote_asset_contexts[object_id] = {
+        "signature": signature,
+        "nodeId": node.get_instance_id(),
+        "asset": asset.duplicate(true),
+    }
+
+    var asset_id := _safe_string(asset.get("assetId", ""))
+    if _safe_string(asset.get("type", "")).to_lower() == "mesh" and _is_sha256_asset_id(asset_id):
+        var cached := _get_cached_mesh_data("", asset_id)
+        if not cached.is_empty():
+            _apply_remote_asset_bytes(object_id, signature, "mesh", cached)
+            return
+    _remote_asset_loader.request_asset(object_id, signature, asset)
+
+
+func _cancel_remote_asset_load(object_id: String) -> void:
+    if _remote_asset_loader != null:
+        _remote_asset_loader.cancel_object(object_id)
+    _remote_asset_contexts.erase(object_id)
+
+
+func _cancel_carrier_load(object_id: String) -> void:
+    _carrier_load_signatures.erase(object_id)
+    for request_id in _pending_recoveries.keys():
+        var recovery_value = _pending_recoveries.get(request_id, {})
+        if recovery_value is Dictionary:
+            if _safe_string((recovery_value as Dictionary).get("objectId", "")) == object_id:
+                _pending_recoveries.erase(request_id)
+
+
+func _on_remote_asset_loaded(
+    object_id: String,
+    signature: String,
+    asset_type: String,
+    data: PackedByteArray
+) -> void:
+    _apply_remote_asset_bytes(object_id, signature, asset_type, data)
+
+
+func _apply_remote_asset_bytes(
+    object_id: String,
+    signature: String,
+    asset_type: String,
+    data: PackedByteArray
+) -> void:
+    var context := _current_remote_asset_context(object_id, signature)
+    if context.is_empty():
+        return
+    var node := _get_managed_node(object_id)
+    if node == null or node.get_instance_id() != int(context.get("nodeId", 0)):
+        return
+    var asset_value = context.get("asset", {})
+    if not (asset_value is Dictionary):
+        return
+    var asset := asset_value as Dictionary
+
+    var result := {}
+    match asset_type:
+        "mesh":
+            result = SceneSyncWireAssetVisual.apply_glb_bytes(node, data, asset)
+        "image":
+            result = SceneSyncWireAssetVisual.apply_image_bytes(node, data)
+        "text":
+            result = SceneSyncWireAssetVisual.apply_text(node, asset, data.get_string_from_utf8())
+        _:
+            result = {"ok": false, "reason": "unsupported-asset-type"}
+
+    if not bool(result.get("ok", false)):
+        _emit_visual_failure(object_id, asset_type, result, data.size())
+        _remote_asset_contexts.erase(object_id)
+        return
+
+    if asset_type == "mesh":
+        var asset_id := _safe_string(asset.get("assetId", ""))
+        if _is_sha256_asset_id(asset_id):
+            _cache_mesh_data("", asset_id, data)
+        _apply_animation_policy(object_id, node)
+    _remote_asset_contexts.erase(object_id)
+    object_added.emit(object_id, node)
+
+
+func _on_remote_asset_failed(
+    object_id: String,
+    signature: String,
+    _asset_type: String,
+    _detail: Dictionary
+) -> void:
+    if not _current_remote_asset_context(object_id, signature).is_empty():
+        _remote_asset_contexts.erase(object_id)
+
+
+func _on_remote_asset_diagnostic(object_id: String, detail: Dictionary) -> void:
+    if not _remote_asset_contexts.has(object_id):
+        return
+    asset_load_diagnostic.emit(object_id, detail.duplicate(true))
+
+
+func _current_remote_asset_context(object_id: String, signature: String) -> Dictionary:
+    var context_value = _remote_asset_contexts.get(object_id, {})
+    if not (context_value is Dictionary):
+        return {}
+    var context := context_value as Dictionary
+    if _safe_string(context.get("signature", "")) != signature:
+        return {}
+    var node := _get_managed_node(object_id)
+    if node == null or node.get_instance_id() != int(context.get("nodeId", 0)):
+        return {}
+    return context
+
+
+func _emit_visual_failure(object_id: String, asset_type: String, result: Dictionary, bytes: int) -> void:
+    asset_load_diagnostic.emit(object_id, {
+        "assetType": asset_type,
+        "reason": _safe_string(result.get("reason", "visual-apply-failed"), "visual-apply-failed"),
+        "requestResult": -1,
+        "status": 0,
+        "bytes": maxi(bytes, 0),
+        "attempt": 1,
+        "maxAttempts": 1,
+        "retryDelay": 0.0,
+        "willRetry": false,
+    })
 
 
 func _cache_mesh_data(mesh_path: String, asset_id: String, data: PackedByteArray) -> void:
@@ -887,15 +1327,15 @@ func _get_cached_mesh_data(mesh_path: String, asset_id: String) -> PackedByteArr
 func _handle_scene_asset_request(payload: Dictionary, requester_peer_id: String) -> void:
     if requester_peer_id == "":
         return
-    var request_id := String(payload.get("requestId", ""))
-    var object_id := String(payload.get("objectId", ""))
+    var request_id := _safe_string(payload.get("requestId", ""))
+    var object_id := _safe_string(payload.get("objectId", ""))
     if request_id == "" or object_id == "":
         return
     if _get_managed_node(object_id) == null:
         return
 
-    var asset_id := _nullable_string(payload.get("assetId", ""))
-    var mesh_path := _nullable_string(payload.get("meshPath", ""))
+    var asset_id := _safe_string(payload.get("assetId", ""))
+    var mesh_path := _safe_string(payload.get("meshPath", ""))
     var cache_key := asset_id if asset_id != "" else mesh_path
     if cache_key == "":
         return
@@ -950,7 +1390,7 @@ func _retry_recovery_peers(request_id: String, peers: Array) -> void:
             return
         if not (peer is Dictionary):
             continue
-        var peer_id := String((peer as Dictionary).get("id", ""))
+        var peer_id := _safe_string((peer as Dictionary).get("id", ""))
         if peer_id == "" or peer_id == _client.id:
             continue
 
@@ -962,9 +1402,9 @@ func _retry_recovery_peers(request_id: String, peers: Array) -> void:
 
         _client.send_handoff(peer_id, SceneSyncProtocol.make_scene_asset_request(
             request_id,
-            String(recovery.get("objectId", "")),
-            String(recovery.get("assetId", "")),
-            String(recovery.get("meshPath", "")),
+            _safe_string(recovery.get("objectId", "")),
+            _safe_string(recovery.get("assetId", "")),
+            _safe_string(recovery.get("meshPath", "")),
             recovery.get("expectedSize", null)
         ))
 
@@ -984,10 +1424,10 @@ func _remove_recovery_after_timeout(request_id: String) -> void:
 
 
 func _handle_file_handoff(payload: Dictionary, from_peer_id: String) -> void:
-    var path := String(payload.get("path", ""))
-    var filename := String(payload.get("filename", ""))
-    var size := int(payload.get("size", 0))
-    var mime := String(payload.get("mime", ""))
+    var path := _safe_string(payload.get("path", ""))
+    var filename := _safe_string(payload.get("filename", ""))
+    var size := _safe_int(payload.get("size", 0), 0)
+    var mime := _safe_string(payload.get("mime", ""))
     if not _can_accept_file_handoff(from_peer_id, filename, size, mime):
         return
 
@@ -1037,14 +1477,14 @@ func _handle_received_file(from_peer_id: String, filename: String, data: PackedB
         var expected = recovery.get("expectedSize", null)
         if expected != null and int(expected) != data.size():
             continue
-        matched_request_id = String(request_id)
+        matched_request_id = _safe_string(request_id)
         matched_recovery = recovery
         break
 
     if matched_request_id == "":
         return
 
-    var expected_asset_id := String(matched_recovery.get("assetId", ""))
+    var expected_asset_id := _safe_string(matched_recovery.get("assetId", ""))
     var computed_asset_id := ""
     if expected_asset_id != "":
         computed_asset_id = SceneSyncBlobClient.compute_asset_id(data)
@@ -1052,10 +1492,10 @@ func _handle_received_file(from_peer_id: String, filename: String, data: PackedB
             return
 
     _pending_recoveries.erase(matched_request_id)
-    var mesh_path := String(matched_recovery.get("meshPath", ""))
+    var mesh_path := _safe_string(matched_recovery.get("meshPath", ""))
     _cache_mesh_data(mesh_path, computed_asset_id if computed_asset_id != "" else expected_asset_id, data)
     _load_mesh_bytes_for_object(
-        String(matched_recovery.get("objectId", "")),
+        _safe_string(matched_recovery.get("objectId", "")),
         data,
         computed_asset_id if computed_asset_id != "" else expected_asset_id
     )
@@ -1112,7 +1552,7 @@ func _get_other_peers() -> Array:
     if _client == null:
         return result
     for peer in _client.peers:
-        if peer is Dictionary and String((peer as Dictionary).get("id", "")) != _client.id:
+        if peer is Dictionary and _safe_string((peer as Dictionary).get("id", "")) != _client.id:
             result.append(peer)
     return result
 
@@ -1143,10 +1583,111 @@ func _generate_recovery_request_id() -> String:
     return "%d-%06d" % [Time.get_ticks_usec(), rng.randi_range(0, 999999)]
 
 
-func _nullable_string(value: Variant) -> String:
-    if value == null:
-        return ""
-    return String(value)
+func _safe_string(value: Variant, fallback: String = "") -> String:
+    if value is String:
+        return value
+    if value is StringName:
+        return String(value)
+    return fallback
+
+
+func _safe_int(value: Variant, fallback: int = 0) -> int:
+    if value is int:
+        return value
+    if value is float and is_finite(float(value)):
+        return int(value)
+    return fallback
+
+
+func _is_sha256_asset_id(value: Variant) -> bool:
+    var asset_id := _safe_string(value)
+    if asset_id.length() != 71 or not asset_id.begins_with("sha256-"):
+        return false
+    for character in asset_id.substr(7):
+        if character not in "0123456789abcdef":
+            return false
+    return true
+
+
+func _mark_remote_object(node: Node3D) -> void:
+    if node != null:
+        node.set_meta(REMOTE_OBJECT_META, true)
+
+
+func _ensure_playback_clock() -> SceneSyncPlaybackClock:
+    if _playback_clock != null:
+        return _playback_clock
+    _playback_clock = SceneSyncPlaybackClock.new()
+    _playback_clock.broadcast_interval = playback_clock_broadcast_interval
+    _playback_clock.broadcast_requested.connect(_on_playback_clock_broadcast_requested)
+    _playback_clock.state_changed.connect(_on_playback_clock_state_changed)
+    _playback_clock.set_mode(playback_clock_mode, "", nickname, _managed_objects.keys())
+    return _playback_clock
+
+
+func _apply_scene_physics_payload(payload: Dictionary, preserve_missing: bool = true) -> void:
+    if payload.has("physics"):
+        var physics_value = payload.get("physics", null)
+        if physics_value is Dictionary:
+            _scene_physics = (physics_value as Dictionary).duplicate(true)
+            _scene_physics_present = true
+            set_meta(PHYSICS_META, _scene_physics.duplicate(true))
+        else:
+            _scene_physics.clear()
+            _scene_physics_present = false
+            if has_meta(PHYSICS_META):
+                remove_meta(PHYSICS_META)
+        scene_physics_changed.emit(_scene_physics.duplicate(true))
+    elif not preserve_missing:
+        _scene_physics.clear()
+        _scene_physics_present = false
+        if has_meta(PHYSICS_META):
+            remove_meta(PHYSICS_META)
+        scene_physics_changed.emit({})
+
+
+func _update_playback_clock() -> void:
+    if _playback_clock == null:
+        return
+    _playback_clock.broadcast_interval = playback_clock_broadcast_interval
+    if playback_clock_mode != _playback_clock.mode:
+        var previous_mode := _playback_clock.mode
+        var local_id := _client.id if _client != null else ""
+        _playback_clock.set_mode(playback_clock_mode, local_id, nickname, _managed_objects.keys())
+        if previous_mode != SceneSyncPlaybackClock.LOCAL and _playback_clock.mode == SceneSyncPlaybackClock.LOCAL:
+            _resume_remote_animation_policies()
+    var monotonic_time := float(Time.get_ticks_usec()) / 1000000.0
+    var unix_time := Time.get_unix_time_from_system()
+    _playback_clock.update(monotonic_time, unix_time, _managed_objects.keys())
+    playback_clock_mode = _playback_clock.mode
+    if playback_clock_mode == SceneSyncPlaybackClock.LOCAL:
+        return
+    for object_id_value in _managed_objects.keys():
+        var object_id := _safe_string(object_id_value)
+        var node := _get_managed_node(object_id)
+        if node == null or not bool(node.get_meta(REMOTE_OBJECT_META, false)):
+            continue
+        var policy: Variant = get_animation_policy(object_id) if _has_animation_policy(object_id) else null
+        var object_time := _playback_clock.get_object_time(object_id, monotonic_time, unix_time)
+        SceneSyncAnimationPolicy.sample(node, policy, object_time)
+
+
+func _resume_remote_animation_policies() -> void:
+    for object_id_value in _managed_objects.keys():
+        var object_id := _safe_string(object_id_value)
+        var node := _get_managed_node(object_id)
+        if node != null and bool(node.get_meta(REMOTE_OBJECT_META, false)):
+            _apply_animation_policy(object_id, node)
+
+
+func _on_playback_clock_broadcast_requested(payload: Dictionary) -> void:
+    if _connected and _client != null:
+        _client.broadcast(payload.duplicate(true))
+
+
+func _on_playback_clock_state_changed(state: Dictionary) -> void:
+    playback_clock_mode = int(state.get("mode", SceneSyncPlaybackClock.LOCAL))
+    playback_clock_state_changed.emit(state.duplicate(true))
 
 
 func _wrap_imported_mesh_for_visual_basis(imported: Node3D, visual_basis: String) -> Node3D:
@@ -1166,21 +1707,21 @@ func _apply_payload_metadata(node: Node3D, object_id: String, payload: Dictionar
     if node == null:
         return
 
-    var name := String(payload.get("name", ""))
+    var name := _safe_string(payload.get("name", ""))
     if name != "":
         node.name = name
 
-    if payload.has("visible"):
-        node.visible = bool(payload["visible"])
+    if payload.has("visible") and payload["visible"] is bool:
+        node.visible = payload["visible"]
 
     var mesh_path := _mesh_path_from_payload(payload)
     if mesh_path != "":
         _mesh_paths[object_id] = mesh_path
 
-    var asset_id := String(payload.get("assetId", ""))
+    var asset_id := _safe_string(payload.get("assetId", ""))
     var asset := _asset_from_payload(payload)
     if asset_id == "" and not asset.is_empty():
-        asset_id = String(asset.get("assetId", ""))
+        asset_id = _safe_string(asset.get("assetId", ""))
     if asset_id != "":
         _asset_ids[object_id] = asset_id
         node.set_meta(ASSET_ID_META, asset_id)
@@ -1206,23 +1747,93 @@ func _apply_payload_metadata(node: Node3D, object_id: String, payload: Dictionar
         if node.has_meta(METADATA_META):
             node.remove_meta(METADATA_META)
 
-    var origin := String(payload.get("origin", ""))
+    var animation_changed := false
+    if payload.has("animation"):
+        animation_changed = true
+        var animation_value = payload.get("animation", null)
+        if animation_value is Dictionary:
+            var animation := (animation_value as Dictionary).duplicate(true)
+            if preserve_missing and _has_animation_policy(object_id):
+                animation = _merge_animation_policy(get_animation_policy(object_id), animation)
+            _animation_policies[object_id] = animation
+            node.set_meta(ANIMATION_META, animation.duplicate(true))
+            animation_policy_changed.emit(object_id, node, animation.duplicate(true))
+        else:
+            _animation_policies.erase(object_id)
+            if node.has_meta(ANIMATION_META):
+                node.remove_meta(ANIMATION_META)
+            animation_policy_changed.emit(object_id, node, {})
+    elif not preserve_missing:
+        animation_changed = true
+        _animation_policies.erase(object_id)
+        if node.has_meta(ANIMATION_META):
+            node.remove_meta(ANIMATION_META)
+
+    if animation_changed and _get_managed_node(object_id) == node:
+        _apply_animation_policy(object_id, node)
+
+    if payload.has("physics"):
+        var physics_value = payload.get("physics", null)
+        if physics_value is Dictionary:
+            var physics := (physics_value as Dictionary).duplicate(true)
+            _object_physics[object_id] = physics
+            node.set_meta(PHYSICS_META, physics.duplicate(true))
+            object_physics_changed.emit(object_id, node, physics.duplicate(true))
+        else:
+            _object_physics.erase(object_id)
+            if node.has_meta(PHYSICS_META):
+                node.remove_meta(PHYSICS_META)
+            object_physics_changed.emit(object_id, node, {})
+    elif not preserve_missing:
+        _object_physics.erase(object_id)
+        if node.has_meta(PHYSICS_META):
+            node.remove_meta(PHYSICS_META)
+
+    var origin := _safe_string(payload.get("origin", ""))
     if origin != "":
         _origins[object_id] = origin
         node.set_meta(ORIGIN_META, origin)
 
-    var hierarchy_path := String(payload.get("unityHierarchyPath", ""))
+    var hierarchy_path := _safe_string(payload.get("unityHierarchyPath", ""))
     if hierarchy_path != "":
         _unity_hierarchy_paths[object_id] = hierarchy_path
         node.set_meta(UNITY_HIERARCHY_PATH_META, hierarchy_path)
 
 
+func _apply_animation_policy(object_id: String, node: Node3D) -> Dictionary:
+    if node == null or not is_instance_valid(node):
+        return {"applied": false, "reason": "invalid-root"}
+    var raw_policy: Variant = get_animation_policy(object_id) if _has_animation_policy(object_id) else null
+    var result := {}
+    if _playback_clock != null and _playback_clock.mode != SceneSyncPlaybackClock.LOCAL:
+        var monotonic_time := float(Time.get_ticks_usec()) / 1000000.0
+        var unix_time := Time.get_unix_time_from_system()
+        result = SceneSyncAnimationPolicy.sample(
+            node,
+            raw_policy,
+            _playback_clock.get_object_time(object_id, monotonic_time, unix_time)
+        )
+    else:
+        result = SceneSyncAnimationPolicy.apply(node, raw_policy)
+    animation_policy_applied.emit(object_id, node, result.duplicate(true))
+    return result
+
+
+func _merge_animation_policy(existing: Dictionary, incoming: Dictionary) -> Dictionary:
+    var result := existing.duplicate(true)
+    if incoming.has("clip") and not incoming.has("clipName"):
+        result.erase("clipName")
+    for key in incoming.keys():
+        result[key] = incoming[key]
+    return result
+
+
 func _graph_object_scope(payload: Dictionary) -> String:
     var scope = payload.get("scope", "")
     if scope is Dictionary:
-        return String((scope as Dictionary).get("object", ""))
-    if String(scope) == "object":
-        return String(payload.get("objectId", ""))
+        return _safe_string((scope as Dictionary).get("object", ""))
+    if _safe_string(scope) == "object":
+        return _safe_string(payload.get("objectId", ""))
     return ""
 
 
@@ -1251,6 +1862,12 @@ func _ensure_loom_runner() -> Node:
         var runner_script = load(LOOM_RUNNER_SCRIPT_PATH)
         if runner_script == null:
             push_warning("[SceneSync] Loomlet runner script is unavailable: %s" % LOOM_RUNNER_SCRIPT_PATH)
+            return null
+        if runner_script.get_class() == "CSharpScript":
+            push_warning("[SceneSync] Loomlet runner assembly is not available yet.")
+            return null
+        if runner_script is Script and not (runner_script as Script).can_instantiate():
+            push_warning("[SceneSync] Loomlet runner assembly is not available yet.")
             return null
         _loom_runner = runner_script.new()
 
@@ -1322,7 +1939,7 @@ func _clear_all_loom_graphs() -> void:
     var objects = _loom_graphs.get("objects", {})
     if objects is Dictionary:
         for object_id in (objects as Dictionary).keys():
-            _clear_loom_object_graph(String(object_id))
+            _clear_loom_object_graph(_safe_string(object_id))
 
 
 func _apply_loom_graph_state() -> void:
@@ -1334,7 +1951,7 @@ func _apply_loom_graph_state() -> void:
     var objects = _loom_graphs.get("objects", {})
     if objects is Dictionary:
         for object_id in (objects as Dictionary).keys():
-            _bind_loom_graph_for_object(String(object_id))
+            _bind_loom_graph_for_object(_safe_string(object_id))
 
 
 func _merge_asset_metadata(node: Node3D, _object_id: String, asset: Dictionary) -> void:
@@ -1349,11 +1966,11 @@ func _merge_asset_metadata(node: Node3D, _object_id: String, asset: Dictionary) 
 
 
 func _apply_asset_visual_delta(node: Node3D, asset: Dictionary) -> void:
-    if String(asset.get("type", "")) != "primitive":
+    if _safe_string(asset.get("type", "")) != "primitive":
         return
 
-    var primitive := String(asset.get("primitive", ""))
-    var color := String(asset.get("color", ""))
+    var primitive := _safe_string(asset.get("primitive", ""))
+    var color := _safe_string(asset.get("color", ""))
     var mesh_instance := _find_mesh_instance(node)
     if mesh_instance == null:
         return
@@ -1407,8 +2024,8 @@ func _apply_color(mesh_instance: MeshInstance3D, color: String) -> void:
 
 func _get_asset_id(node: Node3D, object_id: String) -> String:
     if node != null and node.has_meta(ASSET_ID_META):
-        return String(node.get_meta(ASSET_ID_META))
-    return String(_asset_ids.get(object_id, ""))
+        return _safe_string(node.get_meta(ASSET_ID_META))
+    return _safe_string(_asset_ids.get(object_id, ""))
 
 
 func _get_asset(node: Node3D, object_id: String) -> Dictionary:
@@ -1441,14 +2058,14 @@ func _get_metadata(node: Node3D, object_id: String) -> Dictionary:
 
 func _get_origin(node: Node3D, object_id: String) -> String:
     if node != null and node.has_meta(ORIGIN_META):
-        return String(node.get_meta(ORIGIN_META))
-    return String(_origins.get(object_id, ""))
+        return _safe_string(node.get_meta(ORIGIN_META))
+    return _safe_string(_origins.get(object_id, ""))
 
 
 func _get_unity_hierarchy_path(node: Node3D, object_id: String) -> String:
     if node != null and node.has_meta(UNITY_HIERARCHY_PATH_META):
-        return String(node.get_meta(UNITY_HIERARCHY_PATH_META))
-    return String(_unity_hierarchy_paths.get(object_id, ""))
+        return _safe_string(node.get_meta(UNITY_HIERARCHY_PATH_META))
+    return _safe_string(_unity_hierarchy_paths.get(object_id, ""))
 
 
 func _get_managed_node(object_id: String) -> Node3D:
@@ -1459,8 +2076,8 @@ func _get_managed_node(object_id: String) -> Node3D:
 
 
 func _resolve_existing_sync_target_for_payload(object_id: String, payload: Dictionary) -> Node3D:
-    var hierarchy_path := String(payload.get("unityHierarchyPath", ""))
-    var node_name := String(payload.get("name", ""))
+    var hierarchy_path := _safe_string(payload.get("unityHierarchyPath", ""))
+    var node_name := _safe_string(payload.get("name", ""))
     var name_matches: Array[Node3D] = []
 
     for node in _get_all_sync_targets():
@@ -1470,7 +2087,7 @@ func _resolve_existing_sync_target_for_payload(object_id: String, payload: Dicti
         if object_id != "" and node_object_id == object_id:
             return node
         if hierarchy_path != "" and node.has_meta(UNITY_HIERARCHY_PATH_META):
-            if String(node.get_meta(UNITY_HIERARCHY_PATH_META)) == hierarchy_path:
+            if _safe_string(node.get_meta(UNITY_HIERARCHY_PATH_META)) == hierarchy_path:
                 return node
         if node_name != "" and node.name == node_name:
             name_matches.append(node)
@@ -1590,7 +2207,7 @@ func _node_has_mesh(node: Node3D) -> bool:
 
 func _get_object_id(node: Node) -> String:
     if node != null and node.has_meta(OBJECT_ID_META):
-        return String(node.get_meta(OBJECT_ID_META))
+        return _safe_string(node.get_meta(OBJECT_ID_META))
     return ""
 
 

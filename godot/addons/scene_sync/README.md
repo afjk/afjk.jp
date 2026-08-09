@@ -30,6 +30,48 @@ Add a `SceneSyncManager` node to your scene and configure:
 
 The addon uses Godot .NET for Loomlet behavior graph evaluation. Use a .NET-enabled Godot 4.x editor/export template so `SceneSyncLoomletRunner.cs` and the vendored `Loomlet.Runtime` core are compiled.
 
+## Wire assets
+
+SceneSync can render wire assets without a pre-existing Godot scene node:
+
+- GLB meshes from `asset.url`
+- PNG, JPEG, and WebP images from `asset.url`
+- UTF-8 text from `asset.url` or inline `asset.text`
+- wire primitives, including fallback after an asset change
+
+Remote assets are downloaded with bounded retries: at most four attempts, with 1, 2, and 4 second delays. GLB responses are limited to 50 MiB, image responses to 20 MiB, and text responses to 1 MiB. URLs must use HTTPS; desktop/editor builds additionally allow loopback HTTP for development. Redirects, credentials in URLs, and non-loopback HTTP are rejected. GLB structure, optional SHA-256 hashes, and image signatures are validated before rendering.
+
+Remote URL failures do not enter the blob peer-recovery path. Existing `meshPath`/`assetId` carrier assets continue to use the blob cache and `scene-asset-request` recovery behavior.
+
+URL meshes use the shared cache only when `assetId` is a lowercase `sha256-` value followed by exactly 64 hexadecimal characters. Friendly or malformed IDs are never used as URL cache keys. An explicit `source: "carrier"` always keeps the carrier path even if a stale `url` field is also present.
+
+Subscribe to `SceneSyncManager.asset_load_diagnostic(object_id, detail)` for loading failures and retry status. `detail` contains safe fields such as `status`, `attempt`, `maxAttempts`, `assetType`, `reason`, `retryDelay`, and `willRetry`; it does not expose the URL or room credentials.
+
+## Animation policy
+
+The optional top-level `animation` object is preserved through add, delta, state, mesh replacement, cache/recovery, and locally built wire payloads. Supported fields are `clipName` (or `clip`), `mode` (`loop` or `once`), `speed`, `offset`, and `enabled`. With no policy, the first non-`RESET` clip is played automatically in a loop at normal speed. Explicit `animation: null` clears the stored policy and reapplies that default.
+
+Use `SceneSyncManager.get_animation_policy(object_id)` to read a deep copy of the original wire policy. Managed nodes also expose it in the `scene_sync_animation` metadata key. The manager emits:
+
+- `animation_policy_changed(object_id, node, policy)` when stored policy changes
+- `animation_policy_applied(object_id, node, result)` after applying it to available `AnimationPlayer` nodes
+
+Missing animation fields in ordinary deltas preserve the current policy. Policy application never changes the synchronized object's transform.
+
+## Playback clock
+
+`SceneSyncManager` supports Local, Shared Playback Follow, and Shared Playback Control modes through `playback_clock_mode`. Use `use_local_playback()`, `follow_shared_playback()`, `control_shared_playback()`, or `set_playback_clock_mode(mode)` at runtime, and inspect `get_playback_clock_state()`. Control mode publishes bounded `scene-clock` updates at `playback_clock_broadcast_interval` (minimum 0.05 seconds); Follow mode accepts newer remote revisions. `playback_clock_state_changed(state)` reports mode and clock changes.
+
+In Follow and Control modes, remote-created managed `AnimationPlayer` clips are sampled from the shared object clock. Sampling applies `time * speed + offset`, modulo clip duration for loop mode and clamped for once mode, while freezing local animation advance. Authored/bound Godot animations are not sampled. Returning to Local resumes ordinary animation-policy playback for remote-created nodes, including when the exported mode property is changed directly.
+
+## Physics metadata
+
+Godot preserves, but does not execute, the raw `physics` dictionaries used by SceneSync. Scene physics is available through `get_scene_physics()` and `scene_physics_changed(physics)`. Object physics is deep-copied into the `scene_sync_physics` node metadata key and available through `get_object_physics(object_id)` and `object_physics_changed(object_id, node, physics)`.
+
+Physics metadata round-trips through scene state, add, delta, mesh replacement, cache recovery, and locally built payloads. An omitted field preserves the current dictionary; explicit `physics: null` clears it.
+
+Nodes created solely for received SceneSync objects carry `scene_sync_remote_object`. Disconnect and remote remove/delete messages remove only those remote-created nodes and clear their manager state. Existing authored Godot nodes that were rebound to a wire object are not marked: remove/delete only unpublishes them, and incoming carrier mesh updates preserve their root and subtree instead of replacing them.
+
 ## Unity compatibility
 
 The addon follows the current Unity SceneSync wire shape for scene objects:
@@ -39,6 +81,8 @@ The addon follows the current Unity SceneSync wire shape for scene objects:
 - computes `assetId` as `sha256-...` for locally exported GLB, matching the Unity runtime cache key format
 - caches uploaded/downloaded GLB bytes by `assetId` and `meshPath` during the current session
 - recovers expired blob-store GLB assets through Unity-compatible `scene-asset-request` and `file` handoff messages
+- renders Unity-compatible URL mesh, image, and text assets with bounded validation and retry behavior
+- preserves and applies the Unity animation policy across mesh replacement and recovery
 - rebinds incoming scene objects to an existing unique Godot sync target when possible
 - accepts `scene-batch` messages with `ops`, falling back to `actions` only when `ops` is absent
 - accepts `scene-delete` as a removal alias
