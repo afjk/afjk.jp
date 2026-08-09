@@ -2126,7 +2126,9 @@ func _apply_transform_to_node(node: Node3D, transform_data: Dictionary) -> void:
     var rot: Quaternion = transform_data.get("rotation", current.basis.get_rotation_quaternion())
     var scl: Vector3 = transform_data.get("scale", current.basis.get_scale())
     current.origin = pos
-    current.basis = Basis(rot).scaled(scl)
+    # SceneSync wire transforms use local TRS order (R * S). Basis.scaled()
+    # applies a global scale (S * R), which shears rotated non-uniform scales.
+    current.basis = Basis(rot).scaled_local(scl)
     if node.is_inside_tree():
         node.global_transform = current
     else:
