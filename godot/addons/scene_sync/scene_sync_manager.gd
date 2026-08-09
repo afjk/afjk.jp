@@ -1863,13 +1863,13 @@ func _ensure_loom_runner() -> Node:
         if runner_script == null:
             push_warning("[SceneSync] Loomlet runner script is unavailable: %s" % LOOM_RUNNER_SCRIPT_PATH)
             return null
-        if runner_script.get_class() == "CSharpScript":
+        if not (runner_script is Script):
+            push_warning("[SceneSync] Loomlet runner resource is not a Script: %s" % LOOM_RUNNER_SCRIPT_PATH)
+            return null
+        if not (runner_script as Script).can_instantiate():
             push_warning("[SceneSync] Loomlet runner assembly is not available yet.")
             return null
-        if runner_script is Script and not (runner_script as Script).can_instantiate():
-            push_warning("[SceneSync] Loomlet runner assembly is not available yet.")
-            return null
-        _loom_runner = runner_script.new()
+        _loom_runner = _instantiate_loom_runner_script(runner_script)
 
     if _loom_runner == null:
         push_warning("[SceneSync] Failed to instantiate Loomlet runner.")
@@ -1878,6 +1878,15 @@ func _ensure_loom_runner() -> Node:
     _loom_runner.name = "SceneSyncLoomletRunner"
     add_child(_loom_runner)
     return _loom_runner
+
+
+func _instantiate_loom_runner_script(runner_script: Variant) -> Node:
+    if not (runner_script is Script):
+        return null
+    var script := runner_script as Script
+    if not script.can_instantiate():
+        return null
+    return script.new() as Node
 
 
 func _call_loom_runner(method_name: String, args: Array = []) -> void:
