@@ -62,6 +62,8 @@ cd "$PROJECT_DIR"
   --check-only --script tests/run_tests.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-tests-check.log" \
   --check-only --script tests/test_rapier_bridge.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-manager-transform-tests-check.log" \
+  --check-only --script tests/test_rapier_manager_transform_order.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/loom-runner-check.log" \
   --check-only --script tests/test_loom_runner.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/wire-asset-visual-check.log" \
@@ -122,6 +124,9 @@ run_test "Playback Clock Tests" \
 
 run_test "Rapier Bridge Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-bridge.log" -s tests/test_rapier_bridge.gd
+
+run_test "Rapier Manager Transform Order Tests" \
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-manager-transform.log" -s tests/test_rapier_manager_transform_order.gd
 
 run_test "Remote Asset Loader Tests" \
   env SCENESYNC_REMOTE_ASSET_TEST_PORT="$REMOTE_ASSET_TEST_PORT" \
