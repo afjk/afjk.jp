@@ -64,6 +64,8 @@ cd "$PROJECT_DIR"
   --check-only --script tests/test_rapier_bridge.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-manager-transform-tests-check.log" \
   --check-only --script tests/test_rapier_manager_transform_order.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-editor-tests-check.log" \
+  --check-only --script tests/test_rapier_editor_fallback.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/loom-runner-check.log" \
   --check-only --script tests/test_loom_runner.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/wire-asset-visual-check.log" \
@@ -110,6 +112,15 @@ run_test() {
   echo ""
 }
 
+run_rapier_editor_fallback_test() {
+  local log_file="$TMP_DIR/logs/rapier-editor-fallback.log"
+  "$GODOT" --headless --editor --log-file "$log_file" -s tests/test_rapier_editor_fallback.gd || return 1
+  if grep -E "placeholder instance|Nonexistent '(bool|int)' constructor" "$log_file"; then
+    echo "Rapier editor fallback emitted a placeholder call error"
+    return 1
+  fi
+}
+
 run_test "Unit Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/unit.log" -s tests/run_tests.gd
 
@@ -127,6 +138,9 @@ run_test "Rapier Bridge Tests" \
 
 run_test "Rapier Manager Transform Order Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/rapier-manager-transform.log" -s tests/test_rapier_manager_transform_order.gd
+
+run_test "Rapier Editor Fallback Tests" \
+  run_rapier_editor_fallback_test
 
 run_test "Remote Asset Loader Tests" \
   env SCENESYNC_REMOTE_ASSET_TEST_PORT="$REMOTE_ASSET_TEST_PORT" \

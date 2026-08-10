@@ -11,6 +11,8 @@ const DEFAULT_WORLD_CLASS := &"SceneSyncRapierWorld3D"
 const PROFILE := "SceneSyncRapierParity-0.30"
 const HASH_VERSION := "SceneSyncCanonicalPhysicsHashV1"
 const RAPIER_CORE_VERSION := "0.30.0"
+const EDITOR_UNAVAILABLE_REASON := "rapier-runtime-requires-play"
+const ADDON_UNAVAILABLE_REASON := "rapier-addon-unavailable"
 const GROUND_STABLE_ID := "__scenesync_ground__"
 const DEFAULT_TIMESTEP := 1.0 / 60.0
 const DEFAULT_GRAVITY := Vector3(0.0, -9.81, 0.0)
@@ -25,6 +27,7 @@ const GROUND_THICKNESS := 0.1
 var _manager: Node = null
 var _world: Object = null
 var _available: bool = false
+var _availability_reason: String = ADDON_UNAVAILABLE_REASON
 var _active: bool = false
 var _dirty: bool = true
 var _scene_physics: Dictionary = {}
@@ -60,7 +63,17 @@ func attach_manager(manager: Node) -> void:
 
 
 func refresh_availability() -> bool:
-    var next_available := ClassDB.class_exists(world_class_name)
+    var next_reason := ""
+    var next_available := false
+    # Runtime GDExtension classes are placeholders while Godot runs the editor.
+    # Calling their bound methods logs an engine error, so execution is Play-only.
+    if Engine.is_editor_hint():
+        next_reason = EDITOR_UNAVAILABLE_REASON
+    elif ClassDB.class_exists(world_class_name):
+        next_available = true
+    else:
+        next_reason = ADDON_UNAVAILABLE_REASON
+    _availability_reason = next_reason
     if next_available != _available:
         _available = next_available
         availability_changed.emit(_available)
@@ -77,6 +90,10 @@ func is_active() -> bool:
     return _active
 
 
+func get_availability_reason() -> String:
+    return _availability_reason
+
+
 func is_body_registered(object_id: String) -> bool:
     return _body_definitions.has(object_id)
 
@@ -84,7 +101,7 @@ func is_body_registered(object_id: String) -> bool:
 func get_tick() -> int:
     if _world == null or not is_instance_valid(_world) or not _world.has_method("get_tick"):
         return 0
-    return maxi(0, int(_world.call("get_tick")))
+    return _non_negative_int(_world.call("get_tick"), 0)
 
 
 func get_canonical_state_hash() -> String:
@@ -96,6 +113,7 @@ func get_canonical_state_hash() -> String:
 func get_status() -> Dictionary:
     return {
         "available": _available,
+        "reason": _availability_reason if not _available else "",
         "active": _active,
         "profile": PROFILE,
         "hashVersion": HASH_VERSION,
@@ -192,10 +210,10 @@ func advance_to_time(
     if not clock_active:
         return _state_result(false, "clock-inactive", active_time, false)
     if not refresh_availability():
-        _emit_diagnostic_once("rapier-addon-unavailable", {
+        _emit_diagnostic_once(_availability_reason, {
             "className": String(world_class_name),
         })
-        return _state_result(false, "rapier-addon-unavailable", active_time, false)
+        return _state_result(false, _availability_reason, active_time, false)
     if _body_definitions.is_empty():
         _clear_world()
         return _state_result(false, "no-bodies", active_time, false)
@@ -224,7 +242,7 @@ func advance_to_time(
         limited = true
 
     if step_target > current_tick:
-        if not bool(_world.call("step_to", step_target)):
+        if not _call_world_bool(&"step_to", [step_target]):
             var last_error := _world_last_error()
             _emit_diagnostic("step-failed", {"error": last_error, "targetTick": step_target})
             return _state_result(false, "step-failed", active_time, limited)
@@ -298,14 +316,14 @@ func _rebuild_world(epoch_time: float) -> bool:
     _world = instance as Object
     _timestep = _scene_timestep()
     var gravity := _scene_gravity()
-    if not bool(_world.call("configure", gravity, _timestep)):
+    if not _call_world_bool(&"configure", [gravity, _timestep]):
         _emit_diagnostic("world-configure-failed", {"error": _world_last_error()})
         _world = null
         return false
 
     var ground = _ground_definition()
     if ground is Dictionary and not ground.is_empty():
-        if not bool(_world.call("add_body", ground)):
+        if not _call_world_bool(&"add_body", [ground]):
             _emit_diagnostic("ground-registration-failed", {"error": _world_last_error()})
             _world = null
             return false
@@ -317,7 +335,7 @@ func _rebuild_world(epoch_time: float) -> bool:
         var definition_value = _body_definitions.get(object_id, {})
         if not (definition_value is Dictionary):
             continue
-        if not bool(_world.call("add_body", (definition_value as Dictionary).duplicate(true))):
+        if not _call_world_bool(&"add_body", [(definition_value as Dictionary).duplicate(true)]):
             _emit_diagnostic("body-registration-failed", {
                 "objectId": object_id,
                 "error": _world_last_error(),
@@ -618,6 +636,13 @@ func _world_last_error() -> String:
     if _world != null and is_instance_valid(_world) and _world.has_method("get_last_error"):
         return _safe_string(_world.call("get_last_error"))
     return ""
+
+
+func _call_world_bool(method_name: StringName, arguments: Array = []) -> bool:
+    if _world == null or not is_instance_valid(_world) or not _world.has_method(method_name):
+        return false
+    var result = _world.callv(method_name, arguments)
+    return result if result is bool else false
 
 
 func _clear_world() -> void:

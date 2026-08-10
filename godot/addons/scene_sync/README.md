@@ -18,6 +18,8 @@ Enable the plugin, open the dock on the right side, then set:
 
 Use `Connect` to join the room and `Sync Meshes` to export local meshes as `.glb` and publish them through the blob store.
 
+The Editor dock synchronizes scene data and physics metadata, but Godot exposes runtime GDExtension classes as placeholders while the editor is active. Rapier simulation therefore starts only when the scene is run with **Play**. Disconnect the Editor dock before Play if the runtime `SceneSyncManager` uses the same room, so the editor and game do not appear as two peers.
+
 ## Runtime
 
 Add a `SceneSyncManager` node to your scene and configure:
@@ -73,6 +75,8 @@ In Follow and Control modes, remote-created managed `AnimationPlayer` clips are 
 When scene physics has `enabled: true`, `SceneSyncManager` registers object physics dictionaries with `SceneSyncRapierWorld3D` and runs the same fixed-timestep Rapier 0.30 world used by the browser and Unity parity layer. Dynamic body position and rotation are applied to the corresponding Godot `Node3D`. Local playback follows monotonic time; shared Follow/Control modes derive the target physics tick from the shared playback clock.
 
 Received transforms are applied before physics registration. When `physics.initialTransform` is omitted, the body starts from that received `Node3D` position and rotation; an explicit `initialTransform` remains authoritative. Explicit `halfExtents` and `radius` are collider dimensions and are not multiplied by visual scale.
+
+Rapier execution is runtime-only in Godot: use **Play** or an exported build. Editor mode still receives, preserves, edits, and republishes physics metadata, and `get_rapier_status()` reports `rapier-runtime-requires-play` without invoking the placeholder extension instance.
 
 The vendored GDExtension is pinned to tag `scenesync-v0.8.28-r0.30.0.3`, commit `b0578430c3b975bcf3bc0ee86df0450b51a57eb0`. Its release asset SHA-256 and platform matrix are recorded in `godot-rapier3d/SCENESYNC_BUILD.txt`. Included targets are macOS universal, Android arm64 (Quest), Linux x86_64, and Windows x86_64.
 
