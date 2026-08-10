@@ -500,14 +500,15 @@ func _handle_scene_delta(payload: Dictionary) -> void:
     var node := node_value as Node3D
     if node == null:
         return
+    var should_apply_transform := true
+    if _selected_object != null and is_instance_valid(_selected_object):
+        should_apply_transform = _get_object_id(_selected_object) != object_id
+    if should_apply_transform:
+        _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
     _apply_payload_metadata(node, object_id, payload, true)
     _route_wire_asset(object_id, node, payload)
-    if _selected_object != null and is_instance_valid(_selected_object):
-        if _get_object_id(_selected_object) == object_id:
-            return
-
-    var transform_data := SceneSyncProtocol.extract_transform(payload)
-    _apply_transform_to_node(node, transform_data)
+    if not should_apply_transform:
+        return
     _last_snapshots[object_id] = _snapshot_for_node(node)
 
 
@@ -556,9 +557,9 @@ func _handle_scene_add(payload: Dictionary) -> void:
     if _managed_objects.has(object_id) and is_instance_valid(_managed_objects[object_id]):
         var existing := _managed_objects[object_id] as Node3D
         if existing != null:
+            _apply_transform_to_node(existing, SceneSyncProtocol.extract_transform(payload))
             _apply_payload_metadata(existing, object_id, payload, true)
             _route_wire_asset(object_id, existing, payload)
-            _apply_transform_to_node(existing, SceneSyncProtocol.extract_transform(payload))
         return
 
     var asset := _asset_from_payload(payload)
@@ -567,9 +568,9 @@ func _handle_scene_add(payload: Dictionary) -> void:
     var node := _resolve_existing_sync_target_for_payload(object_id, payload)
     if node != null:
         _bind_existing_managed_object(object_id, node)
+        _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
         _apply_payload_metadata(node, object_id, payload, true)
         _route_wire_asset(object_id, node, payload)
-        _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
         if mesh_path != "":
             _mesh_paths[object_id] = mesh_path
         object_added.emit(object_id, node)
@@ -589,8 +590,8 @@ func _handle_scene_add(payload: Dictionary) -> void:
         node = _create_loading_placeholder(_safe_string(payload.get("name", object_id), object_id))
         _mark_remote_object(node)
         _register_managed_object(object_id, node)
-        _apply_payload_metadata(node, object_id, payload, true)
         _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
+        _apply_payload_metadata(node, object_id, payload, true)
         _route_wire_asset(object_id, node, payload)
         object_added.emit(object_id, node)
         return
@@ -599,8 +600,8 @@ func _handle_scene_add(payload: Dictionary) -> void:
         node = _create_loading_placeholder(_safe_string(payload.get("name", object_id), object_id))
         _mark_remote_object(node)
         _register_managed_object(object_id, node)
-        _apply_payload_metadata(node, object_id, payload, true)
         _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
+        _apply_payload_metadata(node, object_id, payload, true)
         _mesh_paths[object_id] = mesh_path
         _load_mesh_for_object(object_id, payload, mesh_path)
         return
@@ -610,8 +611,8 @@ func _handle_scene_add(payload: Dictionary) -> void:
         _mark_remote_object(node)
 
     _register_managed_object(object_id, node)
-    _apply_payload_metadata(node, object_id, payload, true)
     _apply_transform_to_node(node, SceneSyncProtocol.extract_transform(payload))
+    _apply_payload_metadata(node, object_id, payload, true)
     _route_wire_asset(object_id, node, payload)
 
     if not asset.is_empty():
@@ -987,8 +988,8 @@ func _replace_object_with_mesh_data(object_id: String, payload: Dictionary, data
 
     replacement.name = _safe_string(payload.get("name", object_id), object_id)
     replacement.set_meta(OBJECT_ID_META, object_id)
-    _apply_payload_metadata(replacement, object_id, payload, true)
     _apply_transform_to_node(replacement, SceneSyncProtocol.extract_transform(payload))
+    _apply_payload_metadata(replacement, object_id, payload, true)
 
     if old_node != null and is_instance_valid(old_node):
         if old_node == _selected_object:

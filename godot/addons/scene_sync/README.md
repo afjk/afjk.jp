@@ -72,6 +72,8 @@ In Follow and Control modes, remote-created managed `AnimationPlayer` clips are 
 
 When scene physics has `enabled: true`, `SceneSyncManager` registers object physics dictionaries with `SceneSyncRapierWorld3D` and runs the same fixed-timestep Rapier 0.30 world used by the browser and Unity parity layer. Dynamic body position and rotation are applied to the corresponding Godot `Node3D`. Local playback follows monotonic time; shared Follow/Control modes derive the target physics tick from the shared playback clock.
 
+Received transforms are applied before physics registration. When `physics.initialTransform` is omitted, the body starts from that received `Node3D` position and rotation; an explicit `initialTransform` remains authoritative. Explicit `halfExtents` and `radius` are collider dimensions and are not multiplied by visual scale.
+
 The vendored GDExtension is pinned to tag `scenesync-v0.8.28-r0.30.0.3`, commit `b0578430c3b975bcf3bc0ee86df0450b51a57eb0`. Its release asset SHA-256 and platform matrix are recorded in `godot-rapier3d/SCENESYNC_BUILD.txt`. Included targets are macOS universal, Android arm64 (Quest), Linux x86_64, and Windows x86_64.
 
 Use `get_rapier_status()` or `get_rapier_bridge()` to inspect availability, active state, fixed tick, and canonical state hash. Runtime signals are:
