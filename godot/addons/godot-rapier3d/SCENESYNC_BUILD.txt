@@ -1,0 +1,12 @@
+version=scenesync-v0.8.28-r0.30.0.3
+commit=b0578430c3b975bcf3bc0ee86df0450b51a57eb0
+godot_runtime=4.6.3
+godot_extension_api=4.6
+rapier=0.30.0
+godot_rust=0.5.3
+features=scenesync-runtime,api-4-6
+platforms=linux-x86_64,windows-x86_64,macos-universal,android-arm64
+source=https://github.com/afjk/godot-rapier-physics
+tag=scenesync-v0.8.28-r0.30.0.3
+asset=scenesync-godot-rapier3d-addon.zip
+asset_sha256=90dbbbef3ddfd4e9d6fa34bed713dd1417a2ead70bbde668de6857c131cafbae

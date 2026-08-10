@@ -13,6 +13,10 @@ signal animation_policy_applied(object_id: String, node: Node3D, result: Diction
 signal playback_clock_state_changed(state: Dictionary)
 signal scene_physics_changed(physics: Dictionary)
 signal object_physics_changed(object_id: String, node: Node3D, physics: Dictionary)
+signal rapier_availability_changed(available: bool)
+signal physics_runtime_state_changed(state: Dictionary)
+signal physics_hash_checked(report: Dictionary)
+signal physics_runtime_diagnostic(detail: Dictionary)
 
 @export var presence_url: String = "wss://afjk.jp/presence"
 @export var blob_url: String = ""
@@ -23,11 +27,15 @@ signal object_physics_changed(object_id: String, node: Node3D, physics: Dictiona
 @export var hierarchy_poll_interval: float = 0.5
 @export_enum("Local", "Shared Playback Follow", "Shared Playback Control") var playback_clock_mode: int = 0
 @export var playback_clock_broadcast_interval: float = 0.25
+@export var rapier_physics_enabled: bool = true
+@export_range(1, 10000, 1) var rapier_max_steps_per_update: int = 600
+@export_range(1, 10000, 1) var rapier_hash_broadcast_interval_ticks: int = 60
 
 var _client: SceneSyncPresenceClient
 var _blob_client: SceneSyncBlobClient
 var _remote_asset_loader: SceneSyncRemoteAssetLoader
 var _playback_clock: SceneSyncPlaybackClock
+var _rapier_bridge: Node
 var _managed_objects: Dictionary = {}
 var _known_ids: Dictionary = {}
 var _mesh_paths: Dictionary = {}
@@ -75,6 +83,7 @@ const ORIGIN_META := "scene_sync_origin"
 const UNITY_HIERARCHY_PATH_META := "scene_sync_unity_hierarchy_path"
 const RECEIVE_ROOT_NAME := "SceneSyncRoot"
 const LOOM_RUNNER_SCRIPT_PATH := "res://addons/scene_sync/SceneSyncLoomletRunner.cs"
+const RAPIER_BRIDGE_SCRIPT := preload("res://addons/scene_sync/scene_sync_rapier_bridge.gd")
 
 
 func _ready() -> void:
@@ -89,6 +98,7 @@ func _ready() -> void:
     _remote_asset_loader.asset_failed.connect(_on_remote_asset_failed)
     _remote_asset_loader.diagnostic.connect(_on_remote_asset_diagnostic)
     _ensure_playback_clock()
+    _ensure_rapier_bridge()
     _ensure_loom_runner()
 
     _client.connected.connect(_on_connected)
@@ -111,6 +121,7 @@ func _process(delta: float) -> void:
         _client.poll(delta)
 
     _update_playback_clock()
+    _update_rapier_bridge()
 
     if not _connected:
         return
@@ -180,6 +191,20 @@ func get_object_physics(object_id: String) -> Dictionary:
 
 func get_playback_clock_state() -> Dictionary:
     return _ensure_playback_clock().get_state()
+
+
+func get_rapier_bridge() -> Node:
+    return _ensure_rapier_bridge()
+
+
+func get_rapier_status() -> Dictionary:
+    return _ensure_rapier_bridge().get_status()
+
+
+func get_current_playback_time() -> float:
+    var monotonic_time := float(Time.get_ticks_usec()) / 1000000.0
+    var unix_time := Time.get_unix_time_from_system()
+    return _ensure_playback_clock().get_playback_time(monotonic_time, unix_time)
 
 
 func set_playback_clock_mode(mode: Variant) -> Dictionary:
@@ -378,6 +403,10 @@ func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void
         "scene-physics":
             if _client == null or from_id != _client.id:
                 _apply_scene_physics_payload(payload, true)
+        "scene-physics-hash", "scene-physics-snapshot", "scene-physics-snapshot-request", "scene-physics-input", "scene-physics-input-log", "scene-physics-input-log-clear":
+            var local_id := _client.id if _client != null else ""
+            if from_id != local_id:
+                _ensure_rapier_bridge().handle_sync_payload(payload, from_info)
         "scene-clock":
             var local_id := _client.id if _client != null else ""
             if from_id != local_id and _playback_clock != null:
@@ -696,6 +725,8 @@ func _send_transform_delta() -> void:
     if _selected_object == null or not is_instance_valid(_selected_object):
         return
     var object_id := _get_or_assign_object_id(_selected_object)
+    if _rapier_bridge != null and _rapier_bridge.is_active() and _rapier_bridge.is_body_registered(object_id):
+        return
     var snapshot := _snapshot_for_node(_selected_object)
     if _snapshots_equal(_last_snapshots.get(object_id, {}), snapshot):
         return
@@ -1625,6 +1656,24 @@ func _ensure_playback_clock() -> SceneSyncPlaybackClock:
     return _playback_clock
 
 
+func _ensure_rapier_bridge() -> Node:
+    if _rapier_bridge != null and is_instance_valid(_rapier_bridge):
+        return _rapier_bridge
+    _rapier_bridge = RAPIER_BRIDGE_SCRIPT.new()
+    _rapier_bridge.name = "SceneSyncRapierBridge"
+    _rapier_bridge.auto_run = rapier_physics_enabled
+    _rapier_bridge.max_steps_per_update = rapier_max_steps_per_update
+    _rapier_bridge.hash_broadcast_interval_ticks = rapier_hash_broadcast_interval_ticks
+    add_child(_rapier_bridge)
+    _rapier_bridge.availability_changed.connect(_on_rapier_availability_changed)
+    _rapier_bridge.runtime_state_changed.connect(_on_rapier_runtime_state_changed)
+    _rapier_bridge.hash_report_requested.connect(_on_rapier_hash_report_requested)
+    _rapier_bridge.hash_checked.connect(_on_rapier_hash_checked)
+    _rapier_bridge.diagnostic.connect(_on_rapier_diagnostic)
+    _rapier_bridge.attach_manager(self)
+    return _rapier_bridge
+
+
 func _apply_scene_physics_payload(payload: Dictionary, preserve_missing: bool = true) -> void:
     if payload.has("physics"):
         var physics_value = payload.get("physics", null)
@@ -1672,6 +1721,23 @@ func _update_playback_clock() -> void:
         SceneSyncAnimationPolicy.sample(node, policy, object_time)
 
 
+func _update_rapier_bridge() -> void:
+    if _rapier_bridge == null:
+        return
+    _rapier_bridge.auto_run = rapier_physics_enabled
+    _rapier_bridge.max_steps_per_update = rapier_max_steps_per_update
+    _rapier_bridge.hash_broadcast_interval_ticks = rapier_hash_broadcast_interval_ticks
+    var clock_state := _playback_clock.get_state() if _playback_clock != null else {}
+    var clock_active := true
+    if playback_clock_mode == SceneSyncPlaybackClock.SHARED_PLAYBACK_FOLLOW:
+        clock_active = bool(clock_state.get("active", false))
+    _rapier_bridge.advance_to_time(
+        get_current_playback_time(),
+        playback_clock_mode,
+        clock_active
+    )
+
+
 func _resume_remote_animation_policies() -> void:
     for object_id_value in _managed_objects.keys():
         var object_id := _safe_string(object_id_value)
@@ -1688,6 +1754,27 @@ func _on_playback_clock_broadcast_requested(payload: Dictionary) -> void:
 func _on_playback_clock_state_changed(state: Dictionary) -> void:
     playback_clock_mode = int(state.get("mode", SceneSyncPlaybackClock.LOCAL))
     playback_clock_state_changed.emit(state.duplicate(true))
+
+
+func _on_rapier_availability_changed(available: bool) -> void:
+    rapier_availability_changed.emit(available)
+
+
+func _on_rapier_runtime_state_changed(state: Dictionary) -> void:
+    physics_runtime_state_changed.emit(state.duplicate(true))
+
+
+func _on_rapier_hash_report_requested(payload: Dictionary) -> void:
+    if _connected and _client != null:
+        _client.broadcast(payload.duplicate(true))
+
+
+func _on_rapier_hash_checked(report: Dictionary) -> void:
+    physics_hash_checked.emit(report.duplicate(true))
+
+
+func _on_rapier_diagnostic(detail: Dictionary) -> void:
+    physics_runtime_diagnostic.emit(detail.duplicate(true))
 
 
 func _wrap_imported_mesh_for_visual_basis(imported: Node3D, visual_basis: String) -> Node3D:
