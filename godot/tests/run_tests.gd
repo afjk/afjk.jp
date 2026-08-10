@@ -400,6 +400,7 @@ func _run_manager_tests() -> void:
     _assert_true(manager != null, "manager instantiation")
     _assert_eq(manager.room, "test-headless", "manager room")
     _assert_eq(manager.nickname, "HeadlessTest", "manager nickname")
+    _assert_true(manager.get_rapier_status()["available"], "manager detects vendored Rapier extension")
 
     _assert_eq(
         manager._visual_basis_from_payload({"asset": {"type": "mesh", "visualBasis": null}}),
@@ -673,6 +674,31 @@ func _run_manager_tests() -> void:
     _assert_eq(physics_roundtrip["physics"]["mass"], 2.0, "manager object physics wire roundtrip")
     manager._apply_payload_metadata(animation_node, "obj-anim", {"physics": null}, true)
     _assert_true(not animation_node.has_meta("scene_sync_physics"), "manager clears explicit null object physics")
+
+    manager._apply_scene_physics_payload({
+        "physics": {
+            "enabled": true,
+            "worldOptions": {"gravity": [0, -9.81, 0], "timestep": 1.0 / 60.0, "ground": null},
+        },
+    }, true)
+    manager._apply_payload_metadata(animation_node, "obj-anim", {
+        "physics": {
+            "enabled": true,
+            "bodyType": "dynamic",
+            "shape": "box",
+            "halfExtents": [0.5, 0.5, 0.5],
+            "density": 1.0,
+            "canSleep": false,
+        },
+    }, true)
+    var rapier_bridge = manager.get_rapier_bridge()
+    _assert_true(rapier_bridge.is_body_registered("obj-anim"), "manager registers physics metadata with Rapier")
+    var rapier_state: Dictionary = rapier_bridge.advance_to_time(0.0, SceneSyncPlaybackClock.LOCAL, true)
+    _assert_true(bool(rapier_state.get("active", false)), "manager Rapier bridge executes enabled scene physics")
+    _assert_not_empty(rapier_state.get("hash", ""), "manager Rapier bridge exposes canonical hash")
+    manager._apply_payload_metadata(animation_node, "obj-anim", {"physics": null}, true)
+    _assert_true(not rapier_bridge.is_body_registered("obj-anim"), "manager unregisters cleared physics metadata")
+    manager._apply_scene_physics_payload({"physics": null}, true)
 
     var failed_url_node := Node3D.new()
     sync_root.add_child(failed_url_node)

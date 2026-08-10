@@ -1,0 +1,69 @@
+name: CI - SceneSync Godot
+
+on:
+  pull_request:
+    paths:
+      - "godot/**"
+      - "apps/presence-server/**"
+      - ".github/workflows/ci-godot.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "godot/**"
+      - "apps/presence-server/**"
+      - ".github/workflows/ci-godot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Godot 4.6.3 Mono
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/presence-server/package-lock.json
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.203
+
+      - name: Install presence server dependencies
+        run: npm ci --prefix apps/presence-server
+
+      - name: Install pinned Godot
+        env:
+          GODOT_ARCHIVE: Godot_v4.6.3-stable_mono_linux_x86_64.zip
+          GODOT_SHA512: 962c4f5fd3a704de36c9dedcb2f5f6c973065ac8ed8fd6e12c7ebf7e48c3852d774bcef2ccf76b50b206c0c564ceea54315e2943e76e397529923e7de680508e
+        run: |
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/$GODOT_ARCHIVE" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.6.3-stable/$GODOT_ARCHIVE"
+          cd "$RUNNER_TEMP"
+          echo "$GODOT_SHA512  $GODOT_ARCHIVE" | sha512sum --check --strict
+          mkdir godot-4.6.3
+          unzip -q "$GODOT_ARCHIVE" -d godot-4.6.3
+          GODOT_BIN="$(find "$RUNNER_TEMP/godot-4.6.3" -type f -name 'Godot*' -perm -u+x | head -n 1)"
+          test -n "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+      - name: Run Godot suites
+        run: godot/tests/run_all.sh
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenesync-godot-test-logs
+          path: /tmp/scenesync-godot-tests/logs
+          if-no-files-found: warn

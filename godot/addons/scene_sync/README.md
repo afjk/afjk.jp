@@ -6,6 +6,8 @@ Godot Engine 4.x addon for `afjk.jp/scenesync`.
 
 Copy `godot/addons/scene_sync` into your Godot project's `addons/scene_sync`, then enable `SceneSync` from `Project Settings > Plugins`.
 
+Deterministic physics additionally uses the vendored `godot/addons/godot-rapier3d` GDExtension. Copy that directory unchanged when physics execution is required. SceneSync continues to load and synchronize physics metadata safely when the extension is absent; only simulation is disabled.
+
 ## Editor
 
 Enable the plugin, open the dock on the right side, then set:
@@ -66,9 +68,22 @@ Missing animation fields in ordinary deltas preserve the current policy. Policy 
 
 In Follow and Control modes, remote-created managed `AnimationPlayer` clips are sampled from the shared object clock. Sampling applies `time * speed + offset`, modulo clip duration for loop mode and clamped for once mode, while freezing local animation advance. Authored/bound Godot animations are not sampled. Returning to Local resumes ordinary animation-policy playback for remote-created nodes, including when the exported mode property is changed directly.
 
-## Physics metadata
+## Deterministic Rapier physics
 
-Godot preserves, but does not execute, the raw `physics` dictionaries used by SceneSync. Scene physics is available through `get_scene_physics()` and `scene_physics_changed(physics)`. Object physics is deep-copied into the `scene_sync_physics` node metadata key and available through `get_object_physics(object_id)` and `object_physics_changed(object_id, node, physics)`.
+When scene physics has `enabled: true`, `SceneSyncManager` registers object physics dictionaries with `SceneSyncRapierWorld3D` and runs the same fixed-timestep Rapier 0.30 world used by the browser and Unity parity layer. Dynamic body position and rotation are applied to the corresponding Godot `Node3D`. Local playback follows monotonic time; shared Follow/Control modes derive the target physics tick from the shared playback clock.
+
+The vendored GDExtension is pinned to tag `scenesync-v0.8.28-r0.30.0.3`, commit `b0578430c3b975bcf3bc0ee86df0450b51a57eb0`. Its release asset SHA-256 and platform matrix are recorded in `godot-rapier3d/SCENESYNC_BUILD.txt`. Included targets are macOS universal, Android arm64 (Quest), Linux x86_64, and Windows x86_64.
+
+Use `get_rapier_status()` or `get_rapier_bridge()` to inspect availability, active state, fixed tick, and canonical state hash. Runtime signals are:
+
+- `rapier_availability_changed(available)`
+- `physics_runtime_state_changed(state)`
+- `physics_hash_checked(report)`
+- `physics_runtime_diagnostic(detail)`
+
+The manager broadcasts canonical `scene-physics-hash` reports at `rapier_hash_broadcast_interval_ticks` and verifies compatible remote reports against profile `SceneSyncRapierParity-0.30`, hash contract `SceneSyncCanonicalPhysicsHashV1`, and Rapier core `0.30.0`. Catch-up work is bounded by `rapier_max_steps_per_update`. Set `rapier_physics_enabled` to disable execution while retaining metadata synchronization.
+
+Scene physics metadata remains available through `get_scene_physics()` and `scene_physics_changed(physics)`. Object physics is deep-copied into the `scene_sync_physics` node metadata key and available through `get_object_physics(object_id)` and `object_physics_changed(object_id, node, physics)`.
 
 Physics metadata round-trips through scene state, add, delta, mesh replacement, cache recovery, and locally built payloads. An omitted field preserves the current dictionary; explicit `physics: null` clears it.
 
