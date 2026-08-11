@@ -322,6 +322,15 @@ func _run_presence_client_tests() -> void:
     _assert_true(client != null, "client instantiation")
     _assert_eq(client.id, "", "client initial id empty")
     _assert_eq(client.room, "", "client initial room empty")
+    var received_server_time := [0.0]
+    client.server_time_received.connect(
+        func(value: float, _received_monotonic: float) -> void: received_server_time[0] = value
+    )
+    client._handle_message(JSON.stringify({
+        "type": "welcome", "id": "client-1", "room": "room-1", "serverTime": 1700000000123.0,
+    }))
+    _assert_eq(client.server_time_msec, 1700000000123.0, "welcome stores serverTime")
+    _assert_eq(received_server_time[0], 1700000000123.0, "welcome emits server time anchor")
 
 
 func _run_blob_client_tests() -> void:
@@ -638,6 +647,14 @@ func _run_manager_tests() -> void:
     }, {"id": "remote-controller"})
     manager._update_playback_clock()
     _assert_true(is_equal_approx(animation_player.current_animation_position, 1.5), "manager samples followed clock")
+    var clock_runner := manager._ensure_loom_runner()
+    var runner_get_override := (
+        "GetTimeOverride" if clock_runner.has_method("GetTimeOverride") else "get_time_override"
+    )
+    _assert_true(
+        is_equal_approx(float(clock_runner.call(runner_get_override, "obj-anim")), 1.5),
+        "manager supplies the same ObjectAge to Animation and Loomlet"
+    )
     _assert_true(is_equal_approx(animation_player.speed_scale, 0.0), "shared clock freezes local animation advance")
     _assert_true(is_equal_approx(authored_clock_player.speed_scale, 0.75), "shared clock leaves authored animation speed unchanged")
     _assert_true(
@@ -648,6 +665,17 @@ func _run_manager_tests() -> void:
     manager._update_playback_clock()
     _assert_eq(manager.get_playback_clock_state()["modeName"], "local", "manager returns to local clock")
     _assert_true(is_equal_approx(animation_player.speed_scale, 1.0), "direct local clock setting resumes policy playback")
+    manager.seek_playback_clock(1.25)
+    manager._update_playback_clock()
+    var local_object_time := float(clock_runner.call(runner_get_override, "obj-anim"))
+    _assert_true(
+        is_equal_approx(animation_player.current_animation_position, fmod(local_object_time, 2.0)),
+        "local transport supplies the same ObjectAge to Animation and Loomlet"
+    )
+    _assert_true(is_equal_approx(animation_player.speed_scale, 0.0), "local transport switches Animation to deterministic sampling")
+    manager.pause_playback_clock()
+    manager._update_playback_clock()
+    _assert_true(bool(manager.get_playback_clock_state().get("paused", false)), "manager local pause freezes all consumers")
 
     manager._apply_scene_physics_payload({"physics": {"gravity": [0, -9.8, 0]}}, true)
     _assert_true(manager.has_meta("scene_sync_physics"), "manager stores scene physics metadata")

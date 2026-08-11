@@ -34,6 +34,8 @@ namespace Afjk.SceneSync
         private LoomletEvaluationContext _context;
         private double _lastTime;
         private double _startedAt;
+        private double _lastManagerClockTime;
+        private bool _usingManagerClock;
         private readonly Dictionary<string, Vector3> _offsetBasePositions = new Dictionary<string, Vector3>();
 
         public string ObjectId => objectId;
@@ -87,6 +89,8 @@ namespace Afjk.SceneSync
             _context = new LoomletEvaluationContext();
             _startedAt = Time.realtimeSinceStartup;
             _lastTime = _startedAt;
+            _lastManagerClockTime = 0d;
+            _usingManagerClock = false;
 
             try
             {
@@ -121,13 +125,55 @@ namespace Afjk.SceneSync
 
             try
             {
-                _context.WithSceneClock(elapsed, delta, false, "local", 1.0);
+                var clockTime = elapsed;
+                var clockDelta = delta;
+                var paused = false;
+                var mode = "local";
+                var rate = 1d;
+
+                if (manager != null)
+                {
+                    var sample = manager.GetPlaybackClockSample(sceneScope ? null : objectId);
+                    if (sample.ManagerDriven)
+                    {
+                        clockTime = sceneScope ? sample.ActiveTime : sample.ObjectAge;
+                        clockDelta = _usingManagerClock
+                            ? Math.Max(0d, clockTime - _lastManagerClockTime)
+                            : 0d;
+                        if (sample.Paused) clockDelta = 0d;
+                        _lastManagerClockTime = clockTime;
+                        _usingManagerClock = true;
+                        paused = sample.Paused;
+                        mode = ClockModeName(sample.Mode);
+                        rate = sample.Rate;
+                    }
+                    else
+                    {
+                        _usingManagerClock = false;
+                    }
+                }
+
+                _context.WithSceneClock(clockTime, clockDelta, paused, mode, rate);
                 _evaluator.Evaluate(_context);
             }
             catch (Exception error)
             {
                 Debug.LogWarning("[SceneSync] Loomlet graph evaluation failed: " + error.Message);
                 _evaluator = null;
+            }
+        }
+
+        private static string ClockModeName(SceneSyncPlaybackClockMode mode)
+        {
+            switch (mode)
+            {
+                case SceneSyncPlaybackClockMode.SharedPlaybackFollow:
+                case SceneSyncPlaybackClockMode.SharedPlaybackControl:
+                    return "shared-playback";
+                case SceneSyncPlaybackClockMode.RoomTime:
+                    return "room-time";
+                default:
+                    return "local";
             }
         }
 

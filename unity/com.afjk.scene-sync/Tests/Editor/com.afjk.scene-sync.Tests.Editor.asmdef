@@ -1,0 +1,21 @@
+{
+  "name": "com.afjk.scene-sync.Tests.Editor",
+  "rootNamespace": "Afjk.SceneSync.Tests",
+  "references": [
+    "com.afjk.scene-sync.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

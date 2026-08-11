@@ -19,6 +19,7 @@ namespace Afjk.SceneSync
         public string type;
         public string id;
         public string room;
+        public double serverTime;
         public string nickname;
         public string device;
         public string targetId;
@@ -44,21 +45,23 @@ namespace Afjk.SceneSync
     {
         public string Id { get; private set; }
         public string Room { get; private set; }
+        public double ServerTimeMilliseconds { get; private set; } = double.NaN;
         public List<PeerInfo> Peers { get; private set; } = new List<PeerInfo>();
         public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open;
 
         public event Action OnConnected;
         public event Action OnDisconnected;
+        public event Action<double> OnWelcomeReceived;
         public event Action<List<PeerInfo>> OnPeersUpdated;
         public event Action<string> OnHandoffReceived; // raw JSON
 
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
-        private readonly byte[] _recvBuf = new byte[131072]; // 128KB
-
         public async Task ConnectAsync(string presenceUrl, string room, string nickname)
         {
-            Disconnect();
+            // Initial socket cleanup is not a lifecycle disconnect. A reconnect
+            // only notifies listeners when a live connection actually existed.
+            DisconnectInternal(IsConnected);
 
             _cts = new CancellationTokenSource();
             _ws = new ClientWebSocket();
@@ -78,7 +81,7 @@ namespace Afjk.SceneSync
                 await SendRaw(hello);
 
                 OnConnected?.Invoke();
-                _ = ReceiveLoop();
+                _ = ReceiveLoop(_ws, _cts.Token);
             }
             catch (Exception ex)
             {
@@ -89,6 +92,11 @@ namespace Afjk.SceneSync
 
         public void Disconnect()
         {
+            DisconnectInternal(true);
+        }
+
+        private void DisconnectInternal(bool notifyDisconnected)
+        {
             _cts?.Cancel();
             if (_ws != null)
             {
@@ -97,8 +105,9 @@ namespace Afjk.SceneSync
             }
             Id = null;
             Room = null;
+            ServerTimeMilliseconds = double.NaN;
             Peers.Clear();
-            OnDisconnected?.Invoke();
+            if (notifyDisconnected) OnDisconnected?.Invoke();
         }
 
         public async Task Broadcast(string payloadJson)
@@ -130,21 +139,25 @@ namespace Afjk.SceneSync
             }
         }
 
-        private async Task ReceiveLoop()
+        private async Task ReceiveLoop(ClientWebSocket socket, CancellationToken token)
         {
             var buffer = new MemoryStream();
+            var receiveBuffer = new byte[131072]; // 128KB, isolated per socket generation
             try
             {
-                while (_ws.State == WebSocketState.Open && !_cts.Token.IsCancellationRequested)
+                while (ReferenceEquals(_ws, socket)
+                       && socket.State == WebSocketState.Open
+                       && !token.IsCancellationRequested)
                 {
-                    var result = await _ws.ReceiveAsync(
-                        new ArraySegment<byte>(_recvBuf), _cts.Token);
+                    var result = await socket.ReceiveAsync(
+                        new ArraySegment<byte>(receiveBuffer), token);
                     if (result.MessageType == WebSocketMessageType.Close) break;
 
-                    buffer.Write(_recvBuf, 0, result.Count);
+                    buffer.Write(receiveBuffer, 0, result.Count);
 
                     if (result.EndOfMessage)
                     {
+                        if (!ReferenceEquals(_ws, socket)) break;
                         var text = Encoding.UTF8.GetString(
                             buffer.GetBuffer(), 0, (int)buffer.Length);
                         buffer.SetLength(0);
@@ -159,7 +172,10 @@ namespace Afjk.SceneSync
             }
             finally
             {
-                OnDisconnected?.Invoke();
+                if (ReferenceEquals(_ws, socket))
+                {
+                    DisconnectInternal(true);
+                }
             }
         }
 
@@ -173,6 +189,10 @@ namespace Afjk.SceneSync
                 case "welcome":
                     Id = baseMsg.id;
                     Room = baseMsg.room;
+                    ServerTimeMilliseconds = baseMsg.serverTime > 0d
+                        ? baseMsg.serverTime
+                        : double.NaN;
+                    OnWelcomeReceived?.Invoke(ServerTimeMilliseconds);
                     break;
 
                 case "peers":
