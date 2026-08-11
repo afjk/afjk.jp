@@ -2324,6 +2324,8 @@ func _resolve_existing_sync_target_for_payload(object_id: String, payload: Dicti
         var node_object_id := _get_object_id(node)
         if object_id != "" and node_object_id == object_id:
             return node
+        if bool(node.get_meta(REMOTE_OBJECT_META, false)):
+            continue
         if hierarchy_path != "" and node.has_meta(UNITY_HIERARCHY_PATH_META):
             if _safe_string(node.get_meta(UNITY_HIERARCHY_PATH_META)) == hierarchy_path:
                 return node
