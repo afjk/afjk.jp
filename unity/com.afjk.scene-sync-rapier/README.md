@@ -42,6 +42,15 @@ uses the shared clock time to step Rapier to the matching fixed tick. Reset and
 seek-to-zero payloads with `physicsBaseline` restore the initial Rapier snapshot
 before stepping again.
 
+When `SceneSyncRapierBridge` and `SceneSyncManager` are on the same GameObject,
+the bridge prefers the manager's effective playback clock. Animation, Loomlet
+ObjectAge, and Rapier therefore switch together between Shared Playback and the
+continuous local fallback selected by `PlaybackClockFollowPolicy`. A manager in
+plain manual `Local` mode keeps the existing local fixed-step behavior and does
+not let a received clock make Rapier follow on its own. The bridge's standalone
+message-bus clock remains available when no manager is assigned; it also anchors
+remote time at local monotonic receipt instead of comparing wall clocks.
+
 When scene metadata changes cause a Rapier world rebuild, the bridge preserves
 dynamic body pose, linear velocity, and angular velocity for matching Scene Sync
 object ids. Reset baselines still restore the initial snapshot unless

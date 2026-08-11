@@ -1,6 +1,6 @@
 {
   "name": "com.afjk.scene-sync-rapier",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Scene Sync Rapier",
   "description": "Optional Rapier physics bridge for Scene Sync Unity clients.",
   "unity": "2022.3",
@@ -14,7 +14,7 @@
     "deterministic"
   ],
   "dependencies": {
-    "com.afjk.scene-sync": "0.1.0",
+    "com.afjk.scene-sync": "0.2.0",
     "com.afjk.rapier": "0.3.0"
   },
   "samples": [

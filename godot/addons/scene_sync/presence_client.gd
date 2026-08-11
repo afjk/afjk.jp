@@ -5,11 +5,14 @@ signal connected(id: String, room: String)
 signal disconnected()
 signal peers_updated(peers: Array)
 signal handoff_received(data: Dictionary)
+signal server_time_received(server_time_msec: float, received_monotonic_time: float)
 
 var id: String = ""
 var room: String = ""
 var nickname: String = ""
 var peers: Array = []
+var server_time_msec: float = 0.0
+var server_time_received_monotonic: float = 0.0
 
 var _ws: WebSocketPeer
 var _state: int = WebSocketPeer.STATE_CLOSED
@@ -28,6 +31,8 @@ func connect_to_server(presence_url: String, room_code: String, nick: String) ->
     room = room_code
     id = ""
     peers.clear()
+    server_time_msec = 0.0
+    server_time_received_monotonic = 0.0
     _should_reconnect = true
     _reconnect_timer = 0.0
     _hello_sent = false
@@ -57,6 +62,8 @@ func disconnect_from_server(emit_signal: bool = true) -> void:
     _hello_sent = false
     _welcome_emitted = false
     peers.clear()
+    server_time_msec = 0.0
+    server_time_received_monotonic = 0.0
     id = ""
     room = ""
 
@@ -140,6 +147,11 @@ func _handle_message(text: String) -> void:
         "welcome":
             id = String(data.get("id", ""))
             room = String(data.get("room", room))
+            var server_time_value = data.get("serverTime", null)
+            if _is_finite_number(server_time_value) and float(server_time_value) > 0.0:
+                server_time_msec = float(server_time_value)
+                server_time_received_monotonic = float(Time.get_ticks_usec()) / 1000000.0
+                server_time_received.emit(server_time_msec, server_time_received_monotonic)
             if not _welcome_emitted:
                 _welcome_emitted = true
                 connected.emit(id, room)
@@ -173,6 +185,12 @@ func _handle_closed() -> void:
     _state = WebSocketPeer.STATE_CLOSED
     _hello_sent = false
     _welcome_emitted = false
+    server_time_msec = 0.0
+    server_time_received_monotonic = 0.0
     disconnected.emit()
     if _should_reconnect:
         _reconnect_timer = 3.0
+
+
+static func _is_finite_number(value: Variant) -> bool:
+    return (value is int or value is float) and is_finite(float(value))

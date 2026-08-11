@@ -44,6 +44,8 @@ namespace Afjk.SceneSync.Rapier
         [SerializeField] private bool autoRun = true;
         [SerializeField] private bool useSceneClock = true;
         [SerializeField] private bool requireSceneClock;
+        [SerializeField] private bool preferManagerPlaybackClock = true;
+        [SerializeField] private SceneSyncManager sceneSyncManager;
         [SerializeField] private bool applyDynamicTransforms = true;
         [SerializeField] private bool preserveMotionOnRebuild = true;
         [SerializeField] private bool includeGround = true;
@@ -86,8 +88,8 @@ namespace Afjk.SceneSync.Rapier
         private bool lastStepLimited;
         private bool preserveMotionOnNextRebuild = true;
         private float accumulator;
-        private float worldEpochTime;
-        private float pendingWorldEpochTime;
+        private double worldEpochTime;
+        private double pendingWorldEpochTime;
         private int tick;
         private int latestSceneClockRevision = int.MinValue;
         private float nextMetadataScanAt;
@@ -107,6 +109,9 @@ namespace Afjk.SceneSync.Rapier
         private int timelineClearRevision;
         private long lastPhysicsEventRevision;
         private long localPhysicsEventRevisionCounter;
+        private readonly Queue<string> pendingSceneClockPayloads = new Queue<string>();
+        private bool hasManagerPlaybackClockMode;
+        private SceneSyncPlaybackClockMode lastManagerPlaybackClockMode;
 
         public event Action<SceneSyncRapierCollisionEvent> CollisionEvent;
         public event Action<SceneSyncRapierHashReport> HashReportReceived;
@@ -155,6 +160,16 @@ namespace Afjk.SceneSync.Rapier
         {
             get => requireSceneClock;
             set => requireSceneClock = value;
+        }
+        public bool PreferManagerPlaybackClock
+        {
+            get => preferManagerPlaybackClock;
+            set => preferManagerPlaybackClock = value;
+        }
+        public SceneSyncManager PlaybackClockManager
+        {
+            get => sceneSyncManager;
+            set => sceneSyncManager = value;
         }
         public Transform BodyRoot
         {
@@ -225,6 +240,8 @@ namespace Afjk.SceneSync.Rapier
         private void OnEnable()
         {
             SceneSyncMessageBus.MessageReceived += HandleSceneMessage;
+            if (sceneSyncManager == null)
+                sceneSyncManager = GetComponent<SceneSyncManager>();
             dirty = true;
             RefreshMetadataFromScene();
         }
@@ -237,6 +254,11 @@ namespace Afjk.SceneSync.Rapier
 
         private void Update()
         {
+            while (pendingSceneClockPayloads.Count > 0)
+            {
+                ApplySceneClock(pendingSceneClockPayloads.Dequeue());
+            }
+
             if (Time.unscaledTime >= nextMetadataScanAt)
             {
                 nextMetadataScanAt = Time.unscaledTime + Mathf.Max(0.05f, metadataScanInterval);
@@ -249,9 +271,19 @@ namespace Afjk.SceneSync.Rapier
 
             if (!autoRun || world == null) return;
 
+            if (useSceneClock && TryGetManagerPlaybackClock(out var managerClock))
+            {
+                ApplyManagerPlaybackClockModeTransition(managerClock);
+                if (managerClock.ManagerDriven)
+                    UpdateFromSceneClock(managerClock.ActiveTime);
+                else
+                    StepLocalFrame();
+                return;
+            }
+
             if (useSceneClock && sceneClock.Active)
             {
-                UpdateFromSceneClock();
+                UpdateFromSceneClock(sceneClock.GetTime());
                 return;
             }
 
@@ -259,6 +291,48 @@ namespace Afjk.SceneSync.Rapier
                 return;
 
             StepLocalFrame();
+        }
+
+        private bool TryGetManagerPlaybackClock(out SceneSyncPlaybackClockSample sample)
+        {
+            sample = default;
+            if (!preferManagerPlaybackClock) return false;
+            if (sceneSyncManager == null)
+                sceneSyncManager = GetComponent<SceneSyncManager>();
+            if (sceneSyncManager == null) return false;
+            sample = sceneSyncManager.GetPlaybackClockSample();
+            return true;
+        }
+
+        private double GetEffectivePlaybackClockTime(double fallback)
+        {
+            if (useSceneClock && TryGetManagerPlaybackClock(out var sample))
+                return sample.ManagerDriven
+                    ? Math.Max(0d, sample.ActiveTime)
+                    : Math.Max(0d, fallback);
+            if (useSceneClock && sceneClock.Active)
+                return sceneClock.GetTime();
+            return Math.Max(0d, fallback);
+        }
+
+        private void ApplyManagerPlaybackClockModeTransition(SceneSyncPlaybackClockSample sample)
+        {
+            if (hasManagerPlaybackClockMode
+                && lastManagerPlaybackClockMode != sample.Mode
+                && SceneSyncPlaybackClockMath.ShouldPreservePhysicsAgeAcrossModeChange(
+                    lastManagerPlaybackClockMode,
+                    sample.Mode))
+            {
+                worldEpochTime = SceneSyncPlaybackClockMath.RebasePhysicsWorldEpoch(
+                    sample.ActiveTime,
+                    tick,
+                    scenePhysics.Timestep);
+                hasPendingWorldEpochTime = false;
+                pendingWorldEpochTime = 0d;
+                accumulator = 0f;
+            }
+            lastManagerPlaybackClockMode = sample.Mode;
+            hasManagerPlaybackClockMode = true;
         }
 
         private void StepLocalFrame()
@@ -284,16 +358,18 @@ namespace Afjk.SceneSync.Rapier
             if (steps > 0 || heldBodies)
             {
                 ApplyWorldTransforms();
-                FlushCollisionEvents(GetCurrentPhysicsTime());
+                FlushCollisionEvents((float)GetCurrentPhysicsTime());
                 UpdateLastStateHash(null);
             }
         }
 
-        private void UpdateFromSceneClock()
+        private void UpdateFromSceneClock(double clockTime)
         {
-            var clockTime = sceneClock.GetTime();
             var timestep = Mathf.Max(0.000001f, scenePhysics.Timestep);
-            var targetTick = Mathf.Max(0, Mathf.FloorToInt(Mathf.Max(0f, clockTime - worldEpochTime) / timestep));
+            var targetTick = SceneSyncPlaybackClockMath.GetPhysicsTargetTick(
+                clockTime,
+                worldEpochTime,
+                timestep);
             lastStepLimited = false;
             lastCollisionEvents.Clear();
             if (targetTick < tick)
@@ -321,7 +397,7 @@ namespace Afjk.SceneSync.Rapier
             if (steps > 0 || targetTick == 0 || appliedInputs || heldBodies || restoredBaseline)
             {
                 ApplyWorldTransforms();
-                FlushCollisionEvents(clockTime);
+                FlushCollisionEvents((float)clockTime);
                 if (steps > 0 || appliedInputs || heldBodies || restoredBaseline || string.IsNullOrWhiteSpace(lastStateHash))
                     UpdateLastStateHash("targetTick=" + targetTick.ToString(CultureInfo.InvariantCulture));
             }
@@ -1034,7 +1110,7 @@ namespace Afjk.SceneSync.Rapier
 
                 worldEpochTime = hasPendingWorldEpochTime
                     ? pendingWorldEpochTime
-                    : (useSceneClock && sceneClock.Active ? sceneClock.GetTime() : 0f);
+                    : GetEffectivePlaybackClockTime(0f);
                 hasPendingWorldEpochTime = false;
                 pendingWorldEpochTime = 0f;
                 hasInitialSnapshot = world.TryCreateSnapshot(out initialSnapshot);
@@ -1150,6 +1226,7 @@ namespace Afjk.SceneSync.Rapier
             if (payloadJson.Contains("\"kind\":\"scene-state\""))
             {
                 latestSceneClockRevision = int.MinValue;
+                pendingSceneClockPayloads.Clear();
                 if (SceneSyncWireJson.HasTopLevelField(payloadJson, "physics"))
                     scenePhysics = ScenePhysicsDefinition.Parse(SceneSyncWireJson.ExtractTopLevelRawValue(payloadJson, "physics"));
 
@@ -1165,7 +1242,10 @@ namespace Afjk.SceneSync.Rapier
 
             if (payloadJson.Contains("\"kind\":\"scene-clock\""))
             {
-                ApplySceneClock(payloadJson);
+                // SceneSyncManager publishes to the bus before applying the same
+                // clock payload. Defer one Update so the manager's effective
+                // policy sample is authoritative for physics as well.
+                pendingSceneClockPayloads.Enqueue(payloadJson);
                 return;
             }
 
@@ -1315,8 +1395,9 @@ namespace Afjk.SceneSync.Rapier
                     {
                         tick = payload.tick;
                         worldEpochTime = IsFinite(payload.worldEpochTime)
-                            ? Mathf.Max(0f, payload.worldEpochTime)
-                            : Mathf.Max(0f, sceneClock.GetTime() - tick * Mathf.Max(0.000001f, scenePhysics.Timestep));
+                            ? Math.Max(0d, payload.worldEpochTime)
+                            : Math.Max(0d, GetEffectivePlaybackClockTime(GetCurrentPhysicsTime())
+                                - tick * Math.Max(0.000001d, scenePhysics.Timestep));
                         hasPendingWorldEpochTime = false;
                         pendingWorldEpochTime = 0f;
                         accumulator = 0f;
@@ -1350,9 +1431,9 @@ namespace Afjk.SceneSync.Rapier
                 payload?.tick ?? -1,
                 localTickBeforeApply,
                 payload?.timestep ?? 0f,
-                payload?.activeTime ?? float.NaN,
-                payload?.worldAge ?? float.NaN,
-                payload?.worldEpochTime ?? float.NaN,
+                payload != null ? (float)payload.activeTime : float.NaN,
+                payload != null ? (float)payload.worldAge : float.NaN,
+                payload != null ? (float)payload.worldEpochTime : float.NaN,
                 payloadSceneClockRevision,
                 fromPeerId,
                 bodyCount,
@@ -1822,8 +1903,8 @@ namespace Afjk.SceneSync.Rapier
             if (string.IsNullOrWhiteSpace(hash))
                 return null;
 
-            var activeTime = sceneClock.Active ? sceneClock.GetTime() : GetCurrentPhysicsTime();
-            var worldAge = Mathf.Max(0f, activeTime - worldEpochTime);
+            var activeTime = GetEffectivePlaybackClockTime(GetCurrentPhysicsTime());
+            var worldAge = Math.Max(0d, activeTime - worldEpochTime);
             var builder = new StringBuilder();
             builder.Append("{\"kind\":\"scene-physics-snapshot\"");
             builder.Append(",\"source\":\"physics\"");
@@ -1891,7 +1972,12 @@ namespace Afjk.SceneSync.Rapier
             }
 
             sceneClock = SceneClockState.Parse(payloadJson, sceneClock);
-            var activeTime = sceneClock.GetTime();
+            double activeTime = sceneClock.GetTime();
+            if (useSceneClock && TryGetManagerPlaybackClock(out var managerClock))
+            {
+                if (!managerClock.ManagerDriven) return;
+                activeTime = managerClock.ActiveTime;
+            }
             if (ShouldResetPhysicsForSceneClockPayload(payloadJson, activeTime))
             {
                 ApplyPhysicsResetBaseline(payloadJson, activeTime);
@@ -1914,7 +2000,7 @@ namespace Afjk.SceneSync.Rapier
                 : activeTime;
             if (!IsFinite(worldEpoch)) worldEpoch = activeTime;
 
-            pendingWorldEpochTime = Mathf.Max(0f, (float)worldEpoch);
+            pendingWorldEpochTime = Math.Max(0d, worldEpoch);
             hasPendingWorldEpochTime = true;
             hasAuthoritativeSnapshotBaseline = false;
             accumulator = 0f;
@@ -2158,7 +2244,7 @@ namespace Afjk.SceneSync.Rapier
             CollisionEvent?.Invoke(collisionEvent);
         }
 
-        private float GetCurrentPhysicsTime()
+        private double GetCurrentPhysicsTime()
         {
             return worldEpochTime + tick * Mathf.Max(0.000001f, scenePhysics.Timestep);
         }
@@ -2614,9 +2700,9 @@ namespace Afjk.SceneSync.Rapier
             public int tick;
             public string hash;
             public float timestep;
-            public float activeTime;
-            public float worldAge;
-            public float worldEpochTime;
+            public double activeTime;
+            public double worldAge;
+            public double worldEpochTime;
             public int sceneClockRevision;
             public ScenePhysicsSnapshotBody[] bodies;
         }
@@ -2666,7 +2752,7 @@ namespace Afjk.SceneSync.Rapier
                 int timelineForkTick,
                 int timelineClearRevision,
                 long lastEventRevision,
-                float worldEpochTime,
+                double worldEpochTime,
                 RapierSnapshot snapshot)
             {
                 Tick = Mathf.Max(0, tick);
@@ -2675,7 +2761,7 @@ namespace Afjk.SceneSync.Rapier
                 TimelineForkTick = Mathf.Max(0, timelineForkTick);
                 TimelineClearRevision = Mathf.Max(0, timelineClearRevision);
                 LastEventRevision = Math.Max(0L, lastEventRevision);
-                WorldEpochTime = Mathf.Max(0f, worldEpochTime);
+                WorldEpochTime = Math.Max(0d, worldEpochTime);
                 Snapshot = snapshot;
             }
 
@@ -2685,7 +2771,7 @@ namespace Afjk.SceneSync.Rapier
             public int TimelineForkTick { get; }
             public int TimelineClearRevision { get; }
             public long LastEventRevision { get; }
-            public float WorldEpochTime { get; }
+            public double WorldEpochTime { get; }
             public RapierSnapshot Snapshot { get; }
         }
 
@@ -2756,7 +2842,8 @@ namespace Afjk.SceneSync.Rapier
                 bool paused,
                 double pausedTime,
                 double rate,
-                double roomNow,
+                double roomNowAtReceipt,
+                double receiptMonotonicTime,
                 double sentAtMilliseconds)
             {
                 Active = active;
@@ -2765,11 +2852,13 @@ namespace Afjk.SceneSync.Rapier
                 Paused = paused;
                 PausedTime = IsFinite(pausedTime) ? pausedTime : double.NaN;
                 Rate = IsFinite(rate) && rate >= 0d ? rate : 1d;
-                RoomNow = IsFinite(roomNow) ? roomNow : 0d;
+                RoomNowAtReceipt = IsFinite(roomNowAtReceipt) ? roomNowAtReceipt : 0d;
+                ReceiptMonotonicTime = IsFinite(receiptMonotonicTime) ? receiptMonotonicTime : 0d;
                 SentAtMilliseconds = IsFinite(sentAtMilliseconds) ? sentAtMilliseconds : 0d;
             }
 
-            public static SceneClockState Inactive => new SceneClockState(false, "room", 0d, false, double.NaN, 1d, 0d, 0d);
+            public static SceneClockState Inactive => new SceneClockState(
+                false, "room", 0d, false, double.NaN, 1d, 0d, 0d, 0d);
 
             public bool Active { get; }
             private string Source { get; }
@@ -2777,19 +2866,36 @@ namespace Afjk.SceneSync.Rapier
             private bool Paused { get; }
             private double PausedTime { get; }
             private double Rate { get; }
-            private double RoomNow { get; }
+            private double RoomNowAtReceipt { get; }
+            private double ReceiptMonotonicTime { get; }
             private double SentAtMilliseconds { get; }
 
             public static SceneClockState Parse(string raw, SceneClockState previous)
             {
+                var controllerJson = SceneSyncWireJson.ExtractTopLevelRawObject(raw, "controller");
+                var hasControllerField = SceneSyncWireJson.HasTopLevelField(raw, "controller");
+                var hasController = !string.IsNullOrWhiteSpace(
+                    SceneSyncWireJson.ExtractString(controllerJson, "id"));
+                var hasActiveField = SceneSyncWireJson.HasTopLevelField(raw, "active");
+                var active = SceneSyncPlaybackClockMath.ResolveActive(
+                    hasActiveField,
+                    ReadBool(raw, "active", previous.Active),
+                    hasControllerField,
+                    hasController);
+                if (!hasActiveField && SceneSyncPlaybackClockMath.IsControllerReleaseAction(
+                        SceneSyncWireJson.ExtractString(raw, "action")))
+                    active = false;
+                var receiptMonotonicTime = Time.realtimeSinceStartupAsDouble;
+
                 return new SceneClockState(
-                    true,
+                    active,
                     SceneSyncWireJson.ExtractString(raw, "source") ?? previous.Source ?? "room",
                     ReadDouble(raw, "offset", previous.Offset),
                     ReadBool(raw, "paused", previous.Paused),
-                    ReadDouble(raw, "pausedTime", double.NaN),
+                    ReadDouble(raw, "pausedTime", previous.PausedTime),
                     ReadDouble(raw, "rate", previous.Rate),
-                    ReadDouble(raw, "roomNow", previous.RoomNow),
+                    ReadDouble(raw, "roomNow", previous.RoomNowAtReceipt),
+                    receiptMonotonicTime,
                     ReadDouble(raw, "sentAt", previous.SentAtMilliseconds));
             }
 
@@ -2801,20 +2907,16 @@ namespace Afjk.SceneSync.Rapier
                 var sourceNow = string.Equals(Source, "room", StringComparison.OrdinalIgnoreCase)
                     ? GetRoomNow()
                     : Time.realtimeSinceStartupAsDouble;
-                var time = sourceNow * Rate + Offset;
-                return Mathf.Max(0f, (float)(IsFinite(time) ? time : 0d));
+                return Mathf.Max(0f, (float)SceneSyncPlaybackClockMath.GetActiveTime(
+                    sourceNow, Rate, Offset, Paused, PausedTime));
             }
 
             private double GetRoomNow()
             {
-                if (!IsFinite(RoomNow) || RoomNow <= 0d)
-                    return 0d;
-                if (!IsFinite(SentAtMilliseconds) || SentAtMilliseconds <= 0d)
-                    return RoomNow;
-
-                var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var elapsedSeconds = Math.Max(0d, (nowMs - SentAtMilliseconds) / 1000d);
-                return RoomNow + elapsedSeconds;
+                return SceneSyncPlaybackClockMath.GetAnchoredTime(
+                    RoomNowAtReceipt,
+                    ReceiptMonotonicTime,
+                    Time.realtimeSinceStartupAsDouble);
             }
         }
 

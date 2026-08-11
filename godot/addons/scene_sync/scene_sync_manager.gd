@@ -25,7 +25,9 @@ signal physics_runtime_diagnostic(detail: Dictionary)
 @export var auto_connect: bool = true
 @export var sync_root: Node3D = null
 @export var hierarchy_poll_interval: float = 0.5
-@export_enum("Local", "Shared Playback Follow", "Shared Playback Control") var playback_clock_mode: int = 0
+@export_enum("Local", "Shared Playback Follow", "Shared Playback Control", "Room Time") var playback_clock_mode: int = 0
+@export_enum("Manual", "Auto Follow or Local", "Follower Only") var playback_follow_policy: int = 0
+@export var allow_playback_control: bool = true
 @export var playback_clock_broadcast_interval: float = 0.25
 @export var rapier_physics_enabled: bool = true
 @export_range(1, 10000, 1) var rapier_max_steps_per_update: int = 600
@@ -66,6 +68,9 @@ var _first_peers_received: bool = false
 var _send_timer: float = 0.0
 var _hierarchy_timer: float = 0.0
 var _connected: bool = false
+var _last_playback_effective_mode: int = SceneSyncPlaybackClock.LOCAL
+var _last_effective_playback_time: float = 0.0
+var _has_effective_playback_sample: bool = false
 
 const SEND_INTERVAL: float = 0.05
 const RECOVERY_TIMEOUT_SECONDS: float = 30.0
@@ -105,6 +110,7 @@ func _ready() -> void:
     _client.disconnected.connect(_on_disconnected)
     _client.peers_updated.connect(_on_peers_updated)
     _client.handoff_received.connect(_on_handoff_received)
+    _client.server_time_received.connect(_on_server_time_received)
 
     set_process(true)
     if auto_connect and (not Engine.is_editor_hint() or _can_operate_in_editor()):
@@ -213,7 +219,11 @@ func set_playback_clock_mode(mode: Variant) -> Dictionary:
     var local_id := _client.id if _client != null else ""
     var state := clock.set_mode(mode, local_id, nickname, _managed_objects.keys())
     playback_clock_mode = int(state.get("mode", SceneSyncPlaybackClock.LOCAL))
-    if previous_mode != playback_clock_mode and playback_clock_mode == SceneSyncPlaybackClock.LOCAL:
+    if (
+        previous_mode != playback_clock_mode
+        and playback_clock_mode == SceneSyncPlaybackClock.LOCAL
+        and not bool(state.get("localTransportControlled", false))
+    ):
         _resume_remote_animation_policies()
     return state
 
@@ -228,6 +238,50 @@ func follow_shared_playback() -> Dictionary:
 
 func control_shared_playback() -> Dictionary:
     return set_playback_clock_mode(SceneSyncPlaybackClock.SHARED_PLAYBACK_CONTROL)
+
+
+func use_room_time() -> Dictionary:
+    return set_playback_clock_mode(SceneSyncPlaybackClock.ROOM_TIME)
+
+
+func set_playback_follow_policy(policy: Variant) -> Dictionary:
+    var state := _ensure_playback_clock().set_follow_policy(policy)
+    playback_follow_policy = int(state.get("followPolicy", SceneSyncPlaybackClock.MANUAL))
+    return state
+
+
+func set_playback_control_allowed(allowed: bool) -> Dictionary:
+    allow_playback_control = allowed
+    return _ensure_playback_clock().set_allow_control(allowed)
+
+
+func pause_playback_clock() -> Dictionary:
+    var times := _playback_time_samples()
+    return _ensure_playback_clock().pause(times[0], times[1], _managed_objects.keys())
+
+
+func resume_playback_clock() -> Dictionary:
+    var times := _playback_time_samples()
+    return _ensure_playback_clock().resume(times[0], times[1], _managed_objects.keys())
+
+
+func seek_playback_clock(target_time: float) -> Dictionary:
+    var times := _playback_time_samples()
+    return _ensure_playback_clock().seek(target_time, times[0], times[1], _managed_objects.keys())
+
+
+func reset_playback_clock() -> Dictionary:
+    var times := _playback_time_samples()
+    return _ensure_playback_clock().reset(times[0], times[1], _managed_objects.keys())
+
+
+func set_playback_rate(rate: float) -> Dictionary:
+    var times := _playback_time_samples()
+    return _ensure_playback_clock().set_rate(rate, times[0], times[1], _managed_objects.keys())
+
+
+func release_playback_control() -> Dictionary:
+    return follow_shared_playback()
 
 
 func _has_animation_policy(object_id: String) -> bool:
@@ -285,15 +339,36 @@ func _on_connected(new_id: String, new_room: String) -> void:
     room = new_room
     if _playback_clock != null:
         var configured_mode := playback_clock_mode
-        _playback_clock.clear()
-        playback_clock_mode = configured_mode
+        var reconnect_times := _playback_time_samples()
+        _playback_clock.handle_connection_lost(reconnect_times[0], reconnect_times[1])
         _playback_clock.broadcast_interval = playback_clock_broadcast_interval
+        _playback_clock.set_follow_policy(playback_follow_policy)
+        _playback_clock.set_allow_control(allow_playback_control)
+        if _client.server_time_msec > 0.0:
+            _playback_clock.set_room_time_anchor(
+                _client.server_time_msec,
+                _client.server_time_received_monotonic
+            )
+        if (
+            configured_mode == SceneSyncPlaybackClock.SHARED_PLAYBACK_CONTROL
+            and not bool(_playback_clock.get_state().get("active", false))
+        ):
+            _playback_clock.set_mode(
+                SceneSyncPlaybackClock.LOCAL,
+                new_id,
+                nickname,
+                _managed_objects.keys()
+            )
         _playback_clock.set_mode(configured_mode, new_id, nickname, _managed_objects.keys())
     connected.emit(new_id, new_room)
 
 
 func _on_disconnected() -> void:
     _connected = false
+    if _playback_clock != null:
+        var disconnect_times := _playback_time_samples()
+        _playback_clock.handle_connection_lost(disconnect_times[0], disconnect_times[1])
+        playback_clock_mode = _playback_clock.mode
     _scene_received = false
     _first_peers_received = false
     _locks.clear()
@@ -311,10 +386,11 @@ func _on_disconnected() -> void:
             if bool(managed_node.get_meta(REMOTE_OBJECT_META, false)):
                 SceneSyncAnimationPolicy.stop(managed_node)
                 managed_node.queue_free()
-    if _playback_clock != null:
-        var configured_mode := playback_clock_mode
-        _playback_clock.clear()
-        playback_clock_mode = configured_mode
+    if _loom_runner != null and is_instance_valid(_loom_runner):
+        _call_loom_runner("ClearTimeOverrides")
+    _last_playback_effective_mode = SceneSyncPlaybackClock.LOCAL
+    _last_effective_playback_time = 0.0
+    _has_effective_playback_sample = false
     _managed_objects.clear()
     _known_ids.clear()
     _mesh_paths.clear()
@@ -338,6 +414,10 @@ func _on_disconnected() -> void:
     disconnected.emit()
 
 
+func _on_server_time_received(server_time_msec: float, received_monotonic_time: float) -> void:
+    _ensure_playback_clock().set_room_time_anchor(server_time_msec, received_monotonic_time)
+
+
 func _on_peers_updated(peers: Array) -> void:
     var live_peer_ids := {}
     for peer in peers:
@@ -348,6 +428,10 @@ func _on_peers_updated(peers: Array) -> void:
         var owner_id := _safe_string(_locks[object_id])
         if owner_id != "" and owner_id != _client.id and not live_peer_ids.has(owner_id):
             _locks.erase(object_id)
+
+    if _playback_clock != null:
+        var times := _playback_time_samples()
+        _playback_clock.reconcile_peers(peers, times[0], times[1])
 
     if not _first_peers_received and peers.size() > 0:
         _first_peers_received = true
@@ -409,8 +493,12 @@ func _dispatch_scene_payload(payload: Dictionary, from_info: Dictionary) -> void
                 _ensure_rapier_bridge().handle_sync_payload(payload, from_info)
         "scene-clock":
             var local_id := _client.id if _client != null else ""
-            if from_id != local_id and _playback_clock != null:
-                if _playback_clock.ingest(payload, from_id, local_id):
+            if _playback_clock != null and (
+                from_id != local_id
+                or _playback_clock.mode == SceneSyncPlaybackClock.SHARED_PLAYBACK_CONTROL
+            ):
+                var times := _playback_time_samples()
+                if _playback_clock.ingest(payload, from_id, local_id, times[0], times[1]):
                     playback_clock_mode = _playback_clock.mode
         "scene-delta":
             if from_id != _client.id:
@@ -1651,10 +1739,19 @@ func _ensure_playback_clock() -> SceneSyncPlaybackClock:
         return _playback_clock
     _playback_clock = SceneSyncPlaybackClock.new()
     _playback_clock.broadcast_interval = playback_clock_broadcast_interval
+    _playback_clock.follow_policy = playback_follow_policy
+    _playback_clock.allow_control = allow_playback_control
     _playback_clock.broadcast_requested.connect(_on_playback_clock_broadcast_requested)
     _playback_clock.state_changed.connect(_on_playback_clock_state_changed)
     _playback_clock.set_mode(playback_clock_mode, "", nickname, _managed_objects.keys())
     return _playback_clock
+
+
+func _playback_time_samples() -> Array[float]:
+    return [
+        float(Time.get_ticks_usec()) / 1000000.0,
+        Time.get_unix_time_from_system(),
+    ]
 
 
 func _ensure_rapier_bridge() -> Node:
@@ -1700,25 +1797,61 @@ func _update_playback_clock() -> void:
     if _playback_clock == null:
         return
     _playback_clock.broadcast_interval = playback_clock_broadcast_interval
+    if playback_follow_policy != _playback_clock.follow_policy:
+        _playback_clock.set_follow_policy(playback_follow_policy)
+    if allow_playback_control != _playback_clock.allow_control:
+        _playback_clock.set_allow_control(allow_playback_control)
     if playback_clock_mode != _playback_clock.mode:
-        var previous_mode := _playback_clock.mode
         var local_id := _client.id if _client != null else ""
         _playback_clock.set_mode(playback_clock_mode, local_id, nickname, _managed_objects.keys())
-        if previous_mode != SceneSyncPlaybackClock.LOCAL and _playback_clock.mode == SceneSyncPlaybackClock.LOCAL:
-            _resume_remote_animation_policies()
     var monotonic_time := float(Time.get_ticks_usec()) / 1000000.0
     var unix_time := Time.get_unix_time_from_system()
     _playback_clock.update(monotonic_time, unix_time, _managed_objects.keys())
     playback_clock_mode = _playback_clock.mode
-    if playback_clock_mode == SceneSyncPlaybackClock.LOCAL:
+    playback_follow_policy = _playback_clock.follow_policy
+    allow_playback_control = _playback_clock.allow_control
+    var state := _playback_clock.get_state()
+    var effective_mode := int(state.get("effectiveMode", SceneSyncPlaybackClock.LOCAL))
+    var transport_controlled := bool(state.get("localTransportControlled", false))
+    var active_time := _playback_clock.get_playback_time(monotonic_time, unix_time)
+    var effective_delta := 0.0
+    if _has_effective_playback_sample:
+        effective_delta = maxf(0.0, active_time - _last_effective_playback_time)
+    _last_effective_playback_time = active_time
+    _has_effective_playback_sample = true
+
+    if (
+        _last_playback_effective_mode != SceneSyncPlaybackClock.LOCAL
+        and effective_mode == SceneSyncPlaybackClock.LOCAL
+        and not transport_controlled
+    ):
+        _resume_remote_animation_policies()
+    _last_playback_effective_mode = effective_mode
+
+    if effective_mode == SceneSyncPlaybackClock.LOCAL and not transport_controlled:
+        if _loom_runner != null and is_instance_valid(_loom_runner):
+            _call_loom_runner("ClearTimeOverrides")
         return
+    var loom_runner_available := _loom_runner != null and is_instance_valid(_loom_runner)
+    if loom_runner_available:
+        _call_loom_runner("SetSharedTimeOverride", [
+            active_time,
+            effective_delta,
+            bool(state.get("paused", false)),
+            String(state.get("effectiveModeName", "shared-playback-follow")),
+            float(state.get("rate", 1.0)),
+        ])
     for object_id_value in _managed_objects.keys():
         var object_id := _safe_string(object_id_value)
         var node := _get_managed_node(object_id)
-        if node == null or not bool(node.get_meta(REMOTE_OBJECT_META, false)):
+        if node == null:
+            continue
+        var object_time := _playback_clock.get_object_time(object_id, monotonic_time, unix_time)
+        if loom_runner_available:
+            _call_loom_runner("SetObjectTimeOverride", [object_id, object_time])
+        if not bool(node.get_meta(REMOTE_OBJECT_META, false)):
             continue
         var policy: Variant = get_animation_policy(object_id) if _has_animation_policy(object_id) else null
-        var object_time := _playback_clock.get_object_time(object_id, monotonic_time, unix_time)
         SceneSyncAnimationPolicy.sample(node, policy, object_time)
 
 
@@ -1729,13 +1862,15 @@ func _update_rapier_bridge() -> void:
     _rapier_bridge.max_steps_per_update = rapier_max_steps_per_update
     _rapier_bridge.hash_broadcast_interval_ticks = rapier_hash_broadcast_interval_ticks
     var clock_state := _playback_clock.get_state() if _playback_clock != null else {}
-    var clock_active := true
-    if playback_clock_mode == SceneSyncPlaybackClock.SHARED_PLAYBACK_FOLLOW:
-        clock_active = bool(clock_state.get("active", false))
+    var effective_mode := int(clock_state.get("effectiveMode", SceneSyncPlaybackClock.LOCAL))
+    var playback_time := (
+        _last_effective_playback_time
+        if _has_effective_playback_sample else get_current_playback_time()
+    )
     _rapier_bridge.advance_to_time(
-        get_current_playback_time(),
-        playback_clock_mode,
-        clock_active
+        playback_time,
+        effective_mode,
+        true
     )
 
 
@@ -1893,7 +2028,13 @@ func _apply_animation_policy(object_id: String, node: Node3D) -> Dictionary:
         return {"applied": false, "reason": "invalid-root"}
     var raw_policy: Variant = get_animation_policy(object_id) if _has_animation_policy(object_id) else null
     var result := {}
-    if _playback_clock != null and _playback_clock.mode != SceneSyncPlaybackClock.LOCAL:
+    if (
+        _playback_clock != null
+        and (
+            _playback_clock.is_using_shared_time()
+            or bool(_playback_clock.get_state().get("localTransportControlled", false))
+        )
+    ):
         var monotonic_time := float(Time.get_ticks_usec()) / 1000000.0
         var unix_time := Time.get_unix_time_from_system()
         result = SceneSyncAnimationPolicy.sample(

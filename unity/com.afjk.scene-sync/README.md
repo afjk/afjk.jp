@@ -166,6 +166,35 @@ Managed Objects の概要を表示します。
 
 Editor は制作ツールとして Unity GameObject を原本扱いします。一方、Runtime / Player は一時的な Scene Sync 参加者として扱います。Runtime で受信したオブジェクトは temporary object として生成され、Scene Sync 上で削除された場合はローカルでも削除されます。
 
+### Runtime playback clock
+
+`SceneSyncManager.PlaybackClockMode` は `Local`、`SharedPlaybackFollow`、
+`SharedPlaybackControl`、`RoomTime` を提供します。Presence の
+`welcome.serverTime` と受信した `scene-clock.roomNow` は受信時の local
+monotonic clock に anchor されるため、端末 wall clock がずれていても
+Shared Playback の経過時間には影響しません。
+
+XR viewer など controller にならない client では次のように設定します。
+
+```csharp
+manager.PlaybackClockFollowPolicy = SceneSyncPlaybackClockFollowPolicy.FollowerOnly;
+manager.AllowPlaybackClockControl = false;
+```
+
+`FollowerOnly` と `AutoFollowOrLocal` は、有効な remote controller がいる間だけ
+自動的に `SharedPlaybackFollow` を effective mode として使います。controller の
+release、disconnect、lease expiry 後は最後の Shared ActiveTime を local clock へ
+rebaseし、1倍速で連続して進みます。`FollowerOnly` は controller 取得payloadを
+送信しません。既存の `Manual` + `Local` は従来どおり各componentのlocal playbackを
+維持します。
+
+transport API は `PausePlaybackClock()`、`ResumePlaybackClock()`、
+`SeekPlaybackClock()`、`ResetPlaybackClock()`、`SetPlaybackClockRate()`、
+`ReleaseSharedPlaybackControl()` です。Follow中とRoom Timeではpause/seek/rateを
+拒否します。`GetPlaybackClockSample(objectId)` はAnimation、Loomlet、physics adapter
+が共有するeffective `ActiveTime` / `ObjectAge`、pause、rate、controller、revisionを
+返します。
+
 ## Animated GLB Export
 
 UnityGLTF は optional dependency です。

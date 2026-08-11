@@ -24,7 +24,50 @@ public partial class SceneSyncLoomletRunner : Node
 
     private readonly Dictionary<string, Node3D> _objects = new Dictionary<string, Node3D>();
     private readonly Dictionary<string, BoundGraph> _objectGraphs = new Dictionary<string, BoundGraph>();
+    private readonly Dictionary<string, double> _objectTimeOverrides = new Dictionary<string, double>();
     private BoundGraph _sceneGraph;
+    private bool _hasSharedTimeOverride;
+    private double _sharedTimeOverride;
+    private double _sharedDeltaOverride;
+    private bool _sharedPausedOverride;
+    private string _sharedModeOverride = "local";
+    private double _sharedRateOverride = 1.0;
+
+    public void SetSharedTimeOverride(double time, double delta, bool paused, string mode, double rate)
+    {
+        _hasSharedTimeOverride = true;
+        _sharedTimeOverride = FiniteNonNegative(time);
+        _sharedDeltaOverride = FiniteNonNegative(delta);
+        _sharedPausedOverride = paused;
+        _sharedModeOverride = string.IsNullOrWhiteSpace(mode) ? "shared-playback" : mode;
+        _sharedRateOverride = double.IsNaN(rate) || double.IsInfinity(rate) || rate < 0 ? 1.0 : rate;
+    }
+
+    public void SetObjectTimeOverride(string objectId, double time)
+    {
+        if (!string.IsNullOrWhiteSpace(objectId))
+            _objectTimeOverrides[objectId] = FiniteNonNegative(time);
+    }
+
+    public void ClearTimeOverrides()
+    {
+        _hasSharedTimeOverride = false;
+        _objectTimeOverrides.Clear();
+    }
+
+    public bool HasTimeOverride(string objectId = null)
+    {
+        return _hasSharedTimeOverride && (string.IsNullOrWhiteSpace(objectId) || _objectTimeOverrides.ContainsKey(objectId));
+    }
+
+    public double GetTimeOverride(string objectId = null)
+    {
+        if (!_hasSharedTimeOverride)
+            return -1.0;
+        return !string.IsNullOrWhiteSpace(objectId) && _objectTimeOverrides.TryGetValue(objectId, out var value)
+            ? value
+            : _sharedTimeOverride;
+    }
 
     public void BindObject(string objectId, Node3D target)
     {
@@ -43,6 +86,7 @@ public partial class SceneSyncLoomletRunner : Node
 
         ClearObjectGraph(objectId);
         _objects.Remove(objectId);
+        _objectTimeOverrides.Remove(objectId);
     }
 
     public void SetSceneGraph(string graphJson)
@@ -118,6 +162,27 @@ public partial class SceneSyncLoomletRunner : Node
         return _objects.TryGetValue(objectId, out var target) && GodotObject.IsInstanceValid(target)
             ? target
             : null;
+    }
+
+    private ClockSample ResolveClock(string objectId, double localTime, double localDelta)
+    {
+        if (!_hasSharedTimeOverride)
+            return new ClockSample(localTime, Math.Max(0, localDelta), false, "local", 1.0);
+
+        var time = !string.IsNullOrWhiteSpace(objectId) && _objectTimeOverrides.TryGetValue(objectId, out var objectTime)
+            ? objectTime
+            : _sharedTimeOverride;
+        return new ClockSample(
+            time,
+            _sharedPausedOverride ? 0.0 : _sharedDeltaOverride,
+            _sharedPausedOverride,
+            _sharedModeOverride,
+            _sharedRateOverride);
+    }
+
+    private static double FiniteNonNegative(double value)
+    {
+        return double.IsNaN(value) || double.IsInfinity(value) ? 0.0 : Math.Max(0, value);
     }
 
     private static LoomletFunctionRegistry CreateSceneSyncRegistry(BoundGraph bound)
@@ -243,7 +308,8 @@ public partial class SceneSyncLoomletRunner : Node
             _time += Math.Max(0, delta);
             try
             {
-                _context.WithSceneClock(_time, Math.Max(0, delta), false, "local", 1.0);
+                var clock = _owner.ResolveClock(_objectId, _time, delta);
+                _context.WithSceneClock(clock.Time, clock.Delta, clock.Paused, clock.Mode, clock.Rate);
                 _evaluator.Evaluate(_context);
             }
             catch (Exception error)
@@ -387,5 +453,23 @@ public partial class SceneSyncLoomletRunner : Node
             foreach (var child in node.GetChildren())
                 ApplyColorRecursive(child, color);
         }
+    }
+
+    private readonly struct ClockSample
+    {
+        public ClockSample(double time, double delta, bool paused, string mode, double rate)
+        {
+            Time = time;
+            Delta = delta;
+            Paused = paused;
+            Mode = mode;
+            Rate = rate;
+        }
+
+        public double Time { get; }
+        public double Delta { get; }
+        public bool Paused { get; }
+        public string Mode { get; }
+        public double Rate { get; }
     }
 }

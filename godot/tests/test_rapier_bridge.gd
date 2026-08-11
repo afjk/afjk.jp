@@ -24,6 +24,7 @@ func _run() -> void:
     _test_addon_contract()
     _test_freefall_hashes_and_transform()
     _test_shared_tick_hash_verification_and_lifecycle()
+    _test_room_time_mode_rebase()
     _test_missing_addon_fallback()
     _finish()
 
@@ -139,6 +140,41 @@ func _test_shared_tick_hash_verification_and_lifecycle() -> void:
     bridge.upsert_object("box-1", body, _freefall_physics(), true)
     bridge.clear_runtime(true)
     _assert_true(not bridge.is_body_registered("box-1"), "disconnect cleanup clears body bindings")
+    _free_fixture(fixture)
+
+
+func _test_room_time_mode_rebase() -> void:
+    var fixture := _new_freefall_fixture()
+    var bridge = fixture["bridge"]
+    bridge.advance_to_time(0.0, 0, true)
+    bridge.advance_to_time(1.0, 0, true)
+    _assert_eq(bridge.get_tick(), 60, "Room Time fixture starts at one second")
+
+    var room_state: Dictionary = bridge.advance_to_time(1700000000.0, 3, true)
+    _assert_eq(bridge.get_tick(), 60, "Room Time mode transition does not target Unix-scale physics ticks")
+    _assert_true(not bool(room_state.get("limited", true)), "Room Time transition rebases the Rapier world without catch-up limiting")
+    _assert_true(
+        is_equal_approx(
+            float(room_state.get("targetTime", 0.0)) - float(room_state.get("worldEpochTime", 0.0)),
+            1.0
+        ),
+        "Room Time transition preserves the simulated world age"
+    )
+
+    var local_state: Dictionary = bridge.advance_to_time(1.0, 0, true)
+    _assert_eq(bridge.get_tick(), 60, "Room Time to Local keeps the current physics tick")
+    _assert_true(
+        is_equal_approx(
+            float(local_state.get("targetTime", 0.0)) - float(local_state.get("worldEpochTime", 0.0)),
+            1.0
+        ),
+        "Room Time to Local preserves the simulated world age"
+    )
+
+    bridge.advance_to_time(1700000000.0, 3, true)
+    var control_state: Dictionary = bridge.advance_to_time(0.0, 2, true)
+    _assert_eq(bridge.get_tick(), 0, "Room Time to Control resets the physics baseline")
+    _assert_true(not bool(control_state.get("limited", true)), "Control acquisition rewinds without catch-up limiting")
     _free_fixture(fixture)
 
 

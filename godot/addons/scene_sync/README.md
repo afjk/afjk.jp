@@ -66,9 +66,17 @@ Missing animation fields in ordinary deltas preserve the current policy. Policy 
 
 ## Playback clock
 
-`SceneSyncManager` supports Local, Shared Playback Follow, and Shared Playback Control modes through `playback_clock_mode`. Use `use_local_playback()`, `follow_shared_playback()`, `control_shared_playback()`, or `set_playback_clock_mode(mode)` at runtime, and inspect `get_playback_clock_state()`. Control mode publishes bounded `scene-clock` updates at `playback_clock_broadcast_interval` (minimum 0.05 seconds); Follow mode accepts newer remote revisions. `playback_clock_state_changed(state)` reports mode and clock changes.
+`SceneSyncManager` supports Local, Shared Playback Follow, Shared Playback Control, and Room Time modes through `playback_clock_mode`. Use `use_local_playback()`, `follow_shared_playback()`, `control_shared_playback()`, `use_room_time()`, or `set_playback_clock_mode(mode)` at runtime, and inspect `get_playback_clock_state()`.
 
-In Follow and Control modes, remote-created managed `AnimationPlayer` clips are sampled from the shared object clock. Sampling applies `time * speed + offset`, modulo clip duration for loop mode and clamped for once mode, while freezing local animation advance. Authored/bound Godot animations are not sampled. Returning to Local resumes ordinary animation-policy playback for remote-created nodes, including when the exported mode property is changed directly.
+`welcome.serverTime` is captured as a RoomNow anchor. Received shared clocks are anchored to the local monotonic clock at receipt; a follower never extrapolates with the difference between its wall clock and the sender's `sentAt`. `serverTime` and `sentAt` are Unix milliseconds, while `roomNow`, `offset`, `pausedTime`, `time`, and `targetTime` are seconds. Canonical payloads may also carry `active`, `controller`, `leaseExpiresAt` (Unix milliseconds), and `leaseDurationMs`. Legacy payloads without those fields remain supported.
+
+Control mode supports `pause_playback_clock()`, `resume_playback_clock()`, `seek_playback_clock(time)`, `reset_playback_clock()`, and `set_playback_rate(rate)`. These publish the compatible `pause`, `play`, `seek`, `reset`, and `rate` operations. `release_playback_control()` publishes a release and immediately rebases to local monotonic 1x time; it does not wait for the server echo. Room Time continuously exposes RoomNow and does not accept transport operations.
+
+Control capability and follow behavior are separate. Set `allow_playback_control` to disable controller acquisition, and choose `playback_follow_policy` from Manual, Auto Follow or Local, and Follower Only. Follower Only always has effective `allowControl: false` and never emits a controller acquisition. Auto Follow or Local and Follower Only follow only while an authoritative controller is active; release, peer disappearance, disconnect, or lease expiry rebases the last displayed Shared Time and ObjectAge to local monotonic 1x time without a reset.
+
+Control mode publishes bounded `scene-clock` updates at `playback_clock_broadcast_interval` (minimum 0.05 seconds); Follow mode accepts newer remote revisions. `playback_clock_state_changed(state)` reports configured and effective mode, policy, controller, lease, pause, and rate state.
+
+In Follow, Control, and Room Time modes, remote-created managed `AnimationPlayer` clips, Loomlet `scene.clock`, and Rapier all consume the same per-frame effective ActiveTime and ObjectAge sample. Sampling applies `time * speed + offset`, modulo clip duration for loop mode and clamped for once mode, while freezing local animation advance. Local transport operations and automatic Follow-to-Local fallback also use that shared manager sample. Untouched Local mode retains the existing ordinary animation and Loomlet delta behavior. Authored/bound Godot animations are not sampled.
 
 ## Deterministic Rapier physics
 

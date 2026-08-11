@@ -64,6 +64,10 @@ func _run() -> void:
             runner.has_method("SetSceneGraph") or runner.has_method("set_scene_graph"),
             "runner exposes scene graph method"
         )
+        _assert_true(
+            runner.has_method("SetSharedTimeOverride") or runner.has_method("set_shared_time_override"),
+            "runner exposes shared time override API"
+        )
 
         var target := Node3D.new()
         manager.add_child(target)
@@ -71,6 +75,24 @@ func _run() -> void:
         manager._call_loom_runner("BindObject", ["loom-test", target])
         manager._call_loom_runner("SetObjectGraph", ["loom-test", target, JSON.stringify(graph)])
         manager._call_loom_runner("SetSceneGraph", [JSON.stringify(graph)])
+        manager._call_loom_runner("SetSharedTimeOverride", [12.5, 0.25, false, "shared-playback-follow", 1.0])
+        manager._call_loom_runner("SetObjectTimeOverride", ["loom-test", 3.5])
+        var get_override_method := (
+            "GetTimeOverride" if runner.has_method("GetTimeOverride") else "get_time_override"
+        )
+        _assert_true(
+            is_equal_approx(float(runner.call(get_override_method, "")), 12.5),
+            "scene graph receives shared ActiveTime override"
+        )
+        _assert_true(
+            is_equal_approx(float(runner.call(get_override_method, "loom-test")), 3.5),
+            "object graph receives shared ObjectAge override"
+        )
+        manager._call_loom_runner("ClearTimeOverrides")
+        var has_override_method := (
+            "HasTimeOverride" if runner.has_method("HasTimeOverride") else "has_time_override"
+        )
+        _assert_true(not bool(runner.call(has_override_method, "")), "Local mode clears shared time overrides")
         manager._call_loom_runner("ClearObjectGraph", ["loom-test"])
         manager._call_loom_runner("UnbindObject", ["loom-test"])
         manager._call_loom_runner("ClearSceneGraph")
