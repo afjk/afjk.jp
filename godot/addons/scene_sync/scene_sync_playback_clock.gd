@@ -609,7 +609,7 @@ func _broadcast_release(monotonic_time: float, unix_time: float) -> void:
     }
     if bool(payload["paused"]) and _is_finite_number(_clock.get("pausedTime", null)):
         payload["pausedTime"] = float(_clock["pausedTime"])
-    broadcast_requested.emit(payload)
+    broadcast_requested.emit(payload.duplicate(true))
 
 
 func _get_local_time(monotonic_time: float) -> float:

@@ -172,7 +172,10 @@ namespace Afjk.SceneSync
             }
             finally
             {
-                if (ReferenceEquals(_ws, socket)) OnDisconnected?.Invoke();
+                if (ReferenceEquals(_ws, socket))
+                {
+                    DisconnectInternal(true);
+                }
             }
         }
 
