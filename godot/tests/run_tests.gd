@@ -811,6 +811,30 @@ func _run_manager_tests() -> void:
     var resolved = manager._resolve_existing_sync_target_for_payload("obj-2", {"name": "UnityCube"})
     _assert_eq(resolved, existing, "manager resolves existing node by unique name")
 
+    var pasted_object_ids := ["paste-a", "paste-b", "paste-c"]
+    for pasted_object_id in pasted_object_ids:
+        manager._handle_scene_add({
+            "kind": "scene-add",
+            "objectId": pasted_object_id,
+            "name": "Web Crate Copy",
+            "position": [0.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0, 1.0],
+            "scale": [1.0, 1.0, 1.0],
+            "asset": {"type": "primitive", "primitive": "box"},
+        })
+    var pasted_instance_ids := {}
+    for pasted_object_id in pasted_object_ids:
+        var pasted_node := manager._managed_objects.get(pasted_object_id) as Node3D
+        _assert_true(pasted_node != null, "manager tracks each same-name Web paste")
+        if pasted_node != null:
+            pasted_instance_ids[pasted_node.get_instance_id()] = true
+            _assert_eq(
+                pasted_node.get_meta("scene_sync_object_id", ""),
+                pasted_object_id,
+                "manager preserves each same-name Web paste identity"
+            )
+    _assert_eq(pasted_instance_ids.size(), 3, "manager creates distinct nodes for same-name Web pastes")
+
     var mesh_existing := Node3D.new()
     mesh_existing.name = "MeshTarget"
     sync_root.add_child(mesh_existing)
