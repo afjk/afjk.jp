@@ -1556,10 +1556,11 @@
         <label class="form-group">
           <span class="form-label">形式</span>
           <select id="export-format-input" class="form-input">
-            <option value="static-zip">Static ZIP（従来形式）</option>
+            <option value="auto" selected>Auto（推奨）</option>
             <option value="single-html">Single HTML（1ファイル）</option>
+            <option value="static-zip">Static ZIP（従来形式）</option>
           </select>
-          <small class="export-format-hint">Single HTML はシーン、アセット、ビューアを1つのHTMLに埋め込みます。初期版は Three.js CDN 接続を使用します。</small>
+          <small id="export-format-hint" class="export-format-hint">推定サイズが32MB以下で完全に埋め込める場合は Single HTML、それ以外は Static ZIP を選びます。Three.js CDN 接続は必要です。</small>
         </label>
         <div class="form-group">
           <span class="form-label">Thumbnail画像</span>

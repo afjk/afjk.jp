@@ -1,5 +1,3 @@
-import { createSceneDocumentFromSceneSyncState } from './export-scene-document.js';
-import { collectExportAssets } from './collect-export-assets.js';
 import { generateManifest } from './export-manifest.js';
 import { generateReadme, generateReadmeHtml } from './export-readme.js';
 import {
@@ -7,66 +5,10 @@ import {
   generateExportThumbnail,
   resolveExportThumbnailTitle,
 } from './export-thumbnail.js';
-import { normalizeExportMetadata } from './export-metadata.js';
+import { prepareSceneSyncExport } from './export-preparation.js';
+import { VIEWER_SOURCES } from './viewer-sources.js';
 
-function stripSourceMappingUrl(source) {
-  return String(source).replace(/\r?\n?\/\/# sourceMappingURL=.*(?:\r?\n)?$/u, '\n');
-}
-
-// These viewer source files are fetched from the current origin and bundled into the ZIP
-export const VIEWER_SOURCES = [
-  { src: '/assets/js/scenesync-export/viewer/static-viewer-entry.js', dest: 'viewer/viewer.js' },
-  {
-    src: '/assets/js/scenesync-export/viewer/create-viewer-core.js',
-    dest: 'viewer/create-viewer-core.js',
-    transform: (source) => source.replaceAll('../../scenesync/', '../scenesync/'),
-  },
-  { src: '/assets/js/scenesync-export/viewer/export-behavior-runtime.js', dest: 'viewer/export-behavior-runtime.js' },
-  { src: '/assets/js/scenesync-export/viewer/object-audio-controller.js', dest: 'viewer/object-audio-controller.js' },
-  { src: '/assets/js/scenesync-export/viewer/static-asset-resolver.js', dest: 'viewer/static-asset-resolver.js' },
-  { src: '/assets/js/scenesync-export/viewer/scene-document.js', dest: 'viewer/scene-document.js' },
-  { src: '/assets/js/scenesync-export/viewer/viewer-scene-clock.js', dest: 'viewer/viewer-scene-clock.js' },
-  { src: '/assets/js/scenesync/shells/player/player-transport.js', dest: 'viewer/player-transport.js' },
-  { src: '/assets/js/scenesync/shells/player/player-actions.js', dest: 'viewer/player-actions.js' },
-  { src: '/assets/js/scenesync/shells/player/player-shell.css', dest: 'viewer/player-shell.css' },
-  {
-    src: '/assets/js/scenesync/scene-physics.js',
-    dest: 'viewer/scene-physics.js',
-    transform: (source) => source
-      .replaceAll('./runtime/runtime-events.js', '../scenesync/runtime/runtime-events.js')
-      .replaceAll('./runtime/event-timeline.js', '../scenesync/runtime/event-timeline.js'),
-  },
-  { src: '/assets/js/scenesync/physics/index.js', dest: 'viewer/physics/index.js' },
-  { src: '/assets/js/scenesync/physics/rapier-world.js', dest: 'viewer/physics/rapier-world.js' },
-  { src: '/assets/js/scenesync/plugins/scene-sync-physics-plugin.js', dest: 'scenesync/plugins/scene-sync-physics-plugin.js' },
-  { src: '/assets/js/scenesync/plugins/scene-sync-loomlet-plugin.js', dest: 'scenesync/plugins/scene-sync-loomlet-plugin.js' },
-  { src: '/assets/js/scenesync/runtime/schedule-context.js', dest: 'scenesync/runtime/schedule-context.js' },
-  { src: '/assets/js/scenesync/runtime/runtime-events.js', dest: 'scenesync/runtime/runtime-events.js' },
-  { src: '/assets/js/scenesync/runtime/event-timeline.js', dest: 'scenesync/runtime/event-timeline.js' },
-  { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
-  // deterministic-compat build — must match the build used by rapier-world.js
-  {
-    src: '/assets/vendor/rapier-deterministic/0.19.3/rapier.mjs',
-    dest: 'viewer/rapier/rapier.js',
-    transform: stripSourceMappingUrl,
-  },
-  { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier_wasm3d_bg.wasm', dest: 'viewer/rapier/rapier_wasm3d_bg.wasm', binary: true },
-  // Pinned Loomlet behavior graph runtime. Exported viewers must not depend on afjk.jp at runtime.
-  {
-    src: '/assets/vendor/loomlet/0.3.0/loomlet-scenesync-runtime.browser.js',
-    dest: 'viewer/loomlet/loomlet-scenesync-runtime.browser.js',
-  },
-];
-
-// Only Single HTML exports expose the opener handoff UI. Keeping these out of
-// VIEWER_SOURCES leaves Static ZIP contents and behavior unchanged.
-export const SINGLE_HTML_HANDOFF_SOURCES = [
-  { src: '/assets/js/scenesync/handoff/protocol.js', dest: 'scenesync/handoff/protocol.js' },
-  { src: '/assets/js/scenesync/handoff/source.js', dest: 'scenesync/handoff/source.js' },
-  { src: '/assets/js/scenesync/handoff/source.css', dest: 'scenesync/handoff/source.css' },
-  { src: '/assets/js/scenesync/utils/room-code.js', dest: 'scenesync/utils/room-code.js' },
-];
-
+export { VIEWER_SOURCES, SINGLE_HTML_HANDOFF_SOURCES, fetchExportViewerSources } from './viewer-sources.js';
 const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -222,26 +164,6 @@ async function addExportThumbnail(zip, {
   return { path: 'thumbnail.png', mode: thumbnail.mode };
 }
 
-export async function fetchExportViewerSources(sources = VIEWER_SOURCES) {
-  const results = {};
-  const failures = [];
-
-  await Promise.all(
-    sources.map(async ({ src, dest, binary = false, transform = null }) => {
-      try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const content = binary ? await res.arrayBuffer() : await res.text();
-        results[dest] = typeof transform === 'function' ? transform(content) : content;
-      } catch (err) {
-        failures.push({ src, dest, error: err.message });
-      }
-    })
-  );
-
-  return { results, failures };
-}
-
 export async function buildExportPackage({
   managedObjects,
   bgmState,
@@ -252,39 +174,27 @@ export async function buildExportPackage({
   behaviorState = null,
   physicsState = null,
   exportMetadata = null,
+  preparedExport = null,
 }) {
-  const metadata = normalizeExportMetadata(exportMetadata);
-
-  // 1. Build SceneDocument from current state
-  let sceneDocument;
-  try {
-    sceneDocument = createSceneDocumentFromSceneSyncState({
-      managedObjects,
-      bgmState,
-      envId,
-      behaviorState,
-      physicsState,
-      exportMetadata: metadata,
-    });
-  } catch (err) {
-    throw new Error(`SceneDocument generation failed: ${err.message}`);
-  }
-
-  // 2. Collect assets (fetch GLBs, HDRI, BGM)
-  const { files, document: updatedDoc, assetManifest, missingAssets } =
-    await collectExportAssets({
-      sceneDocument,
-      blobBase,
-      envOrigin,
-      assetCache,
-    });
-
-  // 3. Fetch viewer source files
-  const { results: viewerFiles, failures: viewerFailures } = await fetchExportViewerSources();
+  // Direct Static ZIP exports intentionally fetch exactly their historic viewer
+  // source set. Auto can pass a wider prepared set and we still write only it.
+  const prepared = preparedExport || await prepareSceneSyncExport({
+    managedObjects, bgmState, envId, blobBase, envOrigin, assetCache,
+    behaviorState, physicsState, exportMetadata, viewerSources: VIEWER_SOURCES,
+  });
+  const {
+    metadata, files, document: updatedDoc, assetManifest, missingAssets,
+    viewerFiles, viewerFailures,
+  } = prepared;
 
   if (viewerFailures.length > 0) {
-    const missing = viewerFailures.map(f => f.dest).join(', ');
-    throw new Error(`Required viewer files could not be fetched: ${missing}`);
+    const requiredDestinations = new Set(VIEWER_SOURCES.map(({ dest }) => dest));
+    const missing = viewerFailures.filter(({ dest }) => requiredDestinations.has(dest)).map(f => f.dest);
+    if (missing.length === 0) {
+      // Handoff-only sources are irrelevant to a Static ZIP.
+    } else {
+      throw new Error(`Required viewer files could not be fetched: ${missing.join(', ')}`);
+    }
   }
 
   // 4. Build manifest
@@ -326,8 +236,9 @@ export async function buildExportPackage({
   }
 
   // 7. Add viewer files
+  const staticViewerDestinations = new Set(VIEWER_SOURCES.map(({ dest }) => dest));
   for (const [dest, content] of Object.entries(viewerFiles)) {
-    zip.file(dest, content);
+    if (staticViewerDestinations.has(dest)) zip.file(dest, content);
   }
 
   // 8. Add asset files
@@ -353,5 +264,5 @@ export async function buildExportPackage({
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 
-  return { missingAssets };
+  return { missingAssets, filename, manifest, selectedFormat: 'static-zip' };
 }
