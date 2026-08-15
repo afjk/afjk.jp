@@ -8599,7 +8599,7 @@ function createSceneUrlImportContext(options = {}) {
       const meshPath = generateRandomPath();
       let assetId = null;
 
-      try {
+      if (!options.strictLoad) try {
         assetId = await computeAssetId(arrayBuffer);
         await assetCache.putAsset({
           assetId,
@@ -9222,12 +9222,10 @@ function addOrUpdateObject(objectId, info, options = {}) {
         return;
       case 'mesh':
         if (asset.source === 'url' && asset.url) {
-          loadMeshObjectFromUrl(objectId, info, asset.url, existing, options.prebuiltGlbModel);
-          return;
+          return loadMeshObjectFromUrl(objectId, info, asset.url, existing, options.prebuiltGlbModel, options);
         }
         if (asset.meshPath) {
-          loadMeshObject(objectId, info, asset.meshPath, existing, options);
-          return;
+          return loadMeshObject(objectId, info, asset.meshPath, existing, options);
         }
         break;
       case 'video':
@@ -9250,8 +9248,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
   }
 
   if (info.meshPath) {
-    loadMeshObject(objectId, info, info.meshPath, existing, options);
-    return;
+    return loadMeshObject(objectId, info, info.meshPath, existing, options);
   }
 
   if (!existing) {
@@ -9370,12 +9367,12 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     return;
   }
 
-  (async () => {
+  return (async () => {
     try {
       const incomingAssetId = info.asset?.assetId || info.assetId || null;
       let cachedRecord = null;
 
-      try {
+      if (!options.strictLoad) try {
         const cachedByAssetId = incomingAssetId
           ? await assetCache.getByAssetId(incomingAssetId)
           : null;
@@ -9408,9 +9405,10 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
 
       let blob = null;
       try {
-        const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath });
+        const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath, signal: options.signal });
         blob = result.blob;
       } catch (fetchErr) {
+        if (options.strictLoad) throw fetchErr;
         const status = Number(fetchErr?.status || 0);
         if (status === 404) {
           console.warn('[SceneSync] Mesh blob expired (404):', meshPath);
@@ -9460,7 +9458,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         source: 'network',
       });
 
-      glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
+      await glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
         try {
           markCrashProbe('glb-load-success', {
             objectId,
@@ -9501,6 +9499,32 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             };
           }
 
+          if (removedObjectIds.has(objectId) || options.signal?.aborted) {
+            scene.remove(model);
+            model.traverse?.((child) => {
+              child.geometry?.dispose?.();
+              if (Array.isArray(child.material)) child.material.forEach(disposeMaterial);
+              else if (child.material) disposeMaterial(child.material);
+            });
+            cleanupPreviewForLoadedObject(options);
+            const error = new Error('Mesh object load was cancelled');
+            error.code = 'handoff-object-load-cancelled';
+            strictLoadFailure(options, error);
+            return;
+          }
+          try {
+            assertStrictLoadedObjectCommit(options, objectId, model);
+          } catch (error) {
+            scene.remove(model);
+            model.traverse?.((child) => {
+              child.geometry?.dispose?.();
+              if (Array.isArray(child.material)) child.material.forEach(disposeMaterial);
+              else if (child.material) disposeMaterial(child.material);
+            });
+            cleanupPreviewForLoadedObject(options);
+            throw error;
+          }
+
           if (existing) {
             model.position.copy(existing.position);
             model.quaternion.copy(existing.quaternion);
@@ -9510,10 +9534,19 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           }
 
           if (removedObjectIds.has(objectId)) {
+            scene.remove(model);
             cleanupPreviewForLoadedObject(options);
             return;
           }
 
+          if (options.signal?.aborted) {
+            scene.remove(model);
+            cleanupPreviewForLoadedObject(options);
+            const error = new Error('Mesh object load was cancelled');
+            error.code = 'handoff-object-load-cancelled';
+            strictLoadFailure(options, error);
+            return;
+          }
           replaceManagedObject(objectId, model, info);
           cleanupPreviewForLoadedObject(options);
 
@@ -9554,6 +9587,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           URL.revokeObjectURL(objectUrl);
           return;
         }
+        if (options.strictLoad) throw err;
         if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
         } else if (!suppressSnapshotSaveOnFailure) {
@@ -9570,6 +9604,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         cleanupPreviewForLoadedObject(options);
         return;
       }
+      if (options.strictLoad) throw err;
       if (!existing && !skipFallbackOnFailure) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
       } else if (!suppressSnapshotSaveOnFailure) {
@@ -10331,17 +10366,18 @@ function disposeMaterial(material) {
   material.dispose();
 }
 
-function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null) {
+function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
 
   const promise = prebuilt
     ? Promise.resolve({ model: prebuilt })
     : (async () => {
         const { loadGlbFromUrl } = await import('./loaders/url-importers/glb.js');
-        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader });
+        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader, signal: options.signal, maxBytes: 128 * 1024 * 1024 });
       })();
 
-  promise.then(({ model }) => {
+  return promise.then(({ model }) => {
+    if (options.signal?.aborted || removedObjectIds.has(objectId)) return;
     removeLoadingOverlay(objectId);
     model.userData.objectId = objectId;
     model.userData.name = info.name;
@@ -10382,6 +10418,7 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
       type: 'error',
       message: `GLB の読み込みに失敗しました: ${err?.message || 'CORS/サイズ/形式エラーの可能性'}`,
     });
+    if (options.strictLoad || options.signal?.aborted) throw err;
     const failedInfo = { ...info, name: `${info.name || objectId} (load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
     notifySceneStateChanged('glb-url-load-failed');
@@ -15631,7 +15668,11 @@ function initializeHandoffTarget() {
     },
     ensureRoom: ensureHandoffRoom,
     applyMessage: (message) => message.sourceUrl
-      ? applySceneSyncHandoffUrl({ sourceUrl: message.sourceUrl }, createSceneSyncExportImportContext())
+      ? applySceneSyncHandoffUrl({
+          sourceUrl: message.sourceUrl,
+          sessionId: message.sessionId,
+          requestId: message.requestId,
+        }, createSceneSyncExportImportContext())
       : applySceneSyncHandoffPayload({
           sceneDocument: message.sceneDocument,
           embeddedAssets: message.embeddedAssets,

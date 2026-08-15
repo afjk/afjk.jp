@@ -148,7 +148,15 @@ export async function materializeSceneDocumentUrlAssets(sceneDocument, {
     if (entries.has(ref.path)) continue;
     let response;
     try { response = await fetchImpl(ref.url, { mode: 'cors', credentials: 'omit', signal }); }
-    catch { throw error('handoff-remote-asset-fetch-failed'); }
+    catch (cause) {
+      const failure = error('handoff-remote-asset-fetch-failed');
+      // Fetch deliberately hides CORS as TypeError.  The handoff caller may
+      // use its server-side static-export path only for that opaque class;
+      // HTTP, validation, and size errors must remain browser-direct.
+      failure.networkFailure = cause instanceof TypeError;
+      failure.cause = cause;
+      throw failure;
+    }
     if (!response?.ok) throw error('handoff-remote-asset-http-error');
     const allowance = Math.min(resolved.maxAssetBytes, resolved.maxTotalBytes - total);
     if (allowance <= 0) throw error('handoff-remote-assets-too-large');
