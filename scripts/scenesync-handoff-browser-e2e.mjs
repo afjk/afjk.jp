@@ -223,6 +223,9 @@ let publisherServer;
 let observer;
 let browser;
 let tempDir;
+// Playwright's transport is unref'd; without a referenced handle Node may
+// terminate while an awaited browser-side status promise is still pending.
+const keepAlive = setInterval(() => {}, 1_000);
 const requestLog = [];
 try {
   tempDir = await mkdtemp(path.join(os.tmpdir(), 'scene-sync-handoff-e2e-'));
@@ -405,7 +408,12 @@ try {
   noCorsPopup.on('console', (message) => noCorsDiagnostics.push(`popup:${message.type()}:${message.text()}`));
   noCorsPopup.on('pageerror', (error) => noCorsDiagnostics.push(`popup-pageerror:${error.message}`));
   await noCorsPopup.waitForLoadState('domcontentloaded');
-  await noCorsSource.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Opened in Scene Sync.', null, { timeout: TEST_TIMEOUT_MS });
+  try {
+    await noCorsSource.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Opened in Scene Sync.', null, { timeout: 30_000 });
+  } catch (error) {
+    const status = await noCorsSource.locator('#scene-sync-handoff-status').textContent().catch(() => 'unavailable');
+    throw new Error(`${error.message}\nno-ACAO status=${status}\npopup=${noCorsPopup.url()}\ndiagnostics=${noCorsDiagnostics.join('\n')}\nrequests=${requestLog.join('\n')}`);
+  }
   await Promise.race([noCorsAddDone, new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for no-ACAO carrier broadcast')), 10_000))]);
   const noCorsObject = await noCorsPopup.evaluate(async () => {
     const { managedObjects } = await import('/assets/js/scenesync/scene.js');
@@ -447,6 +455,7 @@ try {
   assert.deepEqual(unexpectedDiagnostics, []);
   console.log(JSON.stringify({ status: 'passed', roomId, targetState, observed: [...observedAdds.keys()] }, null, 2));
 } finally {
+  clearInterval(keepAlive);
   await browser?.close();
   if (observer && observer.readyState !== WebSocket.CLOSED) observer.terminate();
   await closeServer(staticServer);
