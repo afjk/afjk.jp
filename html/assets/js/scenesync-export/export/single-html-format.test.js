@@ -150,6 +150,23 @@ test('Single HTML parser ignores comments and data-* attributes while accepting 
   assert.equal(parsed.sceneDocument.format, 'scene-sync-export-scene');
 });
 
+test('Single HTML parser ignores fake tags in raw script/style text and keeps quote-aware real tags', () => {
+  const payload = JSON.stringify({
+    format: SINGLE_HTML_EXPORT_FORMAT,
+    version: 1,
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] },
+    assets: {},
+  });
+  const html = `<meta NAME="scene-sync-export-format" data-note=">" CONTENT='single-html-v1'>
+    <script>const fake = '<meta name="scene-sync-export-format" content="single-html-v1"><script id="scene-sync-single-html-payload">';</script>
+    <style>.fake::before { content: '<meta name="scene-sync-export-format" content="single-html-v1"><script id="scene-sync-single-html-payload">'; }</style>
+    <SCRIPT data-note='>' ID="scene-sync-single-html-payload" type="application/json">${payload}</SCRIPT>
+    <script>const anotherFake = '<script id="scene-sync-single-html-payload">';</script>`;
+  const parsed = parseSingleHtmlExportDocument(html, { isValidSceneDocument });
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.sceneDocument.version, 2);
+});
+
 test('Single HTML parser enforces document, asset count, decoded asset, total asset, and safe path limits before decoding', () => {
   const payload = {
     format: SINGLE_HTML_EXPORT_FORMAT,

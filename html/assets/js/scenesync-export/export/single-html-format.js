@@ -107,40 +107,49 @@ function utf8ByteLength(value) {
   return length;
 }
 
-function withoutHtmlComments(html) {
-  return String(html).replace(/<!--[\s\S]*?(?:-->|$)/gu, '');
+function readOpeningTag(source, start) {
+  if (source[start] !== '<' || /[!/?]/u.test(source[start + 1] || '')) return null;
+  let index = start + 1;
+  const nameStart = index;
+  while (index < source.length && !/[\s/>]/u.test(source[index])) index += 1;
+  const name = source.slice(nameStart, index).toLowerCase();
+  if (!name) return null;
+
+  let quote = null;
+  for (; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '>') {
+      return { name, opening: source.slice(start, index + 1), end: index + 1 };
+    }
+  }
+  return null;
 }
 
-function openingTags(html, expectedName) {
-  const tags = [];
-  const lowerName = expectedName.toLowerCase();
-  const source = withoutHtmlComments(html);
-  let index = 0;
+function skipHtmlComment(source, start) {
+  const end = source.indexOf('-->', start + 4);
+  return end < 0 ? source.length : end + 3;
+}
+
+function findRawTextClosingTag(source, name, from) {
+  let index = from;
   while (index < source.length) {
     const start = source.indexOf('<', index);
-    if (start < 0) break;
-    const candidate = source.slice(start + 1, start + 1 + lowerName.length);
-    const boundary = source[start + 1 + lowerName.length];
-    if (candidate.toLowerCase() !== lowerName || !(/[\s/>]/u.test(boundary || ''))) {
-      index = start + 1;
-      continue;
-    }
-    let quote = null;
-    let end = start + 1 + lowerName.length;
-    for (; end < source.length; end += 1) {
-      const char = source[end];
-      if (quote) {
-        if (char === quote) quote = null;
-      } else if (char === '"' || char === "'") {
-        quote = char;
-      } else if (char === '>') {
-        tags.push({ opening: source.slice(start, end + 1), end: end + 1, source });
-        break;
+    if (start < 0) return null;
+    if (source[start + 1] === '/') {
+      const candidate = source.slice(start + 2, start + 2 + name.length);
+      const boundary = source[start + 2 + name.length];
+      if (candidate.toLowerCase() === name && /[\s>]/u.test(boundary || '')) {
+        const end = source.indexOf('>', start + 2 + name.length);
+        return end < 0 ? null : { start, end: end + 1 };
       }
     }
-    index = end < source.length ? end + 1 : source.length;
+    index = start + 1;
   }
-  return tags;
+  return null;
 }
 
 function parseOpeningTagAttributes(openingTag, tagName) {
@@ -177,27 +186,42 @@ function parseOpeningTagAttributes(openingTag, tagName) {
   return attributes;
 }
 
-function findSingleHtmlMarker(html) {
-  for (const tag of openingTags(html, 'meta')) {
-    const attributes = parseOpeningTagAttributes(tag.opening, 'meta');
-    if (attributes.get('name') === 'scene-sync-export-format') {
-      return attributes.get('content') ?? '';
-    }
-  }
-  return null;
-}
+function inspectSingleHtmlDocument(html) {
+  const source = String(html);
+  let marker = null;
+  let payloadText = null;
+  let payloadFound = false;
+  let index = 0;
 
-function findSingleHtmlPayloadText(html) {
-  for (const tag of openingTags(html, 'script')) {
-    const attributes = parseOpeningTagAttributes(tag.opening, 'script');
-    if (attributes.get('id') !== SINGLE_HTML_PAYLOAD_ID) continue;
-    const closing = /<\/script\s*>/giu;
-    closing.lastIndex = tag.end;
-    const match = closing.exec(tag.source);
-    if (!match) return null;
-    return tag.source.slice(tag.end, match.index);
+  while (index < source.length) {
+    const start = source.indexOf('<', index);
+    if (start < 0) break;
+    if (source.startsWith('<!--', start)) {
+      index = skipHtmlComment(source, start);
+      continue;
+    }
+    const tag = readOpeningTag(source, start);
+    if (!tag) {
+      index = start + 1;
+      continue;
+    }
+    const attributes = parseOpeningTagAttributes(tag.opening, tag.name);
+    if (tag.name === 'meta' && attributes.get('name') === 'scene-sync-export-format') {
+      marker = attributes.get('content') ?? '';
+    }
+
+    if (tag.name === 'script' || tag.name === 'style') {
+      const closing = findRawTextClosingTag(source, tag.name, tag.end);
+      if (tag.name === 'script' && attributes.get('id') === SINGLE_HTML_PAYLOAD_ID && !payloadFound) {
+        payloadFound = true;
+        payloadText = closing ? source.slice(tag.end, closing.start) : null;
+      }
+      index = closing ? closing.end : source.length;
+      continue;
+    }
+    index = tag.end;
   }
-  return null;
+  return { marker, payloadText, payloadFound };
 }
 
 function estimatedBase64DecodedBytes(base64) {
@@ -266,13 +290,12 @@ export function parseSingleHtmlExportDocument(html, { isValidSceneDocument, limi
   if (typeof html !== 'string' || utf8ByteLength(html) > resolvedLimits.documentBytes) {
     return { valid: false, reason: 'single-html-document-too-large' };
   }
-  const marker = findSingleHtmlMarker(html);
+  const { marker, payloadText } = inspectSingleHtmlDocument(html);
   if (marker == null) return { valid: false, reason: 'not-single-html-export' };
   if (marker !== SINGLE_HTML_EXPORT_FORMAT) {
     return { valid: false, reason: 'invalid-single-html-marker' };
   }
 
-  const payloadText = findSingleHtmlPayloadText(html);
   if (payloadText == null) return { valid: false, reason: 'missing-single-html-payload' };
 
   let payload;
