@@ -1,4 +1,4 @@
-name: CI - Scene Sync Export Static Viewer Smoke
+name: CI - Scene Sync Export Viewer Smokes
 
 on:
   pull_request:
@@ -16,6 +16,7 @@ on:
       - "html/assets/vendor/loomlet/**"
       - "html/assets/vendor/rapier-deterministic/**"
       - "scripts/scenesync-export-static-viewer-smoke.mjs"
+      - "scripts/scenesync-export-single-html-smoke.mjs"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ci-scene-sync-export-static-viewer.yml"
@@ -27,7 +28,7 @@ permissions:
 
 jobs:
   smoke:
-    name: Static Viewer Smoke
+    name: Static and Single HTML Viewer Smokes
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -50,3 +51,6 @@ jobs:
 
       - name: Run static viewer smoke
         run: npm run test:e2e:scene-sync-export-static-viewer
+
+      - name: Run Single HTML file playback smoke
+        run: npm run test:e2e:scene-sync-export-single-html

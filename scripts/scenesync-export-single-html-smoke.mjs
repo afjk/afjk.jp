@@ -59,21 +59,44 @@ function createTriangleGlb() {
   return glb;
 }
 
-function createSilentWav() {
-  const wav = new Uint8Array(44);
+function createToneWav() {
+  const sampleRate = 8000;
+  const sampleCount = sampleRate;
+  const wav = new Uint8Array(44 + sampleCount);
   const view = new DataView(wav.buffer);
   wav.set(new TextEncoder().encode('RIFF'), 0);
-  view.setUint32(4, 36, true);
+  view.setUint32(4, 36 + sampleCount, true);
   wav.set(new TextEncoder().encode('WAVEfmt '), 8);
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
   view.setUint16(22, 1, true);
-  view.setUint32(24, 8000, true);
-  view.setUint32(28, 8000, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true);
   view.setUint16(32, 1, true);
   view.setUint16(34, 8, true);
   wav.set(new TextEncoder().encode('data'), 36);
+  view.setUint32(40, sampleCount, true);
+  for (let index = 0; index < sampleCount; index += 1) {
+    wav[44 + index] = 128 + Math.round(48 * Math.sin((2 * Math.PI * 440 * index) / sampleRate));
+  }
   return wav;
+}
+
+function addSingleHtmlTestInstrumentation(viewerFiles) {
+  const viewerEntry = viewerFiles['viewer/viewer.js'];
+  assert(typeof viewerEntry === 'string', 'Viewer entry source is unavailable for test instrumentation');
+  const instrumented = viewerEntry
+    .replace(
+      'const scene = new THREE.Scene();',
+      'const scene = new THREE.Scene();\n  globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__ = scene;',
+    )
+    .replace(
+      'const bgmAudio = viewerCore.getBgmAudio();',
+      'const bgmAudio = viewerCore.getBgmAudio();\n  globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__ = bgmAudio;',
+    );
+  assert(instrumented.includes('__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__'), 'Unable to instrument viewer scene for physics observation');
+  assert(instrumented.includes('__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__'), 'Unable to instrument viewer audio for playback observation');
+  return { ...viewerFiles, 'viewer/viewer.js': instrumented };
 }
 
 async function loadViewerFiles() {
@@ -111,7 +134,7 @@ const sceneDocument = {
       asset: { type: 'mesh', path: 'assets/triangle.glb' },
     },
   ],
-  bgm: { asset: { path: 'assets/silence.wav' }, loop: true, volume: 0 },
+  bgm: { asset: { path: 'assets/tone.wav' }, loop: true, volume: 0 },
   physics: { enabled: true, duration: 2, worldOptions: { gravity: -9.81 } },
   behaviors: { scene: { nodes: [], edges: [] } },
 };
@@ -119,7 +142,7 @@ const sceneDocument = {
 let browser;
 let tempDir;
 try {
-  const viewerFiles = await loadViewerFiles();
+  const viewerFiles = addSingleHtmlTestInstrumentation(await loadViewerFiles());
   const html = await buildSingleHtmlDocument({
     sceneDocument,
     manifest: {
@@ -129,7 +152,7 @@ try {
     files: {
       'assets/pixel.png': Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL8WQAAAABJRU5ErkJggg==', 'base64')),
       'assets/triangle.glb': createTriangleGlb(),
-      'assets/silence.wav': createSilentWav(),
+      'assets/tone.wav': createToneWav(),
     },
     viewerFiles,
   });
@@ -150,8 +173,29 @@ try {
   await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
   await page.waitForTimeout(800);
+  await page.waitForFunction(() => globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA, null, { timeout: 10000 });
+  const initialDynamicBodyY = await page.evaluate(() => {
+    let box = null;
+    globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+      if (object.userData?.objectId === 'box') box = object;
+    });
+    return box?.position?.y;
+  });
+  assert(Number.isFinite(initialDynamicBodyY), 'Dynamic physics body was not added to the viewer scene');
   await page.locator('[data-player-play-pause]').click();
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]')?.dataset.playerPlaying === '1');
+  await page.locator('#viewer-controls button', { hasText: 'Play BGM' }).click();
+  await page.waitForFunction(() => {
+    const audio = globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__;
+    return audio?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && audio.error === null && audio.paused === false;
+  }, null, { timeout: 10000 });
+  await page.waitForFunction((initialY) => {
+    let box = null;
+    globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+      if (object.userData?.objectId === 'box') box = object;
+    });
+    return Number.isFinite(box?.position?.y) && box.position.y < initialY - 0.05;
+  }, initialDynamicBodyY, { timeout: 10000 });
   await page.locator('[data-player-rate="2"]').click();
   await page.locator('[data-player-seek]').evaluate((element) => {
     element.value = '0.5';
@@ -170,6 +214,17 @@ try {
     playerRate: document.querySelector('[data-player-rate="2"]')?.dataset.active,
     playerTime: document.querySelector('[data-player-current-time]')?.textContent,
     bgmControlPresent: [...document.querySelectorAll('#viewer-controls button')].some((button) => button.textContent.includes('BGM')),
+    bgmAudio: (() => {
+      const audio = globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__;
+      return audio ? { readyState: audio.readyState, paused: audio.paused, error: audio.error?.message || null } : null;
+    })(),
+    dynamicBodyY: (() => {
+      let box = null;
+      globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+        if (object.userData?.objectId === 'box') box = object;
+      });
+      return box?.position?.y;
+    })(),
   }));
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(!consoleErrors.some((message) => message.includes('Rapier initialization failed')), `Rapier failed to initialize: ${consoleErrors.join('\n')}`);
@@ -180,8 +235,10 @@ try {
   assert(!state.missingNoticeVisible, 'Embedded image or GLB was reported missing');
   assert(state.playerRate === 'true' && state.playerTime !== '00:00.00', 'Playback controls did not update the embedded scene clock');
   assert(state.bgmControlPresent, 'Embedded audio did not produce a playback control');
+  assert(state.bgmAudio?.readyState >= 2 && state.bgmAudio.error === null && state.bgmAudio.paused === false, 'Embedded audio did not become playable after a user action');
+  assert(state.dynamicBodyY < initialDynamicBodyY - 0.05, 'Rapier did not move the dynamic body under gravity');
   assert(!requestUrls.some((url) => url.startsWith('file:') && url !== pathToFileURL(htmlPath).href), `Unexpected sibling file request: ${requestUrls.join(', ')}`);
-  assert(!requestUrls.some((url) => /rapier_wasm3d_bg\.wasm|assets\/(?:pixel\.png|triangle\.glb|silence\.wav)/u.test(url)), `Embedded assets used a sibling request: ${requestUrls.join(', ')}`);
+  assert(!requestUrls.some((url) => /rapier_wasm3d_bg\.wasm|assets\/(?:pixel\.png|triangle\.glb|tone\.wav)/u.test(url)), `Embedded assets used a sibling request: ${requestUrls.join(', ')}`);
   console.log(JSON.stringify({ status: 'passed', ...state, requestUrls }, null, 2));
 } finally {
   await browser?.close();
