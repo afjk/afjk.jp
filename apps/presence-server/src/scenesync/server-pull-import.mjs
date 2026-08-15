@@ -122,14 +122,29 @@ function requestOnce(url, addresses, { timeoutMs, signal }) {
   const transport = url.protocol === 'https:' ? https : http;
   const lookup = (_hostname, _options, callback) => callback(null, addresses[0].address, addresses[0].family);
   return new Promise((resolve, reject) => {
+    let responseRef = null;
+    let settled = false;
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const finishReject = (error) => { if (settled) return; settled = true; cleanup(); reject(error); };
     const request = transport.request(url, {
       method: 'GET', headers: { accept: 'text/html,application/json,*/*;q=0.1', 'user-agent': 'SceneSyncServerPull/1' },
       lookup, timeout: timeoutMs, servername: url.hostname,
-    }, (response) => resolve(response));
-    const abort = () => request.destroy(failure('handoff-url-timeout', 504));
+    }, (response) => {
+      if (settled) { response.destroy(); return; }
+      responseRef = response;
+      response.setTimeout(timeoutMs, () => response.destroy(failure('handoff-url-idle-timeout', 504)));
+      response.once('close', cleanup);
+      settled = true;
+      resolve(response);
+    });
+    const abort = () => {
+      const error = failure('handoff-url-timeout', 504);
+      request.destroy(error);
+      responseRef?.destroy(error);
+    };
     if (signal) signal.addEventListener('abort', abort, { once: true });
     request.once('timeout', abort);
-    request.once('error', reject);
+    request.once('error', finishReject);
     request.end();
   });
 }

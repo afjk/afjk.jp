@@ -1486,6 +1486,7 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
   const filePath = `${BLOB_DIR}/${id}.import`;
   let size = 0;
   let reserved = false;
+  let output = null;
   try {
     mkdirSync(BLOB_DIR, { recursive: true });
     if (serverPullLiveBytes + serverPullReservedBytes + maxBytes > sceneSyncConfig.serverPullMaxLiveBytes) {
@@ -1496,7 +1497,10 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
     if (!Number.isFinite(freeBytes) || freeBytes < maxBytes) throw createHttpError(507, 'handoff-server-pull-disk-full');
     serverPullReservedBytes += maxBytes;
     reserved = true;
-    const output = createWriteStream(temporaryPath, { flags: 'wx' });
+    output = createWriteStream(temporaryPath, { flags: 'wx' });
+    // The write/drain promises below observe operational errors; retain a
+    // listener as well so teardown after an abort cannot become unhandled.
+    output.on('error', () => {});
     const waitForDrain = () => new Promise((resolve, reject) => {
       const done = () => { output.off('error', failed); resolve(); };
       const failed = (error) => { output.off('drain', done); reject(error); };
@@ -1504,10 +1508,10 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
       output.once('error', failed);
     });
     for await (const raw of body) {
-      if (signal?.aborted) throw createHttpError(504, 'handoff-url-timeout');
+      if (signal?.aborted) { body.destroy?.(); throw createHttpError(504, 'handoff-url-timeout'); }
       const chunk = Buffer.from(raw);
       size += chunk.length;
-      if (size > maxBytes) throw createHttpError(413, 'handoff-remote-asset-too-large');
+      if (size > maxBytes) { body.destroy?.(); throw createHttpError(413, 'handoff-remote-asset-too-large'); }
       if (!output.write(chunk)) await waitForDrain();
     }
     await new Promise((resolve, reject) => {
@@ -1528,6 +1532,8 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
     reserved = false;
     return { size, mime, url: `/presence/blob/${id}` };
   } catch (error) {
+    try { output?.destroy(error); } catch {}
+    try { body.destroy?.(error); } catch {}
     try { unlinkSync(temporaryPath); } catch {}
     try { unlinkSync(filePath); } catch {}
     throw error;
@@ -1609,6 +1615,7 @@ function createPresenceServer() {
       const controller = new AbortController();
       const abort = () => controller.abort();
       req.once('aborted', abort);
+      res.once('close', abort);
       try {
         const inspection = await serverPullImporter.inspect(input.sourceUrl, { signal: controller.signal });
         importJobs.set(jobId, { ...input, token, actorId, expiresAt, digest: inspection.digest });
@@ -1622,6 +1629,7 @@ function createPresenceServer() {
         sendImportJson(res, status, { error: code });
       } finally {
         req.off('aborted', abort);
+        res.off('close', abort);
         activeServerPulls -= 1;
       }
       return;
@@ -1650,6 +1658,7 @@ function createPresenceServer() {
       const controller = new AbortController();
       const abort = () => controller.abort();
       req.once('aborted', abort);
+      res.once('close', abort);
       try {
         const result = await serverPullImporter(job.sourceUrl, { signal: controller.signal, expectedDigest: job.digest });
         completedImportJobs.set(materializeMatch[1], {
@@ -1668,6 +1677,7 @@ function createPresenceServer() {
         sendImportJson(res, status, { error: code });
       } finally {
         req.off('aborted', abort);
+        res.off('close', abort);
         activeServerPulls -= 1;
       }
       return;
