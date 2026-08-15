@@ -388,8 +388,12 @@ export function createServerPullImporter({
 
   async function importSceneSyncUrl(sourceUrl, { signal, expectedDigest } = {}) {
     const stored = [];
+    const deadline = new AbortController();
+    const abort = () => deadline.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(abort, resolvedLimits.overallTimeoutMs);
     try {
-      const inspected = await inspect(sourceUrl, { signal });
+      const inspected = await inspect(sourceUrl, { signal: deadline.signal });
       if (expectedDigest && expectedDigest !== inspected.digest) throw failure('handoff-inspection-changed', 409);
       const { sceneUrl, sourceOrigin } = inspected;
       const document = inspected.sceneDocument;
@@ -400,7 +404,7 @@ export function createServerPullImporter({
       let total = 0;
       const materialized = new Map();
       for (const ref of unique.values()) {
-        const fetched = await fetchSafe(ref.url.href, { ...fetchOptions, signal, requiredOrigin: sourceOrigin });
+        const fetched = await fetchSafe(ref.url.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
         const mime = contentType(fetched.response.headers);
         if (!mimeAllowed(ref.type, mime)) { fetched.response.destroy?.(); throw failure('handoff-invalid-asset-mime'); }
         const declared = Number(header(fetched.response.headers, 'content-length'));
@@ -410,7 +414,7 @@ export function createServerPullImporter({
           throw failure('handoff-remote-assets-too-large', 413);
         }
         const id = randomUUID().replace(/-/g, '');
-        const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: mime || 'application/octet-stream', maxBytes: allowance, signal });
+        const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: mime || 'application/octet-stream', maxBytes: allowance, signal: deadline.signal });
         if (!storedAsset || !Number.isFinite(storedAsset.size) || storedAsset.size > allowance) throw failure('handoff-asset-store-failed', 500);
         stored.push(id); total += storedAsset.size;
         materialized.set(ref.url.href, { id, size: storedAsset.size, url: storedAsset.url, mime: storedAsset.mime || mime });
@@ -423,6 +427,9 @@ export function createServerPullImporter({
     } catch (error) {
       await Promise.allSettled(stored.map((id) => removeAsset(id)));
       throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
     }
   }
   importSceneSyncUrl.inspect = inspect;

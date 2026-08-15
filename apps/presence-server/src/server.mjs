@@ -2165,7 +2165,7 @@ function createPresenceServer() {
         payload: body.payload,
         onBehalfOfUserId: session.payload.userId,
         sender: createApiSender('AI'),
-        actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt),
+        actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy }),
       });
 
       if (result.status >= 400) {
@@ -2259,7 +2259,7 @@ function createPresenceServer() {
           payload,
           onBehalfOfUserId,
           sender,
-          actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt),
+          actorId: getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy }),
         });
         sendJson(res, result.status, result.body);
         return;
