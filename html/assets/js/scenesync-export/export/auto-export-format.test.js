@@ -66,6 +66,31 @@ test('Auto falls back for missing assets and custom thumbnails', () => {
   assert.equal(thumbnail.reason, 'custom-thumbnail-requires-static-zip');
 });
 
+test('missing asset warning is combined for every selected format branch without duplicates', () => {
+  const missingAssets = [{ id: 'external' }];
+  const forcedZip = selectAutoExportFormat({ requestedFormat: 'static-zip', missingAssets });
+  assert.deepEqual(forcedZip.warnings, ['external-assets-not-embedded']);
+  const thumbnailZip = selectAutoExportFormat({ hasCustomThumbnail: true, missingAssets });
+  assert.deepEqual(thumbnailZip.warnings, ['external-assets-not-embedded']);
+  const largeZip = selectAutoExportFormat({
+    estimatedBytes: DEFAULT_AUTO_SINGLE_HTML_THRESHOLD_BYTES + 1,
+    missingAssets,
+  });
+  assert.equal(largeZip.format, 'static-zip');
+  assert.deepEqual(largeZip.warnings, ['external-assets-not-embedded']);
+  const forcedSingle = selectAutoExportFormat({ requestedFormat: 'single-html', missingAssets });
+  assert.deepEqual(forcedSingle.warnings, ['external-assets-not-embedded']);
+});
+
+test('formats without missing assets do not receive a missing-asset warning', () => {
+  const autoSingle = selectAutoExportFormat({ estimatedBytes: 1, missingAssets: [] });
+  assert.deepEqual(autoSingle.warnings, ['three-cdn-required']);
+  const forcedSingle = selectAutoExportFormat({ requestedFormat: 'single-html', missingAssets: [] });
+  assert.deepEqual(forcedSingle.warnings, []);
+  const forcedZip = selectAutoExportFormat({ requestedFormat: 'static-zip', missingAssets: [] });
+  assert.deepEqual(forcedZip.warnings, []);
+});
+
 test('forced modes retain user choice, aggregate warnings, and reject unsupported thumbnail', () => {
   assert.equal(selectAutoExportFormat({ requestedFormat: 'static-zip' }).reason, 'forced-static-zip');
   const single = selectAutoExportFormat({

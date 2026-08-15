@@ -40,10 +40,6 @@ export function estimateSingleHtmlExport({ preparation = null, ...input } = {}) 
     .reduce((total, byteLength) => total + base64EncodedByteLength(byteLength), 0);
 }
 
-function result(format, reason, warnings = []) {
-  return { format, reason, warnings };
-}
-
 /** Determines the output format without doing any I/O. */
 export function selectAutoExportFormat({
   requestedFormat = AUTO_EXPORT_FORMAT,
@@ -56,6 +52,13 @@ export function selectAutoExportFormat({
 } = {}) {
   const threshold = normalizeAutoSingleHtmlThresholdBytes(thresholdBytes);
   const hasMissingAssets = missingAssets.length > 0;
+  const result = (format, reason, warnings = []) => ({
+    format,
+    reason,
+    warnings: hasMissingAssets && !warnings.includes('external-assets-not-embedded')
+      ? [...warnings, 'external-assets-not-embedded']
+      : warnings,
+  });
   if (requestedFormat === STATIC_ZIP_EXPORT_FORMAT) {
     return result(STATIC_ZIP_EXPORT_FORMAT, 'forced-static-zip');
   }

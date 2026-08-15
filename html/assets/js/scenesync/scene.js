@@ -15734,6 +15734,7 @@ const EXPORT_REASON_COPY = {
 const EXPORT_WARNING_COPY = {
   'three-cdn-required': 'Three.js を CDN から読み込むため、再生時にインターネット接続が必要です。',
   'external-assets-not-embedded': '一部の外部アセットは埋め込まれていません。',
+  'missing-assets': '一部のアセットをエクスポートに含められませんでした。',
   'single-html-estimate-exceeds-auto-threshold': '推奨サイズを超える Single HTML を指定しています。',
 };
 
@@ -15927,7 +15928,10 @@ async function triggerExport() {
     const selectedLabel = result.selectedFormat === 'single-html' ? 'Single HTML' : 'Static ZIP';
     const decision = `${selectedLabel} (${formatEstimatedBytes(result.estimatedBytes)})`;
     const reason = exportReasonCopy(result.fallbackReason);
-    const warnings = exportWarningsCopy(result.warnings);
+    const warnings = exportWarningsCopy([
+      ...result.warnings,
+      ...(result.missingAssets.length > 0 ? ['missing-assets'] : []),
+    ]);
     showToast(`出力: ${decision}。${reason}${warnings ? ` ${warnings}` : ''}`, 7000);
   } catch (err) {
     console.error('[Export] failed:', err);
