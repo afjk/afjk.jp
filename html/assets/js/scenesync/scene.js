@@ -9225,8 +9225,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
           return loadMeshObjectFromUrl(objectId, info, asset.url, existing, options.prebuiltGlbModel, options);
         }
         if (asset.meshPath) {
-          loadMeshObject(objectId, info, asset.meshPath, existing, options);
-          return;
+          return loadMeshObject(objectId, info, asset.meshPath, existing, options);
         }
         break;
       case 'video':
@@ -9249,8 +9248,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
   }
 
   if (info.meshPath) {
-    loadMeshObject(objectId, info, info.meshPath, existing, options);
-    return;
+    return loadMeshObject(objectId, info, info.meshPath, existing, options);
   }
 
   if (!existing) {
@@ -9502,6 +9500,11 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
 
           if (removedObjectIds.has(objectId) || options.signal?.aborted) {
             scene.remove(model);
+            model.traverse?.((child) => {
+              child.geometry?.dispose?.();
+              if (Array.isArray(child.material)) child.material.forEach(disposeMaterial);
+              else if (child.material) disposeMaterial(child.material);
+            });
             cleanupPreviewForLoadedObject(options);
             const error = new Error('Mesh object load was cancelled');
             error.code = 'handoff-object-load-cancelled';
@@ -9512,6 +9515,11 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             assertStrictLoadedObjectCommit(options, objectId, model);
           } catch (error) {
             scene.remove(model);
+            model.traverse?.((child) => {
+              child.geometry?.dispose?.();
+              if (Array.isArray(child.material)) child.material.forEach(disposeMaterial);
+              else if (child.material) disposeMaterial(child.material);
+            });
             cleanupPreviewForLoadedObject(options);
             throw error;
           }
