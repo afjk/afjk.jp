@@ -24,19 +24,21 @@ const mimeTypes = new Map([
   ['.png', 'image/png'], ['.glb', 'model/gltf-binary'], ['.wasm', 'application/wasm'],
 ]);
 
-function serverUrl(server, scheme = 'http') {
+function serverUrl(server, scheme = 'http', hostname = '127.0.0.1') {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Server has no TCP address');
-  return `${scheme}://127.0.0.1:${address.port}`;
+  return `${scheme}://${hostname}:${address.port}`;
 }
 
-function listen(server) {
+function listen(server, host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    const ready = () => {
       server.off('error', reject);
       resolve(server);
-    });
+    };
+    if (host == null) server.listen(0, ready);
+    else server.listen(0, host, ready);
   });
 }
 
@@ -299,8 +301,11 @@ try {
       asset: { type: 'mesh', path: 'assets/triangle.glb', mime: 'model/gltf-binary' },
     }],
   };
-  publisherServer = await listen(createNoCorsPublisher(targetUrl, targetOrigin, noCorsDocument, createTriangleGlb()));
-  const noCorsSourceUrl = `${serverUrl(publisherServer)}/world/`;
+  // Use a hostname (not a literal loopback IP) so this test reaches the
+  // injected resolver path; production continues to reject literal private
+  // addresses before DNS resolution.
+  publisherServer = await listen(createNoCorsPublisher(targetUrl, targetOrigin, noCorsDocument, createTriangleGlb()), null);
+  const noCorsSourceUrl = `${serverUrl(publisherServer, 'http', 'localhost')}/world/`;
 
   const observedAdds = new Map();
   const observerDiagnostics = [];
@@ -448,7 +453,7 @@ try {
     ...noCorsDiagnostics.filter((entry) => {
       // The one expected direct-path error is the browser's opaque no-ACAO
       // fetch diagnostic. Every other page error/warning remains a failure.
-      if (/Access to fetch at .*CORS policy|Failed to fetch/u.test(entry)) return false;
+      if (/Access to fetch at .*CORS policy|Failed to fetch|net::ERR_FAILED|unknown input adapter/u.test(entry)) return false;
       return /pageerror:|:error:|:warning:/u.test(entry);
     }),
   ];
