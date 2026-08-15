@@ -74,9 +74,9 @@ export function isPublicIp(address) {
     || hasV6Prefix(value, 0n, 96) || hasV6Prefix(value, 0xffffn, 96) // compatible/mapped
     || hasV6Prefix(value, 0x7en, 7) || hasV6Prefix(value, 0x3fan, 10) || hasV6Prefix(value, 0xffn, 8)
     || hasV6Prefix(value, 0x64ff9b0000000000000000n, 96) || hasV6Prefix(value, 0x64ff9b0001n, 48)
-    || hasV6Prefix(value, 0x100n, 64) || hasV6Prefix(value, 0x20010000n, 32) // discard/Teredo
+    || hasV6Prefix(value, 0x100000000000000n, 64) || hasV6Prefix(value, 0x20010000n, 32) // discard/Teredo
     || hasV6Prefix(value, 0x2002n, 16) || hasV6Prefix(value, 0x20010db8n, 32)
-    || hasV6Prefix(value, 0x20010002n, 48) || hasV6Prefix(value, 0x20010n, 28)) return false;
+    || hasV6Prefix(value, 0x20010002n, 48) || hasV6Prefix(value, 0x2001001n, 28) || hasV6Prefix(value, 0x2001002n, 28)) return false;
   return true;
 }
 
@@ -188,7 +188,10 @@ async function fetchSafe(urlValue, options) {
 
 async function readTextLimited(response, maxBytes) {
   const declared = Number(header(response.headers, 'content-length'));
-  if (Number.isFinite(declared) && declared > maxBytes) throw failure('handoff-document-too-large', 413);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try { response.destroy?.(); } catch {}
+    throw failure('handoff-document-too-large', 413);
+  }
   const chunks = []; let total = 0;
   for await (const raw of response.body || response) {
     const chunk = Buffer.from(raw);
@@ -207,7 +210,7 @@ function extractMarker(html) {
 
 function assertSceneDocument(document) {
   if (!document || typeof document !== 'object' || Array.isArray(document)
-    || document.format !== 'scene-sync-export-scene' || document.version !== 2 || !Array.isArray(document.objects)) {
+    || document.format !== 'scene-sync-export-scene' || ![1, 2].includes(document.version) || !Array.isArray(document.objects)) {
     throw failure('handoff-invalid-scene-document');
   }
   if (document.objects.length > 10_000) throw failure('handoff-too-many-objects', 413);
@@ -240,9 +243,13 @@ function assertSceneDocument(document) {
 
 function assetUrl(value, baseUrl, sourceOrigin) {
   if (typeof value !== 'string' || !value || value.length > 1024) throw failure('handoff-unsafe-asset-path');
-  if (value.startsWith('/') || value.includes('\\') || value.includes('?') || value.includes('#') || /\u0000|[\x00-\x1f]|%2e|%2f/iu.test(value)
-    || value.split('/').some((segment) => !segment || segment === '.' || segment === '..' || segment.includes(':'))) throw failure('handoff-unsafe-asset-path');
-  const url = safeUrl(new URL(value, baseUrl).href, { allowHttpForTests: baseUrl.protocol === 'http:' });
+  let absolute = null;
+  try { absolute = new URL(value); } catch {}
+  const path = absolute ? absolute.pathname : value;
+  if ((!absolute && (value.startsWith('/') || value.includes('\\') || value.includes('?') || value.includes('#')))
+    || /\u0000|[\x00-\x1f]|%2e|%2f/iu.test(value)
+    || path.split('/').some((segment, index) => segment === '.' || segment === '..' || segment.includes(':') || (!absolute && !segment) || (absolute && !segment && index !== 0))) throw failure('handoff-unsafe-asset-path');
+  const url = safeUrl((absolute || new URL(value, baseUrl)).href, { allowHttpForTests: baseUrl.protocol === 'http:' });
   if (url.origin !== sourceOrigin) throw failure('handoff-cross-origin-asset', 403);
   return url;
 }
@@ -398,7 +405,10 @@ export function createServerPullImporter({
         if (!mimeAllowed(ref.type, mime)) { fetched.response.destroy?.(); throw failure('handoff-invalid-asset-mime'); }
         const declared = Number(header(fetched.response.headers, 'content-length'));
         const allowance = Math.min(resolvedLimits.maxAssetBytes, resolvedLimits.maxTotalBytes - total);
-        if (allowance <= 0 || (Number.isFinite(declared) && declared > allowance)) throw failure('handoff-remote-assets-too-large', 413);
+        if (allowance <= 0 || (Number.isFinite(declared) && declared > allowance)) {
+          try { fetched.response.destroy?.(); } catch {}
+          throw failure('handoff-remote-assets-too-large', 413);
+        }
         const id = randomUUID().replace(/-/g, '');
         const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: mime || 'application/octet-stream', maxBytes: allowance, signal });
         if (!storedAsset || !Number.isFinite(storedAsset.size) || storedAsset.size > allowance) throw failure('handoff-asset-store-failed', 500);

@@ -9372,7 +9372,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       const incomingAssetId = info.asset?.assetId || info.assetId || null;
       let cachedRecord = null;
 
-      try {
+      if (!options.strictLoad) try {
         const cachedByAssetId = incomingAssetId
           ? await assetCache.getByAssetId(incomingAssetId)
           : null;

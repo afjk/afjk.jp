@@ -80,8 +80,26 @@ test('inspects directory scene.json and current.json version paths without fetch
 });
 
 test('conservatively blocks private, mapped, transition, and reserved IPv6 ranges', () => {
-  for (const value of ['127.0.0.1', '10.0.0.1', '::1', 'fc00::1', 'fe80::1', '::ffff:c0a8:1', '64:ff9b::808:808', '2001:0::1', '2002:0808:0808::1', '2001:db8::1', 'ff00::1']) {
+  for (const value of ['127.0.0.1', '10.0.0.1', '::1', 'fc00::1', 'fe80::1', '::ffff:c0a8:1', '64:ff9b::808:808', '100::1', '2001:0::1', '2001:10::1', '2001:20::1', '2002:0808:0808::1', '2001:db8::1', 'ff00::1']) {
     assert.equal(isPublicIp(value), false, value);
   }
   assert.equal(isPublicIp('2606:4700:4700::1111'), true);
+});
+
+test('destroys a declared oversized document response before rejecting', async () => {
+  let destroyed = false;
+  const oversized = {
+    status: 200,
+    headers: { get: (name) => name === 'content-length' ? String(11 * 1024 * 1024) : name === 'content-type' ? 'application/json' : '' },
+    async *[Symbol.asyncIterator]() { yield Buffer.from('{}'); },
+    destroy() { destroyed = true; },
+  };
+  const importer = createServerPullImporter({
+    allowHttpForTests: true,
+    resolveHost: async () => [{ address: '8.8.8.8', family: 4 }],
+    fetchImpl: async () => oversized,
+    storeAsset: async () => { throw new Error('must not store'); },
+  });
+  await assert.rejects(importer.inspect('http://publisher.example/world/'), { code: 'handoff-document-too-large' });
+  assert.equal(destroyed, true);
 });

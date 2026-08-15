@@ -1574,7 +1574,11 @@ function createPresenceServer() {
 
   // CORS preflight
     if (req.method === 'OPTIONS') {
-      if (path.startsWith('/blob/')) {
+      if (path.startsWith('/scene-sync/import-jobs')) {
+        // This control plane is same-origin only; do not advertise it through
+        // the otherwise public presence API's wildcard CORS policy.
+        res.writeHead(204, { 'cache-control': 'no-store' }).end();
+      } else if (path.startsWith('/blob/')) {
         setBlobCors(req, res);
         res.writeHead(204).end();
       } else {
@@ -1724,7 +1728,7 @@ function createPresenceServer() {
   // POST /blob/:id
     if (req.method === 'POST' && path.startsWith('/blob/')) {
       setBlobCors(req, res);
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
       const originalName = decodeURIComponent(path.slice(6));
       const id = originalName.replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
       if (!id) {
@@ -1837,7 +1841,7 @@ function createPresenceServer() {
   // GET /blob/:id
     if (req.method === 'GET' && path.startsWith('/blob/')) {
     setBlobCors(req, res);
-    const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+    const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
     const id = path.slice(6).replace(/[^a-z0-9\-]/gi, '').slice(0, 32);
     const entry = blobs.get(id);
     if (!entry) {
@@ -2288,7 +2292,7 @@ function createPresenceServer() {
     const roomOverride = sanitizeRoom(url.searchParams.get('room'));
     const isInferredRoom = !roomOverride;
     const roomId = roomOverride || inferRoomFromReq(req) || 'global';
-    const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+    const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
     const ipHash = getIpHash(req, sceneSyncConfig.ipHashSalt);
     const conn = acceptWebSocket(req, socket);
     if (!conn) return;
