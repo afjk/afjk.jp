@@ -287,6 +287,23 @@ async function run() {
       { timeout: 60000 },
     );
 
+    // Product-default Auto should choose a portable Single HTML for a small,
+    // fully embeddable scene before this test seeds its ZIP-import fixture.
+    const autoDownloadPromise = page.waitForEvent('download', { timeout: 120000 });
+    await page.locator('#export-btn').click();
+    await page.locator('#export-dialog:not([hidden])').waitFor({ state: 'visible' });
+    assert(await page.locator('#export-format-input').inputValue() === 'auto', 'Auto must be the default export format');
+    await page.locator('#export-submit').click();
+    const autoDownload = await autoDownloadPromise;
+    const autoPath = await autoDownload.path();
+    assert(autoPath, 'Auto download path unavailable');
+    const autoHtml = await readFile(autoPath, 'utf8');
+    assert(/\.html$/i.test(autoDownload.suggestedFilename()), 'Auto small scene should download Single HTML');
+    assert(/meta name="scene-sync-export-format" content="single-html-v1"/.test(autoHtml), 'Auto download lacks Single HTML marker');
+    await page.locator('#toast.show').waitFor({ state: 'visible' });
+    assert(/出力: Single HTML/.test(await page.locator('#toast').textContent()), 'Auto result toast should name its selected format');
+    result.autoDownload = { suggested: autoDownload.suggestedFilename(), marker: 'single-html-v1' };
+
     const seeded = await page.evaluate(async ({ baseUrl }) => {
       const mod = await import('/assets/js/scenesync/scene.js');
       const THREE = await import('three');

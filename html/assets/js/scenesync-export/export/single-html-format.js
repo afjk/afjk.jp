@@ -438,12 +438,24 @@ function makeRuntimeScript() {
 })();`;
 }
 
+function isSingleHtmlCss(path) {
+  return path === 'viewer/viewer.css'
+    || path === 'viewer/player-shell.css'
+    || path === 'scenesync/handoff/source.css';
+}
+
+function mimeForSingleHtmlAsset(path, value) {
+  return value instanceof Blob && value.type
+    ? value.type
+    : inferSingleHtmlAssetMime(path);
+}
+
 /**
- * Produces one portable HTML document. Viewer source remains as ES modules,
- * but is embedded and materialized as Blob URLs at startup so the generated
- * file never needs sibling JS/CSS/asset files.
+ * Applies exactly the same source rewrites and CSS assembly used by the final
+ * document. It is intentionally synchronous: callers can estimate a large
+ * export without allocating its base64 strings.
  */
-export async function buildSingleHtmlDocument({
+export function prepareSingleHtmlDocument({
   sceneDocument,
   manifest,
   files = {},
@@ -458,9 +470,7 @@ export async function buildSingleHtmlDocument({
   const embeddedFiles = { ...files };
 
   for (const [path, source] of Object.entries(viewerFiles)) {
-    if (path === 'viewer/viewer.css'
-      || path === 'viewer/player-shell.css'
-      || path === 'scenesync/handoff/source.css') continue;
+    if (isSingleHtmlCss(path)) continue;
     if (typeof source === 'string') {
       let rewritten = rewriteSingleHtmlModuleImports(source, path);
       if (path === 'viewer/rapier/rapier.js') {
@@ -475,15 +485,10 @@ export async function buildSingleHtmlDocument({
     }
   }
 
-  const payload = {
-    format: SINGLE_HTML_EXPORT_FORMAT,
-    version: SINGLE_HTML_EXPORT_VERSION,
-    manifest,
-    sceneDocument,
-    modules,
-    assets: await encodeSingleHtmlAssets(embeddedFiles),
-  };
+  return { sceneDocument, manifest, viewerCss, modules, embeddedFiles };
+}
 
+function renderSingleHtmlDocument({ viewerCss, payload }) {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -506,4 +511,46 @@ export async function buildSingleHtmlDocument({
   <script>${makeRuntimeScript().replaceAll('</script', '<\\/script')}</script>
 </body>
 </html>`;
+}
+
+/** Renders the exact final document with empty base64 values. */
+export function buildSingleHtmlDocumentSkeleton({ preparation = null, ...input } = {}) {
+  const prepared = preparation || prepareSingleHtmlDocument(input);
+  const assets = Object.fromEntries(Object.entries(prepared.embeddedFiles).map(([path, value]) => [path, {
+    mime: mimeForSingleHtmlAsset(path, value),
+    base64: '',
+  }]));
+  const payload = {
+    format: SINGLE_HTML_EXPORT_FORMAT,
+    version: SINGLE_HTML_EXPORT_VERSION,
+    manifest: prepared.manifest,
+    sceneDocument: prepared.sceneDocument,
+    modules: prepared.modules,
+    assets,
+  };
+  return {
+    html: renderSingleHtmlDocument({ viewerCss: prepared.viewerCss, payload }),
+    assetByteLengths: Object.fromEntries(Object.entries(prepared.embeddedFiles).map(([path, value]) => [path,
+      value instanceof Blob ? value.size : value.byteLength,
+    ])),
+  };
+}
+
+/**
+ * Produces one portable HTML document. Viewer source remains as ES modules,
+ * but is embedded and materialized as Blob URLs at startup so the generated
+ * file never needs sibling JS/CSS/asset files.
+ */
+export async function buildSingleHtmlDocument({ preparation = null, ...input } = {}) {
+  const prepared = preparation || prepareSingleHtmlDocument(input);
+
+  const payload = {
+    format: SINGLE_HTML_EXPORT_FORMAT,
+    version: SINGLE_HTML_EXPORT_VERSION,
+    manifest: prepared.manifest,
+    sceneDocument: prepared.sceneDocument,
+    modules: prepared.modules,
+    assets: await encodeSingleHtmlAssets(prepared.embeddedFiles),
+  };
+  return renderSingleHtmlDocument({ viewerCss: prepared.viewerCss, payload });
 }

@@ -1,18 +1,21 @@
-/**
- * Policy and sizing helpers for the export format chooser.  These functions
- * intentionally have no browser dependencies so the boundary conditions can
- * be tested without fetching a scene.
- */
+import { buildSingleHtmlDocumentSkeleton, prepareSingleHtmlDocument } from './single-html-format.js';
+
 export const AUTO_EXPORT_FORMAT = 'auto';
 export const SINGLE_HTML_EXPORT_FORMAT = 'single-html';
 export const STATIC_ZIP_EXPORT_FORMAT = 'static-zip';
 
-// Keep the automatic choice comfortably below the hard Single HTML limit.
-// It is exported both as documentation and for hosts that need a different
-// policy (for example an embedded editor with a lower download budget).
+// Keep the automatic choice comfortably below the 100 MiB hard Single HTML
+// limit. Hosts may override this only with a finite, non-negative integer.
 export const DEFAULT_AUTO_SINGLE_HTML_THRESHOLD_BYTES = 32 * 1024 * 1024;
-export const SINGLE_HTML_ESTIMATE_FIXED_OVERHEAD_BYTES = 16 * 1024;
-export const SINGLE_HTML_ESTIMATE_ASSET_OVERHEAD_BYTES = 96;
+
+export function normalizeAutoSingleHtmlThresholdBytes(value) {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && Number.isInteger(value)
+    && value >= 0
+    ? value
+    : DEFAULT_AUTO_SINGLE_HTML_THRESHOLD_BYTES;
+}
 
 export function base64EncodedByteLength(byteLength) {
   const length = Number(byteLength);
@@ -24,59 +27,21 @@ export function utf8ByteLength(value) {
   return new TextEncoder().encode(String(value)).byteLength;
 }
 
-function safeJsonByteLength(value) {
-  return utf8ByteLength(JSON.stringify(value)
-    .replaceAll('<', '\\u003C')
-    .replaceAll('>', '\\u003E')
-    .replaceAll('&', '\\u0026')
-    .replaceAll('\u2028', '\\u2028')
-    .replaceAll('\u2029', '\\u2029'));
-}
-
-function fileByteLength(value) {
-  if (typeof value === 'string') return utf8ByteLength(value);
-  if (value instanceof ArrayBuffer) return value.byteLength;
-  if (ArrayBuffer.isView(value)) return value.byteLength;
-  if (Number.isFinite(value?.size)) return value.size;
-  if (Number.isFinite(value?.byteLength)) return value.byteLength;
-  return 0;
-}
-
 /**
- * Estimates the final HTML document after all local bytes are base64 encoded.
- * JSON punctuation, escaped document/module text, CSS and the bootstrap are
- * all accounted for.  The fixed term protects against small template changes.
+ * Exact final UTF-8 size without materialising potentially huge base64 data.
+ * The shared skeleton serializes the same escaped JSON/template/modules/CSS as
+ * buildSingleHtmlDocument; base64 is ASCII and therefore simply adds its exact
+ * 4 * ceil(n / 3) byte length to each empty value.
  */
-export function estimateSingleHtmlExport({
-  sceneDocument = {},
-  manifest = {},
-  files = {},
-  viewerFiles = {},
-  fixedOverheadBytes = SINGLE_HTML_ESTIMATE_FIXED_OVERHEAD_BYTES,
-  assetOverheadBytes = SINGLE_HTML_ESTIMATE_ASSET_OVERHEAD_BYTES,
-} = {}) {
-  let bytes = Number(fixedOverheadBytes) || 0;
-  bytes += safeJsonByteLength(sceneDocument) + safeJsonByteLength(manifest);
+export function estimateSingleHtmlExport({ preparation = null, ...input } = {}) {
+  const prepared = preparation || prepareSingleHtmlDocument(input);
+  const { html, assetByteLengths } = buildSingleHtmlDocumentSkeleton({ preparation: prepared });
+  return utf8ByteLength(html) + Object.values(assetByteLengths)
+    .reduce((total, byteLength) => total + base64EncodedByteLength(byteLength), 0);
+}
 
-  for (const [path, source] of Object.entries(viewerFiles)) {
-    const isCss = path === 'viewer/viewer.css'
-      || path === 'viewer/player-shell.css'
-      || path === 'scenesync/handoff/source.css';
-    if (isCss || typeof source === 'string') {
-      // CSS is directly embedded, JS becomes a JSON module entry.
-      bytes += isCss
-        ? utf8ByteLength(String(source).replaceAll('</style', '<\\/style'))
-        : safeJsonByteLength({ [path]: source });
-    } else {
-      bytes += base64EncodedByteLength(fileByteLength(source))
-        + assetOverheadBytes + safeJsonByteLength(path);
-    }
-  }
-  for (const [path, value] of Object.entries(files)) {
-    bytes += base64EncodedByteLength(fileByteLength(value))
-      + assetOverheadBytes + safeJsonByteLength(path);
-  }
-  return Math.ceil(bytes);
+function result(format, reason, warnings = []) {
+  return { format, reason, warnings };
 }
 
 /** Determines the output format without doing any I/O. */
@@ -85,40 +50,46 @@ export function selectAutoExportFormat({
   estimatedBytes = 0,
   thresholdBytes = DEFAULT_AUTO_SINGLE_HTML_THRESHOLD_BYTES,
   missingAssets = [],
+  hasCustomThumbnail = false,
   singleHtmlSupported = true,
   staticZipSupported = true,
 } = {}) {
+  const threshold = normalizeAutoSingleHtmlThresholdBytes(thresholdBytes);
+  const hasMissingAssets = missingAssets.length > 0;
   if (requestedFormat === STATIC_ZIP_EXPORT_FORMAT) {
-    return { format: STATIC_ZIP_EXPORT_FORMAT, reason: 'forced-static-zip', warning: null };
+    return result(STATIC_ZIP_EXPORT_FORMAT, 'forced-static-zip');
   }
   if (requestedFormat === SINGLE_HTML_EXPORT_FORMAT) {
-    if (!singleHtmlSupported) {
-      return { format: null, reason: 'single-html-required-dependency-unembeddable', warning: null };
-    }
-    return {
-      format: SINGLE_HTML_EXPORT_FORMAT,
-      reason: 'forced-single-html',
-      warning: estimatedBytes > thresholdBytes ? 'single-html-estimate-exceeds-auto-threshold' : null,
-    };
+    if (hasCustomThumbnail) return result(null, 'single-html-custom-thumbnail-unsupported');
+    if (!singleHtmlSupported) return result(null, 'single-html-required-dependency-unembeddable');
+    const warnings = [];
+    if (estimatedBytes > threshold) warnings.push('single-html-estimate-exceeds-auto-threshold');
+    if (hasMissingAssets) warnings.push('external-assets-not-embedded');
+    return result(SINGLE_HTML_EXPORT_FORMAT, 'forced-single-html', warnings);
+  }
+  if (hasCustomThumbnail) {
+    return staticZipSupported
+      ? result(STATIC_ZIP_EXPORT_FORMAT, 'custom-thumbnail-requires-static-zip')
+      : result(null, 'custom-thumbnail-requires-static-zip-unavailable');
   }
   if (!singleHtmlSupported) {
     return staticZipSupported
-      ? { format: STATIC_ZIP_EXPORT_FORMAT, reason: 'single-html-required-dependency-unembeddable', warning: null }
-      : { format: null, reason: 'required-viewer-dependency-unavailable', warning: null };
+      ? result(STATIC_ZIP_EXPORT_FORMAT, 'single-html-required-dependency-unembeddable')
+      : result(null, 'required-viewer-dependency-unavailable');
   }
-  // A ZIP preserves the original URL fallback.  A file:// Single HTML export
-  // is less reliable for missing/external assets, so fidelity wins over size.
-  if (missingAssets.length > 0) {
+  // A ZIP retains remote URL fallback. A file:// Single HTML export is less
+  // faithful when a required scene asset could not be embedded.
+  if (hasMissingAssets) {
     return staticZipSupported
-      ? { format: STATIC_ZIP_EXPORT_FORMAT, reason: 'missing-assets-static-zip-fidelity', warning: 'external-assets-not-embedded' }
-      : { format: null, reason: 'missing-assets-and-static-zip-unavailable', warning: null };
+      ? result(STATIC_ZIP_EXPORT_FORMAT, 'unembedded-external-assets-prefer-static-zip', ['external-assets-not-embedded'])
+      : result(null, 'unembedded-external-assets-static-zip-unavailable');
   }
-  if (estimatedBytes > thresholdBytes) {
+  if (estimatedBytes > threshold) {
     return staticZipSupported
-      ? { format: STATIC_ZIP_EXPORT_FORMAT, reason: 'single-html-estimate-exceeds-threshold', warning: null }
-      : { format: null, reason: 'single-html-estimate-exceeds-threshold-and-static-zip-unavailable', warning: null };
+      ? result(STATIC_ZIP_EXPORT_FORMAT, 'single-html-estimate-exceeds-threshold')
+      : result(null, 'single-html-estimate-exceeds-threshold-and-static-zip-unavailable');
   }
-  return { format: SINGLE_HTML_EXPORT_FORMAT, reason: 'within-single-html-threshold', warning: 'three-cdn-required' };
+  return result(SINGLE_HTML_EXPORT_FORMAT, 'within-single-html-threshold', ['three-cdn-required']);
 }
 
 export function formatEstimatedBytes(bytes) {

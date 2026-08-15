@@ -15707,7 +15707,6 @@ const exportTagsInput = document.getElementById('export-tags-input');
 const exportAuthorInput = document.getElementById('export-author-input');
 const exportFormatInput = document.getElementById('export-format-input');
 const exportFormatHint = document.getElementById('export-format-hint');
-const exportFormatResult = document.getElementById('export-format-result');
 const exportSubmitBtn = document.getElementById('export-submit');
 const exportThumbnailSelectBtn = document.getElementById('export-thumbnail-select');
 const exportThumbnailClearBtn = document.getElementById('export-thumbnail-clear');
@@ -15717,6 +15716,34 @@ const exportThumbnailPreview = document.getElementById('export-thumbnail-preview
 let exportDialogResolve = null;
 let exportThumbnailFile = null;
 let exportThumbnailPreviewUrl = null;
+
+const EXPORT_REASON_COPY = {
+  'forced-static-zip': 'Static ZIP を指定しました。',
+  'forced-single-html': 'Single HTML を指定しました。',
+  'within-single-html-threshold': '推定サイズが推奨上限内のため Single HTML を選択しました。',
+  'single-html-estimate-exceeds-threshold': '推定サイズが推奨上限を超えたため Static ZIP を選択しました。',
+  'single-html-required-dependency-unembeddable': 'Single HTML に必要なビューアを埋め込めません。',
+  'unembedded-external-assets-prefer-static-zip': '埋め込めない外部アセットを保持するため Static ZIP を選択しました。',
+  'custom-thumbnail-requires-static-zip': 'カスタムサムネイルを含めるため Static ZIP を選択しました。',
+  'single-html-custom-thumbnail-unsupported': 'Single HTML はカスタムサムネイルを含められません。Static ZIP を選択してください。',
+  'required-viewer-dependency-unavailable': '必要なビューアを取得できませんでした。',
+  'single-html-estimate-exceeds-threshold-and-static-zip-unavailable': '推定サイズが推奨上限を超え、Static ZIP も出力できません。',
+  'unembedded-external-assets-static-zip-unavailable': '埋め込めない外部アセットがあり、Static ZIP も出力できません。',
+  'custom-thumbnail-requires-static-zip-unavailable': 'カスタムサムネイルには Static ZIP が必要ですが、出力できません。',
+};
+const EXPORT_WARNING_COPY = {
+  'three-cdn-required': 'Three.js を CDN から読み込むため、再生時にインターネット接続が必要です。',
+  'external-assets-not-embedded': '一部の外部アセットは埋め込まれていません。',
+  'single-html-estimate-exceeds-auto-threshold': '推奨サイズを超える Single HTML を指定しています。',
+};
+
+function exportReasonCopy(reason) {
+  return EXPORT_REASON_COPY[reason] || `出力ポリシー: ${reason}`;
+}
+
+function exportWarningsCopy(warnings = []) {
+  return warnings.map((warning) => EXPORT_WARNING_COPY[warning] || `警告: ${warning}`).join(' ');
+}
 
 function isExportDialogOpen() {
   return Boolean(exportDialog && !exportDialog.hidden);
@@ -15742,6 +15769,7 @@ function setExportThumbnailFile(file) {
       exportThumbnailPreview.removeAttribute('src');
       exportThumbnailPreview.classList.remove('is-visible');
     }
+    updateExportSubmitLabel();
     return;
   }
 
@@ -15758,12 +15786,12 @@ function setExportThumbnailFile(file) {
     exportThumbnailPreview.src = exportThumbnailPreviewUrl;
     exportThumbnailPreview.classList.add('is-visible');
   }
+  updateExportSubmitLabel();
 }
 
 function resetExportDialogForm() {
   exportForm?.reset?.();
   if (exportFormatInput) exportFormatInput.value = 'auto';
-  if (exportFormatResult) exportFormatResult.textContent = '';
   setExportThumbnailFile(null);
 }
 
@@ -15786,7 +15814,7 @@ function updateExportSubmitLabel() {
     ? 'Export Single HTML' : format === 'static-zip' ? 'Export ZIP' : 'Auto Export';
   if (!exportFormatHint) return;
   exportFormatHint.textContent = format === 'single-html'
-    ? 'Single HTML は1ファイルに埋め込みます。大きい場合は出力前に確認します。Three.js CDN 接続は必要です。'
+    ? `Single HTML は1ファイルに埋め込みます。大きい場合は出力前に確認します。Three.js CDN 接続は必要です。${exportThumbnailFile ? ' カスタムサムネイルには対応していません。' : ''}`
     : format === 'static-zip'
       ? '従来の Static ZIP を必ず出力します。ローカル再生には web server が必要です。'
       : '推定サイズが32MB以下で完全に埋め込める場合は Single HTML、それ以外は Static ZIP を選びます。Three.js CDN 接続は必要です。';
@@ -15898,16 +15926,13 @@ async function triggerExport() {
     }
     const selectedLabel = result.selectedFormat === 'single-html' ? 'Single HTML' : 'Static ZIP';
     const decision = `${selectedLabel} (${formatEstimatedBytes(result.estimatedBytes)})`;
-    if (exportFormatResult) {
-      exportFormatResult.textContent = `出力: ${decision} — ${result.fallbackReason}`;
-    }
-
-    const warning = result.warning ? ' / warning: external or CDN dependency' : '';
-    const missing = result.missingAssets.length > 0 ? ' / missing assets' : '';
-    showToast(`Exported ${decision} — ${result.fallbackReason}${warning}${missing}`, 5000);
+    const reason = exportReasonCopy(result.fallbackReason);
+    const warnings = exportWarningsCopy(result.warnings);
+    showToast(`出力: ${decision}。${reason}${warnings ? ` ${warnings}` : ''}`, 7000);
   } catch (err) {
     console.error('[Export] failed:', err);
-    showToast('Export failed');
+    const reason = String(err?.message || '').replace(/^Export is unsupported: /u, '');
+    showToast(EXPORT_REASON_COPY[reason] || 'Export failed');
   }
 }
 

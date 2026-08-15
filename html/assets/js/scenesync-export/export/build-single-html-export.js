@@ -60,6 +60,7 @@ export async function buildSingleHtmlExport({
   physicsState = null,
   exportMetadata = null,
   preparedExport = null,
+  singleHtmlPreparation = null,
 }) {
   const prepared = preparedExport || await prepareSceneSyncExport({
     managedObjects, bgmState, envId, blobBase, envOrigin, assetCache,
@@ -70,12 +71,14 @@ export async function buildSingleHtmlExport({
     throw new Error(`Required viewer files could not be fetched: ${viewerFailures.map((failure) => failure.dest).join(', ')}`);
   }
 
-  const manifest = createSingleHtmlManifest({ assetManifest, missingAssets, metadata });
+  const manifest = singleHtmlPreparation?.manifest
+    || createSingleHtmlManifest({ assetManifest, missingAssets, metadata });
   const html = await buildSingleHtmlDocument({
     sceneDocument: document,
     manifest,
     files,
     viewerFiles,
+    preparation: singleHtmlPreparation,
   });
   const filename = `scene-sync-export-${formatTimestamp()}.html`;
   downloadHtml(html, filename);
