@@ -83,8 +83,13 @@ services:
     build: ./apps/presence-server
     container_name: presence-server
     restart: always
+    # Development diagnostics only: never expose the server-pull control plane
+    # on a public interface. Production traffic arrives through https-portal.
+    ports:
+      - "127.0.0.1:8787:8787"
     environment:
       - PORT=8787
+      - SCENE_SYNC_TRUST_REVERSE_PROXY=true
       - STATS_FILE=/data/stats.json
       # TURN server config — .env で TURN_URL を設定すると ICE 候補に含まれる
       - TURN_URL=${TURN_URL:-}

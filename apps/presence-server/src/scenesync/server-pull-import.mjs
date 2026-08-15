@@ -65,16 +65,45 @@ export function isPublicIp(address) {
   const family = net.isIP(address);
   if (family === 4) return ipv4IsPublic(address);
   if (family !== 6) return false;
-  const value = address.toLowerCase().split('%')[0];
-  if (value === '::' || value === '::1' || value.startsWith('fc') || value.startsWith('fd')
-    || /^(?:fe[89ab]|ff)/u.test(value)) return false; // link-local / multicast
-  // Treat address-embedding and transition ranges as non-public rather than
-  // trying to reason about the embedded IPv4 address in multiple notations.
-  if (value.startsWith('::') || value.startsWith('64:ff9b:') || value.startsWith('64:ff9b:1:')
-    || value.startsWith('100:') || value.startsWith('2001:0:') || value.startsWith('2002:')) return false;
-  // Documentation, benchmarking and discard-only allocations.
-  if (value.startsWith('2001:db8:') || value.startsWith('2001:2:') || value.startsWith('2001:10:')) return false;
+  const value = ipv6ToBigInt(address);
+  if (value == null) return false;
+  // Reject all special-use ranges with real prefix arithmetic, so compressed
+  // spellings such as 2001::1 cannot evade a textual prefix check.
+  if (hasV6Prefix(value, 0n, 128) || hasV6Prefix(value, 1n, 128)
+    || hasV6Prefix(value, 0n, 96) || hasV6Prefix(value, 0xffffn, 96) // compatible/mapped
+    || hasV6Prefix(value, 0x7en, 7) || hasV6Prefix(value, 0x3fan, 10) || hasV6Prefix(value, 0xffn, 8)
+    || hasV6Prefix(value, 0x64ff9b0000000000000000n, 96) || hasV6Prefix(value, 0x64ff9b0001n, 48)
+    || hasV6Prefix(value, 0x100n, 64) || hasV6Prefix(value, 0x20010000n, 32) // discard/Teredo
+    || hasV6Prefix(value, 0x2002n, 16) || hasV6Prefix(value, 0x20010db8n, 32)
+    || hasV6Prefix(value, 0x20010002n, 48) || hasV6Prefix(value, 0x20010n, 28)) return false;
   return true;
+}
+
+function ipv6ToBigInt(address) {
+  const raw = String(address).toLowerCase().split('%')[0];
+  if (!raw || raw.split('::').length > 2) return null;
+  const [leftRaw, rightRaw] = raw.split('::');
+  const expand = (part) => part ? part.split(':').filter(Boolean) : [];
+  let left = expand(leftRaw); let right = expand(rightRaw);
+  const dotted = [...left, ...right].findIndex((part) => part.includes('.'));
+  if (dotted >= 0) {
+    const all = [...left, ...right];
+    if (dotted !== all.length - 1 || !net.isIP(all[dotted])) return null;
+    const octets = all[dotted].split('.').map(Number);
+    all.splice(dotted, 1, ((octets[0] << 8) | octets[1]).toString(16), ((octets[2] << 8) | octets[3]).toString(16));
+    left = raw.includes('::') ? all.slice(0, left.length) : all;
+    right = raw.includes('::') ? all.slice(left.length) : [];
+  }
+  const count = left.length + right.length;
+  if ((raw.includes('::') && count >= 8) || (!raw.includes('::') && count !== 8)) return null;
+  const groups = [...left, ...Array(raw.includes('::') ? 8 - count : 0).fill('0'), ...right];
+  if (groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/u.test(group))) return null;
+  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group}`), 0n);
+}
+
+function hasV6Prefix(value, prefix, bits) {
+  const width = BigInt(128 - bits);
+  return (value >> width) === prefix;
 }
 
 async function resolvePublicHost(hostname, resolveHost) {
@@ -296,7 +325,33 @@ export function createServerPullImporter({
         sceneText = await readTextLimited(scene.response, resolvedLimits.maxDocumentBytes);
       }
       let sceneDocument;
-      try { sceneDocument = JSON.parse(sceneText); } catch { throw failure('handoff-invalid-scene-json'); }
+      try { sceneDocument = JSON.parse(sceneText); } catch {
+        // Mirror static world URLs supported by the browser loader: a plain
+        // directory can expose scene.json directly or current.json -> an
+        // immutable version directory. This remains same-origin and marker/
+        // JSON-only; ZIP and Single HTML are deliberately rejected above.
+        if (marker) throw failure('handoff-invalid-scene-json');
+        const directory = new URL('./', first.url);
+        let sceneCandidate = new URL('scene.json', directory);
+        let sceneFetched;
+        try { sceneFetched = await fetchSafe(sceneCandidate.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin }); }
+        catch {
+          let currentFetched;
+          try { currentFetched = await fetchSafe(new URL('current.json', directory).href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin }); }
+          catch { throw failure('handoff-not-scene-sync-export'); }
+          let current;
+          try { current = JSON.parse(await readTextLimited(currentFetched.response, resolvedLimits.maxDocumentBytes)); }
+          catch { throw failure('handoff-invalid-current-json'); }
+          const versionPath = typeof current?.versionPath === 'string' ? current.versionPath
+            : typeof current?.versionId === 'string' ? `versions/${current.versionId}/` : '';
+          if (!versionPath) throw failure('handoff-current-json-missing-version');
+          sceneCandidate = assetUrl(`${versionPath.replace(/\/$/u, '')}/scene.json`, directory, sourceOrigin);
+          sceneFetched = await fetchSafe(sceneCandidate.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+        }
+        sceneUrl = sceneFetched.url;
+        sceneText = await readTextLimited(sceneFetched.response, resolvedLimits.maxDocumentBytes);
+        try { sceneDocument = JSON.parse(sceneText); } catch { throw failure('handoff-invalid-scene-json'); }
+      }
       assertSceneDocument(sceneDocument);
       const digest = createHash('sha256').update(JSON.stringify(sceneDocument)).digest('base64url');
       return { sceneDocument, sceneUrl, sourceOrigin, digest };

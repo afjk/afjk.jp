@@ -40,6 +40,7 @@ export function createSceneSyncConfig(env = process.env) {
     serverPullsPerActorPerMinute: parseIntEnv(env.SCENE_SYNC_SERVER_PULLS_PER_ACTOR_PER_MINUTE, 3, 1),
     serverPullAllowedOrigins: (env.SCENE_SYNC_SERVER_PULL_ALLOWED_ORIGINS || 'https://afjk.jp,https://staging.afjk.jp')
       .split(',').map((value) => value.trim().replace(/\/$/u, '')).filter(Boolean),
+    trustReverseProxy: parseBoolEnv(env.SCENE_SYNC_TRUST_REVERSE_PROXY, false),
   };
 
   if (env.NODE_ENV === 'production' && !config.actorHashSalt) {

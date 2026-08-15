@@ -1559,7 +1559,7 @@ function createPresenceServer() {
       let input;
       try { input = validateImportJobInput(await readJsonBody(req)); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: error?.code || 'handoff-invalid-import-job' }); return; }
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
       if (!serverPullRateLimiter.allow(actorId)) {
         sendImportJson(res, 429, { error: 'handoff-rate-limited' });
         return;
@@ -1604,7 +1604,7 @@ function createPresenceServer() {
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
       const job = importJobs.get(materializeMatch[1]);
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
       // Delete before the remote request: replay cannot turn this endpoint into
       // a repeated fetch primitive, even if the first request times out.
       importJobs.delete(materializeMatch[1]);
@@ -1650,7 +1650,7 @@ function createPresenceServer() {
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
       const completed = completedImportJobs.get(cleanupMatch[1]);
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
       completedImportJobs.delete(cleanupMatch[1]);
       if (!completed || completed.expiresAt < Date.now() || completed.actorId !== actorId || completed.token !== body.token) {
         sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });

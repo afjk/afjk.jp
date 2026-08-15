@@ -59,6 +59,26 @@ test('rejects private DNS answers and cross-origin redirects before a body is ex
   await assert.rejects(redirected('http://publisher.example/world/'), { code: 'handoff-cross-origin-redirect' });
 });
 
+test('inspects directory scene.json and current.json version paths without fetching assets', async () => {
+  const calls = [];
+  const importer = createServerPullImporter({
+    allowHttpForTests: true,
+    resolveHost: async () => [{ address: '8.8.8.8', family: 4 }],
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (url.endsWith('/world/')) return response('<html>world</html>', { 'content-type': 'text/html' });
+      if (url.endsWith('/world/scene.json')) return response('missing', {}, 404);
+      if (url.endsWith('/world/current.json')) return response(JSON.stringify({ versionPath: 'versions/immutable/' }));
+      if (url.endsWith('/world/versions/immutable/scene.json')) return response(JSON.stringify(scene));
+      throw new Error(`unexpected ${url}`);
+    },
+    storeAsset: async () => { throw new Error('inspect must not stream assets'); },
+  });
+  const inspected = await importer.inspect('http://publisher.example/world/');
+  assert.equal(inspected.sceneDocument.objects.length, 2);
+  assert.equal(calls.some((url) => url.endsWith('model.glb')), false);
+});
+
 test('conservatively blocks private, mapped, transition, and reserved IPv6 ranges', () => {
   for (const value of ['127.0.0.1', '10.0.0.1', '::1', 'fc00::1', 'fe80::1', '::ffff:c0a8:1', '64:ff9b::808:808', '2001:0::1', '2002:0808:0808::1', '2001:db8::1', 'ff00::1']) {
     assert.equal(isPublicIp(value), false, value);
