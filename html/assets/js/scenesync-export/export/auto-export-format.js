@@ -100,3 +100,13 @@ export function formatEstimatedBytes(bytes) {
   if (value < 1024 * 1024) return `${Math.ceil(value / 1024)} KB`;
   return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
 }
+
+/** Adds the canonical missing-asset warning once without mutating caller data. */
+export function mergeMissingAssetWarning(warnings = [], missingAssets = []) {
+  const current = Array.isArray(warnings) ? warnings : [];
+  if (!Array.isArray(missingAssets) || missingAssets.length === 0
+    || current.includes('external-assets-not-embedded')) {
+    return current;
+  }
+  return [...current, 'external-assets-not-embedded'];
+}

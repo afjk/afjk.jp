@@ -5,6 +5,7 @@ import {
   base64EncodedByteLength,
   DEFAULT_AUTO_SINGLE_HTML_THRESHOLD_BYTES,
   estimateSingleHtmlExport,
+  mergeMissingAssetWarning,
   normalizeAutoSingleHtmlThresholdBytes,
   selectAutoExportFormat,
   utf8ByteLength,
@@ -89,6 +90,15 @@ test('formats without missing assets do not receive a missing-asset warning', ()
   assert.deepEqual(forcedSingle.warnings, []);
   const forcedZip = selectAutoExportFormat({ requestedFormat: 'static-zip', missingAssets: [] });
   assert.deepEqual(forcedZip.warnings, []);
+});
+
+test('UI defense-in-depth keeps the canonical missing-asset warning to one occurrence', () => {
+  const canonical = 'external-assets-not-embedded';
+  const once = mergeMissingAssetWarning([canonical], [{ id: 'missing' }]);
+  assert.equal(once.filter((warning) => warning === canonical).length, 1);
+  const added = mergeMissingAssetWarning(['three-cdn-required'], [{ id: 'missing' }]);
+  assert.deepEqual(added, ['three-cdn-required', canonical]);
+  assert.deepEqual(mergeMissingAssetWarning(['three-cdn-required'], []), ['three-cdn-required']);
 });
 
 test('forced modes retain user choice, aggregate warnings, and reject unsupported thumbnail', () => {
