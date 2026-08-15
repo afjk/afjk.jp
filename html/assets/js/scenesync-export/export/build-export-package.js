@@ -213,7 +213,7 @@ async function addExportThumbnail(zip, {
   return { path: 'thumbnail.png', mode: thumbnail.mode };
 }
 
-async function fetchViewerSources() {
+export async function fetchExportViewerSources() {
   const results = {};
   const failures = [];
 
@@ -271,7 +271,7 @@ export async function buildExportPackage({
     });
 
   // 3. Fetch viewer source files
-  const { results: viewerFiles, failures: viewerFailures } = await fetchViewerSources();
+  const { results: viewerFiles, failures: viewerFailures } = await fetchExportViewerSources();
 
   if (viewerFailures.length > 0) {
     const missing = viewerFailures.map(f => f.dest).join(', ');
