@@ -3,7 +3,17 @@ import assert from 'node:assert/strict';
 import {
   buildExportPackage,
   EXPORT_THUMBNAIL_FILE_LIMIT_BYTES,
+  generateExportIndexHtml,
 } from './build-export-package.js';
+
+test('Static ZIP viewer keeps its file:// warning separate from Single HTML playback', () => {
+  const indexHtml = generateExportIndexHtml();
+
+  assert.match(indexHtml, /location\.protocol === 'file:'/);
+  assert.match(indexHtml, /file-protocol-warning/);
+  assert.match(indexHtml, /python3 -m http\.server 8080/);
+  assert.doesNotMatch(indexHtml, /__SCENE_SYNC_SINGLE_HTML_EXPORT__/);
+});
 
 function vec(values) {
   return { toArray: () => [...values] };
