@@ -128,6 +128,8 @@ describe('blob store', () => {
 
     assert.equal(downloadResponse.status, 200);
     assert.equal(downloadResponse.headers.get('content-type'), 'image/jpeg');
+    assert.equal(downloadResponse.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(downloadResponse.headers.get('content-security-policy'), "sandbox; default-src 'none'");
     assert.deepEqual(Array.from(body), [0xff, 0xd8, 0xff, 0xd9]);
   });
 });

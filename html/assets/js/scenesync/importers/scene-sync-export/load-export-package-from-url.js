@@ -146,7 +146,14 @@ async function fetchText(url, fetchImpl, options = {}) {
   }
   let text;
   try { text = await (await responseBlobLimited(response, options.maxBytes ?? Infinity)).text(); }
-  catch (error) { return { ok: false, reason: error.message === 'url-document-too-large' ? 'url-document-too-large' : 'fetch-failed', url }; }
+  catch (error) {
+    return {
+      ok: false,
+      reason: error.message === 'url-document-too-large' ? 'url-document-too-large' : 'fetch-failed',
+      url,
+      networkFailure: error instanceof TypeError,
+    };
+  }
   return {
     ok: true,
     text,
@@ -178,8 +185,13 @@ function parseSceneJsonText(text, fetched) {
 }
 
 async function tryFetchSceneJson(sceneUrl, fetchImpl, options) {
-  const fetched = await fetchText(sceneUrl, fetchImpl, options);
-  if (!fetched.ok) return { valid: false, reason: 'scene-json-fetch-failed', fetched };
+  let fetched;
+  try {
+    fetched = await fetchText(sceneUrl, fetchImpl, options);
+  } catch (error) {
+    return { valid: false, reason: 'scene-json-fetch-threw', error, networkFailure: error instanceof TypeError };
+  }
+  if (!fetched.ok) return { valid: false, reason: 'scene-json-fetch-failed', fetched, networkFailure: Boolean(fetched.networkFailure) };
   return parseSceneJsonText(fetched.text, fetched);
 }
 
@@ -271,8 +283,13 @@ async function resolveCurrentJson(current, directoryUrl, fetchImpl, options) {
 
 async function tryFetchCurrentJson(directoryUrl, fetchImpl, options) {
   const currentUrl = new URL('current.json', directoryUrl).href;
-  const fetched = await fetchText(currentUrl, fetchImpl, options);
-  if (!fetched.ok) return { valid: false, reason: 'current-json-fetch-failed', fetched };
+  let fetched;
+  try {
+    fetched = await fetchText(currentUrl, fetchImpl, options);
+  } catch (error) {
+    return { valid: false, reason: 'current-json-fetch-threw', error, networkFailure: error instanceof TypeError };
+  }
+  if (!fetched.ok) return { valid: false, reason: 'current-json-fetch-failed', fetched, networkFailure: Boolean(fetched.networkFailure) };
 
   let current;
   try {
@@ -349,7 +366,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
       if (href) {
         const markerSceneUrl = new URL(href, directFetched.url || parsed.href).href;
         const markerResult = await tryFetchSceneJson(markerSceneUrl, fetchImpl, fetchOptions)
-          .catch((error) => ({ valid: false, reason: 'html-marker-scene-json-threw', error }));
+          .catch((error) => ({ valid: false, reason: 'html-marker-scene-json-threw', error, networkFailure: error instanceof TypeError }));
         if (markerResult.valid) return {
           ...markerResult,
           kind: 'html-marker-url',
@@ -377,7 +394,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
         return blockingResult({ reason: 'invalid-current-json', error }, attempts);
       }
       const currentResult = await resolveCurrentJson(current, directoryOfUrl(directFetched.url), fetchImpl, fetchOptions)
-        .catch((error) => ({ valid: false, reason: 'current-json-threw', error }));
+        .catch((error) => ({ valid: false, reason: 'current-json-threw', error, networkFailure: error instanceof TypeError }));
       if (currentResult.valid) return currentResult;
       return blockingResult(currentResult, attempts);
     }
@@ -393,21 +410,21 @@ export async function loadExportPackageFromUrl(url, options = {}) {
 
   const directoryUrl = asDirectoryUrl(parsed.href);
   const directorySceneResult = await tryFetchSceneJson(new URL('scene.json', directoryUrl).href, fetchImpl, fetchOptions)
-    .catch((error) => ({ valid: false, reason: 'directory-scene-json-threw', error }));
+    .catch((error) => ({ valid: false, reason: 'directory-scene-json-threw', error, networkFailure: error instanceof TypeError }));
   if (directorySceneResult.valid) return {
     ...directorySceneResult,
     baseUrl: directoryUrl,
     kind: 'directory-scene-json-url',
   };
-  attempts.push({ step: 'directory-scene-json', reason: directorySceneResult.reason });
+  attempts.push({ step: 'directory-scene-json', reason: directorySceneResult.reason, networkFailure: Boolean(directorySceneResult.networkFailure) });
   if (shouldBlockSceneJsonFallback(directorySceneResult)) {
     return blockingResult(directorySceneResult, attempts);
   }
 
   const currentResult = await tryFetchCurrentJson(directoryUrl, fetchImpl, fetchOptions)
-    .catch((error) => ({ valid: false, reason: 'current-json-threw', error }));
+    .catch((error) => ({ valid: false, reason: 'current-json-threw', error, networkFailure: error instanceof TypeError }));
   if (currentResult.valid) return currentResult;
-  attempts.push({ step: 'current-json', reason: currentResult.reason });
+  attempts.push({ step: 'current-json', reason: currentResult.reason, networkFailure: Boolean(currentResult.networkFailure) });
   if (currentResult.shouldBlockGenericImport) {
     return blockingResult(currentResult, attempts);
   }

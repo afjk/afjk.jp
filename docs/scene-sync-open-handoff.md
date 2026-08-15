@@ -1,9 +1,13 @@
 # Open in Scene Sync handoff protocol
 
 Portable Single HTML exports and published Static exports include an **Open in
-Scene Sync** control. Static handoff fetches the export from Scene Sync, so the
-publisher must allow cross-origin `GET` for the viewer page, `scene.json`, and
-every referenced asset.
+Scene Sync** control. Static handoff always tries the browser's direct,
+credential-free CORS fetch first. Publishers should therefore allow
+cross-origin `GET` for the viewer page, `scene.json`, and every referenced
+asset. When the browser receives an opaque fetch `TypeError` (the normal CORS
+or network failure shape), Scene Sync can use its same-origin server-pull
+fallback. HTTP errors, malformed documents, unsafe paths, and size-limit
+failures do not use that fallback.
 
 1. Generate cryptographically random `sessionId` and `requestId` values with at
    least 128 bits of entropy, encoded as 22–128 URL-safe characters
@@ -77,21 +81,46 @@ handoff import, then uploads them to its blob store; a completed import has no
 runtime dependency on the publishing host. URL handoff deliberately skips BGM
 and all other scene-level settings.
 
-Hosts need CORS for the page, marker JSON, and every asset. Scene Sync fetches
-all of them with `credentials: "omit"`; redirects remain subject to the same
-CORS policy. Handoff entry HTML, `scene.json`, and `current.json` are limited
-to 10 MiB (advertised and streamed bytes), while assets are separately limited
-to 128 MiB each and 500 MiB total. HTTP errors, CORS
-failures, unsafe relative paths, duplicate materialized paths, more than 2,048
-assets, an asset over 128 MiB, or more than 500 MiB total reject the import
-without applying it. `Content-Length` is checked but actual streamed bytes are
-authoritative. Absolute `asset.url` is also fetched only without credentials;
-credential-bearing URLs are rejected rather than copied into a room.
+The fallback is not a general web proxy. It only accepts an HTTPS static page
+marker, a `scene.json`, a directory, or `current.json`, validates the Scene
+Sync schema before staging, and returns only the canonical scene document with
+local blob references. Source URLs have no credentials and use default HTTPS
+port 443; every DNS answer and redirect is checked for public global-unicast
+addresses, redirects/assets stay on the original origin, and ZIP/Single HTML
+URLs are rejected. Server-pulled assets are streamed to disk—not Base64 or a
+browser `postMessage` upload—and passive MIME types only are accepted (HTML and
+SVG are rejected). Blob responses use `nosniff` and a sandbox CSP.
+
+The browser still uses `credentials: "omit"`. Handoff entry HTML, `scene.json`,
+and `current.json` are limited to 10 MiB (advertised and streamed bytes), with
+at most 2,048 assets, 128 MiB per asset, and 500 MiB per import. The server also
+enforces a global staged/live-byte quota, disk-free-space check, request/idle
+and ten-minute job deadlines, and short-lived one-use inspect/materialize job
+tokens bound to the requester. `Content-Length` is checked but actual streamed
+bytes are authoritative. HTTP failures, unsafe relative paths, duplicate
+materialized paths, or a quota failure reject the import without applying it.
+Absolute same-origin `asset.url` values are accepted without credentials;
+credential-bearing or cross-origin asset URLs are rejected rather than copied
+into a room.
 
 URL handoff accepts only a static page marker, `scene.json`, a directory, or a
 `current.json` resolver. It deliberately rejects direct ZIP and Single HTML
 URLs: use drag-and-drop/manual import for ZIP and the embedded payload handoff
 for Single HTML. Use immutable/versioned public URLs so a click has a stable meaning. Do not
-depend on provider-specific APIs: any static host meeting the marker and CORS
-requirements works. A URL handoff is add-only, has no confirmation dialog, and
+depend on provider-specific APIs: any static host meeting the marker plus the
+direct CORS contract—or, for its fallback path, the HTTPS/default-port,
+same-origin, public-DNS, and passive-MIME rules above—works. A URL handoff is add-only, has no confirmation dialog, and
 does not apply scene-level settings.
+
+## Server-pull deployment settings
+
+The control plane is same-origin and sends no CORS headers. Keep the presence
+port private behind the TLS reverse proxy. Configure the explicit (no wildcard)
+browser origins in `SCENE_SYNC_SERVER_PULL_ALLOWED_ORIGINS`; set
+`SCENE_SYNC_TRUST_REVERSE_PROXY=true` only when the reverse proxy supplies a
+trusted client address. `SCENE_SYNC_SERVER_PULL_MAX_LIVE_BYTES` caps all live
+and staged server-pull blobs (the compose default is 500 MiB), while
+`SCENE_SYNC_SERVER_PULLS_PER_ACTOR_PER_MINUTE` bounds expensive inspections
+(default 3). The compose
+service binds port 8787 to `127.0.0.1` specifically so that the import-job API
+is not publicly exposed.

@@ -79,6 +79,53 @@ test('inspects directory scene.json and current.json version paths without fetch
   assert.equal(calls.some((url) => url.endsWith('model.glb')), false);
 });
 
+test('treats a 404 generic directory entry as scene.json/current.json, including v1 documents', async () => {
+  const calls = [];
+  const v1 = { ...scene, version: 1 };
+  const importer = createServerPullImporter({
+    allowHttpForTests: true,
+    resolveHost: async () => [{ address: '8.8.8.8', family: 4 }],
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (url.endsWith('/world')) return response('missing', {}, 404);
+      if (url.endsWith('/world/scene.json')) return response('missing', {}, 404);
+      if (url.endsWith('/world/current.json')) return response(JSON.stringify({ versionPath: 'versions/v1/' }));
+      if (url.endsWith('/world/versions/v1/scene.json')) return response(JSON.stringify(v1));
+      throw new Error(`unexpected ${url}`);
+    },
+    storeAsset: async () => { throw new Error('inspect must not store'); },
+  });
+  const inspected = await importer.inspect('http://publisher.example/world');
+  assert.equal(inspected.sceneDocument.version, 1);
+  assert.deepEqual(calls, [
+    'http://publisher.example/world',
+    'http://publisher.example/world/scene.json',
+    'http://publisher.example/world/current.json',
+    'http://publisher.example/world/versions/v1/scene.json',
+  ]);
+});
+
+test('rejects active HTML and SVG server-pull assets before storing them', async () => {
+  for (const [type, path, mime] of [
+    ['text', 'assets/page.html', 'text/html'],
+    ['image', 'assets/vector.svg', 'image/svg+xml'],
+  ]) {
+    const document = { ...scene, objects: [{ ...scene.objects[0], id: `${type}-active`, asset: { type, path } }] };
+    let stored = false;
+    const importer = createServerPullImporter({
+      allowHttpForTests: true,
+      resolveHost: async () => [{ address: '8.8.8.8', family: 4 }],
+      fetchImpl: async (url) => {
+        if (url.endsWith('/world/')) return response(JSON.stringify(document));
+        return response('<script>alert(1)</script>', { 'content-type': mime });
+      },
+      storeAsset: async () => { stored = true; },
+    });
+    await assert.rejects(importer('http://publisher.example/world/'), { code: 'handoff-invalid-asset-mime' });
+    assert.equal(stored, false, mime);
+  }
+});
+
 test('conservatively blocks private, mapped, transition, and reserved IPv6 ranges', () => {
   for (const value of ['127.0.0.1', '10.0.0.1', '192.88.99.1', '::1', 'fc00::1', 'fe80::1', '::ffff:c0a8:1', '64:ff9b::808:808', '100::1', '2001:0::1', '2001:10::1', '2001:20::1', '2002:0808:0808::1', '2001:db8::1', '3fff::1', '4000::1', '5f00::1', '8000::1', 'f000::1', 'ff00::1']) {
     assert.equal(isPublicIp(value), false, value);

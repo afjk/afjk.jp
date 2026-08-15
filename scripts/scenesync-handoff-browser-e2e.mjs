@@ -77,18 +77,16 @@ function createStaticServer(presenceHttpUrl, publishedRoot = null) {
         res.end(req.method === 'HEAD' ? undefined : body);
         return;
       }
-      if (url.pathname.startsWith('/presence/blob')) {
+      if (url.pathname.startsWith('/presence/')) {
         const body = req.method === 'PUT' || req.method === 'POST' ? await readRequest(req) : undefined;
-        const upstream = await fetch(`${presenceHttpUrl}${url.pathname.replace('/presence', '')}${url.search}`, {
+        const upstreamBase = typeof presenceHttpUrl === 'function' ? presenceHttpUrl() : presenceHttpUrl;
+        const upstream = await fetch(`${upstreamBase}${url.pathname.replace('/presence', '')}${url.search}`, {
           method: req.method,
-          headers: req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {},
+          headers: Object.fromEntries(Object.entries(req.headers).filter(([name]) => ['content-type', 'origin', 'sec-fetch-site'].includes(name))),
           body,
         });
         const bytes = Buffer.from(await upstream.arrayBuffer());
-        res.writeHead(upstream.status, {
-          'content-type': upstream.headers.get('content-type') || 'application/octet-stream',
-          'content-length': bytes.length,
-        });
+        res.writeHead(upstream.status, Object.fromEntries([...upstream.headers].filter(([name]) => ['content-type', 'x-content-type-options', 'content-security-policy', 'cache-control'].includes(name))));
         res.end(bytes);
         return;
       }
@@ -98,12 +96,37 @@ function createStaticServer(presenceHttpUrl, publishedRoot = null) {
       res.writeHead(200, {
         'content-type': mimeTypes.get(path.extname(filePath)) || 'application/octet-stream',
         'content-length': body.length,
+        // The no-ACAO publisher imports only the handoff module graph from
+        // the target origin; its HTML, manifest, and GLB remain no-CORS.
+        ...(path.extname(filePath) === '.js' ? { 'access-control-allow-origin': '*' } : {}),
       });
       res.end(req.method === 'HEAD' ? undefined : body);
     } catch {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('Not found');
     }
+  });
+}
+
+function createNoCorsPublisher(targetAppUrl, targetOrigin, sceneDocument, triangle) {
+  return createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    if (url.pathname === '/world/' || url.pathname === '/world/index.html') {
+      res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html>
+        <link rel="scene-sync-export" href="./scene.json"><div id="viewer-ui"></div>
+        <script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetAppUrl)};<\/script>
+        <script type="module">import { mountUrlHandoff } from '${new URL('/assets/js/scenesync/handoff/source.js', targetOrigin).href}'; mountUrlHandoff({ sourceUrl: location.href }); globalThis.__URL_HANDOFF_READY__ = true;<\/script>`);
+      return;
+    }
+    if (url.pathname === '/world/scene.json') {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(sceneDocument));
+      return;
+    }
+    if (url.pathname === '/world/assets/triangle.glb') {
+      res.writeHead(200, { 'content-type': 'model/gltf-binary', 'content-length': triangle.length }).end(triangle);
+      return;
+    }
+    res.writeHead(404).end();
   });
 }
 
@@ -196,20 +219,30 @@ async function loadHandoffFiles() {
 
 let presenceServer;
 let staticServer;
+let publisherServer;
 let observer;
 let browser;
 let tempDir;
 const requestLog = [];
 try {
   tempDir = await mkdtemp(path.join(os.tmpdir(), 'scene-sync-handoff-e2e-'));
+  // Must be set before dynamically importing server.mjs, whose blob directory
+  // is configured at module evaluation time.
+  process.env.BLOB_DIR = path.join(tempDir, 'blobs');
   process.env.SCENE_SYNC_GLB_BACKUP_DIR = path.join(tempDir, 'glb-backup');
   process.env.SCENE_SYNC_GLB_BACKUP_MIN_FREE_BYTES = '0';
-  const { createPresenceServer } = await import('../apps/presence-server/src/server.mjs');
-  presenceServer = await listen(createPresenceServer());
-  const presenceHttpUrl = serverUrl(presenceServer);
-  const presenceWsUrl = serverUrl(presenceServer, 'ws');
-  staticServer = await listen(createStaticServer(presenceHttpUrl, tempDir));
+  let presenceHttpUrl = '';
+  staticServer = await listen(createStaticServer(() => presenceHttpUrl, tempDir));
   const targetOrigin = serverUrl(staticServer);
+  const { createPresenceServer } = await import('../apps/presence-server/src/server.mjs');
+  presenceServer = await listen(createPresenceServer({
+    serverPullAllowedOrigins: [targetOrigin],
+    serverPullAllowHttpForTests: true,
+    serverPullResolveHost: async () => [{ address: '8.8.8.8', family: 4 }],
+    serverPullFetchImpl: globalThis.fetch.bind(globalThis),
+  }));
+  presenceHttpUrl = serverUrl(presenceServer);
+  const presenceWsUrl = serverUrl(presenceServer, 'ws');
   const targetUrl = `${targetOrigin}/scenesync/?presence=${encodeURIComponent(presenceWsUrl)}`;
   const roomId = `handoff-e2e-${Date.now().toString(36)}`.slice(0, 24);
   observer = await connectObserver(presenceWsUrl, roomId);
@@ -256,10 +289,22 @@ try {
   }));
   await writeFile(path.join(publishedDir, 'assets/pixel.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
 
+  const noCorsDocument = {
+    format: 'scene-sync-export-scene', version: 2,
+    objects: [{
+      id: 'no-acao-triangle', position: [2, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'mesh', path: 'assets/triangle.glb', mime: 'model/gltf-binary' },
+    }],
+  };
+  publisherServer = await listen(createNoCorsPublisher(targetUrl, targetOrigin, noCorsDocument, createTriangleGlb()));
+  const noCorsSourceUrl = `${serverUrl(publisherServer)}/world/`;
+
   const observedAdds = new Map();
   const observerDiagnostics = [];
   let resolveUrlAdd;
   const urlAddDone = new Promise((resolve) => { resolveUrlAdd = resolve; });
+  let resolveNoCorsAdd;
+  const noCorsAddDone = new Promise((resolve) => { resolveNoCorsAdd = resolve; });
   const addsDone = new Promise((resolve) => {
     observer.on('message', (raw) => {
       let message;
@@ -274,6 +319,11 @@ try {
         && message.payload.objectId === 'url-handoff-image') {
         observedAdds.set(message.payload.objectId, message.payload);
         resolveUrlAdd();
+      }
+      if (message.type === 'handoff' && message.payload?.kind === 'scene-add'
+        && message.payload.objectId === 'no-acao-triangle') {
+        observedAdds.set(message.payload.objectId, message.payload);
+        resolveNoCorsAdd();
       }
     });
   });
@@ -339,12 +389,60 @@ try {
   assert.equal(urlAsset?.source, 'blob');
   assert.equal(urlAsset?.path, undefined);
   assert.equal(observedAdds.get('url-handoff-image')?.asset?.path, undefined);
+  // This publisher deliberately sends no ACAO header.  Browser direct fetch
+  // fails opaquely; the test-only injected server transport performs the
+  // inspect/materialize path and streams the triangle GLB into a carrier blob.
+  const noCorsSource = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  const noCorsDiagnostics = [];
+  noCorsSource.on('console', (message) => noCorsDiagnostics.push(`source:${message.type()}:${message.text()}`));
+  noCorsSource.on('pageerror', (error) => noCorsDiagnostics.push(`source-pageerror:${error.message}`));
+  await noCorsSource.goto(noCorsSourceUrl, { waitUntil: 'domcontentloaded' });
+  await noCorsSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  await noCorsSource.locator('#scene-sync-handoff-room').fill(roomId);
+  const noCorsPopupPromise = noCorsSource.waitForEvent('popup');
+  await noCorsSource.locator('#scene-sync-handoff button').click();
+  const noCorsPopup = await noCorsPopupPromise;
+  noCorsPopup.on('console', (message) => noCorsDiagnostics.push(`popup:${message.type()}:${message.text()}`));
+  noCorsPopup.on('pageerror', (error) => noCorsDiagnostics.push(`popup-pageerror:${error.message}`));
+  await noCorsPopup.waitForLoadState('domcontentloaded');
+  await noCorsSource.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Opened in Scene Sync.', null, { timeout: TEST_TIMEOUT_MS });
+  await Promise.race([noCorsAddDone, new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for no-ACAO carrier broadcast')), 10_000))]);
+  const noCorsObject = await noCorsPopup.evaluate(async () => {
+    const { managedObjects } = await import('/assets/js/scenesync/scene.js');
+    const model = managedObjects.get('no-acao-triangle');
+    let meshCount = 0;
+    let triangleVertices = 0;
+    let boxGeometry = false;
+    model?.traverse?.((node) => {
+      if (!node.isMesh) return;
+      meshCount += 1;
+      triangleVertices = Math.max(triangleVertices, node.geometry?.attributes?.position?.count || 0);
+      boxGeometry ||= node.geometry?.type === 'BoxGeometry';
+    });
+    return { asset: model?.userData?.asset || null, meshCount, triangleVertices, boxGeometry };
+  });
+  assert.equal(noCorsObject.asset?.type, 'mesh');
+  assert.equal(noCorsObject.asset?.source, 'carrier');
+  assert.equal(noCorsObject.asset?.path, undefined);
+  assert.equal(noCorsObject.meshCount > 0, true, 'actual GLB model, not placeholder box');
+  assert.equal(noCorsObject.triangleVertices, 3);
+  assert.equal(noCorsObject.boxGeometry, false);
+  assert.equal(observedAdds.get('no-acao-triangle')?.asset?.source, 'carrier');
+  assert.equal(requestLog.some((entry) => entry.includes('/presence/scene-sync/import-jobs')), true);
+  assert.equal(requestLog.some((entry) => entry.includes('/materialize')), true);
+  assert.equal(requestLog.some((entry) => entry.includes('/presence/blob/')), true);
   const allowedPopupWarning = /GL Driver Message|unknown input adapter/u;
   const unexpectedDiagnostics = [
     ...sourceDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')
       || entry.startsWith('console:warning:')),
     ...popupDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')
       || (entry.startsWith('console:warning:') && !allowedPopupWarning.test(entry))),
+    ...noCorsDiagnostics.filter((entry) => {
+      // The one expected direct-path error is the browser's opaque no-ACAO
+      // fetch diagnostic. Every other page error/warning remains a failure.
+      if (/Access to fetch at .*CORS policy|Failed to fetch/u.test(entry)) return false;
+      return /pageerror:|:error:|:warning:/u.test(entry);
+    }),
   ];
   assert.deepEqual(unexpectedDiagnostics, []);
   console.log(JSON.stringify({ status: 'passed', roomId, targetState, observed: [...observedAdds.keys()] }, null, 2));
@@ -352,6 +450,7 @@ try {
   await browser?.close();
   if (observer && observer.readyState !== WebSocket.CLOSED) observer.terminate();
   await closeServer(staticServer);
+  await closeServer(publisherServer);
   await presenceServer?.stop?.();
   if (tempDir) await rm(tempDir, { recursive: true, force: true });
 }

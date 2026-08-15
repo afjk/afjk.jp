@@ -478,7 +478,7 @@ test('URL handoff uses server pull only for opaque network failure and materiali
     fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
     serverFetchImpl: async (url, options = {}) => {
       calls.push({ url: String(url), body: options.body });
-      if (String(url).endsWith('/import-jobs')) return response({ url: String(url), body: { jobId: 'a'.repeat(32), token: 'token', digest: 'digest', sceneDocument: document } });
+      if (String(url).endsWith('/import-jobs')) return response({ url: String(url), body: { jobId: 'a'.repeat(32), token: 'token', digest: 'digest', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22), sceneDocument: document } });
       return response({ url: String(url), body: { sceneDocument: document } });
     },
   }); } catch (error) { throw error.cause || error; }
@@ -495,6 +495,66 @@ test('URL handoff does not call server pull for HTTP failure', async () => {
       serverFetchImpl: async () => { serverCalls += 1; throw new Error('must not call'); },
     }),
     (error) => error.code === 'handoff-url-load-failed',
+  );
+  strictEqual(serverCalls, 0);
+});
+
+test('URL handoff rejects an inspection token bound to different handoff IDs', async () => {
+  let materializeCalls = 0;
+  await rejects(
+    () => applySceneSyncHandoffUrl({ sourceUrl: 'https://no-acao.example/world/', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) }, {
+      managedObjects: new Map(), fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+      serverFetchImpl: async (url) => {
+        if (String(url).endsWith('/import-jobs')) return response({ url: String(url), body: {
+          jobId: 'a'.repeat(32), token: 'token', digest: 'digest', sessionId: 'z'.repeat(22), requestId: 'b'.repeat(22), sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] },
+        } });
+        materializeCalls += 1;
+        throw new Error('must not materialize');
+      },
+    }),
+    (error) => error.code === 'handoff-url-import-failed',
+  );
+  strictEqual(materializeCalls, 0);
+});
+
+test('URL handoff retries through server pull when only a referenced asset is opaque', async () => {
+  const remoteDocument = {
+    format: 'scene-sync-export-scene', version: 2,
+    objects: [{ id: 'opaque-asset', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/poster.png' } }],
+  };
+  const stagedDocument = {
+    ...remoteDocument,
+    objects: [{ ...remoteDocument.objects[0], asset: { type: 'image', url: '/presence/blob/staged-poster', mime: 'image/png' } }],
+  };
+  const serverCalls = [];
+  const result = await applySceneSyncHandoffUrl({
+    sourceUrl: 'https://mixed-cors.example/world/scene.json', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22),
+  }, {
+    managedObjects: new Map(), addOrUpdateObject: () => {}, broadcast: () => {},
+    fetchImpl: async (url) => String(url).endsWith('scene.json')
+      ? response({ url: String(url), body: remoteDocument })
+      : (() => { throw new TypeError('Failed to fetch'); })(),
+    serverFetchImpl: async (url) => {
+      serverCalls.push(String(url));
+      if (String(url).endsWith('/import-jobs')) return response({ url: String(url), body: { jobId: 'a'.repeat(32), token: 'token', digest: 'digest', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22), sceneDocument: remoteDocument } });
+      return response({ url: String(url), body: { sceneDocument: stagedDocument, cleanup: { jobId: 'a'.repeat(32), token: 'cleanup', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) } } });
+    },
+  });
+  strictEqual(result.handled, true);
+  strictEqual(serverCalls.length, 2);
+});
+
+test('URL handoff does not server-pull an HTTP-denied referenced asset', async () => {
+  let serverCalls = 0;
+  await rejects(
+    () => applySceneSyncHandoffUrl({ sourceUrl: 'https://denied.example/world/scene.json', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) }, {
+      managedObjects: new Map(),
+      fetchImpl: async (url) => String(url).endsWith('scene.json')
+        ? response({ url: String(url), body: { format: 'scene-sync-export-scene', version: 2, objects: [{ id: 'denied-asset', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/poster.png' } }] } })
+        : response({ url: String(url), body: 'denied', ok: false, status: 403 }),
+      serverFetchImpl: async () => { serverCalls += 1; throw new Error('must not call'); },
+    }),
+    (error) => error.code === 'handoff-remote-asset-http-error' || error.code === 'handoff-url-import-failed',
   );
   strictEqual(serverCalls, 0);
 });

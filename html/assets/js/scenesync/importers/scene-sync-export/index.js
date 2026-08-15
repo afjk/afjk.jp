@@ -421,7 +421,7 @@ async function inspectHandoffOnServer({ sourceUrl, sessionId, requestId }, { ser
   });
   if (!created.ok) throw new Error('server pull job rejected');
   const job = await created.json();
-  if (!job?.sceneDocument || typeof job.digest !== 'string') throw new Error('server pull inspection invalid');
+  if (!job?.sceneDocument || typeof job.digest !== 'string' || job.sessionId !== sessionId || job.requestId !== requestId) throw new Error('server pull inspection invalid');
   return { request, job };
 }
 
@@ -429,7 +429,7 @@ async function materializeInspectedHandoffOnServer({ request, job }, { signal } 
   const headers = { 'content-type': 'application/json' };
   const materialized = await request(`/presence/scene-sync/import-jobs/${encodeURIComponent(job.jobId)}/materialize`, {
     method: 'POST', credentials: 'same-origin', headers, signal,
-    body: JSON.stringify({ token: job.token, digest: job.digest }),
+    body: JSON.stringify({ token: job.token, digest: job.digest, sessionId: job.sessionId, requestId: job.requestId }),
   });
   if (!materialized.ok) throw new Error('server pull import failed');
   const payload = await materialized.json();
@@ -442,6 +442,27 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
   let serverCleanup = null;
   const timeout = setTimeout(() => controller.abort(), context.handoffTimeoutMs || DEFAULT_URL_HANDOFF_TIMEOUT_MS);
   try {
+    const pullOnServer = async () => {
+      const inspected = await inspectHandoffOnServer({ sourceUrl, sessionId, requestId }, {
+        serverFetchImpl: context.serverFetchImpl,
+        signal: controller.signal,
+      });
+      try {
+        // This happens before materialize: a duplicate must not cause a
+        // server to download/stage even one publisher asset.
+        preflightHandoffObjectIds(inspected.job.sceneDocument, context.managedObjects);
+      } catch (error) {
+        void inspected.request(`/presence/scene-sync/import-jobs/${encodeURIComponent(inspected.job.jobId)}/cancel`, {
+          method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: inspected.job.token, sessionId: inspected.job.sessionId, requestId: inspected.job.requestId }), signal: controller.signal,
+        }).catch(() => {});
+        throw error;
+      }
+      const staged = await materializeInspectedHandoffOnServer(inspected, { signal: controller.signal });
+      serverCleanup = { request: inspected.request, ...staged.cleanup };
+      return { valid: true, sceneDocument: staged.sceneDocument, kind: 'server-pull-handoff' };
+    };
+
     let result = await loadExportPackageFromUrl(sourceUrl, {
       fetchImpl: context.fetchImpl,
       signal: controller.signal,
@@ -454,23 +475,7 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
         failure.code = 'handoff-url-load-failed';
         throw failure;
       }
-      const inspected = await inspectHandoffOnServer({ sourceUrl, sessionId, requestId }, {
-        serverFetchImpl: context.serverFetchImpl,
-        signal: controller.signal,
-      });
-      try {
-        preflightHandoffObjectIds(inspected.job.sceneDocument, context.managedObjects);
-      } catch (error) {
-        void inspected.request(`/presence/scene-sync/import-jobs/${encodeURIComponent(inspected.job.jobId)}/cancel`, {
-          method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ token: inspected.job.token }),
-        }).catch(() => {});
-        throw error;
-      }
-      const staged = await materializeInspectedHandoffOnServer(inspected, { signal: controller.signal });
-      serverCleanup = { request: inspected.request, ...staged.cleanup };
-      const sceneDocument = staged.sceneDocument;
-      result = { valid: true, sceneDocument, kind: 'server-pull-handoff' };
+      result = await pullOnServer();
     }
     if (!URL_HANDOFF_KINDS.has(result.kind) && result.kind !== 'server-pull-handoff') {
       const failure = new Error(`Unsupported URL handoff kind: ${result.kind}`);
@@ -485,7 +490,7 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
       failure.code = strict.reason || 'invalid-handoff-scene-document';
       throw failure;
     }
-    return await applyLoadedSceneSyncExport({ ...result, sceneDocument: canonical.value }, {
+    const apply = async (candidate) => await applyLoadedSceneSyncExport({ ...candidate, sceneDocument: canonicalizeJsonValue(candidate.sceneDocument).value }, {
       ...context,
       signal: controller.signal,
       materializeSceneLevel: false,
@@ -496,13 +501,29 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
       applySceneLevel: false,
       showPreview: false,
     });
+    try {
+      return await apply({ ...result, sceneDocument: canonical.value });
+    } catch (error) {
+      // A page/manifest may be CORS-readable while one asset is opaque.  No
+      // state has been committed before materialization, so retry the same
+      // inspected, add-only flow exactly once.  Do not broaden this to HTTP,
+      // schema, path, or size errors.
+      if (result.kind !== 'server-pull-handoff' && error?.networkFailure === true) {
+        result = await pullOnServer();
+        const serverCanonical = canonicalizeJsonValue(result.sceneDocument);
+        const serverStrict = serverCanonical.valid && validateStrictSceneDocument(serverCanonical.value);
+        if (!serverCanonical.valid || !serverStrict?.valid || !isValidSceneDocument(serverCanonical.value)) throw error;
+        return await apply({ ...result, sceneDocument: serverCanonical.value });
+      }
+      throw error;
+    }
   } catch (cause) {
     if (serverCleanup?.jobId && serverCleanup?.token) {
       // Best effort only; the server independently TTL-cleans any blobs when
       // the browser disconnects before this request can run.
       void serverCleanup.request(`/presence/scene-sync/import-jobs/${encodeURIComponent(serverCleanup.jobId)}/cleanup`, {
         method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token: serverCleanup.token }),
+        body: JSON.stringify({ token: serverCleanup.token, sessionId: serverCleanup.sessionId, requestId: serverCleanup.requestId }),
       }).catch(() => {});
     }
     if (controller.signal.aborted) {

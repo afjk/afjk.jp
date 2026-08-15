@@ -118,15 +118,34 @@ async function resolvePublicHost(hostname, resolveHost, signal) {
     if (!isPublicIp(hostname)) throw failure('handoff-ssrf-blocked', 403);
     return [{ address: hostname, family: net.isIP(hostname) }];
   }
-  const records = await Promise.race([
-    resolveHost(hostname),
-    new Promise((_, reject) => signal?.addEventListener('abort', () => reject(failure('handoff-url-timeout', 504)), { once: true })),
-  ]);
+  // Do not leave one AbortSignal listener behind for every asset lookup: an
+  // export is allowed to reference thousands of assets.  DNS is deliberately
+  // raced with the job deadline, but the listener is always removed when DNS
+  // wins (or rejects) rather than retained until the ten minute deadline.
+  let abort;
+  const aborted = new Promise((_, reject) => {
+    abort = () => reject(failure('handoff-url-timeout', 504));
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+  let records;
+  try {
+    records = await Promise.race([resolveHost(hostname), aborted]);
+  } finally {
+    if (abort) signal?.removeEventListener('abort', abort);
+  }
   if (signal?.aborted) throw failure('handoff-url-timeout', 504);
   if (!Array.isArray(records) || records.length === 0 || records.some((record) => !isPublicIp(record?.address))) {
     throw failure('handoff-ssrf-blocked', 403);
   }
   return records;
+}
+
+function directoryUrl(url) {
+  const directory = new URL(url);
+  if (!directory.pathname.endsWith('/')) directory.pathname += '/';
+  directory.search = '';
+  directory.hash = '';
+  return directory;
 }
 
 function requestOnce(url, addresses, { timeoutMs, signal }) {
@@ -287,7 +306,7 @@ function collectAssets(document, baseUrl, maxAssets) {
           ...object.asset,
           source: 'carrier',
           meshPath: saved.id,
-          mime: object.asset?.mime || saved.mime,
+          mime: saved.mime,
           size: saved.size,
         };
         delete object.asset.path;
@@ -295,7 +314,7 @@ function collectAssets(document, baseUrl, maxAssets) {
         return;
       }
       object.asset = {
-        ...object.asset, url: saved.url, mime: object.asset?.mime || saved.mime,
+        ...object.asset, url: saved.url, mime: saved.mime,
         // URL-backed mesh/text import paths are explicit; otherwise mesh
         // becomes a default box and text is silently treated as inline.
         ...(object.asset?.type === 'mesh' || object.asset?.type === 'text' ? { source: 'url' } : {}),
@@ -305,7 +324,7 @@ function collectAssets(document, baseUrl, maxAssets) {
     for (const source of Object.values(object.audioSources || {})) {
       const asset = source?.asset || (source?.url ? { url: source.url } : null);
       add(asset, 'audio', (saved) => {
-        source.url = saved.url; source.mime ||= saved.mime; delete source.asset;
+        source.url = saved.url; source.mime = saved.mime; delete source.asset;
       });
     }
   }
@@ -316,13 +335,24 @@ function collectAssets(document, baseUrl, maxAssets) {
 }
 
 function mimeAllowed(type, mime) {
-  if (!mime || mime === 'application/octet-stream') return true;
+  // Imported blob URLs are served from the Scene Sync origin.  Keep this to
+  // passive formats: accepting HTML/SVG would turn a static publisher into an
+  // active-content injection primitive on that origin.
+  if (!mime || mime === 'application/octet-stream') return type === 'mesh';
   if (type === 'mesh') return mime === 'model/gltf-binary' || mime === 'model/gltf+json';
-  if (type === 'image') return mime.startsWith('image/');
+  if (type === 'image') return new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp']).has(mime);
   if (type === 'video') return mime.startsWith('video/');
   if (type === 'audio') return mime.startsWith('audio/');
-  if (type === 'text') return mime.startsWith('text/') || mime === 'application/json';
+  if (type === 'text') return mime === 'text/plain' || mime === 'text/markdown' || mime === 'application/json';
   return false;
+}
+
+function storedMime(type, mime) {
+  // Even plain text is served defensively as an inert text document.  This
+  // also drops a remote charset parameter, which avoids inheriting unusual
+  // browser sniffing behaviour from the publisher.
+  if (type === 'text') return 'text/plain; charset=utf-8';
+  return mime || 'application/octet-stream';
 }
 
 export function createServerPullImporter({
@@ -344,7 +374,42 @@ export function createServerPullImporter({
     const deadlineTimer = setTimeout(abort, resolvedLimits.overallTimeoutMs);
     try {
       const sourceOrigin = safeUrl(sourceUrl, { allowHttpForTests }).origin;
-      const first = await fetchSafe(sourceUrl, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+      let first;
+      try {
+        first = await fetchSafe(sourceUrl, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+      } catch (firstError) {
+        // A URL such as /world or /world/ is a supported directory entry even
+        // when the publisher does not serve an index document.  Only this
+        // generic entry retries scene.json/current.json; an explicit scene
+        // document URL must keep its HTTP failure (never become a proxy-like
+        // fallback for arbitrary paths).
+        const initial = safeUrl(sourceUrl, { allowHttpForTests });
+        const explicitDocument = /\/(?:scene|current)\.json$/iu.test(initial.pathname)
+          || /\.(?:zip|html?)$/iu.test(initial.pathname);
+        if (explicitDocument || firstError?.code !== 'handoff-remote-http-error') throw firstError;
+        const directory = directoryUrl(initial);
+        let sceneFetched;
+        try {
+          sceneFetched = await fetchSafe(new URL('scene.json', directory).href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+        } catch (sceneError) {
+          if (sceneError?.code !== 'handoff-remote-http-error') throw sceneError;
+          const currentFetched = await fetchSafe(new URL('current.json', directory).href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+          let current;
+          try { current = JSON.parse(await readTextLimited(currentFetched.response, resolvedLimits.maxDocumentBytes)); }
+          catch { throw failure('handoff-invalid-current-json'); }
+          const versionPath = typeof current?.versionPath === 'string' ? current.versionPath
+            : typeof current?.versionId === 'string' ? `versions/${current.versionId}/` : '';
+          if (!versionPath) throw failure('handoff-current-json-missing-version');
+          sceneFetched = await fetchSafe(assetUrl(`${versionPath.replace(/\/$/u, '')}/scene.json`, directory, sourceOrigin).href,
+            { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+        }
+        const sceneText = await readTextLimited(sceneFetched.response, resolvedLimits.maxDocumentBytes);
+        let sceneDocument;
+        try { sceneDocument = JSON.parse(sceneText); } catch { throw failure('handoff-invalid-scene-json'); }
+        assertSceneDocument(sceneDocument);
+        const digest = createHash('sha256').update(JSON.stringify(sceneDocument)).digest('base64url');
+        return { sceneDocument, sceneUrl: sceneFetched.url, sourceOrigin, digest };
+      }
       const firstType = contentType(first.response.headers);
       const firstText = await readTextLimited(first.response, resolvedLimits.maxDocumentBytes);
       // Server pull intentionally has no ZIP or Single HTML semantics. Their
@@ -379,16 +444,18 @@ export function createServerPullImporter({
         // immutable version directory. This remains same-origin and marker/
         // JSON-only; ZIP and Single HTML are deliberately rejected above.
         if (marker) throw failure('handoff-invalid-scene-json');
-        const directory = new URL(first.url);
-        if (!directory.pathname.endsWith('/')) directory.pathname += '/';
-        directory.search = ''; directory.hash = '';
+        const directory = directoryUrl(first.url);
         let sceneCandidate = new URL('scene.json', directory);
         let sceneFetched;
         try { sceneFetched = await fetchSafe(sceneCandidate.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin }); }
-        catch {
+        catch (sceneError) {
+          if (sceneError?.code !== 'handoff-remote-http-error') throw sceneError;
           let currentFetched;
           try { currentFetched = await fetchSafe(new URL('current.json', directory).href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin }); }
-          catch { throw failure('handoff-not-scene-sync-export'); }
+          catch (currentError) {
+            if (currentError?.code === 'handoff-remote-http-error') throw failure('handoff-not-scene-sync-export');
+            throw currentError;
+          }
           let current;
           try { current = JSON.parse(await readTextLimited(currentFetched.response, resolvedLimits.maxDocumentBytes)); }
           catch { throw failure('handoff-invalid-current-json'); }
@@ -439,7 +506,7 @@ export function createServerPullImporter({
           throw failure('handoff-remote-assets-too-large', 413);
         }
         const id = randomUUID().replace(/-/g, '');
-        const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: mime || 'application/octet-stream', maxBytes: allowance, signal: deadline.signal });
+        const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: storedMime(ref.type, mime), maxBytes: allowance, signal: deadline.signal });
         if (!storedAsset || !Number.isFinite(storedAsset.size) || storedAsset.size > allowance) throw failure('handoff-asset-store-failed', 500);
         stored.push(id); total += storedAsset.size;
         materialized.set(ref.url.href, { id, size: storedAsset.size, url: storedAsset.url, mime: storedAsset.mime || mime });
@@ -461,11 +528,11 @@ export function createServerPullImporter({
   return importSceneSyncUrl;
 }
 
-export function validateImportJobInput(body) {
+export function validateImportJobInput(body, { allowHttpForTests = false } = {}) {
   if (!body || typeof body !== 'object' || typeof body.sourceUrl !== 'string'
     || !HANDOFF_ID.test(body.sessionId || '') || !HANDOFF_ID.test(body.requestId || '')) {
     throw failure('handoff-invalid-import-job');
   }
-  safeUrl(body.sourceUrl);
+  safeUrl(body.sourceUrl, { allowHttpForTests });
   return { sourceUrl: new URL(body.sourceUrl).href, sessionId: body.sessionId, requestId: body.requestId };
 }

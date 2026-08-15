@@ -440,3 +440,55 @@ test('does not mark HTTP failures as networkFailure', async () => {
   strictEqual(result.valid, false);
   strictEqual(result.networkFailure, false);
 });
+
+test('marks opaque marker, directory, and current document fetches as network failures only', async () => {
+  const marker = await loadExportPackageFromUrl('https://no-acao.example/world/', {
+    handoffOnly: true,
+    fetchImpl: async (url) => String(url).endsWith('/world/')
+      ? response({ url: String(url), body: '<link rel="scene-sync-export" href="scene.json">', contentType: 'text/html' })
+      : (() => { throw new TypeError('Failed to fetch'); })(),
+  });
+  strictEqual(marker.valid, false);
+  strictEqual(marker.networkFailure, true);
+
+  const directory = await loadExportPackageFromUrl('https://no-acao.example/directory/', {
+    handoffOnly: true,
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.endsWith('/directory/')) return response({ url: href, body: '<html>directory</html>', contentType: 'text/html' });
+      throw new TypeError('Failed to fetch');
+    },
+  });
+  strictEqual(directory.valid, false);
+  strictEqual(directory.networkFailure, true);
+
+  const current = await loadExportPackageFromUrl('https://no-acao.example/current.json', {
+    handoffOnly: true,
+    fetchImpl: async (url) => String(url).endsWith('/current.json')
+      ? response({ url: String(url), body: { versionPath: 'versions/v1/' } })
+      : (() => { throw new TypeError('Failed to fetch'); })(),
+  });
+  strictEqual(current.valid, false);
+  strictEqual(current.networkFailure, true);
+
+  const directoryCurrent = await loadExportPackageFromUrl('https://no-acao.example/fallback/', {
+    handoffOnly: true,
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.endsWith('/fallback/')) return response({ url: href, body: '<html>directory</html>', contentType: 'text/html' });
+      if (href.endsWith('/fallback/scene.json')) return response({ url: href, body: 'missing', ok: false, status: 404 });
+      if (href.endsWith('/fallback/current.json')) throw new TypeError('Failed to fetch');
+      throw new Error(`unexpected ${href}`);
+    },
+  });
+  strictEqual(directoryCurrent.valid, false);
+  strictEqual(directoryCurrent.networkFailure, true);
+
+  const http = await loadExportPackageFromUrl('https://denied.example/world/', {
+    handoffOnly: true,
+    fetchImpl: async (url) => String(url).endsWith('/world/')
+      ? response({ url: String(url), body: '<link rel="scene-sync-export" href="scene.json">', contentType: 'text/html' })
+      : response({ url: String(url), body: 'denied', ok: false, status: 403 }),
+  });
+  strictEqual(http.networkFailure, false);
+});

@@ -994,11 +994,11 @@ function sendImportJson(res, statusCode, payload) {
   }).end(JSON.stringify(payload));
 }
 
-function isSameOriginImportRequest(req) {
+function isSameOriginImportRequest(req, allowedOrigins = sceneSyncConfig.serverPullAllowedOrigins) {
   const origin = String(req.headers.origin || '');
   if (!origin) return false;
   const fetchSite = String(req.headers['sec-fetch-site'] || '');
-  return sceneSyncConfig.serverPullAllowedOrigins.includes(origin) && (!fetchSite || fetchSite === 'same-origin');
+  return allowedOrigins.includes(origin) && (!fetchSite || fetchSite === 'same-origin');
 }
 
 function createHttpError(status, message) {
@@ -1542,7 +1542,15 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
   }
 }
 
-function createPresenceServer() {
+function createPresenceServer({
+  serverPullImporter: injectedServerPullImporter,
+  serverPullAllowedOrigins = sceneSyncConfig.serverPullAllowedOrigins,
+  // Narrow test transport injection.  Storage remains the server's atomic
+  // blob store, never a caller-provided sink.
+  serverPullFetchImpl,
+  serverPullResolveHost,
+  serverPullAllowHttpForTests = false,
+} = {}) {
   // Import blobs are process-local TTL state. They cannot be safely served
   // after a restart, so remove stale partial/staged files before accepting
   // jobs instead of leaking disk space indefinitely.
@@ -1565,9 +1573,14 @@ function createPresenceServer() {
   const importJobs = new Map();
   const completedImportJobs = new Map();
   let activeServerPulls = 0;
-  const serverPullImporter = createServerPullImporter({
+  // Injection is used by isolated integration tests to supply an in-process
+  // HTTPS/DNS transport. Production always constructs the hardened default.
+  const serverPullImporter = injectedServerPullImporter || createServerPullImporter({
     storeAsset: storeServerPulledBlob,
     removeAsset: async (id) => deleteBlob(id),
+    ...(serverPullFetchImpl ? { fetchImpl: serverPullFetchImpl } : {}),
+    ...(serverPullResolveHost ? { resolveHost: serverPullResolveHost } : {}),
+    allowHttpForTests: serverPullAllowHttpForTests,
   });
   const server = createServer(async (req, res) => {
     const path = req.url.split('?')[0].replace(/\/+/g, '/');
@@ -1592,12 +1605,12 @@ function createPresenceServer() {
   // the only successful response is a validated Scene Sync document with
   // materialized local blob URLs.
     if (req.method === 'POST' && path === '/scene-sync/import-jobs') {
-      if (!isSameOriginImportRequest(req)) {
+      if (!isSameOriginImportRequest(req, serverPullAllowedOrigins)) {
         sendImportJson(res, 403, { error: 'handoff-origin-forbidden' });
         return;
       }
       let input;
-      try { input = validateImportJobInput(await readJsonBody(req)); }
+      try { input = validateImportJobInput(await readJsonBody(req), { allowHttpForTests: serverPullAllowHttpForTests }); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: error?.code || 'handoff-invalid-import-job' }); return; }
       const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
       if (!serverPullRateLimiter.allow(actorId)) {
@@ -1614,7 +1627,6 @@ function createPresenceServer() {
       }
       const jobId = randomUUID().replace(/-/g, '');
       const token = `${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`;
-      const expiresAt = Date.now() + 10 * 60 * 1000;
       activeServerPulls += 1;
       const controller = new AbortController();
       const abort = () => controller.abort();
@@ -1622,10 +1634,13 @@ function createPresenceServer() {
       res.once('close', abort);
       try {
         const inspection = await serverPullImporter.inspect(input.sourceUrl, { signal: controller.signal });
+        // Inspection can itself run for minutes.  Start the one-use job TTL
+        // only once its validated metadata is ready to return.
+        const expiresAt = Date.now() + 10 * 60 * 1000;
         importJobs.set(jobId, { ...input, token, actorId, expiresAt, digest: inspection.digest });
         // Only metadata leaves the server at inspection time. The target can
         // reject duplicate IDs before a single remote asset byte is fetched.
-        sendImportJson(res, 201, { jobId, token, expiresAt, digest: inspection.digest, sceneDocument: inspection.sceneDocument });
+        sendImportJson(res, 201, { jobId, token, expiresAt, digest: inspection.digest, sessionId: input.sessionId, requestId: input.requestId, sceneDocument: inspection.sceneDocument });
       } catch (error) {
         const status = Number(error?.status) || 400;
         const code = typeof error?.code === 'string' && /^handoff-[a-z0-9-]{1,100}$/u.test(error.code)
@@ -1641,7 +1656,7 @@ function createPresenceServer() {
 
     const materializeMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/materialize$/u);
     if (req.method === 'POST' && materializeMatch) {
-      if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
+      if (!isSameOriginImportRequest(req, serverPullAllowedOrigins)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
@@ -1650,7 +1665,8 @@ function createPresenceServer() {
       // Delete before the remote request: replay cannot turn this endpoint into
       // a repeated fetch primitive, even if the first request times out.
       importJobs.delete(materializeMatch[1]);
-      if (!job || job.expiresAt < Date.now() || job.actorId !== actorId || typeof body.token !== 'string' || body.token !== job.token || body.digest !== job.digest) {
+      if (!job || job.expiresAt < Date.now() || job.actorId !== actorId || typeof body.token !== 'string' || body.token !== job.token || body.digest !== job.digest
+        || body.sessionId !== job.sessionId || body.requestId !== job.requestId) {
         sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });
         return;
       }
@@ -1671,13 +1687,13 @@ function createPresenceServer() {
           if (entry) entry.createdAt = committedAt;
         }
         completedImportJobs.set(materializeMatch[1], {
-          token: job.token, actorId, storedIds: result.storedIds, expiresAt: Date.now() + BLOB_TTL_MS,
+          token: job.token, actorId, sessionId: job.sessionId, requestId: job.requestId, storedIds: result.storedIds, expiresAt: Date.now() + BLOB_TTL_MS,
         });
         sendImportJson(res, 200, {
           sceneDocument: result.sceneDocument,
           assetCount: result.assetCount,
           totalBytes: result.totalBytes,
-          cleanup: { jobId: materializeMatch[1], token: job.token },
+          cleanup: { jobId: materializeMatch[1], token: job.token, sessionId: job.sessionId, requestId: job.requestId },
         });
       } catch (error) {
         const status = Number(error?.status) || 400;
@@ -1694,28 +1710,29 @@ function createPresenceServer() {
 
     const cancelMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/cancel$/u);
     if (req.method === 'POST' && cancelMatch) {
-      if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
+      if (!isSameOriginImportRequest(req, serverPullAllowedOrigins)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
       const job = importJobs.get(cancelMatch[1]);
       const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
       importJobs.delete(cancelMatch[1]);
-      if (!job || job.actorId !== actorId || job.token !== body.token) { sendImportJson(res, 404, { error: 'handoff-import-job-not-found' }); return; }
+      if (!job || job.actorId !== actorId || job.token !== body.token || body.sessionId !== job.sessionId || body.requestId !== job.requestId) { sendImportJson(res, 404, { error: 'handoff-import-job-not-found' }); return; }
       res.writeHead(204, { 'cache-control': 'no-store' }).end();
       return;
     }
 
     const cleanupMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/cleanup$/u);
     if (req.method === 'POST' && cleanupMatch) {
-      if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
+      if (!isSameOriginImportRequest(req, serverPullAllowedOrigins)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
       const completed = completedImportJobs.get(cleanupMatch[1]);
       const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
       completedImportJobs.delete(cleanupMatch[1]);
-      if (!completed || completed.expiresAt < Date.now() || completed.actorId !== actorId || completed.token !== body.token) {
+      if (!completed || completed.expiresAt < Date.now() || completed.actorId !== actorId || completed.token !== body.token
+        || body.sessionId !== completed.sessionId || body.requestId !== completed.requestId) {
         sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });
         return;
       }
@@ -1868,6 +1885,11 @@ function createPresenceServer() {
         'content-type': entry.contentType || 'application/octet-stream',
         'content-length': entry.size,
         'cache-control': 'no-store',
+        // Blobs are fetched from third-party static exports.  Keep every
+        // delivery non-sniffable (and navigation-sandboxed) even if a future
+        // uploader accidentally supplies an active MIME type.
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "sandbox; default-src 'none'",
         ...corsHeaders,
       }).end(entry.buffer);
     } else if (entry.file) {
@@ -1877,6 +1899,8 @@ function createPresenceServer() {
         'content-type': entry.contentType || 'application/octet-stream',
         'content-length': entry.size,
         'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "sandbox; default-src 'none'",
         ...corsHeaders,
       });
       stream.pipe(res);

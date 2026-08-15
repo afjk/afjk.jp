@@ -16,6 +16,9 @@ on:
       - "html/assets/js/scenesync/shells/player/player-actions.js"
       - "html/assets/js/scenesync/shells/player/player-transport.js"
       - "html/assets/js/scenesync/shells/player/player-shell.css"
+      - "apps/presence-server/**"
+      - "docker-compose.yml"
+      - "docs/scene-sync-open-handoff.md"
       - "html/assets/vendor/loomlet/**"
       - "html/assets/vendor/rapier-deterministic/**"
       - "scripts/scenesync-export-static-viewer-smoke.mjs"
@@ -56,6 +59,9 @@ jobs:
 
       - name: Run export, import, and handoff unit suite
         run: npm run test:scene-sync-export-import
+
+      - name: Run presence server-pull unit suite
+        run: node --test apps/presence-server/tests/server-pull-import.test.mjs
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
