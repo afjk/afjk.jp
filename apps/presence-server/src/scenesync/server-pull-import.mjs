@@ -111,12 +111,17 @@ function hasV6Prefix(value, prefix, bits) {
   return (value >> width) === prefix;
 }
 
-async function resolvePublicHost(hostname, resolveHost) {
+async function resolvePublicHost(hostname, resolveHost, signal) {
+  if (signal?.aborted) throw failure('handoff-url-timeout', 504);
   if (net.isIP(hostname)) {
     if (!isPublicIp(hostname)) throw failure('handoff-ssrf-blocked', 403);
     return [{ address: hostname, family: net.isIP(hostname) }];
   }
-  const records = await resolveHost(hostname);
+  const records = await Promise.race([
+    resolveHost(hostname),
+    new Promise((_, reject) => signal?.addEventListener('abort', () => reject(failure('handoff-url-timeout', 504)), { once: true })),
+  ]);
+  if (signal?.aborted) throw failure('handoff-url-timeout', 504);
   if (!Array.isArray(records) || records.length === 0 || records.some((record) => !isPublicIp(record?.address))) {
     throw failure('handoff-ssrf-blocked', 403);
   }
@@ -127,6 +132,7 @@ function requestOnce(url, addresses, { timeoutMs, signal }) {
   const transport = url.protocol === 'https:' ? https : http;
   const lookup = (_hostname, _options, callback) => callback(null, addresses[0].address, addresses[0].family);
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(failure('handoff-url-timeout', 504)); return; }
     let responseRef = null;
     let settled = false;
     const cleanup = () => signal?.removeEventListener('abort', abort);
@@ -155,7 +161,7 @@ function requestOnce(url, addresses, { timeoutMs, signal }) {
 }
 
 async function nativeFetch(url, options) {
-  const addresses = await resolvePublicHost(url.hostname, options.resolveHost);
+  const addresses = await resolvePublicHost(url.hostname, options.resolveHost, options.signal);
   return await requestOnce(url, addresses, options);
 }
 
@@ -166,7 +172,7 @@ async function fetchSafe(urlValue, options) {
     // Validate before *every* request, including injected transports used by
     // integration tests. Native transport also pins its connection to this
     // validated address via request.lookup.
-    await resolvePublicHost(url.hostname, options.resolveHost);
+    await resolvePublicHost(url.hostname, options.resolveHost, options.signal);
     const response = options.fetchImpl
       ? await options.fetchImpl(url.href, { signal: options.signal, redirect: 'manual' })
       : await nativeFetch(url, options);
@@ -209,7 +215,9 @@ async function readTextLimited(response, maxBytes) {
 function extractMarker(html) {
   const link = html.match(/<link\b[^>]*\brel=["']scene-sync-export["'][^>]*\bhref=["']([^"']+)["'][^>]*>/iu)
     || html.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\brel=["']scene-sync-export["'][^>]*>/iu);
-  return link?.[1] || null;
+  const meta = html.match(/<meta\b[^>]*\bname=["']scene-sync-export["'][^>]*\bcontent=["']([^"']+)["'][^>]*>/iu)
+    || html.match(/<meta\b[^>]*\bcontent=["']([^"']+)["'][^>]*\bname=["']scene-sync-export["'][^>]*>/iu);
+  return link?.[1] || meta?.[1] || null;
 }
 
 function assertSceneDocument(document) {
@@ -340,7 +348,7 @@ export function createServerPullImporter({
       const firstText = await readTextLimited(first.response, resolvedLimits.maxDocumentBytes);
       // Server pull intentionally has no ZIP or Single HTML semantics. Their
       // payloads would be arbitrary remote bodies rather than a static marker.
-      if (/zip|octet-stream/u.test(firstType) || /scene-sync-export-format/i.test(firstText)) {
+      if (/zip|octet-stream/u.test(firstType) || /<meta\b[^>]*\bname=["']scene-sync-export-format["']/iu.test(firstText)) {
         throw failure('handoff-url-kind-rejected');
       }
       let sceneUrl = first.url;
