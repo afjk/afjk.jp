@@ -7,9 +7,9 @@ export function createActorId({ ip = '', userAgent = '', salt = '', length = 24 
   return hash.slice(0, Math.max(8, Math.min(length, 64)));
 }
 
-export function getActorIdFromRequest(req, salt = '', { trustProxy = false } = {}) {
+export function getActorIdFromRequest(req, salt = '', { trustProxy = false, includeUserAgent = true } = {}) {
   const real = trustProxy ? req.headers['x-real-ip'] : '';
   const ip = real ? String(real).trim() : (req.socket?.remoteAddress || '');
-  const userAgent = String(req.headers['user-agent'] || '');
+  const userAgent = includeUserAgent ? String(req.headers['user-agent'] || '') : '';
   return createActorId({ ip, userAgent, salt });
 }

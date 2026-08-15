@@ -8599,7 +8599,7 @@ function createSceneUrlImportContext(options = {}) {
       const meshPath = generateRandomPath();
       let assetId = null;
 
-      try {
+      if (!options.strictLoad) try {
         assetId = await computeAssetId(arrayBuffer);
         await assetCache.putAsset({
           assetId,
@@ -9408,6 +9408,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath, signal: options.signal });
         blob = result.blob;
       } catch (fetchErr) {
+        if (options.strictLoad) throw fetchErr;
         const status = Number(fetchErr?.status || 0);
         if (status === 404) {
           console.warn('[SceneSync] Mesh blob expired (404):', meshPath);

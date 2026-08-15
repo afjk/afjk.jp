@@ -1595,7 +1595,7 @@ function createPresenceServer() {
       let input;
       try { input = validateImportJobInput(await readJsonBody(req)); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: error?.code || 'handoff-invalid-import-job' }); return; }
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
       if (!serverPullRateLimiter.allow(actorId)) {
         sendImportJson(res, 429, { error: 'handoff-rate-limited' });
         return;
@@ -1642,7 +1642,7 @@ function createPresenceServer() {
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
       const job = importJobs.get(materializeMatch[1]);
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
       // Delete before the remote request: replay cannot turn this endpoint into
       // a repeated fetch primitive, even if the first request times out.
       importJobs.delete(materializeMatch[1]);
@@ -1661,6 +1661,11 @@ function createPresenceServer() {
       res.once('close', abort);
       try {
         const result = await serverPullImporter(job.sourceUrl, { signal: controller.signal, expectedDigest: job.digest });
+        const committedAt = Date.now();
+        for (const id of result.storedIds) {
+          const entry = blobs.get(id);
+          if (entry) entry.createdAt = committedAt;
+        }
         completedImportJobs.set(materializeMatch[1], {
           token: job.token, actorId, storedIds: result.storedIds, expiresAt: Date.now() + BLOB_TTL_MS,
         });
@@ -1683,6 +1688,20 @@ function createPresenceServer() {
       return;
     }
 
+    const cancelMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/cancel$/u);
+    if (req.method === 'POST' && cancelMatch) {
+      if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
+      const job = importJobs.get(cancelMatch[1]);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
+      importJobs.delete(cancelMatch[1]);
+      if (!job || job.actorId !== actorId || job.token !== body.token) { sendImportJson(res, 404, { error: 'handoff-import-job-not-found' }); return; }
+      res.writeHead(204, { 'cache-control': 'no-store' }).end();
+      return;
+    }
+
     const cleanupMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/cleanup$/u);
     if (req.method === 'POST' && cleanupMatch) {
       if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
@@ -1690,7 +1709,7 @@ function createPresenceServer() {
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
       const completed = completedImportJobs.get(cleanupMatch[1]);
-      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy });
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
       completedImportJobs.delete(cleanupMatch[1]);
       if (!completed || completed.expiresAt < Date.now() || completed.actorId !== actorId || completed.token !== body.token) {
         sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });

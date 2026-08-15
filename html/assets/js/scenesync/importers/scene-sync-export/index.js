@@ -458,7 +458,15 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
         serverFetchImpl: context.serverFetchImpl,
         signal: controller.signal,
       });
-      preflightHandoffObjectIds(inspected.job.sceneDocument, context.managedObjects);
+      try {
+        preflightHandoffObjectIds(inspected.job.sceneDocument, context.managedObjects);
+      } catch (error) {
+        void inspected.request(`/presence/scene-sync/import-jobs/${encodeURIComponent(inspected.job.jobId)}/cancel`, {
+          method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: inspected.job.token }),
+        }).catch(() => {});
+        throw error;
+      }
       const staged = await materializeInspectedHandoffOnServer(inspected, { signal: controller.signal });
       serverCleanup = { request: inspected.request, ...staged.cleanup };
       const sceneDocument = staged.sceneDocument;

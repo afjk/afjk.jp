@@ -43,6 +43,7 @@ function safeUrl(value, { allowHttpForTests = false } = {}) {
   if (url.username || url.password || (url.protocol !== 'https:' && !(allowHttpForTests && url.protocol === 'http:'))) {
     throw failure('handoff-invalid-source-url');
   }
+  if (!allowHttpForTests && url.port) throw failure('handoff-invalid-source-url');
   return url;
 }
 
@@ -127,7 +128,7 @@ function requestOnce(url, addresses, { timeoutMs, signal }) {
     const cleanup = () => signal?.removeEventListener('abort', abort);
     const finishReject = (error) => { if (settled) return; settled = true; cleanup(); reject(error); };
     const request = transport.request(url, {
-      method: 'GET', headers: { accept: 'text/html,application/json,*/*;q=0.1', 'user-agent': 'SceneSyncServerPull/1' },
+      method: 'GET', headers: { accept: 'text/html,application/json,*/*;q=0.1', 'accept-encoding': 'identity', 'user-agent': 'SceneSyncServerPull/1' },
       lookup, timeout: timeoutMs, servername: url.hostname,
     }, (response) => {
       if (settled) { response.destroy(); return; }
@@ -178,6 +179,8 @@ async function fetchSafe(urlValue, options) {
       try { response.resume?.(); } catch {}
       throw failure('handoff-remote-http-error', 400);
     }
+    const encoding = String(header(response.headers, 'content-encoding')).trim().toLowerCase();
+    if (encoding && encoding !== 'identity') { try { response.destroy?.(); } catch {} throw failure('handoff-encoded-response-rejected'); }
     return { response, url };
   }
   throw failure('handoff-too-many-redirects', 400);
@@ -312,7 +315,7 @@ export function createServerPullImporter({
 } = {}) {
   if (typeof storeAsset !== 'function') throw new Error('storeAsset is required');
   const resolvedLimits = { ...SERVER_PULL_LIMITS, ...limits };
-  const fetchOptions = { fetchImpl, resolveHost, allowHttpForTests, limits: resolvedLimits };
+  const fetchOptions = { fetchImpl, resolveHost, allowHttpForTests, limits: resolvedLimits, timeoutMs: resolvedLimits.timeoutMs };
 
   async function inspect(sourceUrl, { signal } = {}) {
     const deadline = new AbortController();
