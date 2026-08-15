@@ -173,6 +173,7 @@ async function applyLoadedSceneSyncExport(result, context, {
   confirm = true,
   rejectExistingObjectIds = false,
   applySceneLevel = true,
+  showPreview = true,
 } = {}) {
   const {
     managedObjects,
@@ -209,10 +210,15 @@ async function applyLoadedSceneSyncExport(result, context, {
   const updateCount = existingObjectIds.size;
   const addCount = objects.length - updateCount;
 
-  if (rejectExistingObjectIds && existingObjectIds.size > 0) {
-    const error = new Error(`Object ID already exists: ${[...existingObjectIds][0]}`);
+  function assertObjectAvailable(objectId) {
+    if (!managedObjects.has(objectId)) return;
+    const error = new Error(`Object ID already exists: ${objectId}`);
     error.code = 'handoff-object-id-conflict';
     throw error;
+  }
+
+  if (rejectExistingObjectIds && existingObjectIds.size > 0) {
+    assertObjectAvailable([...existingObjectIds][0]);
   }
 
   if (confirm) {
@@ -231,10 +237,9 @@ async function applyLoadedSceneSyncExport(result, context, {
   }
 
   showToast?.(`Scene Sync Exportを復元中…（0/${objects.length}）`, 60000);
-  const preview = await showSceneDocumentImportPreview(resolvedDocument, {
-    zip: result.zip,
-    addOrUpdateObject,
-  });
+  const preview = showPreview
+    ? await showSceneDocumentImportPreview(resolvedDocument, { zip: result.zip, addOrUpdateObject })
+    : { previewed: 0, dispose() {} };
   if (preview.previewed > 0) {
     showToast?.(`Scene Sync Exportを復元中…（プレビュー表示 / 0/${objects.length}）`, 60000);
   }
@@ -251,6 +256,7 @@ async function applyLoadedSceneSyncExport(result, context, {
       zip: result.zip,
       uploadBlobToStore,
       existingObjectIds,
+      assertObjectAvailable: rejectExistingObjectIds ? assertObjectAvailable : undefined,
       onProgress: ({ processed, total }) => {
         showToast?.(`Scene Sync Exportを復元中…（${processed}/${total}）`, 60000);
       },
@@ -301,6 +307,7 @@ export async function applySceneSyncHandoffPayload({
     confirm: false,
     rejectExistingObjectIds: true,
     applySceneLevel: false,
+    showPreview: false,
   });
 }
 

@@ -287,6 +287,14 @@ try {
   assert.equal(targetState.objects[1].asset?.type, 'mesh');
   assert.equal(observedAdds.get('handoff-e2e-image')?.asset?.path, undefined);
   assert.equal(observedAdds.get('handoff-e2e-glb')?.asset?.source, 'carrier');
+  const allowedPopupWarning = /GL Driver Message|unknown input adapter/u;
+  const unexpectedDiagnostics = [
+    ...sourceDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')
+      || entry.startsWith('console:warning:')),
+    ...popupDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')
+      || (entry.startsWith('console:warning:') && !allowedPopupWarning.test(entry))),
+  ];
+  assert.deepEqual(unexpectedDiagnostics, []);
   console.log(JSON.stringify({ status: 'passed', roomId, targetState, observed: [...observedAdds.keys()] }, null, 2));
 } finally {
   await browser?.close();

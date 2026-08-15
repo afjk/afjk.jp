@@ -8,6 +8,7 @@ import {
   createAckMessage,
   createHandoffMessage,
   createReadyMessage,
+  isValidHandoffId,
   transitionHandoffSourceState,
   validateAckMessage,
   validateHandoffMessage,
@@ -32,6 +33,8 @@ function message(overrides = {}) {
 }
 
 test('protocol binds READY, SEND, and minimal ACK to session/request IDs', () => {
+  assert.equal(isValidHandoffId('a'.repeat(21)), false);
+  assert.equal(isValidHandoffId('a'.repeat(22)), true);
   assert.deepEqual(createReadyMessage({ sessionId, requestId }), {
     type: 'scene-sync-ready', version: 1, sessionId, requestId,
   });
@@ -83,6 +86,28 @@ test('strict canonical validation rejects structured-clone values that JSON woul
   }
 });
 
+test('canonical objects safely preserve prototype-shaped JSON keys as own data', () => {
+  const source = JSON.parse('{"__proto__":{"polluted":true},"constructor":"value","prototype":{"safe":true}}');
+  const canonical = canonicalizeJsonValue(source);
+  assert.equal(canonical.valid, true);
+  assert.equal(Object.getPrototypeOf(canonical.value), null);
+  assert.equal(Object.hasOwn(canonical.value, '__proto__'), true);
+  assert.deepEqual(canonical.value.__proto__.polluted, true);
+  assert.equal(canonical.value.constructor, 'value');
+  assert.equal({}.polluted, undefined);
+
+  const result = validateHandoffMessage(message({
+    sceneDocument: {
+      ...sceneDocument,
+      metadata: JSON.parse('{"__proto__":{"polluted":true},"constructor":"scene"}'),
+    },
+  }), validationOptions);
+  assert.equal(result.valid, true);
+  assert.equal(Object.getPrototypeOf(result.sceneDocument.metadata), null);
+  assert.equal(Object.hasOwn(result.sceneDocument.metadata, '__proto__'), true);
+  assert.equal({}.polluted, undefined);
+});
+
 test('strict SceneDocument validation enforces finite exact transforms, IDs, duplicates, and limits', () => {
   const invalidObjects = [
     { ...sceneDocument.objects[0], position: [0, 0, 0, 1] },
@@ -113,6 +138,8 @@ test('handoff returns a detached canonical copy and reuses Single HTML size limi
   const original = message();
   const result = validateHandoffMessage(original, validationOptions);
   assert.equal(result.valid, true);
+  assert.equal(Object.getPrototypeOf(result.message), null);
+  assert.notEqual(result.message, original);
   assert.notEqual(result.sceneDocument, original.sceneDocument);
   original.sceneDocument.objects[0].position[0] = 99;
   assert.equal(result.sceneDocument.objects[0].position[0], 0);

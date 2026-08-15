@@ -54,6 +54,9 @@ jobs:
       - name: Install presence server dependencies
         run: npm ci --prefix apps/presence-server
 
+      - name: Run export, import, and handoff unit suite
+        run: npm run test:scene-sync-export-import
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 

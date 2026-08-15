@@ -8,6 +8,7 @@ import {
   parseSingleHtmlExportDocument,
   rewriteSingleHtmlModuleImports,
   stringifySafeEmbeddedJson,
+  validateSingleHtmlEmbeddedAssets,
 } from './single-html-format.js';
 import { isValidSceneDocument } from '../viewer/scene-document.js';
 
@@ -132,6 +133,21 @@ test('Single HTML parser rejects malformed marker, version, document, and assets
   assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, version: 99 }), { isValidSceneDocument }).reason, 'unsupported-single-html-version');
   assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, sceneDocument: {} }), { isValidSceneDocument }).reason, 'invalid-single-html-scene-document');
   assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, assets: { 'bad.bin': { mime: 'application/octet-stream', base64: 'not base64!' } } }), { isValidSceneDocument }).reason, 'invalid-single-html-assets');
+});
+
+test('embedded asset lookup is own-only and prototype-shaped paths cannot escape the asset map', async () => {
+  const inheritedAsset = { mime: 'application/octet-stream', base64: 'AQ==' };
+  const inheritedAssets = Object.create({ '__proto__.bin': inheritedAsset });
+  assert.equal(validateSingleHtmlEmbeddedAssets(inheritedAssets).valid, true);
+  assert.equal(createSingleHtmlAssetZip(inheritedAssets).file('__proto__.bin'), null);
+  assert.equal(createSingleHtmlAssetZip({}).file('__proto__'), null);
+
+  const inheritedFields = { 'assets/bad.bin': Object.create(inheritedAsset) };
+  assert.equal(validateSingleHtmlEmbeddedAssets(inheritedFields).reason, 'invalid-single-html-assets');
+
+  const ownProtoAsset = JSON.parse('{"__proto__":{"mime":"application/octet-stream","base64":"AQ=="}}');
+  assert.equal(validateSingleHtmlEmbeddedAssets(ownProtoAsset).reason, 'invalid-single-html-assets');
+  assert.equal({}.mime, undefined);
 });
 
 test('Single HTML parser ignores comments and data-* attributes while accepting quoted case-insensitive attributes', () => {

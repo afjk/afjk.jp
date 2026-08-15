@@ -4,8 +4,10 @@ Portable Single HTML exports include an **Open in Scene Sync** control. Other
 web pages can use the same `postMessage` protocol without making a CORS fetch
 to the source page.
 
-1. Generate cryptographically random `sessionId` and `requestId` values (at
-   least 128 bits each). In a user gesture, open
+1. Generate cryptographically random `sessionId` and `requestId` values with at
+   least 128 bits of entropy, encoded as 22–128 URL-safe characters
+   (`A-Z`, `a-z`, `0-9`, `_`, `-`). The built-in exporter uses 32 lowercase
+   hexadecimal characters. In a user gesture, open
    `https://afjk.jp/scenesync/?handoff=1&handoffSession=...&handoffRequest=...`.
    Add a sanitized `room` query parameter (`[a-z0-9-]`, at most 24 characters)
    when the import must join a particular room. Keep the returned `WindowProxy`.

@@ -22,7 +22,8 @@ export const DEFAULT_HANDOFF_VALIDATION_LIMITS = Object.freeze({
   maxStringBytes: 100 * 1024 * 1024,
 });
 
-const HANDOFF_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
+// 22 base64url characters are required to carry at least 128 random bits.
+const HANDOFF_ID_PATTERN = /^[A-Za-z0-9_-]{22,128}$/u;
 
 export function isValidHandoffId(value) {
   return typeof value === 'string' && HANDOFF_ID_PATTERN.test(value);
@@ -135,7 +136,9 @@ export function canonicalizeJsonValue(value, limits = {}) {
       const prototype = Object.getPrototypeOf(input);
       if (prototype !== Object.prototype && prototype !== null) throw new Error('handoff-non-plain-object');
       if (Reflect.ownKeys(input).some((key) => typeof key !== 'string')) throw new Error('handoff-symbol-key');
-      const output = {};
+      // Null-prototype output prevents JSON keys such as `__proto__`,
+      // `constructor`, and `prototype` from mutating the canonical clone.
+      const output = Object.create(null);
       for (const [key, child] of Object.entries(input)) {
         stringBytes += utf8ByteLength(key);
         if (stringBytes > resolved.maxStringBytes) throw new Error('handoff-strings-too-large');
@@ -218,9 +221,19 @@ export function validateHandoffMessage(value, {
   if (typeof validateEmbeddedAssets !== 'function') return { valid: false, reason: 'handoff-validator-unavailable' };
   const assetsResult = validateEmbeddedAssets(embeddedAssets, { ...limits, sceneDocument });
   if (!assetsResult.valid) return assetsResult;
+  const message = Object.assign(Object.create(null), {
+    type: SCENE_SYNC_HANDOFF_TYPE,
+    version: SCENE_SYNC_HANDOFF_VERSION,
+    sessionId: value.sessionId,
+    requestId: value.requestId,
+    mode: SCENE_SYNC_HANDOFF_MODE_ADD,
+    sceneDocument,
+    embeddedAssets,
+  });
+  if (expectedRoomId) message.roomId = expectedRoomId;
   return {
     valid: true,
-    message: value,
+    message,
     sceneDocument,
     embeddedAssets,
     roomId: expectedRoomId,

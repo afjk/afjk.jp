@@ -378,7 +378,10 @@ test('handoff imports embedded image and GLB assets in add mode without confirma
       calls.uploads.push({ size: blob.size, mime });
       return { url: 'https://blob.test/poster.png', mime };
     },
-    importGlbFileAsSceneObject: async (file, options) => calls.glb.push({ file, options }),
+    importGlbFileAsSceneObject: async (file, options) => {
+      options.beforeCommit?.();
+      calls.glb.push({ file, options });
+    },
     environmentManager: { loadEnvironment: () => { calls.settings += 1; } },
     applySceneBgm: () => { calls.settings += 1; },
     applyScenePhysics: () => { calls.settings += 1; },
@@ -392,6 +395,7 @@ test('handoff imports embedded image and GLB assets in add mode without confirma
   deepStrictEqual(calls.uploads, [{ size: 2, mime: 'image/png' }]);
   strictEqual(calls.glb[0].file.name, 'model.glb');
   deepStrictEqual(calls.glb[0].options.position, [4, 5, 6]);
+  strictEqual(calls.adds.length, 1, 'handoff must skip preview mutations');
   const imageAdd = calls.adds.find((entry) => entry.options?.source === 'scene-sync-export-import');
   strictEqual(imageAdd.payload.asset.url, 'https://blob.test/poster.png');
   strictEqual(calls.settings, 0);
@@ -433,6 +437,72 @@ test('handoff add rejects duplicate and existing object IDs before preview, upda
   );
   strictEqual(calls.adds, 0);
   strictEqual(calls.broadcasts, 0);
+});
+
+test('handoff final guards preserve peer objects added during image upload or GLB load', async () => {
+  const base = {
+    position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+  };
+
+  const imageRemote = { owner: 'peer-image' };
+  const imageObjects = new Map();
+  const imageCalls = { adds: 0, broadcasts: 0, uploads: 0 };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ ...base, id: 'raced-image', asset: { type: 'image', path: 'assets/race.png' } }],
+      },
+      embeddedAssets: { 'assets/race.png': { mime: 'image/png', base64: 'AQ==' } },
+    }, {
+      managedObjects: imageObjects,
+      addOrUpdateObject: () => { imageCalls.adds += 1; },
+      broadcast: () => { imageCalls.broadcasts += 1; },
+      uploadBlobToStore: async () => {
+        imageCalls.uploads += 1;
+        imageObjects.set('raced-image', imageRemote);
+        return { url: 'https://blob.test/race.png', mime: 'image/png' };
+      },
+    }),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(imageCalls.uploads, 1);
+  strictEqual(imageCalls.adds, 0);
+  strictEqual(imageCalls.broadcasts, 0);
+  strictEqual(imageObjects.get('raced-image'), imageRemote);
+
+  const glbRemote = { owner: 'peer-glb' };
+  const glbObjects = new Map();
+  const glbCalls = { mutations: 0, broadcasts: 0, uploads: 0, loads: 0 };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ ...base, id: 'raced-glb', asset: { type: 'mesh', path: 'assets/race.glb' } }],
+      },
+      embeddedAssets: { 'assets/race.glb': { mime: 'model/gltf-binary', base64: 'Z2xi' } },
+    }, {
+      managedObjects: glbObjects,
+      addOrUpdateObject: () => { glbCalls.mutations += 1; },
+      broadcast: () => { glbCalls.broadcasts += 1; },
+      uploadBlobToStore: async () => { glbCalls.uploads += 1; },
+      importGlbFileAsSceneObject: async (_file, options) => {
+        glbCalls.loads += 1;
+        await Promise.resolve();
+        glbObjects.set('raced-glb', glbRemote);
+        options.beforeCommit();
+        glbCalls.mutations += 1;
+        glbCalls.broadcasts += 1;
+        glbCalls.uploads += 1;
+      },
+    }),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(glbCalls.loads, 1);
+  strictEqual(glbCalls.mutations, 0);
+  strictEqual(glbCalls.broadcasts, 0);
+  strictEqual(glbCalls.uploads, 0);
+  strictEqual(glbObjects.get('raced-glb'), glbRemote);
 });
 
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {

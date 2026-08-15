@@ -8426,6 +8426,7 @@ async function importGlbFileAsSceneObject(file, {
   physics,
   selectAfterLoad = false,
   showImportToast = false,
+  beforeCommit,
 } = {}) {
   const loadPosition = Array.isArray(position)
     ? new THREE.Vector3().fromArray(position)
@@ -8446,6 +8447,25 @@ async function importGlbFileAsSceneObject(file, {
   if (animation) info.animation = animation;
   if (audioSources !== undefined) info.audioSources = audioSources;
   if (physics !== undefined) info.physics = physics;
+
+  try {
+    beforeCommit?.(objectId, model);
+  } catch (error) {
+    // loadFromFile may already have attached the model to the scene. A
+    // handoff collision must leave the peer-owned object untouched and not
+    // leak the uncommitted model or its GPU resources.
+    scene.remove(model);
+    if (typeof model.userData?.disposable === 'function') {
+      try { model.userData.disposable(); } catch {}
+    } else {
+      model.traverse?.((child) => {
+        child.geometry?.dispose?.();
+        if (Array.isArray(child.material)) child.material.forEach((material) => disposeMaterial(material));
+        else disposeMaterial(child.material);
+      });
+    }
+    throw error;
+  }
 
   // GLB は内部に元のシーン座標を持つため、info の transform で上書きする
   replaceManagedObject(objectId, model, info);
