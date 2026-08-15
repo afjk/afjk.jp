@@ -1,7 +1,7 @@
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
 import { VIEWER_SOURCES } from '../html/assets/js/scenesync-export/export/build-export-package.js';
@@ -14,6 +14,91 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function align4(length) {
+  return (length + 3) & ~3;
+}
+
+// A complete, tiny triangle GLB keeps this test self-contained while ensuring
+// GLTFLoader consumes an embedded binary asset rather than a primitive fallback.
+function createTriangleGlb() {
+  const json = new TextEncoder().encode(JSON.stringify({
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+    buffers: [{ byteLength: 42 }],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: 36 },
+      { buffer: 0, byteOffset: 36, byteLength: 6 },
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+      { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' },
+    ],
+  }));
+  const jsonLength = align4(json.length);
+  const binaryLength = 44;
+  const glb = new Uint8Array(12 + 8 + jsonLength + 8 + binaryLength);
+  const view = new DataView(glb.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, glb.length, true);
+  view.setUint32(12, jsonLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  glb.set(json, 20);
+  glb.fill(0x20, 20 + json.length, 20 + jsonLength);
+  const binaryOffset = 20 + jsonLength;
+  view.setUint32(binaryOffset, binaryLength, true);
+  view.setUint32(binaryOffset + 4, 0x004e4942, true);
+  const data = new DataView(glb.buffer, binaryOffset + 8);
+  [0, 0, 0, 1, 0, 0, 0, 1, 0].forEach((value, index) => data.setFloat32(index * 4, value, true));
+  data.setUint16(36, 0, true);
+  data.setUint16(38, 1, true);
+  data.setUint16(40, 2, true);
+  return glb;
+}
+
+function createToneWav() {
+  const sampleRate = 8000;
+  const sampleCount = sampleRate;
+  const wav = new Uint8Array(44 + sampleCount);
+  const view = new DataView(wav.buffer);
+  wav.set(new TextEncoder().encode('RIFF'), 0);
+  view.setUint32(4, 36 + sampleCount, true);
+  wav.set(new TextEncoder().encode('WAVEfmt '), 8);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  wav.set(new TextEncoder().encode('data'), 36);
+  view.setUint32(40, sampleCount, true);
+  for (let index = 0; index < sampleCount; index += 1) {
+    wav[44 + index] = 128 + Math.round(48 * Math.sin((2 * Math.PI * 440 * index) / sampleRate));
+  }
+  return wav;
+}
+
+function addSingleHtmlTestInstrumentation(viewerFiles) {
+  const viewerEntry = viewerFiles['viewer/viewer.js'];
+  assert(typeof viewerEntry === 'string', 'Viewer entry source is unavailable for test instrumentation');
+  const instrumented = viewerEntry
+    .replace(
+      'const scene = new THREE.Scene();',
+      'const scene = new THREE.Scene();\n  globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__ = scene;',
+    )
+    .replace(
+      'const bgmAudio = viewerCore.getBgmAudio();',
+      'const bgmAudio = viewerCore.getBgmAudio();\n  globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__ = bgmAudio;',
+    );
+  assert(instrumented.includes('__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__'), 'Unable to instrument viewer scene for physics observation');
+  assert(instrumented.includes('__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__'), 'Unable to instrument viewer audio for playback observation');
+  return { ...viewerFiles, 'viewer/viewer.js': instrumented };
+}
+
 async function loadViewerFiles() {
   const files = {};
   for (const { src, dest, binary = false, transform = null } of VIEWER_SOURCES) {
@@ -23,22 +108,6 @@ async function loadViewerFiles() {
     files[dest] = typeof transform === 'function' ? transform(content) : content;
   }
   return files;
-}
-
-async function startServer(html) {
-  const server = createServer((request, response) => {
-    if (request.url !== '/' && request.url !== '/index.html') {
-      response.writeHead(404).end('not found');
-      return;
-    }
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);
-  });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  return { server, url: `http://127.0.0.1:${port}/` };
 }
 
 const sceneDocument = {
@@ -56,44 +125,122 @@ const sceneDocument = {
       asset: { type: 'primitive', primitive: 'box', color: '#4488ff' },
       physics: { enabled: true, bodyType: 'dynamic', shape: 'box', halfExtents: [0.5, 0.5, 0.5] },
     },
+    {
+      id: 'image', position: [-2, 1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', path: 'assets/pixel.png' },
+    },
+    {
+      id: 'mesh', position: [2, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'mesh', path: 'assets/triangle.glb' },
+    },
   ],
+  bgm: { asset: { path: 'assets/tone.wav' }, loop: true, volume: 0 },
   physics: { enabled: true, duration: 2, worldOptions: { gravity: -9.81 } },
   behaviors: { scene: { nodes: [], edges: [] } },
 };
 
 let browser;
-let server;
+let tempDir;
 try {
-  const viewerFiles = await loadViewerFiles();
+  const viewerFiles = addSingleHtmlTestInstrumentation(await loadViewerFiles());
   const html = await buildSingleHtmlDocument({
     sceneDocument,
     manifest: {
       format: 'scene-sync-export', version: 1,
       singleHtml: { format: 'single-html-v1', version: 1 },
     },
+    files: {
+      'assets/pixel.png': Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL8WQAAAABJRU5ErkJggg==', 'base64')),
+      'assets/triangle.glb': createTriangleGlb(),
+      'assets/tone.wav': createToneWav(),
+    },
     viewerFiles,
   });
-  const serverInfo = await startServer(html);
-  server = serverInfo.server;
+  tempDir = await mkdtemp(path.join(os.tmpdir(), 'scene-sync-single-html-'));
+  const htmlPath = path.join(tempDir, 'portable-scene.html');
+  await writeFile(htmlPath, html);
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const pageErrors = [];
+  const consoleErrors = [];
+  const requestUrls = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.goto(serverInfo.url, { waitUntil: 'domcontentloaded' });
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') consoleErrors.push(message.text());
+  });
+  page.on('request', (request) => requestUrls.push(request.url()));
+  await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
-  await page.waitForTimeout(300);
+  await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
+  await page.waitForTimeout(800);
+  await page.waitForFunction(() => globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA, null, { timeout: 10000 });
+  const initialDynamicBodyY = await page.evaluate(() => {
+    let box = null;
+    globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+      if (object.userData?.objectId === 'box') box = object;
+    });
+    return box?.position?.y;
+  });
+  assert(Number.isFinite(initialDynamicBodyY), 'Dynamic physics body was not added to the viewer scene');
+  await page.locator('[data-player-play-pause]').click();
+  await page.waitForFunction(() => document.querySelector('[data-player-play-pause]')?.dataset.playerPlaying === '1');
+  await page.locator('#viewer-controls button', { hasText: 'Play BGM' }).click();
+  await page.waitForFunction(() => {
+    const audio = globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__;
+    return audio?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && audio.error === null && audio.paused === false;
+  }, null, { timeout: 10000 });
+  await page.waitForFunction((initialY) => {
+    let box = null;
+    globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+      if (object.userData?.objectId === 'box') box = object;
+    });
+    return Number.isFinite(box?.position?.y) && box.position.y < initialY - 0.05;
+  }, initialDynamicBodyY, { timeout: 10000 });
+  await page.locator('[data-player-rate="2"]').click();
+  await page.locator('[data-player-seek]').evaluate((element) => {
+    element.value = '0.5';
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.locator('[data-player-play-pause]').click();
+  await page.waitForFunction(() => document.querySelector('[data-player-play-pause]')?.dataset.playerPlaying === '0');
   const state = await page.evaluate(() => ({
     format: document.querySelector('meta[name="scene-sync-export-format"]')?.content,
     hasAssets: Boolean(window.__SCENE_SYNC_SINGLE_HTML_ASSET_URLS__),
     hasSceneDocument: Boolean(window.__SCENE_SYNC_SINGLE_HTML_SCENE_DOCUMENT__),
     canvasWidth: document.getElementById('viewer-canvas')?.width || 0,
+    loading: document.getElementById('loading-overlay')?.textContent,
+    fileWarningVisible: !document.getElementById('file-protocol-warning')?.classList.contains('hidden'),
+    missingNoticeVisible: !document.getElementById('missing-notice')?.classList.contains('hidden'),
+    playerRate: document.querySelector('[data-player-rate="2"]')?.dataset.active,
+    playerTime: document.querySelector('[data-player-current-time]')?.textContent,
+    bgmControlPresent: [...document.querySelectorAll('#viewer-controls button')].some((button) => button.textContent.includes('BGM')),
+    bgmAudio: (() => {
+      const audio = globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__;
+      return audio ? { readyState: audio.readyState, paused: audio.paused, error: audio.error?.message || null } : null;
+    })(),
+    dynamicBodyY: (() => {
+      let box = null;
+      globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+        if (object.userData?.objectId === 'box') box = object;
+      });
+      return box?.position?.y;
+    })(),
   }));
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
+  assert(!consoleErrors.some((message) => message.includes('Rapier initialization failed')), `Rapier failed to initialize: ${consoleErrors.join('\n')}`);
   assert(state.format === 'single-html-v1', 'Single HTML format marker was not preserved');
   assert(state.hasAssets && state.hasSceneDocument, 'Embedded resolver payload was not initialized');
   assert(state.canvasWidth > 0, 'Viewer canvas was not initialized');
-  console.log(JSON.stringify({ status: 'passed', ...state }, null, 2));
+  assert(!state.fileWarningVisible, 'Single HTML should not show the Static ZIP file:// warning');
+  assert(!state.missingNoticeVisible, 'Embedded image or GLB was reported missing');
+  assert(state.playerRate === 'true' && state.playerTime !== '00:00.00', 'Playback controls did not update the embedded scene clock');
+  assert(state.bgmControlPresent, 'Embedded audio did not produce a playback control');
+  assert(state.bgmAudio?.readyState >= 2 && state.bgmAudio.error === null && state.bgmAudio.paused === false, 'Embedded audio did not become playable after a user action');
+  assert(state.dynamicBodyY < initialDynamicBodyY - 0.05, 'Rapier did not move the dynamic body under gravity');
+  assert(!requestUrls.some((url) => url.startsWith('file:') && url !== pathToFileURL(htmlPath).href), `Unexpected sibling file request: ${requestUrls.join(', ')}`);
+  assert(!requestUrls.some((url) => /rapier_wasm3d_bg\.wasm|assets\/(?:pixel\.png|triangle\.glb|tone\.wav)/u.test(url)), `Embedded assets used a sibling request: ${requestUrls.join(', ')}`);
+  console.log(JSON.stringify({ status: 'passed', ...state, requestUrls }, null, 2));
 } finally {
   await browser?.close();
-  if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (tempDir) await rm(tempDir, { recursive: true, force: true });
 }
