@@ -150,7 +150,15 @@ function directoryUrl(url) {
 
 function requestOnce(url, addresses, { timeoutMs, signal }) {
   const transport = url.protocol === 'https:' ? https : http;
-  const lookup = (_hostname, _options, callback) => callback(null, addresses[0].address, addresses[0].family);
+  // Node's HTTPS connector may ask its lookup callback for every address
+  // (`options.all === true`). Returning the scalar form in that case makes
+  // Node read an undefined address, while returning only these already
+  // validated records preserves DNS-rebinding pinning.
+  const lookup = (_hostname, options, callback) => {
+    const pinned = addresses.map(({ address, family }) => ({ address, family }));
+    if (options?.all) callback(null, pinned);
+    else callback(null, pinned[0].address, pinned[0].family);
+  };
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(failure('handoff-url-timeout', 504)); return; }
     let responseRef = null;
