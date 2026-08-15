@@ -68,6 +68,10 @@ export function isPublicIp(address) {
   if (family !== 6) return false;
   const value = ipv6ToBigInt(address);
   if (value == null) return false;
+  // Global unicast is strictly 2000::/3. Do not accidentally treat arbitrary
+  // syntactically-valid IPv6 (4000::, 8000::, multicast-adjacent ranges) as
+  // public merely because it is not on a short deny list.
+  if (!hasV6Prefix(value, 1n, 3)) return false;
   // Reject all special-use ranges with real prefix arithmetic, so compressed
   // spellings such as 2001::1 cannot evade a textual prefix check.
   if (hasV6Prefix(value, 0n, 128) || hasV6Prefix(value, 1n, 128)
@@ -75,7 +79,7 @@ export function isPublicIp(address) {
     || hasV6Prefix(value, 0x7en, 7) || hasV6Prefix(value, 0x3fan, 10) || hasV6Prefix(value, 0xffn, 8)
     || hasV6Prefix(value, 0x64ff9b0000000000000000n, 96) || hasV6Prefix(value, 0x64ff9b0001n, 48)
     || hasV6Prefix(value, 0x100000000000000n, 64) || hasV6Prefix(value, 0x20010000n, 32) // discard/Teredo
-    || hasV6Prefix(value, 0x2002n, 16) || hasV6Prefix(value, 0x20010db8n, 32)
+    || hasV6Prefix(value, 0x2002n, 16) || hasV6Prefix(value, 0x20010db8n, 32) || hasV6Prefix(value, 0x3fff0n, 20)
     || hasV6Prefix(value, 0x20010002n, 48) || hasV6Prefix(value, 0x2001001n, 28) || hasV6Prefix(value, 0x2001002n, 28)) return false;
   return true;
 }
