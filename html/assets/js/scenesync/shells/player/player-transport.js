@@ -13,6 +13,9 @@ const CLOCK_MODE_LABELS = {
 
 export async function ensurePlayerTransportStylesheet() {
   if (document.getElementById(STYLE_ID)) return;
+  // Single-file exports inline the player stylesheet together with viewer.css.
+  // A Blob module URL cannot be used as the base for a relative stylesheet URL.
+  if (globalThis.__SCENE_SYNC_SINGLE_HTML_EXPORT__) return;
   const link = document.createElement('link');
   link.id = STYLE_ID;
   link.rel = 'stylesheet';

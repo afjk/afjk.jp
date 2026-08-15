@@ -106,6 +106,7 @@ import {
   shouldResetPhysicsForSceneClockPayload,
 } from './scene-physics.js';
 import { buildExportPackage, validateExportThumbnailFile } from '../scenesync-export/export/build-export-package.js';
+import { buildSingleHtmlExport } from '../scenesync-export/export/build-single-html-export.js';
 
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
@@ -15585,6 +15586,8 @@ const exportTitleInput = document.getElementById('export-title-input');
 const exportDescriptionInput = document.getElementById('export-description-input');
 const exportTagsInput = document.getElementById('export-tags-input');
 const exportAuthorInput = document.getElementById('export-author-input');
+const exportFormatInput = document.getElementById('export-format-input');
+const exportSubmitBtn = document.getElementById('export-submit');
 const exportThumbnailSelectBtn = document.getElementById('export-thumbnail-select');
 const exportThumbnailClearBtn = document.getElementById('export-thumbnail-clear');
 const exportThumbnailInput = document.getElementById('export-thumbnail-input');
@@ -15647,8 +15650,16 @@ function buildExportDialogResult() {
     description: exportDescriptionInput?.value || '',
     tags: exportTagsInput?.value || '',
     author: exportAuthorInput?.value || '',
+    format: exportFormatInput?.value === 'single-html' ? 'single-html' : 'static-zip',
     thumbnailFile: exportThumbnailFile,
   };
+}
+
+function updateExportSubmitLabel() {
+  if (!exportSubmitBtn) return;
+  exportSubmitBtn.textContent = exportFormatInput?.value === 'single-html'
+    ? 'Export Single HTML'
+    : 'Export ZIP';
 }
 
 function closeExportMetadataDialog(result = null) {
@@ -15670,6 +15681,7 @@ function openExportMetadataDialog() {
   }
 
   resetExportDialogForm();
+  updateExportSubmitLabel();
   exportDialog.hidden = false;
   requestAnimationFrame(() => {
     focusTextInputIfSafe(exportTitleInput);
@@ -15703,6 +15715,8 @@ exportThumbnailInput?.addEventListener('change', () => {
   setExportThumbnailFile(file);
 });
 
+exportFormatInput?.addEventListener('change', updateExportSubmitLabel);
+
 exportDialogCloseBtn?.addEventListener('click', () => closeExportMetadataDialog(null));
 exportCancelBtn?.addEventListener('click', () => closeExportMetadataDialog(null));
 
@@ -15733,7 +15747,10 @@ async function triggerExport() {
   try {
     resetScenePhysicsRuntimeBeforePersistence();
     const behaviorState = loomIntegration?.exportState?.() ?? null;
-    const { missingAssets } = await buildExportPackage({
+    const buildExport = exportMetadata.format === 'single-html'
+      ? buildSingleHtmlExport
+      : buildExportPackage;
+    const { missingAssets } = await buildExport({
       managedObjects,
       bgmState: serializeSceneBgm(),
       envId: environmentManager.getCurrentEnvId(),

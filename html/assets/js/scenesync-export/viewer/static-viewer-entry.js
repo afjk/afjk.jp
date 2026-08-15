@@ -7,6 +7,8 @@ import { createPlayerTransportPanel } from './player-transport.js';
 const BASE_URL = new URL('./', document.baseURI).href;
 
 function resolveFromRoot(path) {
+  const embeddedAssetUrl = globalThis.__SCENE_SYNC_SINGLE_HTML_ASSET_URLS__?.[path];
+  if (embeddedAssetUrl) return embeddedAssetUrl;
   return new URL(path, BASE_URL).href;
 }
 
@@ -110,20 +112,25 @@ async function main() {
   const missingNotice = document.getElementById('missing-notice');
   const controlsEl = document.getElementById('viewer-controls');
 
-  if (location.protocol === 'file:') {
+  const embeddedSceneDocument = globalThis.__SCENE_SYNC_SINGLE_HTML_SCENE_DOCUMENT__;
+  if (location.protocol === 'file:' && !embeddedSceneDocument) {
     fileWarning?.classList.remove('hidden');
     loadingOverlay?.classList.add('hidden');
     return;
   }
 
   let sceneDoc;
-  try {
-    const res = await fetch(resolveFromRoot('scene.json'));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    sceneDoc = await res.json();
-  } catch (err) {
-    if (loadingOverlay) loadingOverlay.textContent = `Failed to load scene.json: ${err.message}`;
-    return;
+  if (embeddedSceneDocument) {
+    sceneDoc = embeddedSceneDocument;
+  } else {
+    try {
+      const res = await fetch(resolveFromRoot('scene.json'));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      sceneDoc = await res.json();
+    } catch (err) {
+      if (loadingOverlay) loadingOverlay.textContent = `Failed to load scene.json: ${err.message}`;
+      return;
+    }
   }
 
   // Build Three.js app
