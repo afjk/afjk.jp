@@ -80,7 +80,7 @@ test('inspects directory scene.json and current.json version paths without fetch
 });
 
 test('conservatively blocks private, mapped, transition, and reserved IPv6 ranges', () => {
-  for (const value of ['127.0.0.1', '10.0.0.1', '::1', 'fc00::1', 'fe80::1', '::ffff:c0a8:1', '64:ff9b::808:808', '100::1', '2001:0::1', '2001:10::1', '2001:20::1', '2002:0808:0808::1', '2001:db8::1', '3fff::1', '4000::1', '5f00::1', '8000::1', 'f000::1', 'ff00::1']) {
+  for (const value of ['127.0.0.1', '10.0.0.1', '192.88.99.1', '::1', 'fc00::1', 'fe80::1', '::ffff:c0a8:1', '64:ff9b::808:808', '100::1', '2001:0::1', '2001:10::1', '2001:20::1', '2002:0808:0808::1', '2001:db8::1', '3fff::1', '4000::1', '5f00::1', '8000::1', 'f000::1', 'ff00::1']) {
     assert.equal(isPublicIp(value), false, value);
   }
   assert.equal(isPublicIp('2606:4700:4700::1111'), true);
