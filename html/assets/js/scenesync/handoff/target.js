@@ -95,6 +95,16 @@ export function createHandoffTargetSession({
       postToOpener(ack(false, validation.reason), replyOrigin(event.origin));
       return;
     }
+    if (validation.sourceUrl) {
+      let sourceOrigin = null;
+      try { sourceOrigin = new URL(validation.sourceUrl).origin; } catch {}
+      if (!sourceOrigin || sourceOrigin !== event.origin) {
+        const reason = 'handoff-source-origin-mismatch';
+        onDiagnostic(reason);
+        postToOpener(ack(false, reason), replyOrigin(event.origin));
+        return;
+      }
+    }
 
     busy = true;
     try {

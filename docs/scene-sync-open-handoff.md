@@ -71,14 +71,21 @@ referenced image, video, text, GLB, object-audio, and BGM files before applying
 the import, then uploads them to its blob store; a completed import has no
 runtime dependency on the publishing host.
 
-Hosts need CORS for the page, marker JSON, and every asset. HTTP errors, CORS
+Hosts need CORS for the page, marker JSON, and every asset. Scene Sync fetches
+all of them with `credentials: "omit"`; redirects remain subject to the same
+CORS policy. Handoff entry HTML, `scene.json`, and `current.json` are limited
+to 10 MiB (advertised and streamed bytes), while assets are separately limited
+to 128 MiB each and 500 MiB total. HTTP errors, CORS
 failures, unsafe relative paths, duplicate materialized paths, more than 2,048
 assets, an asset over 128 MiB, or more than 500 MiB total reject the import
 without applying it. `Content-Length` is checked but actual streamed bytes are
 authoritative. Absolute `asset.url` is also fetched only without credentials;
 credential-bearing URLs are rejected rather than copied into a room.
 
-Use immutable/versioned public URLs so a click has a stable meaning. Do not
+URL handoff accepts only a static page marker, `scene.json`, a directory, or a
+`current.json` resolver. It deliberately rejects direct ZIP and Single HTML
+URLs: use drag-and-drop/manual import for ZIP and the embedded payload handoff
+for Single HTML. Use immutable/versioned public URLs so a click has a stable meaning. Do not
 depend on provider-specific APIs: any static host meeting the marker and CORS
 requirements works. A URL handoff is add-only, has no confirmation dialog, and
 does not apply scene-level settings.

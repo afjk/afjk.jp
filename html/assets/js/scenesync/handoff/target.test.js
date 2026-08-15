@@ -136,3 +136,22 @@ test('target preserves visible diagnostic and safe coded import error ACK for op
     origin: '*',
   });
 });
+
+test('target binds URL handoff sourceUrl to the postMessage origin', async () => {
+  const replies = [];
+  const opener = { postMessage: (message, origin) => replies.push({ message, origin }) };
+  const windowRef = createFakeTargetWindow(opener);
+  let applied = 0;
+  createHandoffTargetSession({
+    windowRef, locationRef: { search: targetSearch },
+    validateMessage: (message, options) => ({ valid: true, roomId: options.expectedRoomId, sourceUrl: message.sourceUrl }),
+    applyMessage: async () => { applied += 1; },
+  });
+  const urlMessage = { type: 'scene-sync-handoff', sessionId, requestId, sourceUrl: 'https://publisher.test/world/' };
+  await windowRef.emitMessage({ source: opener, origin: 'https://wrong.test', data: urlMessage });
+  assert.equal(replies.at(-1).message.reason, 'handoff-source-origin-mismatch');
+  assert.equal(applied, 0);
+  await windowRef.emitMessage({ source: opener, origin: 'https://publisher.test', data: urlMessage });
+  assert.equal(replies.at(-1).message.status, 'ok');
+  assert.equal(applied, 1);
+});

@@ -38,13 +38,11 @@ test('rejects unsafe paths, credential URLs, collision, HTTP failure and real-by
     materializeSceneDocumentUrlAssets({ objects: [object({ type: 'image', url: 'https://user:secret@static.example/a.png' })] }, { baseUrl: base, fetchImpl: fetcher({}) }),
     { code: 'handoff-invalid-asset-url' },
   );
-  await assert.rejects(
-    materializeSceneDocumentUrlAssets({ objects: [
-      object({ type: 'image', path: 'assets/a.png', url: 'https://static.example/one.png' }),
-      { ...object({ type: 'image', path: 'assets/a.png', url: 'https://static.example/two.png' }), id: 'b' },
-    ] }, { baseUrl: base, fetchImpl: fetcher({ 'https://static.example/v1/assets/a.png': { body: 'a' } }) }),
-    { code: 'handoff-remote-asset-path-collision' },
-  );
+  const pathPreferred = await materializeSceneDocumentUrlAssets({ objects: [
+    object({ type: 'image', path: 'assets/a.png', url: 'https://static.example/one.png' }),
+    { ...object({ type: 'image', path: 'assets/a.png', url: 'https://static.example/two.png' }), id: 'b' },
+  ] }, { baseUrl: base, fetchImpl: fetcher({ 'https://static.example/v1/assets/a.png': { body: 'a' } }) });
+  assert.equal(pathPreferred.assetCount, 2);
   await assert.rejects(
     materializeSceneDocumentUrlAssets({ objects: [object({ type: 'image', path: 'missing.png' })] }, { baseUrl: base, fetchImpl: fetcher({}) }),
     { code: 'handoff-remote-asset-http-error' },

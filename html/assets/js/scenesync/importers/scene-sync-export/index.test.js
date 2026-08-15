@@ -461,6 +461,24 @@ test('URL handoff preflights existing IDs before it fetches publisher assets', a
   strictEqual(calls, 1, 'only scene.json may be fetched before ID preflight rejects');
 });
 
+test('direct URL import confirms before fetching assets', async () => {
+  let assetFetches = 0;
+  const result = await tryOpenSceneSyncExportUrl('https://example.com/world/scene.json', {
+    managedObjects: new Map(),
+    confirmOpen: () => false,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/scene.json')) return response({ url: String(url), body: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ id: 'cancel', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/a.png' } }],
+      } });
+      assetFetches += 1;
+      return response({ url: String(url), body: 'asset' });
+    },
+  });
+  strictEqual(result.cancelled, true);
+  strictEqual(assetFetches, 0);
+});
+
 test('handoff final guards preserve peer objects added during image upload or GLB load', async () => {
   const base = {
     position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],

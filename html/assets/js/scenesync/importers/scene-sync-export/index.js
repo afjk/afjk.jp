@@ -7,6 +7,12 @@ import { materializeSceneDocumentUrlAssets } from './materialize-url-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
 import { applySceneDocumentSettings } from './apply-scene-settings.js';
 import { createSingleHtmlAssetZip } from '../../../scenesync-export/export/single-html-format.js';
+import { canonicalizeJsonValue, validateStrictSceneDocument } from '../../handoff/protocol.js';
+import { isValidSceneDocument } from '../../../scenesync-export/viewer/scene-document.js';
+import { DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES } from './load-export-package-from-url.js';
+
+export const DEFAULT_URL_HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
+const URL_HANDOFF_KINDS = new Set(['html-marker-url', 'scene-json-url', 'directory-scene-json-url', 'current-json-url']);
 
 async function applyImportedBehaviorsIfNeeded(resolvedDocument, context) {
   if (!resolvedDocument.behaviors) return null;
@@ -188,6 +194,17 @@ async function applyLoadedSceneSyncExport(result, context, {
     applyScenePhysics,
     applySceneBehaviors,
   } = context;
+  let confirmedBeforeMaterialize = false;
+  if (confirm && !result.zip && result.baseUrl) {
+    const rawObjects = result.sceneDocument?.objects || [];
+    const rawExisting = rawObjects.filter((obj) => managedObjects.has(obj.id)).length;
+    const confirmFn = confirmOpen || (typeof window !== 'undefined' ? window.confirm.bind(window) : null);
+    const message = 'Scene Sync Exportを読み込みます\n\n'
+      + `- objects: ${rawObjects.length}\n- update existing: ${rawExisting}\n- add new: ${rawObjects.length - rawExisting}\n\n`
+      + '同じIDのオブジェクトは上書きされます。';
+    if (confirmFn && !confirmFn(message)) return { handled: true, cancelled: true, kind };
+    confirmedBeforeMaterialize = true;
+  }
 
   // URL handoffs must reject ID conflicts before contacting a publisher's
   // assets. This keeps add-only semantics cheap and prevents a colliding page
@@ -214,6 +231,8 @@ async function applyLoadedSceneSyncExport(result, context, {
     const materialized = await materializeSceneDocumentUrlAssets(result.sceneDocument, {
       baseUrl: result.baseUrl,
       fetchImpl: context.fetchImpl,
+      signal: context.signal,
+      includeSceneLevel: context.materializeSceneLevel !== false,
     });
     importResult = { ...result, sceneDocument: materialized.document, zip: materialized.zip };
   }
@@ -249,7 +268,7 @@ async function applyLoadedSceneSyncExport(result, context, {
     assertObjectAvailable([...existingObjectIds][0]);
   }
 
-  if (confirm) {
+  if (confirm && !confirmedBeforeMaterialize) {
     const confirmFn = confirmOpen
       || (typeof window !== 'undefined' ? window.confirm.bind(window) : null);
     const message =
@@ -340,14 +359,38 @@ export async function applySceneSyncHandoffPayload({
 }
 
 export async function applySceneSyncHandoffUrl({ sourceUrl }, context = {}) {
-  const result = await loadExportPackageFromUrl(sourceUrl, { fetchImpl: context.fetchImpl });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), context.handoffTimeoutMs || DEFAULT_URL_HANDOFF_TIMEOUT_MS);
+  const result = await loadExportPackageFromUrl(sourceUrl, {
+    fetchImpl: context.fetchImpl,
+    signal: controller.signal,
+    maxDocumentBytes: DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES,
+  });
   if (!result.valid) {
+    clearTimeout(timeout);
     const failure = new Error(`Scene Sync Export URL failed: ${result.reason}`);
     failure.code = 'handoff-url-load-failed';
     throw failure;
   }
   try {
-    return await applyLoadedSceneSyncExport(result, context, {
+    if (!URL_HANDOFF_KINDS.has(result.kind)) {
+      const failure = new Error(`Unsupported URL handoff kind: ${result.kind}`);
+      failure.code = 'handoff-url-kind-rejected';
+      throw failure;
+    }
+    const canonical = canonicalizeJsonValue(result.sceneDocument);
+    if (!canonical.valid) { const failure = new Error(canonical.reason); failure.code = canonical.reason; throw failure; }
+    const strict = validateStrictSceneDocument(canonical.value);
+    if (!strict.valid || !isValidSceneDocument(canonical.value)) {
+      const failure = new Error(strict.reason || 'invalid-handoff-scene-document');
+      failure.code = strict.reason || 'invalid-handoff-scene-document';
+      throw failure;
+    }
+    return await applyLoadedSceneSyncExport({ ...result, sceneDocument: canonical.value }, {
+      ...context,
+      signal: controller.signal,
+      materializeSceneLevel: false,
+    }, {
       kind: 'url-handoff',
       confirm: false,
       rejectExistingObjectIds: true,
@@ -359,6 +402,8 @@ export async function applySceneSyncHandoffUrl({ sourceUrl }, context = {}) {
     const failure = new Error('Scene Sync URL handoff import failed');
     failure.code = 'handoff-url-import-failed';
     throw failure;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

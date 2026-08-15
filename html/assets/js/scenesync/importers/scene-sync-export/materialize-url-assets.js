@@ -80,13 +80,26 @@ function virtualZip(entries) {
   };
 }
 
+function normalizeIgnoredAsset(asset) {
+  if (!asset || typeof asset !== 'object') return;
+  if (asset.type === 'primitive') {
+    delete asset.path; delete asset.url; delete asset.username; delete asset.password;
+  }
+  if (asset.type === 'text' && asset.source === 'inline') {
+    delete asset.path; delete asset.url; delete asset.username; delete asset.password;
+  }
+}
+
 function addRef(refs, holder, key, asset, type, baseUrl, index) {
+  normalizeIgnoredAsset(asset);
   if (!asset || asset.type === 'primitive' || (asset.type === 'text' && asset.source === 'inline')) return;
   const rawPath = typeof asset.path === 'string' ? asset.path : null;
   const rawUrl = typeof asset.url === 'string' ? asset.url : null;
   if (!rawPath && !rawUrl) return;
   if (rawPath && !safePath(rawPath)) throw error('handoff-unsafe-asset-path');
-  const url = remoteUrl(rawUrl || rawPath, baseUrl);
+  // A package path is authoritative. Never let a document smuggle a second
+  // remote URL past a local/static package declaration.
+  const url = remoteUrl(rawPath || rawUrl, baseUrl);
   if (!url) throw error('handoff-invalid-asset-url');
   const path = rawPath || `remote-assets/${index}-${basename(url, index)}`;
   refs.push({ holder, key, asset, type, path, url });
@@ -99,6 +112,8 @@ export async function materializeSceneDocumentUrlAssets(sceneDocument, {
   baseUrl,
   fetchImpl = globalThis.fetch?.bind(globalThis),
   limits = {},
+  signal,
+  includeSceneLevel = true,
 } = {}) {
   if (!baseUrl || typeof fetchImpl !== 'function') throw error('handoff-remote-fetch-unavailable');
   const resolved = { ...DEFAULT_REMOTE_ASSET_LIMITS, ...limits };
@@ -112,7 +127,7 @@ export async function materializeSceneDocumentUrlAssets(sceneDocument, {
       if (asset) addRef(refs, source, source.asset ? 'asset' : '__directUrl', asset, 'audio', baseUrl, index++);
     }
   }
-  if (document.bgm?.asset || document.bgm?.url) {
+  if (includeSceneLevel && (document.bgm?.asset || document.bgm?.url)) {
     const asset = document.bgm.asset || { url: document.bgm.url, mime: document.bgm.mime };
     addRef(refs, document.bgm, document.bgm.asset ? 'asset' : '__directUrl', asset, 'bgm', baseUrl, index++);
   }
@@ -124,6 +139,7 @@ export async function materializeSceneDocumentUrlAssets(sceneDocument, {
   // Detect path collisions before any network side effect. This also makes a
   // malformed document atomic even when the first remote host is unavailable.
   for (const ref of refs) {
+    if (signal?.aborted) throw error('handoff-url-timeout');
     const prior = byPath.get(ref.path);
     if (prior && prior !== ref.url) throw error('handoff-remote-asset-path-collision');
     byPath.set(ref.path, ref.url);
@@ -131,7 +147,7 @@ export async function materializeSceneDocumentUrlAssets(sceneDocument, {
   for (const ref of refs) {
     if (entries.has(ref.path)) continue;
     let response;
-    try { response = await fetchImpl(ref.url, { mode: 'cors', credentials: 'omit' }); }
+    try { response = await fetchImpl(ref.url, { mode: 'cors', credentials: 'omit', signal }); }
     catch { throw error('handoff-remote-asset-fetch-failed'); }
     if (!response?.ok) throw error('handoff-remote-asset-http-error');
     const allowance = Math.min(resolved.maxAssetBytes, resolved.maxTotalBytes - total);
