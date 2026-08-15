@@ -123,6 +123,15 @@ test('loads ZIP content from application/zip URLs without requiring a .zip exten
   });
 });
 
+test('handoff-only loader rejects ZIP before JSZip processing', async () => {
+  const fetchImpl = createFetch({
+    'https://example.test/export': { body: 'PK\x03\x04', contentType: 'application/zip' },
+  });
+  const result = await loadExportPackageFromUrl('https://example.test/export', { fetchImpl, handoffOnly: true, maxDocumentBytes: 1024 });
+  strictEqual(result.valid, false);
+  strictEqual(result.reason, 'handoff-url-kind-rejected');
+});
+
 test('loads octet-stream ZIP content when magic bytes start with PK', async () => {
   const fetchImpl = createFetch({
     'https://cdn.example.com/export/abc': {

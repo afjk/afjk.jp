@@ -15550,6 +15550,16 @@ function createSceneSyncExportImportContext() {
       broadcast,
       source: options.source || 'scene-sync-export-import',
     }),
+    rollbackImportedObject: (objectId, expectedObject) => {
+      if (managedObjects.get(objectId) !== expectedObject) return false;
+      return deleteObjectById(objectId, {
+        broadcastDelete: true,
+        pushHistory: false,
+        notifyScene: false,
+        updateSelection: false,
+        ignoreLock: true,
+      });
+    },
   };
 }
 

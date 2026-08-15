@@ -184,6 +184,10 @@ export async function applySceneDocument(sceneDocument, {
   uploadBlobToStore,
   existingObjectIds,
   assertObjectAvailable,
+  onObjectCandidate,
+  onObjectCommitted,
+  signal,
+  strictAssetUploads = false,
   onProgress,
 } = {}) {
   let added = 0;
@@ -207,6 +211,11 @@ export async function applySceneDocument(sceneDocument, {
   }
 
   for (const obj of sceneDocument.objects || []) {
+    if (signal?.aborted) {
+      const error = new Error('URL handoff timed out');
+      error.code = 'handoff-url-timeout';
+      throw error;
+    }
     const existed = existingObjectIds instanceof Set
       ? existingObjectIds.has(obj.id)
       : managedObjects.has(obj.id);
@@ -221,6 +230,11 @@ export async function applySceneDocument(sceneDocument, {
       uploadBlobToStore,
     });
     skippedAssets += prepared.skippedAssets;
+    if (strictAssetUploads && prepared.skippedAssets > 0) {
+      const error = new Error('Handoff asset staging failed');
+      error.code = 'handoff-asset-stage-failed';
+      throw error;
+    }
 
     if (obj.importAsset?.kind === 'glb-file') {
       const entry = zip?.file(obj.importAsset.path);
@@ -245,12 +259,14 @@ export async function applySceneDocument(sceneDocument, {
           physics: obj.physics,
           selectAfterLoad: false,
           source: 'scene-sync-export-import',
-          beforeCommit: typeof assertObjectAvailable === 'function'
-            ? () => assertObjectAvailable(obj.id)
-            : undefined,
+          beforeCommit: (_objectId, model) => {
+            onObjectCandidate?.(obj.id, model);
+            assertObjectAvailable?.(obj.id);
+          },
         });
 
         glbImported += 1;
+        onObjectCommitted?.(obj.id);
         reportProgress(obj);
         continue;
       }
@@ -284,9 +300,15 @@ export async function applySceneDocument(sceneDocument, {
 
     // Handoff callers use this synchronous final guard after every awaited
     // asset-staging step. Keep guard → mutation → broadcast in one turn.
+    if (signal?.aborted) {
+      const error = new Error('URL handoff timed out');
+      error.code = 'handoff-url-timeout';
+      throw error;
+    }
     assertObjectAvailable?.(obj.id);
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
     broadcast(payload);
+    onObjectCommitted?.(obj.id);
     reportProgress(obj);
   }
 

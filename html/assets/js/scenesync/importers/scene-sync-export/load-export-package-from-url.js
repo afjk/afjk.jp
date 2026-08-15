@@ -305,6 +305,9 @@ export async function loadExportPackageFromUrl(url, options = {}) {
   if (directFetched.ok) {
     const zipCandidate = await shouldTreatAsZip(directFetched, parsed.href);
     if (zipCandidate) {
+      if (options.handoffOnly) {
+        return { valid: false, reason: 'handoff-url-kind-rejected', shouldBlockGenericImport: true };
+      }
       const zipResult = await tryLoadZipBlob(directFetched.blob, directFetched.url)
         .catch((error) => ({ valid: false, reason: 'zip-load-threw', error }));
       if (zipResult.valid) return zipResult;
@@ -322,6 +325,9 @@ export async function loadExportPackageFromUrl(url, options = {}) {
     directText = await directFetched.blob.text();
     const singleHtmlResult = loadSingleHtmlExportFromText(directText);
     if (singleHtmlResult.valid) {
+      if (options.handoffOnly) {
+        return { valid: false, reason: 'handoff-url-kind-rejected', shouldBlockGenericImport: true };
+      }
       return {
         ...singleHtmlResult,
         sourceUrl: directFetched.url || parsed.href,

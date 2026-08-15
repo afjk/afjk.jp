@@ -256,8 +256,15 @@ async function applyLoadedSceneSyncExport(result, context, {
   );
   const updateCount = existingObjectIds.size;
   const addCount = objects.length - updateCount;
+  const rollbackCandidateIds = new Set(objects.filter((obj) => !existingObjectIds.has(obj.id)).map((obj) => obj.id));
+  const rollbackIdentityById = new Map();
 
   function assertObjectAvailable(objectId) {
+    if (context.signal?.aborted) {
+      const error = new Error('URL handoff timed out');
+      error.code = 'handoff-url-timeout';
+      throw error;
+    }
     if (!managedObjects.has(objectId)) return;
     const error = new Error(`Object ID already exists: ${objectId}`);
     error.code = 'handoff-object-id-conflict';
@@ -304,6 +311,12 @@ async function applyLoadedSceneSyncExport(result, context, {
       uploadBlobToStore,
       existingObjectIds,
       assertObjectAvailable: rejectExistingObjectIds ? assertObjectAvailable : undefined,
+      onObjectCandidate: (objectId, object) => rollbackIdentityById.set(objectId, object),
+      onObjectCommitted: (objectId) => {
+        if (!rollbackIdentityById.has(objectId)) rollbackIdentityById.set(objectId, managedObjects.get(objectId));
+      },
+      signal: context.signal,
+      strictAssetUploads: rejectExistingObjectIds,
       onProgress: ({ processed, total }) => {
         showToast?.(`Scene Sync Exportを復元中…（${processed}/${total}）`, 60000);
       },
@@ -324,6 +337,14 @@ async function applyLoadedSceneSyncExport(result, context, {
       });
       behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
     }
+  } catch (error) {
+    if (rejectExistingObjectIds) {
+      for (const objectId of [...rollbackCandidateIds].reverse()) {
+        const expected = rollbackIdentityById.get(objectId);
+        if (expected) context.rollbackImportedObject?.(objectId, expected);
+      }
+    }
+    throw error;
   } finally {
     preview.dispose();
   }
@@ -365,6 +386,7 @@ export async function applySceneSyncHandoffUrl({ sourceUrl }, context = {}) {
     fetchImpl: context.fetchImpl,
     signal: controller.signal,
     maxDocumentBytes: DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES,
+    handoffOnly: true,
   });
   if (!result.valid) {
     clearTimeout(timeout);

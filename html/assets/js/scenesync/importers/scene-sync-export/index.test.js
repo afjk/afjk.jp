@@ -545,6 +545,65 @@ test('handoff final guards preserve peer objects added during image upload or GL
   strictEqual(glbObjects.get('raced-glb'), glbRemote);
 });
 
+test('handoff rolls back earlier own objects after a later asset failure without deleting a peer replacement', async () => {
+  const managedObjects = new Map();
+  const broadcasts = [];
+  const own = { owner: 'handoff' };
+  const peer = { owner: 'peer' };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [
+          { id: 'first', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'primitive', primitive: 'box' } },
+          { id: 'later', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/fail.png' } },
+        ],
+      },
+      embeddedAssets: { 'assets/fail.png': { mime: 'image/png', base64: 'AQ==' } },
+    }, {
+      managedObjects,
+      addOrUpdateObject: (id) => managedObjects.set(id, own),
+      broadcast: (payload) => broadcasts.push(payload),
+      uploadBlobToStore: async () => {
+        managedObjects.set('first', peer);
+        throw new Error('late upload failed');
+      },
+      rollbackImportedObject: (id, expected) => {
+        if (managedObjects.get(id) !== expected) return false;
+        managedObjects.delete(id);
+        broadcasts.push({ kind: 'scene-remove', objectId: id });
+        return true;
+      },
+    }),
+  );
+  strictEqual(managedObjects.get('first'), peer);
+  strictEqual(broadcasts.some((entry) => entry.kind === 'scene-remove'), false);
+});
+
+test('handoff rollback removes its own earlier object in reverse failure cleanup', async () => {
+  const managedObjects = new Map();
+  const own = { owner: 'handoff' };
+  const removes = [];
+  await rejects(() => applySceneSyncHandoffPayload({
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [
+      { id: 'first-own', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'primitive', primitive: 'box' } },
+      { id: 'later-fail', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/fail.png' } },
+    ] },
+    embeddedAssets: { 'assets/fail.png': { mime: 'image/png', base64: 'AQ==' } },
+  }, {
+    managedObjects,
+    addOrUpdateObject: (id) => managedObjects.set(id, own),
+    broadcast: () => {},
+    uploadBlobToStore: async () => { throw new Error('late upload failed'); },
+    rollbackImportedObject: (id, expected) => {
+      if (managedObjects.get(id) !== expected) return false;
+      managedObjects.delete(id); removes.push(id); return true;
+    },
+  }));
+  strictEqual(managedObjects.has('first-own'), false);
+  deepStrictEqual(removes, ['first-own']);
+});
+
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {
   const html = await buildSingleHtmlDocument({
     sceneDocument: {

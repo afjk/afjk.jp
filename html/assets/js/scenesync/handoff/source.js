@@ -11,6 +11,9 @@ import { sanitizeRoomCode } from '../utils/room-code.js';
 export const DEFAULT_SCENE_SYNC_HANDOFF_URL = 'https://afjk.jp/scenesync/';
 export const DEFAULT_HANDOFF_READY_TIMEOUT_MS = 25_000;
 export const DEFAULT_HANDOFF_ACK_TIMEOUT_MS = 120_000;
+// URL handoff can materialize up to 500 MiB. Keep source-side ACK waiting
+// longer than the target's ten-minute deadline while preserving Single HTML.
+export const DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS = 11 * 60 * 1000;
 
 function statusForFailure(reason) {
   return {
@@ -72,7 +75,7 @@ export function createHandoffSourceController({
       && state === HANDOFF_SOURCE_STATES.WAITING_READY) {
       state = transitionHandoffSourceState(state, 'ready');
       emit({ message: 'Sending scene…' });
-      armTimeout(ackTimeoutMs, 'import-timeout');
+      armTimeout(sourceUrl ? Math.max(ackTimeoutMs, DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS) : ackTimeoutMs, 'import-timeout');
       try {
         popup.postMessage(createHandoffMessage({
           sessionId,
