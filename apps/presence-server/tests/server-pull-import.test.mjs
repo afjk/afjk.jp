@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServerPullImporter, isPublicIp } from '../src/scenesync/server-pull-import.mjs';
+import { createPinnedLookup, createServerPullImporter, isPublicIp } from '../src/scenesync/server-pull-import.mjs';
 
 const scene = {
   format: 'scene-sync-export-scene', version: 2,
@@ -149,4 +149,21 @@ test('destroys a declared oversized document response before rejecting', async (
   });
   await assert.rejects(importer.inspect('http://publisher.example/world/'), { code: 'handoff-document-too-large' });
   assert.equal(destroyed, true);
+});
+
+test('native pinned lookup returns only validated records in all and scalar modes', () => {
+  const lookup = createPinnedLookup([
+    { address: '104.18.23.186', family: 4 },
+    { address: '2606:4700::6812:17ba', family: 6 },
+  ]);
+  let all;
+  lookup('publisher.example', { all: true }, (error, records) => { assert.equal(error, null); all = records; });
+  assert.deepEqual(all, [
+    { address: '104.18.23.186', family: 4 },
+    { address: '2606:4700::6812:17ba', family: 6 },
+  ]);
+  assert.equal(all.some((record) => record.address === '127.0.0.1'), false);
+  let scalar;
+  lookup('publisher.example', { all: false }, (error, address, family) => { assert.equal(error, null); scalar = { address, family }; });
+  assert.deepEqual(scalar, { address: '104.18.23.186', family: 4 });
 });

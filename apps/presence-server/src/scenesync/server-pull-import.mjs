@@ -148,17 +148,21 @@ function directoryUrl(url) {
   return directory;
 }
 
+export function createPinnedLookup(addresses) {
+  const pinned = addresses.map(({ address }) => ({ address, family: net.isIP(address) })).filter(({ family }) => family !== 0);
+  return (_hostname, options, callback) => {
+    if (options?.all) callback(null, pinned);
+    else callback(null, pinned[0].address, pinned[0].family);
+  };
+}
+
 function requestOnce(url, addresses, { timeoutMs, signal }) {
   const transport = url.protocol === 'https:' ? https : http;
   // Node's HTTPS connector may ask its lookup callback for every address
   // (`options.all === true`). Returning the scalar form in that case makes
   // Node read an undefined address, while returning only these already
   // validated records preserves DNS-rebinding pinning.
-  const lookup = (_hostname, options, callback) => {
-    const pinned = addresses.map(({ address, family }) => ({ address, family }));
-    if (options?.all) callback(null, pinned);
-    else callback(null, pinned[0].address, pinned[0].family);
-  };
+  const lookup = createPinnedLookup(addresses);
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(failure('handoff-url-timeout', 504)); return; }
     let responseRef = null;
