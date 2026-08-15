@@ -3,7 +3,7 @@ import { loadExportPackageFromBlob } from './load-export-package.js';
 import { loadExportPackageFromUrl } from './load-export-package-from-url.js';
 import { loadSingleHtmlExportFromBlob } from './load-single-html-export.js';
 import { resolveSceneDocumentAssets } from './resolve-export-assets.js';
-import { resolveSceneDocumentAssetsFromUrl } from './resolve-url-assets.js';
+import { materializeSceneDocumentUrlAssets } from './materialize-url-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
 import { applySceneDocumentSettings } from './apply-scene-settings.js';
 import { createSingleHtmlAssetZip } from '../../../scenesync-export/export/single-html-format.js';
@@ -189,8 +189,36 @@ async function applyLoadedSceneSyncExport(result, context, {
     applySceneBehaviors,
   } = context;
 
-  const { document: resolvedDocument } = await resolveSceneDocumentAssets(result.sceneDocument, {
-    zip: result.zip,
+  // URL handoffs must reject ID conflicts before contacting a publisher's
+  // assets. This keeps add-only semantics cheap and prevents a colliding page
+  // from using the importer as an unnecessary remote fetch primitive.
+  if (rejectExistingObjectIds) {
+    const rawIds = new Set();
+    for (const object of result.sceneDocument?.objects || []) {
+      if (rawIds.has(object.id)) {
+        const error = new Error(`Duplicate object ID: ${object.id}`);
+        error.code = 'handoff-duplicate-object-id';
+        throw error;
+      }
+      rawIds.add(object.id);
+      if (managedObjects.has(object.id)) {
+        const error = new Error(`Object ID already exists: ${object.id}`);
+        error.code = 'handoff-object-id-conflict';
+        throw error;
+      }
+    }
+  }
+
+  let importResult = result;
+  if (!result.zip && result.baseUrl) {
+    const materialized = await materializeSceneDocumentUrlAssets(result.sceneDocument, {
+      baseUrl: result.baseUrl,
+      fetchImpl: context.fetchImpl,
+    });
+    importResult = { ...result, sceneDocument: materialized.document, zip: materialized.zip };
+  }
+  const { document: resolvedDocument } = await resolveSceneDocumentAssets(importResult.sceneDocument, {
+    zip: importResult.zip,
   });
   const objects = resolvedDocument.objects || [];
   const incomingObjectIds = new Set();
@@ -238,7 +266,7 @@ async function applyLoadedSceneSyncExport(result, context, {
 
   showToast?.(`Scene Sync Exportを復元中…（0/${objects.length}）`, 60000);
   const preview = showPreview
-    ? await showSceneDocumentImportPreview(resolvedDocument, { zip: result.zip, addOrUpdateObject })
+    ? await showSceneDocumentImportPreview(resolvedDocument, { zip: importResult.zip, addOrUpdateObject })
     : { previewed: 0, dispose() {} };
   if (preview.previewed > 0) {
     showToast?.(`Scene Sync Exportを復元中…（プレビュー表示 / 0/${objects.length}）`, 60000);
@@ -253,7 +281,7 @@ async function applyLoadedSceneSyncExport(result, context, {
       addOrUpdateObject,
       broadcast,
       importGlbFileAsSceneObject,
-      zip: result.zip,
+      zip: importResult.zip,
       uploadBlobToStore,
       existingObjectIds,
       assertObjectAvailable: rejectExistingObjectIds ? assertObjectAvailable : undefined,
@@ -272,7 +300,7 @@ async function applyLoadedSceneSyncExport(result, context, {
         broadcast,
         applySceneBgm,
         applyScenePhysics,
-        zip: result.zip,
+        zip: importResult.zip,
         uploadBlobToStore,
       });
       behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
@@ -311,6 +339,29 @@ export async function applySceneSyncHandoffPayload({
   });
 }
 
+export async function applySceneSyncHandoffUrl({ sourceUrl }, context = {}) {
+  const result = await loadExportPackageFromUrl(sourceUrl, { fetchImpl: context.fetchImpl });
+  if (!result.valid) {
+    const failure = new Error(`Scene Sync Export URL failed: ${result.reason}`);
+    failure.code = 'handoff-url-load-failed';
+    throw failure;
+  }
+  try {
+    return await applyLoadedSceneSyncExport(result, context, {
+      kind: 'url-handoff',
+      confirm: false,
+      rejectExistingObjectIds: true,
+      applySceneLevel: false,
+      showPreview: false,
+    });
+  } catch (cause) {
+    if (typeof cause?.code === 'string' && cause.code.startsWith('handoff-')) throw cause;
+    const failure = new Error('Scene Sync URL handoff import failed');
+    failure.code = 'handoff-url-import-failed';
+    throw failure;
+  }
+}
+
 // Entry point for "Open Export": detects Scene Sync Export ZIPs and portable
 // Single HTML files, then upserts their objects into the current scene.
 export async function tryOpenSceneSyncExportFile(file, context = {}) {
@@ -336,20 +387,7 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
 }
 
 export async function tryOpenSceneSyncExportUrl(url, context = {}) {
-  const {
-    managedObjects,
-    addOrUpdateObject,
-    broadcast,
-    showToast,
-    confirmOpen,
-    environmentManager,
-    importGlbFileAsSceneObject,
-    uploadBlobToStore,
-    applySceneBgm,
-    applyScenePhysics,
-    applySceneBehaviors,
-    fetchImpl,
-  } = context;
+  const { showToast, fetchImpl } = context;
 
   const result = await loadExportPackageFromUrl(url, { fetchImpl });
   if (!result.valid) {
@@ -365,89 +403,12 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
     return { handled: false, reason: result.reason };
   }
 
-  const { document: resolvedDocument } = result.zip
-    ? await resolveSceneDocumentAssets(result.sceneDocument, { zip: result.zip })
-    : resolveSceneDocumentAssetsFromUrl(result.sceneDocument, { baseUrl: result.baseUrl });
-
-  const objects = resolvedDocument.objects || [];
-  const existingObjectIds = new Set(
-    objects
-      .filter((obj) => managedObjects.has(obj.id))
-      .map((obj) => obj.id)
-  );
-  const updateCount = existingObjectIds.size;
-  const addCount = objects.length - updateCount;
-
-  const confirmFn = confirmOpen
-    || (typeof window !== 'undefined' ? window.confirm.bind(window) : null);
-  const message =
-    'Scene Sync Exportを読み込みます\n\n'
-    + `- objects: ${objects.length}\n`
-    + `- update existing: ${updateCount}\n`
-    + `- add new: ${addCount}\n\n`
-    + '同じIDのオブジェクトは上書きされます。\n'
-    + 'Exportに含まれない既存オブジェクトは残ります。';
-
-  if (confirmFn && !confirmFn(message)) {
-    return { handled: true, cancelled: true };
-  }
-
-  showToast?.(`Scene Sync Exportを復元中…（0/${objects.length}）`, 60000);
-
-  const preview = await showSceneDocumentImportPreview(resolvedDocument, {
-    zip: result.zip,
-    addOrUpdateObject,
-  });
-  if (preview.previewed > 0) {
-    showToast?.(`Scene Sync Exportを復元中…（プレビュー表示 / 0/${objects.length}）`, 60000);
-  }
-
-  let stats;
-  let settingsResult;
-  let behaviorsResult = null;
-  try {
-    stats = await applySceneDocument(resolvedDocument, {
-      managedObjects,
-      addOrUpdateObject,
-      broadcast,
-      importGlbFileAsSceneObject,
-      zip: result.zip,
-      uploadBlobToStore,
-      existingObjectIds,
-      onProgress: ({ processed, total }) => {
-        showToast?.(`Scene Sync Exportを復元中…（${processed}/${total}）`, 60000);
-      },
-    });
-
-    const settingsMessage = `Scene Sync Exportを復元中…（${objects.length}/${objects.length} / 設定を適用中）`;
-    showToast?.(settingsMessage, 60000);
-
-    settingsResult = await applySceneDocumentSettings(resolvedDocument, {
-      environmentManager,
-      broadcast,
-      applySceneBgm,
-      applyScenePhysics,
-      zip: result.zip,
-      uploadBlobToStore,
-    });
-
-    behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
-  } finally {
-    preview.dispose();
-  }
-
-  const behaviorCount = behaviorsResult?.applied || 0;
-  const toastSuffix = behaviorCount > 0 ? ` / Behavior: ${behaviorCount}` : '';
-  showToast?.(
-    `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}${toastSuffix}）`
-  );
-
-  return {
-    handled: true,
-    stats,
-    settings: settingsResult,
-    behaviors: behaviorsResult,
-    sourceUrl: result.sourceUrl || url,
+  const applied = await applyLoadedSceneSyncExport(result, { ...context, fetchImpl }, {
     kind: result.kind,
-  };
+    confirm: true,
+    rejectExistingObjectIds: false,
+    applySceneLevel: true,
+    showPreview: true,
+  });
+  return { ...applied, sourceUrl: result.sourceUrl || url, kind: result.kind };
 }

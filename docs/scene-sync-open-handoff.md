@@ -1,8 +1,9 @@
 # Open in Scene Sync handoff protocol
 
-Portable Single HTML exports include an **Open in Scene Sync** control. Other
-web pages can use the same `postMessage` protocol without making a CORS fetch
-to the source page.
+Portable Single HTML exports and published Static exports include an **Open in
+Scene Sync** control. Static handoff fetches the export from Scene Sync, so the
+publisher must allow cross-origin `GET` for the viewer page, `scene.json`, and
+every referenced asset.
 
 1. Generate cryptographically random `sessionId` and `requestId` values with at
    least 128 bits of entropy, encoded as 22–128 URL-safe characters
@@ -38,6 +39,15 @@ to the source page.
 }
 ```
 
+Static hosts send this mutually exclusive, smaller payload instead. `sourceUrl`
+must be an absolute `http:` or `https:` URL without URL credentials; it is
+fetched with `credentials: "omit"`.
+
+```js
+{ type: 'scene-sync-handoff', version: 1, sessionId, requestId,
+  mode: 'add', roomId: 'optional-room', sourceUrl: 'https://host.example/world/v3/' }
+```
+
 Only `mode: "add"` is supported. The `room` in the opened URL is authoritative;
 an omitted message `roomId` uses it, while a different message `roomId` is
 rejected. Add mode rejects duplicate incoming object IDs and IDs already in the
@@ -50,3 +60,25 @@ over the Single HTML import limits. The target accepts external origins only
 for a page explicitly opened with valid handoff IDs and binds the exchange to
 its `window.opener`. ACKs contain the matching IDs and status, but never room or
 scene data.
+
+## Static export integration contract
+
+Publish `index.html` with `<link rel="scene-sync-export" href="./scene.json">`
+(or an equivalent absolute/relative `href`). `scene.json` follows the normal
+Scene Sync Export scene-document format and its relative `asset.path` values
+are resolved relative to that JSON file. Scene Sync downloads and validates all
+referenced image, video, text, GLB, object-audio, and BGM files before applying
+the import, then uploads them to its blob store; a completed import has no
+runtime dependency on the publishing host.
+
+Hosts need CORS for the page, marker JSON, and every asset. HTTP errors, CORS
+failures, unsafe relative paths, duplicate materialized paths, more than 2,048
+assets, an asset over 128 MiB, or more than 500 MiB total reject the import
+without applying it. `Content-Length` is checked but actual streamed bytes are
+authoritative. Absolute `asset.url` is also fetched only without credentials;
+credential-bearing URLs are rejected rather than copied into a room.
+
+Use immutable/versioned public URLs so a click has a stable meaning. Do not
+depend on provider-specific APIs: any static host meeting the marker and CORS
+requirements works. A URL handoff is add-only, has no confirmation dialog, and
+does not apply scene-level settings.

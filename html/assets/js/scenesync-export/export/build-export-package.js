@@ -15,6 +15,7 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scene Sync Export</title>
+  <link rel="scene-sync-export" href="./scene.json">
   <script type="importmap">
   {
     "imports": {

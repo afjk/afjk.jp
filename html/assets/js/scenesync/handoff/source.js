@@ -26,6 +26,7 @@ export function createHandoffSourceController({
   targetUrl = DEFAULT_SCENE_SYNC_HANDOFF_URL,
   sceneDocument,
   embeddedAssets,
+  sourceUrl,
   readyTimeoutMs = DEFAULT_HANDOFF_READY_TIMEOUT_MS,
   ackTimeoutMs = DEFAULT_HANDOFF_ACK_TIMEOUT_MS,
   closedPollMs = 250,
@@ -79,6 +80,7 @@ export function createHandoffSourceController({
           roomId: requestedRoomId,
           sceneDocument,
           embeddedAssets,
+          sourceUrl,
         }), targetOrigin);
       } catch {
         finish('error', {
@@ -201,6 +203,43 @@ export function mountSingleHtmlHandoff({
     },
   });
 
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const cleaned = sanitizeRoomCode(roomInput?.value);
+    if (roomInput) roomInput.value = cleaned || '';
+    controller.open(cleaned);
+  });
+  return controller;
+}
+
+// Static exports hand off their published page URL. The target fetches the
+// marker/scene document itself, so no scene data or credentials cross windows.
+export function mountUrlHandoff({
+  sourceUrl = globalThis.location?.href,
+  targetUrl = globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ || DEFAULT_SCENE_SYNC_HANDOFF_URL,
+  documentRef = globalThis.document,
+  windowRef = globalThis.window,
+} = {}) {
+  const host = documentRef?.getElementById?.('viewer-ui');
+  if (!host || !sourceUrl) return null;
+  const form = documentRef.createElement('form');
+  form.id = 'scene-sync-handoff';
+  form.className = 'scene-sync-handoff';
+  form.innerHTML = `<label for="scene-sync-handoff-room">Open in Scene Sync</label>
+    <div class="scene-sync-handoff-row"><input id="scene-sync-handoff-room" name="room" type="text" maxlength="24" autocomplete="off" placeholder="Room ID (optional)"><button type="submit" class="viewer-btn">Open</button></div>
+    <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;
+  host.appendChild(form);
+  const roomInput = form.querySelector('[name="room"]');
+  const button = form.querySelector('button');
+  const status = form.querySelector('[role="status"]');
+  const controller = createHandoffSourceController({
+    windowRef, targetUrl, sourceUrl,
+    onStateChange(detail) {
+      if (status) status.textContent = detail.message || '';
+      if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
+      form.dataset.state = detail.state;
+    },
+  });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const cleaned = sanitizeRoomCode(roomInput?.value);

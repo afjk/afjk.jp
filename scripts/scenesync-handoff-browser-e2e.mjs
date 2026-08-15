@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -58,11 +58,25 @@ function resolveStaticPath(urlPath) {
   return candidate.startsWith(`${htmlRoot}${path.sep}`) ? candidate : null;
 }
 
-function createStaticServer(presenceHttpUrl) {
+function createStaticServer(presenceHttpUrl, publishedRoot = null) {
   return createServer(async (req, res) => {
     requestLog.push(`${req.method || 'GET'} ${req.url || '/'}`);
     try {
       const url = new URL(req.url || '/', 'http://localhost');
+      if (publishedRoot && url.pathname.startsWith('/published/')) {
+        const relative = url.pathname.slice('/published/'.length);
+        const publishedBase = path.resolve(publishedRoot, 'published');
+        const filePath = path.resolve(publishedBase, relative || 'index.html');
+        if (!filePath.startsWith(`${publishedBase}${path.sep}`)) throw new Error('invalid published path');
+        const body = await readFile(filePath);
+        res.writeHead(200, {
+          'content-type': mimeTypes.get(path.extname(filePath)) || 'application/octet-stream',
+          'content-length': body.length,
+          'access-control-allow-origin': '*',
+        });
+        res.end(req.method === 'HEAD' ? undefined : body);
+        return;
+      }
       if (url.pathname.startsWith('/presence/blob')) {
         const body = req.method === 'PUT' || req.method === 'POST' ? await readRequest(req) : undefined;
         const upstream = await fetch(`${presenceHttpUrl}${url.pathname.replace('/presence', '')}${url.search}`, {
@@ -194,7 +208,7 @@ try {
   presenceServer = await listen(createPresenceServer());
   const presenceHttpUrl = serverUrl(presenceServer);
   const presenceWsUrl = serverUrl(presenceServer, 'ws');
-  staticServer = await listen(createStaticServer(presenceHttpUrl));
+  staticServer = await listen(createStaticServer(presenceHttpUrl, tempDir));
   const targetOrigin = serverUrl(staticServer);
   const targetUrl = `${targetOrigin}/scenesync/?presence=${encodeURIComponent(presenceWsUrl)}`;
   const roomId = `handoff-e2e-${Date.now().toString(36)}`.slice(0, 24);
@@ -227,9 +241,25 @@ try {
   );
   const sourcePath = path.join(tempDir, 'source.html');
   await writeFile(sourcePath, sourceHtml);
+  const publishedDir = path.join(tempDir, 'published');
+  await mkdir(path.join(publishedDir, 'assets'), { recursive: true });
+  await writeFile(path.join(publishedDir, 'index.html'), `<!doctype html>
+    <link rel="scene-sync-export" href="./scene.json"><div id="viewer-ui"></div>
+    <script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetUrl)};<\/script>
+    <script type="module">import { mountUrlHandoff } from '/assets/js/scenesync/handoff/source.js'; mountUrlHandoff({ sourceUrl: location.href }); globalThis.__URL_HANDOFF_READY__ = true;<\/script>`);
+  await writeFile(path.join(publishedDir, 'scene.json'), JSON.stringify({
+    format: 'scene-sync-export-scene', version: 2,
+    objects: [{
+      id: 'url-handoff-image', position: [0, 2, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', path: 'assets/pixel.png', mime: 'image/png' },
+    }],
+  }));
+  await writeFile(path.join(publishedDir, 'assets/pixel.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
 
   const observedAdds = new Map();
   const observerDiagnostics = [];
+  let resolveUrlAdd;
+  const urlAddDone = new Promise((resolve) => { resolveUrlAdd = resolve; });
   const addsDone = new Promise((resolve) => {
     observer.on('message', (raw) => {
       let message;
@@ -239,6 +269,11 @@ try {
         && ['handoff-e2e-image', 'handoff-e2e-glb'].includes(message.payload.objectId)) {
         observedAdds.set(message.payload.objectId, message.payload);
         if (observedAdds.size === 2) resolve();
+      }
+      if (message.type === 'handoff' && message.payload?.kind === 'scene-add'
+        && message.payload.objectId === 'url-handoff-image') {
+        observedAdds.set(message.payload.objectId, message.payload);
+        resolveUrlAdd();
       }
     });
   });
@@ -287,6 +322,23 @@ try {
   assert.equal(targetState.objects[1].asset?.type, 'mesh');
   assert.equal(observedAdds.get('handoff-e2e-image')?.asset?.path, undefined);
   assert.equal(observedAdds.get('handoff-e2e-glb')?.asset?.source, 'carrier');
+  const urlSource = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  await urlSource.goto(`${targetOrigin}/published/index.html`, { waitUntil: 'domcontentloaded' });
+  await urlSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  await urlSource.locator('#scene-sync-handoff-room').fill(roomId);
+  const urlPopupPromise = urlSource.waitForEvent('popup');
+  await urlSource.locator('#scene-sync-handoff button').click();
+  const urlPopup = await urlPopupPromise;
+  await urlPopup.waitForLoadState('domcontentloaded');
+  await urlSource.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Opened in Scene Sync.', null, { timeout: TEST_TIMEOUT_MS });
+  await Promise.race([urlAddDone, new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for URL handoff broadcast')), 10_000))]);
+  const urlAsset = await urlPopup.evaluate(async () => {
+    const { managedObjects } = await import('/assets/js/scenesync/scene.js');
+    return managedObjects.get('url-handoff-image')?.userData?.asset || null;
+  });
+  assert.equal(urlAsset?.source, 'blob');
+  assert.equal(urlAsset?.path, undefined);
+  assert.equal(observedAdds.get('url-handoff-image')?.asset?.path, undefined);
   const allowedPopupWarning = /GL Driver Message|unknown input adapter/u;
   const unexpectedDiagnostics = [
     ...sourceDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')

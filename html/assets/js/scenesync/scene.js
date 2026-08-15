@@ -12,6 +12,7 @@ import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import {
   applySceneSyncHandoffPayload,
+  applySceneSyncHandoffUrl,
   tryOpenSceneSyncExportFile,
   tryOpenSceneSyncExportUrl,
 } from './importers/scene-sync-export/index.js';
@@ -15559,10 +15560,12 @@ function initializeHandoffTarget() {
       validateEmbeddedAssets: validateSingleHtmlEmbeddedAssets,
     },
     ensureRoom: ensureHandoffRoom,
-    applyMessage: ({ sceneDocument, embeddedAssets }) => applySceneSyncHandoffPayload({
-      sceneDocument,
-      embeddedAssets,
-    }, createSceneSyncExportImportContext()),
+    applyMessage: (message) => message.sourceUrl
+      ? applySceneSyncHandoffUrl({ sourceUrl: message.sourceUrl }, createSceneSyncExportImportContext())
+      : applySceneSyncHandoffPayload({
+          sceneDocument: message.sceneDocument,
+          embeddedAssets: message.embeddedAssets,
+        }, createSceneSyncExportImportContext()),
     onDiagnostic(reason, error) {
       console.warn('[Scene Sync handoff]', reason, error || '');
       showToast(`Open in Scene Sync: ${reason}`);

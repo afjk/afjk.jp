@@ -87,6 +87,19 @@ test('source completes bound READY/SEND/ACK and resets READY to import timeout',
   assert.equal(states.at(-1).message, 'Opened in Scene Sync.');
 });
 
+test('source sends URL-only handoffs without embedded scene data', () => {
+  const popup = createPopup();
+  const windowRef = createFakeWindow([popup]);
+  const controller = createHandoffSourceController({ windowRef, sourceUrl: 'https://static.example/world/' });
+  const opened = controller.open();
+  windowRef.emitMessage({ source: popup, origin: 'https://afjk.jp', data: {
+    type: 'scene-sync-ready', version: 1, sessionId: opened.sessionId, requestId: opened.requestId,
+  } });
+  assert.equal(popup.sent[0].message.sourceUrl, 'https://static.example/world/');
+  assert.equal('sceneDocument' in popup.sent[0].message, false);
+  assert.equal('embeddedAssets' in popup.sent[0].message, false);
+});
+
 test('source separates READY/import timeout and reports popup blocked/closed', () => {
   const readyPopup = createPopup();
   const readyWindow = createFakeWindow([readyPopup]);

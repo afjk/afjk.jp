@@ -270,10 +270,15 @@ async function assertExportFixture(exportRoot, copied) {
   assert(copied.includes('viewer/rapier/rapier.js'), 'Rapier JS source was not copied');
   assert(copied.includes('viewer/rapier/rapier_wasm3d_bg.wasm'), 'Rapier WASM source was not copied');
   assert(copied.includes('scenesync/runtime/event-timeline.js'), 'event timeline runtime was not copied');
+  assert(copied.includes('scenesync/handoff/source.js'), 'Static handoff source was not copied');
 
   await stat(path.join(exportRoot, 'viewer/rapier/rapier.js'));
   await stat(path.join(exportRoot, 'viewer/rapier/rapier_wasm3d_bg.wasm'));
   await stat(path.join(exportRoot, 'scenesync/runtime/event-timeline.js'));
+  await stat(path.join(exportRoot, 'scenesync/handoff/source.js'));
+
+  const indexHtml = await readFile(path.join(exportRoot, 'index.html'), 'utf8');
+  assert(/<link rel="scene-sync-export" href="\.\/scene\.json">/u.test(indexHtml), 'Static export marker is missing');
 
   const rapierJs = await readFile(path.join(exportRoot, 'viewer/rapier/rapier.js'), 'utf8');
   assert(!/sourceMappingURL=/u.test(rapierJs), 'Rapier JS still references a source map that is not exported');
@@ -416,14 +421,18 @@ async function runViewerSmoke(exportRoot) {
         clientWidth: canvas?.clientWidth || 0,
         clientHeight: canvas?.clientHeight || 0,
         loadingHidden: loadingOverlay?.classList.contains('hidden') === true,
-        missingHidden: missingNotice?.classList.contains('hidden') === true,
-        pixelSamples: window.__sceneSyncStaticViewerSmokePixels || [],
+      missingHidden: missingNotice?.classList.contains('hidden') === true,
+      handoffPresent: Boolean(document.getElementById('scene-sync-handoff')),
+      handoffSourceUrl: location.href,
+      pixelSamples: window.__sceneSyncStaticViewerSmokePixels || [],
       };
     });
 
     assert(result.canvas.width > 0 && result.canvas.height > 0, 'Viewer canvas was not sized');
     assert(result.canvas.loadingHidden, 'Viewer loading overlay did not finish');
     assert(result.canvas.missingHidden, 'Viewer reported missing scene assets');
+    assert(result.canvas.handoffPresent, 'Static viewer did not mount Open in Scene Sync');
+    assert(result.canvas.handoffSourceUrl === result.url, 'Static viewer handoff did not use its published page URL');
     assert(result.httpErrors.length === 0, `HTTP errors while loading viewer: ${JSON.stringify(result.httpErrors, null, 2)}`);
     assert(result.requestFailures.length === 0, `Request failures while loading viewer: ${JSON.stringify(result.requestFailures, null, 2)}`);
     assert(result.pageErrors.length === 0, `Page errors while loading viewer: ${result.pageErrors.join('\n')}`);
