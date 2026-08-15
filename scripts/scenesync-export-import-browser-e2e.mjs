@@ -555,6 +555,9 @@ async function run() {
     const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
     await page.locator('#export-btn').click();
     await page.locator('#export-dialog:not([hidden])').waitFor({ state: 'visible' });
+    // This regression test inspects a Static ZIP. Auto is the product default,
+    // so keep the test explicit about the artifact it validates.
+    await page.locator('#export-format-input').selectOption('static-zip');
     await page.locator('#export-submit').click();
     const download = await downloadPromise;
     const downloadPath = await download.path();

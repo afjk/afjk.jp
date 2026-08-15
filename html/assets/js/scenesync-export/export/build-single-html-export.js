@@ -1,12 +1,5 @@
-import { createSceneDocumentFromSceneSyncState } from './export-scene-document.js';
-import { collectExportAssets } from './collect-export-assets.js';
 import { generateManifest } from './export-manifest.js';
-import { normalizeExportMetadata } from './export-metadata.js';
-import {
-  fetchExportViewerSources,
-  SINGLE_HTML_HANDOFF_SOURCES,
-  VIEWER_SOURCES,
-} from './build-export-package.js';
+import { prepareSceneSyncExport } from './export-preparation.js';
 import {
   buildSingleHtmlDocument,
   SINGLE_HTML_EXPORT_FORMAT,
@@ -30,41 +23,8 @@ function downloadHtml(html, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-export async function buildSingleHtmlExport({
-  managedObjects,
-  bgmState,
-  envId,
-  blobBase,
-  envOrigin = location.origin,
-  assetCache = null,
-  behaviorState = null,
-  physicsState = null,
-  exportMetadata = null,
-}) {
-  const metadata = normalizeExportMetadata(exportMetadata);
-  const sceneDocument = createSceneDocumentFromSceneSyncState({
-    managedObjects,
-    bgmState,
-    envId,
-    behaviorState,
-    physicsState,
-    exportMetadata: metadata,
-  });
-  const { files, document, assetManifest, missingAssets } = await collectExportAssets({
-    sceneDocument,
-    blobBase,
-    envOrigin,
-    assetCache,
-  });
-  const { results: viewerFiles, failures } = await fetchExportViewerSources([
-    ...VIEWER_SOURCES,
-    ...SINGLE_HTML_HANDOFF_SOURCES,
-  ]);
-  if (failures.length > 0) {
-    throw new Error(`Required viewer files could not be fetched: ${failures.map((failure) => failure.dest).join(', ')}`);
-  }
-
-  const manifest = {
+export function createSingleHtmlManifest({ assetManifest, missingAssets, metadata }) {
+  return {
     ...generateManifest({
       assetManifest,
       missingAssets,
@@ -87,6 +47,30 @@ export async function buildSingleHtmlExport({
       embedded: ['sceneDocument', 'manifest', 'viewer-js', 'viewer-css', 'binary-assets'],
     },
   };
+}
+
+export async function buildSingleHtmlExport({
+  managedObjects,
+  bgmState,
+  envId,
+  blobBase,
+  envOrigin = location.origin,
+  assetCache = null,
+  behaviorState = null,
+  physicsState = null,
+  exportMetadata = null,
+  preparedExport = null,
+}) {
+  const prepared = preparedExport || await prepareSceneSyncExport({
+    managedObjects, bgmState, envId, blobBase, envOrigin, assetCache,
+    behaviorState, physicsState, exportMetadata,
+  });
+  const { metadata, files, document, assetManifest, missingAssets, viewerFiles, viewerFailures } = prepared;
+  if (viewerFailures.length > 0) {
+    throw new Error(`Required viewer files could not be fetched: ${viewerFailures.map((failure) => failure.dest).join(', ')}`);
+  }
+
+  const manifest = createSingleHtmlManifest({ assetManifest, missingAssets, metadata });
   const html = await buildSingleHtmlDocument({
     sceneDocument: document,
     manifest,
@@ -95,5 +79,5 @@ export async function buildSingleHtmlExport({
   });
   const filename = `scene-sync-export-${formatTimestamp()}.html`;
   downloadHtml(html, filename);
-  return { missingAssets, filename, manifest };
+  return { missingAssets, filename, manifest, selectedFormat: 'single-html' };
 }
