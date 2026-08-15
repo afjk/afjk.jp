@@ -2,7 +2,7 @@ import { CoordinateTransformer } from '../utils/coordinate-utils.js';
 import { GLBFileLoader } from '../loaders/glb-file-loader.js';
 import { parseUriList, extractUrlFromText } from '../loaders/url-classifier.js';
 import { generateTemporaryImageObjectId } from '../loaders/image-preview.js';
-import { isZipFile } from '../importers/scene-sync-export/detect-scene-sync-export.js';
+import { isSingleHtmlFile, isZipFile } from '../importers/scene-sync-export/detect-scene-sync-export.js';
 
 function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
@@ -466,7 +466,7 @@ export class DragDropManager {
   }
 
   async handleFile(file, positionContext) {
-    if (this.sceneSyncExportImporter && isZipFile(file)) {
+    if (this.sceneSyncExportImporter && (isZipFile(file) || isSingleHtmlFile(file))) {
       const result = await this.sceneSyncExportImporter(file, positionContext);
       if (result?.handled) return null;
     }

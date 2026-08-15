@@ -1,9 +1,12 @@
 import { isValidSceneDocument } from '../../../scenesync-export/viewer/scene-document.js';
+import { MAX_SINGLE_HTML_DOCUMENT_BYTES } from '../../../scenesync-export/export/single-html-format.js';
 import { loadExportPackageFromBlob } from './load-export-package.js';
+import { loadSingleHtmlExportFromText } from './load-single-html-export.js';
 
 const ZIP_EXT_RE = /\.zip(?:$|[?#])/i;
 const SCENE_JSON_RE = /(?:^|\/)scene\.json$/i;
 const CURRENT_JSON_RE = /(?:^|\/)current\.json$/i;
+const HTML_EXT_RE = /\.html?(?:$|[?#])/i;
 const ZIP_CONTENT_TYPES = new Set([
   'application/zip',
   'application/x-zip-compressed',
@@ -49,6 +52,14 @@ function isCurrentJsonUrl(url) {
   }
 }
 
+function isHtmlUrl(url) {
+  try {
+    return HTML_EXT_RE.test(new URL(url).pathname);
+  } catch {
+    return HTML_EXT_RE.test(String(url || ''));
+  }
+}
+
 function asDirectoryUrl(url) {
   const parsed = new URL(url);
   if (!parsed.pathname.endsWith('/')) parsed.pathname += '/';
@@ -86,7 +97,7 @@ async function blobHasZipMagic(blob) {
 async function fetchBlob(url, fetchImpl) {
   const response = await fetchImpl(url, { mode: 'cors' });
   if (!response?.ok) {
-    return { ok: false, status: response?.status || 0, url };
+    return { ok: false, status: response?.status || 0, reason: 'http-error', url: response?.url || url };
   }
 
   let blob;
@@ -189,9 +200,21 @@ function blockingResult(result, attempts) {
     valid: false,
     reason: result?.reason || 'invalid-scene-sync-export-url',
     error: result?.error,
+    status: result?.status || result?.fetched?.status || 0,
     attempts,
     shouldBlockGenericImport: true,
   };
+}
+
+function isLikelyHtmlResponse(fetched, url) {
+  return isHtmlUrl(url) || /html/i.test(fetched?.contentType || '');
+}
+
+function singleHtmlFetchFailure(fetched) {
+  if (fetched?.status) {
+    return { reason: 'single-html-http-error', status: fetched.status, error: fetched.error };
+  }
+  return { reason: 'single-html-fetch-failed', error: fetched?.error };
 }
 
 async function resolveCurrentJson(current, directoryUrl, fetchImpl) {
@@ -263,7 +286,43 @@ export async function loadExportPackageFromUrl(url, options = {}) {
       return blockingResult(zipResult, attempts);
     }
 
+    if (directFetched.blob.size > MAX_SINGLE_HTML_DOCUMENT_BYTES
+      && isLikelyHtmlResponse(directFetched, parsed.href)) {
+      const tooLarge = { reason: 'single-html-document-too-large', size: directFetched.blob.size };
+      attempts.push({ step: 'single-html', reason: tooLarge.reason });
+      return blockingResult(tooLarge, attempts);
+    }
+
     directText = await directFetched.blob.text();
+    const singleHtmlResult = loadSingleHtmlExportFromText(directText);
+    if (singleHtmlResult.valid) {
+      return {
+        ...singleHtmlResult,
+        sourceUrl: directFetched.url || parsed.href,
+        kind: 'single-html-url',
+      };
+    }
+    // A Single HTML marker is an explicit claim that this is an export, so
+    // do not fall through to generic URL import with a malformed document.
+    if (singleHtmlResult.reason !== 'not-single-html-export') {
+      attempts.push({ step: 'single-html', reason: singleHtmlResult.reason });
+      return blockingResult(singleHtmlResult, attempts);
+    }
+
+    if (looksLikeHtml(directText, directFetched.contentType)) {
+      const href = extractSceneSyncExportHref(directText);
+      if (href) {
+        const markerSceneUrl = new URL(href, directFetched.url || parsed.href).href;
+        const markerResult = await tryFetchSceneJson(markerSceneUrl, fetchImpl)
+          .catch((error) => ({ valid: false, reason: 'html-marker-scene-json-threw', error }));
+        if (markerResult.valid) return {
+          ...markerResult,
+          kind: 'html-marker-url',
+        };
+        attempts.push({ step: 'html-marker', reason: markerResult.reason });
+        return blockingResult(markerResult, attempts);
+      }
+    }
     const directResult = parseSceneJsonText(directText, {
       ...directFetched,
       text: directText,
@@ -292,6 +351,9 @@ export async function loadExportPackageFromUrl(url, options = {}) {
     if (isZipUrl(parsed.href) || isSceneJsonUrl(parsed.href) || isCurrentJsonUrl(parsed.href)) {
       return blockingResult({ reason: directFetched.reason || 'fetch-failed', error: directFetched.error }, attempts);
     }
+    if (isHtmlUrl(parsed.href)) {
+      return blockingResult(singleHtmlFetchFailure(directFetched), attempts);
+    }
   }
 
   const directoryUrl = asDirectoryUrl(parsed.href);
@@ -313,21 +375,6 @@ export async function loadExportPackageFromUrl(url, options = {}) {
   attempts.push({ step: 'current-json', reason: currentResult.reason });
   if (currentResult.shouldBlockGenericImport) {
     return blockingResult(currentResult, attempts);
-  }
-
-  if (directFetched.ok && looksLikeHtml(directText, directFetched.contentType)) {
-    const href = extractSceneSyncExportHref(directText);
-    if (href) {
-      const markerSceneUrl = new URL(href, directFetched.url).href;
-      const markerResult = await tryFetchSceneJson(markerSceneUrl, fetchImpl)
-        .catch((error) => ({ valid: false, reason: 'html-marker-scene-json-threw', error }));
-      if (markerResult.valid) return {
-        ...markerResult,
-        kind: 'html-marker-url',
-      };
-      attempts.push({ step: 'html-marker', reason: markerResult.reason });
-      return blockingResult(markerResult, attempts);
-    }
   }
 
   return {
