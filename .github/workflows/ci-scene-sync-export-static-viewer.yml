@@ -31,6 +31,9 @@ jobs:
     name: Static and Single HTML Viewer Smokes
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Keep Playwright's install location aligned with the E2E scripts.
+      PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
 
     steps:
       - name: Checkout
@@ -46,8 +49,6 @@ jobs:
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
 
       - name: Run static viewer smoke
         run: npm run test:e2e:scene-sync-export-static-viewer
