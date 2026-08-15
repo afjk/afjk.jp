@@ -12,6 +12,7 @@ import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import {
   applySceneSyncHandoffPayload,
+  applySceneSyncHandoffUrl,
   tryOpenSceneSyncExportFile,
   tryOpenSceneSyncExportUrl,
 } from './importers/scene-sync-export/index.js';
@@ -8266,12 +8267,13 @@ function captureScreenshotBlob(options = {}) {
   });
 }
 
-async function uploadBlobToStore(blob, contentType = 'application/octet-stream', extension = '') {
+async function uploadBlobToStore(blob, contentType = 'application/octet-stream', extension = '', signal) {
   const path = `${generateRandomPath()}${extension}`;
   const res = await fetch(`${BLOB_BASE}/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': contentType },
     body: blob,
+    signal,
   });
   if (!res.ok) {
     let payload = null;
@@ -8428,6 +8430,8 @@ async function importGlbFileAsSceneObject(file, {
   selectAfterLoad = false,
   showImportToast = false,
   beforeCommit,
+  strictUpload = false,
+  signal,
 } = {}) {
   const loadPosition = Array.isArray(position)
     ? new THREE.Vector3().fromArray(position)
@@ -8497,6 +8501,10 @@ async function importGlbFileAsSceneObject(file, {
     ...(animation ? { animation } : {}),
     ...(audioSources !== undefined ? { audioSources } : {}),
     ...(physics !== undefined ? { physics } : {}),
+  }, {
+    throwOnUploadFailure: strictUpload,
+    suppressHistory: strictUpload,
+    signal,
   });
 
   return model;
@@ -9224,19 +9232,16 @@ function addOrUpdateObject(objectId, info, options = {}) {
         break;
       case 'video':
         if (asset.url) {
-          loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle, options);
-          return;
+          return loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle, options);
         }
         break;
       case 'image':
         if (asset.url) {
-          loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle, options);
-          return;
+          return loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle, options);
         }
         break;
       case 'text':
-        loadTextObject(objectId, info, asset, existing);
-        return;
+        return loadTextObject(objectId, info, asset, existing, options);
       default:
         console.warn(`unsupported asset type: ${asset.type}`);
         replaceManagedObject(objectId, buildUnsupportedAssetObject(objectId, info), info);
@@ -9596,13 +9601,21 @@ function buildStereoMediaGroup({ stereo, aspect, texture }) {
   });
 }
 
+function assertStrictLoadedObjectCommit(options, objectId, candidate) {
+  if (options?.strictLoad) options.beforeCommit?.(objectId, candidate);
+}
+
+function strictLoadFailure(options, error) {
+  if (options?.strictLoad) throw error;
+}
+
 function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const promise = prebuilt
     ? Promise.resolve(prebuilt)
-    : loadVideoTextureFromUrl(videoUrl, { THREE });
+    : loadVideoTextureFromUrl(videoUrl, { THREE, signal: options.signal });
 
-  promise.then((bundle) => {
+  return promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const stereo = normalizeStereoMedia(info.asset);
     let group;
@@ -9635,6 +9648,24 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
     group.userData.assetType = 'video';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
 
+    // The handoff loader may have awaited media while a peer created this ID.
+    // Check before touching the existing object, then commit synchronously.
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      const error = new Error('Video object load was cancelled');
+      error.code = 'handoff-object-load-cancelled';
+      strictLoadFailure(options, error);
+      return null;
+    }
+    try {
+      assertStrictLoadedObjectCommit(options, objectId, group);
+    } catch (error) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      throw error;
+    }
+
     if (existing) {
       group.position.copy(existing.position);
       group.quaternion.copy(existing.quaternion);
@@ -9643,21 +9674,18 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
       scene.remove(existing);
     }
 
-    if (removedObjectIds.has(objectId)) {
-      group.userData?.disposable?.();
-      cleanupPreviewForLoadedObject(options);
-      return;
-    }
-
     replaceManagedObject(objectId, group, info);
     cleanupPreviewForLoadedObject(options);
+    return group;
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
     if (removedObjectIds.has(objectId)) {
       cleanupPreviewForLoadedObject(options);
-      return;
+      strictLoadFailure(options, err);
+      return null;
     }
+    strictLoadFailure(options, err);
     if (!existing) {
       const failedInfo = { ...info, name: `${info.name || objectId} (動画読み込み失敗)` };
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xff4444), failedInfo);
@@ -9676,12 +9704,12 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
     ? Promise.resolve(prebuilt)
     : (async () => {
         const { loadImageTextureFromUrl, planeSizeFromAspect } = await import('./loaders/url-importers/image.js');
-        const bundle = await loadImageTextureFromUrl(imageUrl, { THREE });
+        const bundle = await loadImageTextureFromUrl(imageUrl, { THREE, signal: options.signal });
         const { width, height } = planeSizeFromAspect(bundle.aspect);
         return { ...bundle, width, height };
       })();
 
-  promise.then((bundle) => {
+  return promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const { texture, width, height } = bundle;
     const stereo = normalizeStereoMedia(info.asset);
@@ -9728,6 +9756,22 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
     group.userData.assetType = 'image';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      const error = new Error('Image object load was cancelled');
+      error.code = 'handoff-object-load-cancelled';
+      strictLoadFailure(options, error);
+      return null;
+    }
+    try {
+      assertStrictLoadedObjectCommit(options, objectId, group);
+    } catch (error) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      throw error;
+    }
+
     if (existing) {
       group.position.copy(existing.position);
       group.quaternion.copy(existing.quaternion);
@@ -9736,21 +9780,18 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
       scene.remove(existing);
     }
 
-    if (removedObjectIds.has(objectId)) {
-      group.userData?.disposable?.();
-      cleanupPreviewForLoadedObject(options);
-      return;
-    }
-
     replaceManagedObject(objectId, group, info);
     cleanupPreviewForLoadedObject(options);
+    return group;
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
     if (removedObjectIds.has(objectId)) {
       cleanupPreviewForLoadedObject(options);
-      return;
+      strictLoadFailure(options, err);
+      return null;
     }
+    strictLoadFailure(options, err);
     showToast({
       type: 'error',
       message: `画像の読み込みに失敗しました: ${err?.message || 'CORS エラーの可能性'}`,
@@ -9856,17 +9897,17 @@ function bakeTextPanelScaleToLayout(object) {
   return true;
 }
 
-function loadTextObject(objectId, info, asset, existing) {
+function loadTextObject(objectId, info, asset, existing, options = {}) {
   const normalizedAsset = normalizeTextAsset(asset, info);
 
   const textPromise = (normalizedAsset.source === 'url' && normalizedAsset.url)
-    ? fetch(normalizedAsset.url, { mode: 'cors' }).then((r) => {
+    ? fetch(normalizedAsset.url, { mode: 'cors', signal: options.signal }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.text();
       })
     : Promise.resolve(normalizedAsset.text || '');
 
-  textPromise.then((resolvedText) => {
+  return textPromise.then((resolvedText) => {
     const shouldAutoFitLayout =
       normalizedAsset.source === 'url' &&
       normalizedAsset.layout?.autoFit === true;
@@ -9929,6 +9970,20 @@ function loadTextObject(objectId, info, asset, existing) {
       material.dispose();
     };
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      const error = new Error('Text object load was cancelled');
+      error.code = 'handoff-object-load-cancelled';
+      strictLoadFailure(options, error);
+      return null;
+    }
+    try {
+      assertStrictLoadedObjectCommit(options, objectId, group);
+    } catch (error) {
+      group.userData?.disposable?.();
+      throw error;
+    }
+
     if (existing) {
       group.position.copy(existing.position);
       group.quaternion.copy(existing.quaternion);
@@ -9936,17 +9991,15 @@ function loadTextObject(objectId, info, asset, existing) {
       if (transformCtrl.object === existing) transformCtrl.detach();
     }
 
-    if (removedObjectIds.has(objectId)) {
-      group.userData?.disposable?.();
-      return;
-    }
-
     replaceManagedObject(objectId, group, info);
+    return group;
   }).catch((err) => {
     console.warn('Failed to load text object for', objectId, ':', err);
     if (removedObjectIds.has(objectId)) {
-      return;
+      strictLoadFailure(options, err);
+      return null;
     }
+    strictLoadFailure(options, err);
     const failedInfo = { ...info, name: `${info.name || objectId} (text load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0x996633), failedInfo);
   });
@@ -11087,7 +11140,7 @@ function generateRandomPath() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}) {
+async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}, options = {}) {
   const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const meshPath = generateRandomPath();
   let actualMeshPath = null;
@@ -11112,6 +11165,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
         method: 'POST',
         headers: { 'Content-Type': 'model/gltf-binary' },
         body: arrayBuffer,
+        signal: options.signal,
       });
       if (!uploadResponse.ok) {
         let payload = null;
@@ -11134,6 +11188,11 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
     } catch (err) {
       console.warn('POST failed:', err);
       showToast('GLB アップロード失敗: ' + err.message);
+      if (options.throwOnUploadFailure) {
+        const failure = new Error(options.signal?.aborted ? 'URL handoff timed out' : err.message);
+        failure.code = options.signal?.aborted ? 'handoff-url-timeout' : 'handoff-glb-upload-failed';
+        throw failure;
+      }
       return;
     }
 
@@ -11164,9 +11223,11 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
       ...extraFields,
     };
 
-    presenceState.historyManager.push(
-      HistoryManager.createSceneAddEntry(sceneAddPayload)
-    );
+    if (!options.suppressHistory) {
+      presenceState.historyManager.push(
+        HistoryManager.createSceneAddEntry(sceneAddPayload)
+      );
+    }
     notifySceneStateChanged('object-uploaded');
 
     broadcast(sceneAddPayload);
@@ -15549,6 +15610,16 @@ function createSceneSyncExportImportContext() {
       broadcast,
       source: options.source || 'scene-sync-export-import',
     }),
+    rollbackImportedObject: (objectId, expectedObject) => {
+      if (managedObjects.get(objectId) !== expectedObject) return false;
+      return deleteObjectById(objectId, {
+        broadcastDelete: true,
+        pushHistory: false,
+        notifyScene: false,
+        updateSelection: false,
+        ignoreLock: true,
+      });
+    },
   };
 }
 
@@ -15559,10 +15630,12 @@ function initializeHandoffTarget() {
       validateEmbeddedAssets: validateSingleHtmlEmbeddedAssets,
     },
     ensureRoom: ensureHandoffRoom,
-    applyMessage: ({ sceneDocument, embeddedAssets }) => applySceneSyncHandoffPayload({
-      sceneDocument,
-      embeddedAssets,
-    }, createSceneSyncExportImportContext()),
+    applyMessage: (message) => message.sourceUrl
+      ? applySceneSyncHandoffUrl({ sourceUrl: message.sourceUrl }, createSceneSyncExportImportContext())
+      : applySceneSyncHandoffPayload({
+          sceneDocument: message.sceneDocument,
+          embeddedAssets: message.embeddedAssets,
+        }, createSceneSyncExportImportContext()),
     onDiagnostic(reason, error) {
       console.warn('[Scene Sync handoff]', reason, error || '');
       showToast(`Open in Scene Sync: ${reason}`);

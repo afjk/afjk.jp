@@ -16,6 +16,9 @@ const ZIP_MAGIC_SIGNATURES = new Set([
   '80,75,5,6',
   '80,75,7,8',
 ]);
+// Handoff entry documents are metadata, not assets. Keep them bounded before
+// parsing; large assets are governed by the separate 500 MiB materializer.
+export const DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES = 10 * 1024 * 1024;
 
 function fetchImplFromOptions(options = {}) {
   return options.fetchImpl || globalThis.fetch?.bind(globalThis);
@@ -94,20 +97,39 @@ async function blobHasZipMagic(blob) {
   return ZIP_MAGIC_SIGNATURES.has(bytes.slice(0, 4).join(','));
 }
 
-async function fetchBlob(url, fetchImpl) {
-  const response = await fetchImpl(url, { mode: 'cors' });
+async function responseBlobLimited(response, maxBytes) {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error('url-document-too-large');
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    if (typeof response.blob === 'function' && typeof response.arrayBuffer !== 'function') {
+      const blob = await response.blob();
+      if (blob.size > maxBytes) throw new Error('url-document-too-large');
+      return blob;
+    }
+    const source = typeof response.arrayBuffer === 'function' ? await response.arrayBuffer()
+      : new TextEncoder().encode(await response.text()).buffer;
+    if (source.byteLength > maxBytes) throw new Error('url-document-too-large');
+    return new Blob([source]);
+  }
+  const chunks = []; let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) { try { await reader.cancel(); } catch {} throw new Error('url-document-too-large'); }
+    chunks.push(value);
+  }
+  return new Blob(chunks);
+}
+
+async function fetchBlob(url, fetchImpl, { signal, maxBytes = Infinity } = {}) {
+  const response = await fetchImpl(url, { mode: 'cors', credentials: 'omit', signal });
   if (!response?.ok) {
     return { ok: false, status: response?.status || 0, reason: 'http-error', url: response?.url || url };
   }
 
-  let blob;
-  if (typeof response.blob === 'function') {
-    blob = await response.blob();
-  } else if (typeof response.arrayBuffer === 'function') {
-    blob = new Blob([await response.arrayBuffer()]);
-  } else {
-    blob = new Blob([await response.text()]);
-  }
+  const blob = await responseBlobLimited(response, maxBytes);
 
   return {
     ok: true,
@@ -117,12 +139,14 @@ async function fetchBlob(url, fetchImpl) {
   };
 }
 
-async function fetchText(url, fetchImpl) {
-  const response = await fetchImpl(url, { mode: 'cors' });
+async function fetchText(url, fetchImpl, options = {}) {
+  const response = await fetchImpl(url, { mode: 'cors', credentials: 'omit', signal: options.signal });
   if (!response?.ok) {
     return { ok: false, status: response?.status || 0, url };
   }
-  const text = await response.text();
+  let text;
+  try { text = await (await responseBlobLimited(response, options.maxBytes ?? Infinity)).text(); }
+  catch (error) { return { ok: false, reason: error.message === 'url-document-too-large' ? 'url-document-too-large' : 'fetch-failed', url }; }
   return {
     ok: true,
     text,
@@ -153,8 +177,8 @@ function parseSceneJsonText(text, fetched) {
   };
 }
 
-async function tryFetchSceneJson(sceneUrl, fetchImpl) {
-  const fetched = await fetchText(sceneUrl, fetchImpl);
+async function tryFetchSceneJson(sceneUrl, fetchImpl, options) {
+  const fetched = await fetchText(sceneUrl, fetchImpl, options);
   if (!fetched.ok) return { valid: false, reason: 'scene-json-fetch-failed', fetched };
   return parseSceneJsonText(fetched.text, fetched);
 }
@@ -211,13 +235,14 @@ function isLikelyHtmlResponse(fetched, url) {
 }
 
 function singleHtmlFetchFailure(fetched) {
+  if (fetched?.reason === 'url-document-too-large') return { reason: 'single-html-document-too-large' };
   if (fetched?.status) {
     return { reason: 'single-html-http-error', status: fetched.status, error: fetched.error };
   }
   return { reason: 'single-html-fetch-failed', error: fetched?.error };
 }
 
-async function resolveCurrentJson(current, directoryUrl, fetchImpl) {
+async function resolveCurrentJson(current, directoryUrl, fetchImpl, options) {
   const versionPath = typeof current?.versionPath === 'string' && current.versionPath.trim()
     ? current.versionPath.trim()
     : (typeof current?.versionId === 'string' && current.versionId.trim()
@@ -227,7 +252,7 @@ async function resolveCurrentJson(current, directoryUrl, fetchImpl) {
 
   const versionDirectoryUrl = asDirectoryUrl(new URL(versionPath, directoryUrl).href);
   const sceneUrl = new URL('scene.json', versionDirectoryUrl).href;
-  const result = await tryFetchSceneJson(sceneUrl, fetchImpl);
+  const result = await tryFetchSceneJson(sceneUrl, fetchImpl, options);
   if (!result.valid) {
     return {
       ...result,
@@ -243,9 +268,9 @@ async function resolveCurrentJson(current, directoryUrl, fetchImpl) {
   };
 }
 
-async function tryFetchCurrentJson(directoryUrl, fetchImpl) {
+async function tryFetchCurrentJson(directoryUrl, fetchImpl, options) {
   const currentUrl = new URL('current.json', directoryUrl).href;
-  const fetched = await fetchText(currentUrl, fetchImpl);
+  const fetched = await fetchText(currentUrl, fetchImpl, options);
   if (!fetched.ok) return { valid: false, reason: 'current-json-fetch-failed', fetched };
 
   let current;
@@ -255,7 +280,7 @@ async function tryFetchCurrentJson(directoryUrl, fetchImpl) {
     return { valid: false, reason: 'invalid-current-json', error, fetched };
   }
 
-  return resolveCurrentJson(current, directoryUrl, fetchImpl);
+  return resolveCurrentJson(current, directoryUrl, fetchImpl, options);
 }
 
 export async function loadExportPackageFromUrl(url, options = {}) {
@@ -270,15 +295,19 @@ export async function loadExportPackageFromUrl(url, options = {}) {
   }
 
   const fetchImpl = ensureFetch(fetchImplFromOptions(options));
+  const fetchOptions = { signal: options.signal, maxBytes: options.maxDocumentBytes ?? Infinity };
   const attempts = [];
 
-  const directFetched = await fetchBlob(parsed.href, fetchImpl).catch((error) => (
-    { ok: false, reason: 'direct-fetch-threw', error, url: parsed.href }
+  const directFetched = await fetchBlob(parsed.href, fetchImpl, fetchOptions).catch((error) => (
+    { ok: false, reason: error?.message || 'direct-fetch-threw', error, url: parsed.href }
   ));
   let directText = null;
   if (directFetched.ok) {
     const zipCandidate = await shouldTreatAsZip(directFetched, parsed.href);
     if (zipCandidate) {
+      if (options.handoffOnly) {
+        return { valid: false, reason: 'handoff-url-kind-rejected', shouldBlockGenericImport: true };
+      }
       const zipResult = await tryLoadZipBlob(directFetched.blob, directFetched.url)
         .catch((error) => ({ valid: false, reason: 'zip-load-threw', error }));
       if (zipResult.valid) return zipResult;
@@ -296,6 +325,9 @@ export async function loadExportPackageFromUrl(url, options = {}) {
     directText = await directFetched.blob.text();
     const singleHtmlResult = loadSingleHtmlExportFromText(directText);
     if (singleHtmlResult.valid) {
+      if (options.handoffOnly) {
+        return { valid: false, reason: 'handoff-url-kind-rejected', shouldBlockGenericImport: true };
+      }
       return {
         ...singleHtmlResult,
         sourceUrl: directFetched.url || parsed.href,
@@ -313,7 +345,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
       const href = extractSceneSyncExportHref(directText);
       if (href) {
         const markerSceneUrl = new URL(href, directFetched.url || parsed.href).href;
-        const markerResult = await tryFetchSceneJson(markerSceneUrl, fetchImpl)
+        const markerResult = await tryFetchSceneJson(markerSceneUrl, fetchImpl, fetchOptions)
           .catch((error) => ({ valid: false, reason: 'html-marker-scene-json-threw', error }));
         if (markerResult.valid) return {
           ...markerResult,
@@ -341,7 +373,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
       } catch (error) {
         return blockingResult({ reason: 'invalid-current-json', error }, attempts);
       }
-      const currentResult = await resolveCurrentJson(current, directoryOfUrl(directFetched.url), fetchImpl)
+      const currentResult = await resolveCurrentJson(current, directoryOfUrl(directFetched.url), fetchImpl, fetchOptions)
         .catch((error) => ({ valid: false, reason: 'current-json-threw', error }));
       if (currentResult.valid) return currentResult;
       return blockingResult(currentResult, attempts);
@@ -357,7 +389,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
   }
 
   const directoryUrl = asDirectoryUrl(parsed.href);
-  const directorySceneResult = await tryFetchSceneJson(new URL('scene.json', directoryUrl).href, fetchImpl)
+  const directorySceneResult = await tryFetchSceneJson(new URL('scene.json', directoryUrl).href, fetchImpl, fetchOptions)
     .catch((error) => ({ valid: false, reason: 'directory-scene-json-threw', error }));
   if (directorySceneResult.valid) return {
     ...directorySceneResult,
@@ -369,7 +401,7 @@ export async function loadExportPackageFromUrl(url, options = {}) {
     return blockingResult(directorySceneResult, attempts);
   }
 
-  const currentResult = await tryFetchCurrentJson(directoryUrl, fetchImpl)
+  const currentResult = await tryFetchCurrentJson(directoryUrl, fetchImpl, fetchOptions)
     .catch((error) => ({ valid: false, reason: 'current-json-threw', error }));
   if (currentResult.valid) return currentResult;
   attempts.push({ step: 'current-json', reason: currentResult.reason });

@@ -70,6 +70,17 @@ test('handoff validates URL-authoritative room, type, version, mode, document, a
   }
 });
 
+test('handoff accepts only an http(s), credential-free URL payload exclusive of embedded data', () => {
+  const urlMessage = createHandoffMessage({ sessionId, requestId, sourceUrl: 'https://static.example/world/v4/' });
+  const result = validateHandoffMessage(urlMessage, validationOptions);
+  assert.equal(result.valid, true);
+  assert.equal(result.sourceUrl, 'https://static.example/world/v4/');
+  assert.equal(validateHandoffMessage({ ...urlMessage, sceneDocument, embeddedAssets }, validationOptions).reason, 'handoff-source-conflict');
+  assert.equal(validateHandoffMessage({ ...urlMessage, sourceUrl: 'file:///tmp/scene.json' }, validationOptions).reason, 'invalid-handoff-source-url');
+  assert.equal(validateHandoffMessage({ ...urlMessage, sourceUrl: 'https://u:p@static.example/a' }, validationOptions).reason, 'invalid-handoff-source-url');
+  assert.equal(validateHandoffMessage({ ...urlMessage, sourceUrl: `https://static.example/${'a'.repeat(8192)}` }, validationOptions).reason, 'invalid-handoff-source-url');
+});
+
 test('strict canonical validation rejects structured-clone values that JSON would corrupt', () => {
   const cycle = { value: 1 };
   cycle.self = cycle;

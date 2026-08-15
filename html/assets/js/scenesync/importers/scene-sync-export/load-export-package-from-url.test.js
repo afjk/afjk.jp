@@ -123,6 +123,15 @@ test('loads ZIP content from application/zip URLs without requiring a .zip exten
   });
 });
 
+test('handoff-only loader rejects ZIP before JSZip processing', async () => {
+  const fetchImpl = createFetch({
+    'https://example.test/export': { body: 'PK\x03\x04', contentType: 'application/zip' },
+  });
+  const result = await loadExportPackageFromUrl('https://example.test/export', { fetchImpl, handoffOnly: true, maxDocumentBytes: 1024 });
+  strictEqual(result.valid, false);
+  strictEqual(result.reason, 'handoff-url-kind-rejected');
+});
+
 test('loads octet-stream ZIP content when magic bytes start with PK', async () => {
   const fetchImpl = createFetch({
     'https://cdn.example.com/export/abc': {
@@ -154,6 +163,23 @@ test('loads a direct scene.json URL', async () => {
   strictEqual(result.kind, 'scene-json-url');
   strictEqual(result.baseUrl, 'https://example.com/world/');
   strictEqual(result.sceneDocument.objects[0].id, 'box-1');
+});
+
+test('URL loader omits credentials and forwards an AbortSignal for page and marker fetches', async () => {
+  const calls = [];
+  const controller = new AbortController();
+  const fetchImpl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith('/index.html')) return response({ url: String(url), body: '<link rel="scene-sync-export" href="scene.json">', contentType: 'text/html' });
+    return response({ url: String(url), body: { format: 'scene-sync-export-scene', version: 2, objects: [] } });
+  };
+  const result = await loadExportPackageFromUrl('https://example.test/index.html', { fetchImpl, signal: controller.signal, maxDocumentBytes: 1024 });
+  strictEqual(result.valid, true);
+  strictEqual(calls.length, 2);
+  for (const call of calls) {
+    strictEqual(call.options.credentials, 'omit');
+    strictEqual(call.options.signal, controller.signal);
+  }
 });
 
 test('marks explicit invalid scene.json URLs as blocking generic URL fallback', async () => {

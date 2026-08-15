@@ -3,7 +3,13 @@ import { collectExportAssets } from './collect-export-assets.js';
 import { fetchExportViewerSources, SINGLE_HTML_HANDOFF_SOURCES, VIEWER_SOURCES } from './viewer-sources.js';
 import { normalizeExportMetadata } from './export-metadata.js';
 
-export const SINGLE_HTML_VIEWER_SOURCES = [...VIEWER_SOURCES, ...SINGLE_HTML_HANDOFF_SOURCES];
+const VIEWER_DESTINATIONS = new Set(VIEWER_SOURCES.map(({ dest }) => dest));
+// Static exports now bundle the shared handoff modules. Avoid fetching the
+// same module twice when Auto/Single HTML prepares the combined source set.
+export const SINGLE_HTML_VIEWER_SOURCES = [
+  ...VIEWER_SOURCES,
+  ...SINGLE_HTML_HANDOFF_SOURCES.filter(({ dest }) => !VIEWER_DESTINATIONS.has(dest)),
+];
 
 /** Fetches every input shared by Single HTML and Static ZIP builders once. */
 export async function prepareSceneSyncExport({

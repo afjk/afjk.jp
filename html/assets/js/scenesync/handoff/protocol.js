@@ -47,16 +47,30 @@ export function createReadyMessage({ sessionId, requestId } = {}) {
   };
 }
 
-export function createHandoffMessage({ sessionId, requestId, roomId, sceneDocument, embeddedAssets }) {
+export function isSafeHandoffSourceUrl(value) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 8192) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+export function createHandoffMessage({ sessionId, requestId, roomId, sceneDocument, embeddedAssets, sourceUrl }) {
   const message = {
     type: SCENE_SYNC_HANDOFF_TYPE,
     version: SCENE_SYNC_HANDOFF_VERSION,
     sessionId,
     requestId,
     mode: SCENE_SYNC_HANDOFF_MODE_ADD,
-    sceneDocument,
-    embeddedAssets,
   };
+  if (sourceUrl !== undefined) message.sourceUrl = sourceUrl;
+  else {
+    message.sceneDocument = sceneDocument;
+    message.embeddedAssets = embeddedAssets;
+  }
   const cleanedRoomId = sanitizeRoomCode(roomId);
   if (cleanedRoomId) message.roomId = cleanedRoomId;
   return message;
@@ -206,10 +220,24 @@ export function validateHandoffMessage(value, {
     return { valid: false, reason: 'handoff-room-mismatch' };
   }
 
-  const canonical = canonicalizeJsonValue({
-    sceneDocument: value.sceneDocument,
-    embeddedAssets: value.embeddedAssets,
-  }, limits);
+  const hasSourceUrl = value.sourceUrl !== undefined;
+  const hasEmbedded = value.sceneDocument !== undefined || value.embeddedAssets !== undefined;
+  if (hasSourceUrl && hasEmbedded) return { valid: false, reason: 'handoff-source-conflict' };
+  if (hasSourceUrl) {
+    if (!isSafeHandoffSourceUrl(value.sourceUrl)) return { valid: false, reason: 'invalid-handoff-source-url' };
+    const message = Object.assign(Object.create(null), {
+      type: SCENE_SYNC_HANDOFF_TYPE,
+      version: SCENE_SYNC_HANDOFF_VERSION,
+      sessionId: value.sessionId,
+      requestId: value.requestId,
+      mode: SCENE_SYNC_HANDOFF_MODE_ADD,
+      sourceUrl: new URL(value.sourceUrl).href,
+    });
+    if (expectedRoomId) message.roomId = expectedRoomId;
+    return { valid: true, message, sourceUrl: message.sourceUrl, roomId: expectedRoomId,
+      sessionId: value.sessionId, requestId: value.requestId };
+  }
+  const canonical = canonicalizeJsonValue({ sceneDocument: value.sceneDocument, embeddedAssets: value.embeddedAssets }, limits);
   if (!canonical.valid) return canonical;
   const sceneDocument = canonical.value.sceneDocument;
   const embeddedAssets = canonical.value.embeddedAssets;

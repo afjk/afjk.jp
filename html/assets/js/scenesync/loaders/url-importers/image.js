@@ -61,7 +61,7 @@ function filenameFromUrl(url, fallback = 'image') {
  * @param {object} opts - { timeoutMs = 15000 }
  * @returns {Promise<{ texture, width, height, aspect }>}
  */
-export async function loadImageTextureFromUrl(url, { timeoutMs = 15000, THREE } = {}) {
+export async function loadImageTextureFromUrl(url, { timeoutMs = 15000, THREE, signal } = {}) {
   const img = document.createElement('img');
   img.crossOrigin = 'anonymous';
   img.decoding = 'async';
@@ -69,10 +69,12 @@ export async function loadImageTextureFromUrl(url, { timeoutMs = 15000, THREE } 
   await new Promise((resolve, reject) => {
     let settled = false;
     let timerId = null;
+    let onAbort = null;
     const finish = (fn, arg) => {
       if (settled) return;
       settled = true;
       if (timerId !== null) clearTimeout(timerId);
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
       fn(arg);
     };
 
@@ -83,6 +85,11 @@ export async function loadImageTextureFromUrl(url, { timeoutMs = 15000, THREE } 
     );
     img.addEventListener('load', onLoad, { once: true });
     img.addEventListener('error', onError, { once: true });
+    onAbort = () => {
+      img.removeAttribute('src');
+      finish(reject, signal?.reason || new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     timerId = setTimeout(
       () => finish(reject, new Error('画像の読み込みがタイムアウトしました')),
       timeoutMs

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createViewerCore } from './create-viewer-core.js';
 import { createPlayerTransportPanel } from './player-transport.js';
+import { mountUrlHandoff } from '../scenesync/handoff/source.js';
 
 // Resolve scene.json relative to the document root, not the script location
 const BASE_URL = new URL('./', document.baseURI).href;
@@ -117,6 +118,11 @@ async function main() {
     fileWarning?.classList.remove('hidden');
     loadingOverlay?.classList.add('hidden');
     return;
+  }
+  if (!embeddedSceneDocument && (location.protocol === 'http:' || location.protocol === 'https:')) {
+    // Keep this as the viewer page rather than scene.json: it preserves the
+    // export marker and works on static hosts with versioned viewer URLs.
+    mountUrlHandoff({ sourceUrl: location.href });
   }
 
   let sceneDoc;

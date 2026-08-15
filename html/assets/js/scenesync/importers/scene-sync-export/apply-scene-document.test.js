@@ -2,7 +2,7 @@
 // Run: node --test html/assets/js/scenesync/importers/scene-sync-export/apply-scene-document.test.js
 
 import { test } from 'node:test';
-import { strictEqual, deepStrictEqual, ok } from 'node:assert';
+import { strictEqual, deepStrictEqual, ok, rejects } from 'node:assert';
 import { applySceneDocument } from './apply-scene-document.js';
 
 function createFakeZip(files) {
@@ -148,9 +148,208 @@ test('imports ZIP-bundled GLB assets via importGlbFileAsSceneObject, keeping obj
   strictEqual(options.name, 'Booth');
   deepStrictEqual(options.position, [1, 0.5, -2]);
   strictEqual(options.selectAfterLoad, false);
+  strictEqual(options.strictUpload, false);
   deepStrictEqual(options.metadata, { role: 'booth' });
   deepStrictEqual(options.animation, { enabled: true, clip: 0 });
   ok(options.audioSources.ambient);
+});
+
+test('forwards strict GLB upload and abort options for handoff imports', async () => {
+  const controller = new AbortController();
+  const zip = createFakeZip({ 'assets/model.glb': new ArrayBuffer(8) });
+  let received;
+  await applySceneDocument({
+    objects: [{
+      id: 'model', name: 'Model', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      importAsset: { kind: 'glb-file', path: 'assets/model.glb', originalName: 'model.glb', mime: 'model/gltf-binary' },
+    }],
+  }, {
+    managedObjects: new Map(),
+    zip,
+    strictAssetUploads: true,
+    signal: controller.signal,
+    addOrUpdateObject() {}, broadcast() {},
+    importGlbFileAsSceneObject: async (_file, options) => { received = options; },
+  });
+  strictEqual(received.strictUpload, true);
+  strictEqual(received.signal, controller.signal);
+});
+
+test('strict handoff asset staging rejects failed upload even with a remote fallback and forwards AbortSignal', async () => {
+  const controller = new AbortController();
+  const zip = createFakeZip({ 'assets/poster.png': new Uint8Array([1]).buffer });
+  let receivedSignal;
+  await rejects(() => applySceneDocument({
+    objects: [{
+      id: 'poster', name: 'Poster', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', path: 'assets/poster.png', url: 'https://publisher.example/poster.png' },
+      importAsset: { kind: 'blob-file', path: 'assets/poster.png', mime: 'image/png' },
+    }],
+  }, {
+    managedObjects: new Map(), zip, strictAssetUploads: true, signal: controller.signal,
+    addOrUpdateObject() { throw new Error('must not mutate'); }, broadcast() {},
+    uploadBlobToStore: async (_blob, _mime, _extension, signal) => { receivedSignal = signal; throw new Error('upload down'); },
+  }), { code: 'handoff-asset-stage-failed' });
+  strictEqual(receivedSignal, controller.signal);
+});
+
+test('strict async media/text loaders commit before handoff broadcast and reject peer collisions', async (t) => {
+  for (const type of ['image', 'video', 'text']) {
+    await t.test(type, async () => {
+      const managedObjects = new Map();
+      const peer = { owner: 'peer' };
+      const broadcasts = [];
+      let loaderOptions;
+      await rejects(() => applySceneDocument({
+        objects: [{
+          id: `${type}-race`, name: type, position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+          asset: type === 'text'
+            ? { type, source: 'url', url: 'https://publisher.example/text.md' }
+            : { type, source: 'blob', url: `https://blob.example/${type}` },
+        }],
+      }, {
+        managedObjects,
+        strictAssetUploads: true,
+        assertObjectAvailable: (id) => {
+          if (!managedObjects.has(id)) return;
+          const error = new Error('collision'); error.code = 'handoff-object-id-conflict'; throw error;
+        },
+        addOrUpdateObject: (_id, _payload, options) => new Promise((resolve, reject) => {
+          loaderOptions = options;
+          queueMicrotask(() => {
+            managedObjects.set(`${type}-race`, peer);
+            try { options.beforeCommit(`${type}-race`, { owner: 'handoff' }); resolve(); } catch (error) { reject(error); }
+          });
+        }),
+        broadcast: (payload) => broadcasts.push(payload),
+      }), { code: 'handoff-object-id-conflict' });
+      ok(loaderOptions.strictLoad);
+      strictEqual(managedObjects.get(`${type}-race`), peer);
+      strictEqual(broadcasts.length, 0);
+    });
+  }
+});
+
+test('strict async media loaders wait for the ready managed object before broadcast', async () => {
+  const managedObjects = new Map();
+  const broadcasts = [];
+  let resolveLoader;
+  const importing = applySceneDocument({
+    objects: [{
+      id: 'ready-image', name: 'Ready', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', source: 'blob', url: 'https://blob.example/ready.png' },
+    }],
+  }, {
+    managedObjects,
+    strictAssetUploads: true,
+    assertObjectAvailable: (id) => {
+      if (!managedObjects.has(id)) return;
+      const error = new Error('collision'); error.code = 'handoff-object-id-conflict'; throw error;
+    },
+    addOrUpdateObject: (id, _payload, options) => new Promise((resolve) => {
+      resolveLoader = () => {
+        const candidate = { owner: 'handoff-ready' };
+        options.beforeCommit(id, candidate);
+        managedObjects.set(id, candidate);
+        resolve(candidate);
+      };
+    }),
+    broadcast: (payload) => broadcasts.push(payload),
+  });
+  await Promise.resolve();
+  strictEqual(broadcasts.length, 0);
+  strictEqual(managedObjects.has('ready-image'), false);
+  resolveLoader();
+  await importing;
+  strictEqual(managedObjects.get('ready-image').owner, 'handoff-ready');
+  strictEqual(broadcasts.length, 1);
+});
+
+test('strict async media loader failures reject without a fallback mutation or broadcast', async () => {
+  const managedObjects = new Map();
+  const broadcasts = [];
+  await rejects(() => applySceneDocument({
+    objects: [{
+      id: 'failed-video', name: 'Failed', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'video', source: 'blob', url: 'https://blob.example/failed.mp4' },
+    }],
+  }, {
+    managedObjects,
+    strictAssetUploads: true,
+    addOrUpdateObject: () => Promise.reject(Object.assign(new Error('video load failed'), { code: 'handoff-object-load-failed' })),
+    broadcast: (payload) => broadcasts.push(payload),
+  }), { code: 'handoff-object-load-failed' });
+  strictEqual(managedObjects.size, 0);
+  strictEqual(broadcasts.length, 0);
+});
+
+test('strict never-settling media loader races AbortSignal and consumes late rejection', async () => {
+  const controller = new AbortController();
+  const managedObjects = new Map();
+  const broadcasts = [];
+  let rejectLate;
+  let loaderOptions;
+  const importing = applySceneDocument({
+    objects: [{
+      id: 'hung-image', name: 'Hung', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', source: 'blob', url: 'https://blob.example/hung.png' },
+    }],
+  }, {
+    managedObjects, signal: controller.signal, strictAssetUploads: true,
+    assertObjectAvailable: (id) => {
+      if (!controller.signal.aborted && !managedObjects.has(id)) return;
+      const error = new Error('deadline'); error.code = 'handoff-url-timeout'; throw error;
+    },
+    addOrUpdateObject: (_id, _payload, options) => {
+      loaderOptions = options;
+      return new Promise((_resolve, reject) => { rejectLate = reject; });
+    },
+    broadcast: (payload) => broadcasts.push(payload),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await rejects(importing, { code: 'handoff-url-timeout' });
+  strictEqual(loaderOptions.signal, controller.signal);
+  strictEqual(broadcasts.length, 0);
+  rejectLate(new Error('late image decode failure'));
+  await Promise.resolve();
+  strictEqual(managedObjects.size, 0);
+});
+
+test('strict never-settling GLB loader races AbortSignal without later mutation', async () => {
+  const controller = new AbortController();
+  const managedObjects = new Map();
+  const broadcasts = [];
+  let resolveLate;
+  const zip = createFakeZip({ 'assets/hung.glb': new ArrayBuffer(8) });
+  const importing = applySceneDocument({
+    objects: [{
+      id: 'hung-glb', name: 'Hung GLB', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      importAsset: { kind: 'glb-file', path: 'assets/hung.glb', originalName: 'hung.glb', mime: 'model/gltf-binary' },
+    }],
+  }, {
+    managedObjects, signal: controller.signal, strictAssetUploads: true, zip,
+    assertObjectAvailable: (id) => {
+      if (!controller.signal.aborted && !managedObjects.has(id)) return;
+      const error = new Error('deadline'); error.code = 'handoff-url-timeout'; throw error;
+    },
+    importGlbFileAsSceneObject: (_file, options) => new Promise((resolve) => {
+      resolveLate = () => {
+        try { options.beforeCommit('hung-glb', { owner: 'late-glb' }); } catch {}
+        resolve();
+      };
+    }),
+    addOrUpdateObject() {},
+    broadcast: (payload) => broadcasts.push(payload),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await rejects(importing, { code: 'handoff-url-timeout' });
+  ok(resolveLate);
+  resolveLate();
+  await Promise.resolve();
+  strictEqual(managedObjects.size, 0);
+  strictEqual(broadcasts.length, 0);
 });
 
 test('imports ZIP-bundled image/text/audio assets as shared Scene Sync URLs', async () => {

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import { strictEqual, deepStrictEqual, rejects } from 'node:assert';
 import {
   applySceneSyncHandoffPayload,
+  applySceneSyncHandoffUrl,
   showSceneDocumentImportPreview,
   tryOpenSceneSyncExportFile,
   tryOpenSceneSyncExportUrl,
@@ -183,6 +184,11 @@ test('imports Scene Sync Export scene.json URLs without broadcasting relative as
   };
   const fetchImpl = createFetch({
     'https://example.com/world/scene.json': { body: sceneDocument },
+    'https://example.com/world/assets/poster.png': { body: new Uint8Array([1, 2, 3]) },
+    'https://example.com/world/assets/narration.mp3': { body: new Uint8Array([4]) },
+    'https://example.com/world/assets/model.glb': { body: new Uint8Array([5, 6]) },
+    'https://example.com/world/assets/story.md': { body: '# story' },
+    'https://example.com/world/assets/bgm.mp3': { body: new Uint8Array([7]) },
   });
   const managedObjects = new Map();
   const calls = { addOrUpdate: [], broadcast: [], bgm: [], uploads: 0, toasts: [] };
@@ -196,24 +202,22 @@ test('imports Scene Sync Export scene.json URLs without broadcasting relative as
     applySceneBgm: (bgm, options) => calls.bgm.push({ bgm, options }),
     uploadBlobToStore: async () => {
       calls.uploads += 1;
-      throw new Error('URL import should not upload assets');
+      return { url: `https://blob.test/${calls.uploads}` };
     },
     showToast: (message) => calls.toasts.push(message),
   });
 
   strictEqual(result.handled, true);
   strictEqual(result.stats.added, 3);
-  strictEqual(calls.uploads, 0);
+  strictEqual(calls.uploads, 4);
 
   const finalAdds = calls.addOrUpdate.filter((call) => call.options?.source === 'scene-sync-export-import');
   strictEqual(finalAdds.length, 3);
-  strictEqual(finalAdds[0].payload.asset.url, 'https://example.com/world/assets/poster.png');
-  strictEqual(finalAdds[0].payload.asset.source, 'url');
-  strictEqual(finalAdds[0].payload.audioSources.default.url, 'https://example.com/world/assets/narration.mp3');
-  strictEqual(finalAdds[1].payload.asset.url, 'https://example.com/world/assets/model.glb');
-  strictEqual(finalAdds[1].payload.asset.source, 'url');
-  strictEqual(finalAdds[2].payload.asset.url, 'https://example.com/world/assets/story.md');
-  strictEqual(calls.bgm[0].bgm.url, 'https://example.com/world/assets/bgm.mp3');
+  strictEqual(finalAdds[0].payload.asset.url, 'https://blob.test/1');
+  strictEqual(finalAdds[0].payload.asset.source, 'blob');
+  strictEqual(finalAdds[0].payload.audioSources.default.url, 'https://blob.test/2');
+  strictEqual(finalAdds[2].payload.asset.url, 'https://blob.test/3');
+  strictEqual(calls.bgm[0].bgm.url, 'https://blob.test/4');
 
   const broadcastJson = JSON.stringify(calls.broadcast);
   strictEqual(broadcastJson.includes('"path"'), false);
@@ -439,6 +443,42 @@ test('handoff add rejects duplicate and existing object IDs before preview, upda
   strictEqual(calls.broadcasts, 0);
 });
 
+test('URL handoff preflights existing IDs before it fetches publisher assets', async () => {
+  let calls = 0;
+  await rejects(
+    () => applySceneSyncHandoffUrl({ sourceUrl: 'https://example.com/world/scene.json' }, {
+      managedObjects: new Map([['taken', {}]]),
+      fetchImpl: async (url) => {
+        calls += 1;
+        return response({ url: String(url), body: {
+          format: 'scene-sync-export-scene', version: 2,
+          objects: [{ id: 'taken', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/a.png' } }],
+        } });
+      },
+    }),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(calls, 1, 'only scene.json may be fetched before ID preflight rejects');
+});
+
+test('direct URL import confirms before fetching assets', async () => {
+  let assetFetches = 0;
+  const result = await tryOpenSceneSyncExportUrl('https://example.com/world/scene.json', {
+    managedObjects: new Map(),
+    confirmOpen: () => false,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/scene.json')) return response({ url: String(url), body: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ id: 'cancel', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/a.png' } }],
+      } });
+      assetFetches += 1;
+      return response({ url: String(url), body: 'asset' });
+    },
+  });
+  strictEqual(result.cancelled, true);
+  strictEqual(assetFetches, 0);
+});
+
 test('handoff final guards preserve peer objects added during image upload or GLB load', async () => {
   const base = {
     position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
@@ -503,6 +543,87 @@ test('handoff final guards preserve peer objects added during image upload or GL
   strictEqual(glbCalls.broadcasts, 0);
   strictEqual(glbCalls.uploads, 0);
   strictEqual(glbObjects.get('raced-glb'), glbRemote);
+});
+
+test('handoff rolls back earlier own objects after a later asset failure without deleting a peer replacement', async () => {
+  const managedObjects = new Map();
+  const broadcasts = [];
+  const own = { owner: 'handoff' };
+  const peer = { owner: 'peer' };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [
+          { id: 'first', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'primitive', primitive: 'box' } },
+          { id: 'later', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/fail.png' } },
+        ],
+      },
+      embeddedAssets: { 'assets/fail.png': { mime: 'image/png', base64: 'AQ==' } },
+    }, {
+      managedObjects,
+      addOrUpdateObject: (id) => managedObjects.set(id, own),
+      broadcast: (payload) => broadcasts.push(payload),
+      uploadBlobToStore: async () => {
+        managedObjects.set('first', peer);
+        throw new Error('late upload failed');
+      },
+      rollbackImportedObject: (id, expected) => {
+        if (managedObjects.get(id) !== expected) return false;
+        managedObjects.delete(id);
+        broadcasts.push({ kind: 'scene-remove', objectId: id });
+        return true;
+      },
+    }),
+  );
+  strictEqual(managedObjects.get('first'), peer);
+  strictEqual(broadcasts.some((entry) => entry.kind === 'scene-remove'), false);
+});
+
+test('handoff rollback removes its own earlier object in reverse failure cleanup', async () => {
+  const managedObjects = new Map();
+  const own = { owner: 'handoff' };
+  const removes = [];
+  await rejects(() => applySceneSyncHandoffPayload({
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [
+      { id: 'first-own', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'primitive', primitive: 'box' } },
+      { id: 'later-fail', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'image', path: 'assets/fail.png' } },
+    ] },
+    embeddedAssets: { 'assets/fail.png': { mime: 'image/png', base64: 'AQ==' } },
+  }, {
+    managedObjects,
+    addOrUpdateObject: (id) => managedObjects.set(id, own),
+    broadcast: () => {},
+    uploadBlobToStore: async () => { throw new Error('late upload failed'); },
+    rollbackImportedObject: (id, expected) => {
+      if (managedObjects.get(id) !== expected) return false;
+      managedObjects.delete(id); removes.push(id); return true;
+    },
+  }));
+  strictEqual(managedObjects.has('first-own'), false);
+  deepStrictEqual(removes, ['first-own']);
+});
+
+test('handoff records before broadcast and rolls back a broadcast failure', async () => {
+  const managedObjects = new Map();
+  const own = { owner: 'handoff' };
+  let rollbacks = 0;
+  await rejects(() => applySceneSyncHandoffPayload({
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [{
+      id: 'broadcast-fail', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'primitive', primitive: 'box' },
+    }] }, embeddedAssets: {},
+  }, {
+    managedObjects,
+    addOrUpdateObject: (id) => managedObjects.set(id, own),
+    broadcast: () => { throw new Error('socket failed'); },
+    rollbackImportedObject: (id, expected) => {
+      if (managedObjects.get(id) !== expected) return false;
+      managedObjects.delete(id); rollbacks += 1; return true;
+    },
+  }));
+  strictEqual(managedObjects.has('broadcast-fail'), false);
+  strictEqual(rollbacks, 1);
 });
 
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {

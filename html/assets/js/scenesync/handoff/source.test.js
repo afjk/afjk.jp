@@ -35,12 +35,13 @@ function createFakeWindow(popups = []) {
     removeEventListener(type, listener) {
       if (listeners.get(type) === listener) listeners.delete(type);
     },
-    setTimeout(fn) { const id = nextId++; timeouts.set(id, fn); return id; },
+    setTimeout(fn, delay) { const id = nextId++; timeouts.set(id, { fn, delay }); return id; },
     clearTimeout(id) { timeouts.delete(id); },
     setInterval(fn) { const id = nextId++; intervals.set(id, fn); return id; },
     clearInterval(id) { intervals.delete(id); },
     emitMessage(event) { return listeners.get('message')?.(event); },
-    fireTimeout() { const [id, fn] = timeouts.entries().next().value || []; timeouts.delete(id); fn?.(); },
+    fireTimeout() { const [id, entry] = timeouts.entries().next().value || []; timeouts.delete(id); entry?.fn?.(); },
+    timeoutDelays() { return [...timeouts.values()].map((entry) => entry.delay); },
     pollClosed() { intervals.values().next().value?.(); },
     opened,
   };
@@ -85,6 +86,20 @@ test('source completes bound READY/SEND/ACK and resets READY to import timeout',
   });
   assert.equal(controller.getState(), 'complete');
   assert.equal(states.at(-1).message, 'Opened in Scene Sync.');
+});
+
+test('source sends URL-only handoffs without embedded scene data', () => {
+  const popup = createPopup();
+  const windowRef = createFakeWindow([popup]);
+  const controller = createHandoffSourceController({ windowRef, sourceUrl: 'https://static.example/world/' });
+  const opened = controller.open();
+  windowRef.emitMessage({ source: popup, origin: 'https://afjk.jp', data: {
+    type: 'scene-sync-ready', version: 1, sessionId: opened.sessionId, requestId: opened.requestId,
+  } });
+  assert.equal(popup.sent[0].message.sourceUrl, 'https://static.example/world/');
+  assert.equal('sceneDocument' in popup.sent[0].message, false);
+  assert.equal('embeddedAssets' in popup.sent[0].message, false);
+  assert.ok(windowRef.timeoutDelays().includes(13 * 60 * 1000));
 });
 
 test('source separates READY/import timeout and reports popup blocked/closed', () => {

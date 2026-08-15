@@ -136,3 +136,42 @@ test('target preserves visible diagnostic and safe coded import error ACK for op
     origin: '*',
   });
 });
+
+test('target sends a timeout error ACK and releases busy after an aborted loader', async () => {
+  const replies = [];
+  const opener = { postMessage: (message, origin) => replies.push({ message, origin }) };
+  const windowRef = createFakeTargetWindow(opener);
+  let attempts = 0;
+  const session = createHandoffTargetSession({
+    windowRef, locationRef: { search: targetSearch }, validateMessage: validating,
+    applyMessage: async () => {
+      attempts += 1;
+      const error = new Error('deadline'); error.code = 'handoff-url-timeout'; throw error;
+    },
+  });
+  await windowRef.emitMessage({ source: opener, origin: 'https://source.test', data: validMessage });
+  assert.equal(replies.at(-1).message.reason, 'handoff-url-timeout');
+  assert.equal(session.getState().busy, false);
+  await windowRef.emitMessage({ source: opener, origin: 'https://source.test', data: validMessage });
+  assert.equal(attempts, 2);
+  assert.equal(replies.at(-1).message.reason, 'handoff-url-timeout');
+});
+
+test('target binds URL handoff sourceUrl to the postMessage origin', async () => {
+  const replies = [];
+  const opener = { postMessage: (message, origin) => replies.push({ message, origin }) };
+  const windowRef = createFakeTargetWindow(opener);
+  let applied = 0;
+  createHandoffTargetSession({
+    windowRef, locationRef: { search: targetSearch },
+    validateMessage: (message, options) => ({ valid: true, roomId: options.expectedRoomId, sourceUrl: message.sourceUrl }),
+    applyMessage: async () => { applied += 1; },
+  });
+  const urlMessage = { type: 'scene-sync-handoff', sessionId, requestId, sourceUrl: 'https://publisher.test/world/' };
+  await windowRef.emitMessage({ source: opener, origin: 'https://wrong.test', data: urlMessage });
+  assert.equal(replies.at(-1).message.reason, 'handoff-source-origin-mismatch');
+  assert.equal(applied, 0);
+  await windowRef.emitMessage({ source: opener, origin: 'https://publisher.test', data: urlMessage });
+  assert.equal(replies.at(-1).message.status, 'ok');
+  assert.equal(applied, 1);
+});
