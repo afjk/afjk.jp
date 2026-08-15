@@ -8267,12 +8267,13 @@ function captureScreenshotBlob(options = {}) {
   });
 }
 
-async function uploadBlobToStore(blob, contentType = 'application/octet-stream', extension = '') {
+async function uploadBlobToStore(blob, contentType = 'application/octet-stream', extension = '', signal) {
   const path = `${generateRandomPath()}${extension}`;
   const res = await fetch(`${BLOB_BASE}/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': contentType },
     body: blob,
+    signal,
   });
   if (!res.ok) {
     let payload = null;
@@ -8429,6 +8430,8 @@ async function importGlbFileAsSceneObject(file, {
   selectAfterLoad = false,
   showImportToast = false,
   beforeCommit,
+  strictUpload = false,
+  signal,
 } = {}) {
   const loadPosition = Array.isArray(position)
     ? new THREE.Vector3().fromArray(position)
@@ -8498,6 +8501,10 @@ async function importGlbFileAsSceneObject(file, {
     ...(animation ? { animation } : {}),
     ...(audioSources !== undefined ? { audioSources } : {}),
     ...(physics !== undefined ? { physics } : {}),
+  }, {
+    throwOnUploadFailure: strictUpload,
+    suppressHistory: strictUpload,
+    signal,
   });
 
   return model;
@@ -11088,7 +11095,7 @@ function generateRandomPath() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}) {
+async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}, options = {}) {
   const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const meshPath = generateRandomPath();
   let actualMeshPath = null;
@@ -11113,6 +11120,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
         method: 'POST',
         headers: { 'Content-Type': 'model/gltf-binary' },
         body: arrayBuffer,
+        signal: options.signal,
       });
       if (!uploadResponse.ok) {
         let payload = null;
@@ -11135,6 +11143,11 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
     } catch (err) {
       console.warn('POST failed:', err);
       showToast('GLB アップロード失敗: ' + err.message);
+      if (options.throwOnUploadFailure) {
+        const failure = new Error(options.signal?.aborted ? 'URL handoff timed out' : err.message);
+        failure.code = options.signal?.aborted ? 'handoff-url-timeout' : 'handoff-glb-upload-failed';
+        throw failure;
+      }
       return;
     }
 
@@ -11165,9 +11178,11 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
       ...extraFields,
     };
 
-    presenceState.historyManager.push(
-      HistoryManager.createSceneAddEntry(sceneAddPayload)
-    );
+    if (!options.suppressHistory) {
+      presenceState.historyManager.push(
+        HistoryManager.createSceneAddEntry(sceneAddPayload)
+      );
+    }
     notifySceneStateChanged('object-uploaded');
 
     broadcast(sceneAddPayload);

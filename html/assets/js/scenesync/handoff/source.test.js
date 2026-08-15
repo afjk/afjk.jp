@@ -35,12 +35,13 @@ function createFakeWindow(popups = []) {
     removeEventListener(type, listener) {
       if (listeners.get(type) === listener) listeners.delete(type);
     },
-    setTimeout(fn) { const id = nextId++; timeouts.set(id, fn); return id; },
+    setTimeout(fn, delay) { const id = nextId++; timeouts.set(id, { fn, delay }); return id; },
     clearTimeout(id) { timeouts.delete(id); },
     setInterval(fn) { const id = nextId++; intervals.set(id, fn); return id; },
     clearInterval(id) { intervals.delete(id); },
     emitMessage(event) { return listeners.get('message')?.(event); },
-    fireTimeout() { const [id, fn] = timeouts.entries().next().value || []; timeouts.delete(id); fn?.(); },
+    fireTimeout() { const [id, entry] = timeouts.entries().next().value || []; timeouts.delete(id); entry?.fn?.(); },
+    timeoutDelays() { return [...timeouts.values()].map((entry) => entry.delay); },
     pollClosed() { intervals.values().next().value?.(); },
     opened,
   };
@@ -98,6 +99,7 @@ test('source sends URL-only handoffs without embedded scene data', () => {
   assert.equal(popup.sent[0].message.sourceUrl, 'https://static.example/world/');
   assert.equal('sceneDocument' in popup.sent[0].message, false);
   assert.equal('embeddedAssets' in popup.sent[0].message, false);
+  assert.ok(windowRef.timeoutDelays().includes(13 * 60 * 1000));
 });
 
 test('source separates READY/import timeout and reports popup blocked/closed', () => {

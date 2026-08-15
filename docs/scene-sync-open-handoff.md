@@ -54,6 +54,11 @@ rejected. Add mode rejects duplicate incoming object IDs and IDs already in the
 room. It adds objects and their per-object assets/physics only; it does not
 change environment, BGM, global physics, or scene behaviors.
 
+The source keeps a URL-handoff ACK window of at least 13 minutes. The target
+uses a 10 minute import deadline after room setup; timeout aborts pending
+publisher fetches and Scene Sync blob/GLB uploads, and no later mutation is
+accepted.
+
 Scene Sync rejects replayed/cross-session messages, non-JSON structured-clone
 values, invalid transforms, unsafe asset paths, malformed Base64, and payloads
 over the Single HTML import limits. The target accepts external origins only
@@ -67,9 +72,10 @@ Publish `index.html` with `<link rel="scene-sync-export" href="./scene.json">`
 (or an equivalent absolute/relative `href`). `scene.json` follows the normal
 Scene Sync Export scene-document format and its relative `asset.path` values
 are resolved relative to that JSON file. Scene Sync downloads and validates all
-referenced image, video, text, GLB, object-audio, and BGM files before applying
-the import, then uploads them to its blob store; a completed import has no
-runtime dependency on the publishing host.
+referenced image, video, text, GLB, and object-audio files before applying the
+handoff import, then uploads them to its blob store; a completed import has no
+runtime dependency on the publishing host. URL handoff deliberately skips BGM
+and all other scene-level settings.
 
 Hosts need CORS for the page, marker JSON, and every asset. Scene Sync fetches
 all of them with `credentials: "omit"`; redirects remain subject to the same

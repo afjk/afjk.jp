@@ -72,6 +72,7 @@ export async function uploadZipAsset({
   zip,
   plan,
   uploadBlobToStore,
+  signal,
 } = {}) {
   if (!zip || !plan?.path || typeof uploadBlobToStore !== 'function') return null;
 
@@ -82,7 +83,7 @@ export async function uploadZipAsset({
     const mime = plan.mime || inferMimeForExportAsset({ path: plan.path });
     const buffer = await entry.async('arraybuffer');
     const blob = new Blob([buffer], { type: mime });
-    const uploaded = await uploadBlobToStore(blob, mime, extensionForUpload(plan.path, mime));
+    const uploaded = await uploadBlobToStore(blob, mime, extensionForUpload(plan.path, mime), signal);
     if (!uploaded?.url) return null;
 
     return {

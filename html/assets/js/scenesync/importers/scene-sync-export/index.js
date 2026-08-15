@@ -341,7 +341,14 @@ async function applyLoadedSceneSyncExport(result, context, {
     if (rejectExistingObjectIds) {
       for (const objectId of [...rollbackCandidateIds].reverse()) {
         const expected = rollbackIdentityById.get(objectId);
-        if (expected) context.rollbackImportedObject?.(objectId, expected);
+        if (!expected) continue;
+        try {
+          context.rollbackImportedObject?.(objectId, expected);
+        } catch (rollbackError) {
+          // Preserve the import failure: a best-effort cleanup failure must
+          // not turn a failed handoff into an ACK-successful partial import.
+          console.warn('[Scene Sync Export Import] rollback failed:', rollbackError);
+        }
       }
     }
     throw error;
@@ -382,19 +389,18 @@ export async function applySceneSyncHandoffPayload({
 export async function applySceneSyncHandoffUrl({ sourceUrl }, context = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), context.handoffTimeoutMs || DEFAULT_URL_HANDOFF_TIMEOUT_MS);
-  const result = await loadExportPackageFromUrl(sourceUrl, {
-    fetchImpl: context.fetchImpl,
-    signal: controller.signal,
-    maxDocumentBytes: DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES,
-    handoffOnly: true,
-  });
-  if (!result.valid) {
-    clearTimeout(timeout);
-    const failure = new Error(`Scene Sync Export URL failed: ${result.reason}`);
-    failure.code = 'handoff-url-load-failed';
-    throw failure;
-  }
   try {
+    const result = await loadExportPackageFromUrl(sourceUrl, {
+      fetchImpl: context.fetchImpl,
+      signal: controller.signal,
+      maxDocumentBytes: DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES,
+      handoffOnly: true,
+    });
+    if (!result.valid) {
+      const failure = new Error(`Scene Sync Export URL failed: ${result.reason}`);
+      failure.code = 'handoff-url-load-failed';
+      throw failure;
+    }
     if (!URL_HANDOFF_KINDS.has(result.kind)) {
       const failure = new Error(`Unsupported URL handoff kind: ${result.kind}`);
       failure.code = 'handoff-url-kind-rejected';
@@ -420,6 +426,11 @@ export async function applySceneSyncHandoffUrl({ sourceUrl }, context = {}) {
       showPreview: false,
     });
   } catch (cause) {
+    if (controller.signal.aborted) {
+      const failure = new Error('Scene Sync URL handoff timed out');
+      failure.code = 'handoff-url-timeout';
+      throw failure;
+    }
     if (typeof cause?.code === 'string' && cause.code.startsWith('handoff-')) throw cause;
     const failure = new Error('Scene Sync URL handoff import failed');
     failure.code = 'handoff-url-import-failed';

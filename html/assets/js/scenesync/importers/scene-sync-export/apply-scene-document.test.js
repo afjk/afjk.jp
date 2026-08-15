@@ -2,7 +2,7 @@
 // Run: node --test html/assets/js/scenesync/importers/scene-sync-export/apply-scene-document.test.js
 
 import { test } from 'node:test';
-import { strictEqual, deepStrictEqual, ok } from 'node:assert';
+import { strictEqual, deepStrictEqual, ok, rejects } from 'node:assert';
 import { applySceneDocument } from './apply-scene-document.js';
 
 function createFakeZip(files) {
@@ -148,9 +148,49 @@ test('imports ZIP-bundled GLB assets via importGlbFileAsSceneObject, keeping obj
   strictEqual(options.name, 'Booth');
   deepStrictEqual(options.position, [1, 0.5, -2]);
   strictEqual(options.selectAfterLoad, false);
+  strictEqual(options.strictUpload, false);
   deepStrictEqual(options.metadata, { role: 'booth' });
   deepStrictEqual(options.animation, { enabled: true, clip: 0 });
   ok(options.audioSources.ambient);
+});
+
+test('forwards strict GLB upload and abort options for handoff imports', async () => {
+  const controller = new AbortController();
+  const zip = createFakeZip({ 'assets/model.glb': new ArrayBuffer(8) });
+  let received;
+  await applySceneDocument({
+    objects: [{
+      id: 'model', name: 'Model', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      importAsset: { kind: 'glb-file', path: 'assets/model.glb', originalName: 'model.glb', mime: 'model/gltf-binary' },
+    }],
+  }, {
+    managedObjects: new Map(),
+    zip,
+    strictAssetUploads: true,
+    signal: controller.signal,
+    addOrUpdateObject() {}, broadcast() {},
+    importGlbFileAsSceneObject: async (_file, options) => { received = options; },
+  });
+  strictEqual(received.strictUpload, true);
+  strictEqual(received.signal, controller.signal);
+});
+
+test('strict handoff asset staging rejects failed upload even with a remote fallback and forwards AbortSignal', async () => {
+  const controller = new AbortController();
+  const zip = createFakeZip({ 'assets/poster.png': new Uint8Array([1]).buffer });
+  let receivedSignal;
+  await rejects(() => applySceneDocument({
+    objects: [{
+      id: 'poster', name: 'Poster', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', path: 'assets/poster.png', url: 'https://publisher.example/poster.png' },
+      importAsset: { kind: 'blob-file', path: 'assets/poster.png', mime: 'image/png' },
+    }],
+  }, {
+    managedObjects: new Map(), zip, strictAssetUploads: true, signal: controller.signal,
+    addOrUpdateObject() { throw new Error('must not mutate'); }, broadcast() {},
+    uploadBlobToStore: async (_blob, _mime, _extension, signal) => { receivedSignal = signal; throw new Error('upload down'); },
+  }), { code: 'handoff-asset-stage-failed' });
+  strictEqual(receivedSignal, controller.signal);
 });
 
 test('imports ZIP-bundled image/text/audio assets as shared Scene Sync URLs', async () => {

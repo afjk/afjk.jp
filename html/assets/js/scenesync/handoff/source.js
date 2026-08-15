@@ -13,7 +13,7 @@ export const DEFAULT_HANDOFF_READY_TIMEOUT_MS = 25_000;
 export const DEFAULT_HANDOFF_ACK_TIMEOUT_MS = 120_000;
 // URL handoff can materialize up to 500 MiB. Keep source-side ACK waiting
 // longer than the target's ten-minute deadline while preserving Single HTML.
-export const DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS = 11 * 60 * 1000;
+export const DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS = 13 * 60 * 1000;
 
 function statusForFailure(reason) {
   return {

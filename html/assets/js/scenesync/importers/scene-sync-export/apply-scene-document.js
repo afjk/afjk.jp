@@ -88,22 +88,26 @@ function cleanFailedZipBackedAudioSource(source) {
 async function prepareZipBackedObjectAssets(obj, {
   zip,
   uploadBlobToStore,
+  signal,
 } = {}) {
   let asset = cloneJson(obj.asset);
   let audioSources = cloneJson(obj.audioSources);
   let metadata = cloneJson(obj.metadata);
   let skippedAssets = 0;
+  let failedUploads = 0;
 
   if (obj.importAsset?.kind === 'blob-file') {
     const uploaded = await uploadZipAsset({
       zip,
       plan: obj.importAsset,
       uploadBlobToStore,
+      signal,
     });
 
     if (uploaded) {
       asset = cleanUploadedAsset(asset, uploaded);
     } else {
+      failedUploads += 1;
       const cleaned = cleanFailedZipBackedAsset(asset, obj.importAsset);
       asset = cleaned.asset;
       if (!cleaned.fallbackUsed) {
@@ -122,6 +126,7 @@ async function prepareZipBackedObjectAssets(obj, {
       zip,
       plan,
       uploadBlobToStore,
+      signal,
     });
 
     if (uploaded) {
@@ -130,6 +135,7 @@ async function prepareZipBackedObjectAssets(obj, {
         [name]: cleanUploadedAudioSource(source, uploaded),
       };
     } else {
+      failedUploads += 1;
       const cleanedSource = cleanFailedZipBackedAudioSource(source);
       audioSources = { ...(audioSources || {}) };
       if (cleanedSource) {
@@ -172,7 +178,7 @@ async function prepareZipBackedObjectAssets(obj, {
     }
   }
 
-  return { asset, audioSources, metadata, skippedAssets };
+  return { asset, audioSources, metadata, skippedAssets, failedUploads };
 }
 
 export async function applySceneDocument(sceneDocument, {
@@ -228,9 +234,15 @@ export async function applySceneDocument(sceneDocument, {
     const prepared = await prepareZipBackedObjectAssets(obj, {
       zip,
       uploadBlobToStore,
+      signal,
     });
     skippedAssets += prepared.skippedAssets;
-    if (strictAssetUploads && prepared.skippedAssets > 0) {
+    if (signal?.aborted) {
+      const error = new Error('URL handoff timed out');
+      error.code = 'handoff-url-timeout';
+      throw error;
+    }
+    if (strictAssetUploads && (prepared.skippedAssets > 0 || prepared.failedUploads > 0)) {
       const error = new Error('Handoff asset staging failed');
       error.code = 'handoff-asset-stage-failed';
       throw error;
@@ -259,6 +271,8 @@ export async function applySceneDocument(sceneDocument, {
           physics: obj.physics,
           selectAfterLoad: false,
           source: 'scene-sync-export-import',
+          strictUpload: strictAssetUploads,
+          signal,
           beforeCommit: (_objectId, model) => {
             onObjectCandidate?.(obj.id, model);
             assertObjectAvailable?.(obj.id);
@@ -307,8 +321,8 @@ export async function applySceneDocument(sceneDocument, {
     }
     assertObjectAvailable?.(obj.id);
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
-    broadcast(payload);
     onObjectCommitted?.(obj.id);
+    broadcast(payload);
     reportProgress(obj);
   }
 

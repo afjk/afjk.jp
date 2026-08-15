@@ -604,6 +604,28 @@ test('handoff rollback removes its own earlier object in reverse failure cleanup
   deepStrictEqual(removes, ['first-own']);
 });
 
+test('handoff records before broadcast and rolls back a broadcast failure', async () => {
+  const managedObjects = new Map();
+  const own = { owner: 'handoff' };
+  let rollbacks = 0;
+  await rejects(() => applySceneSyncHandoffPayload({
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [{
+      id: 'broadcast-fail', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'primitive', primitive: 'box' },
+    }] }, embeddedAssets: {},
+  }, {
+    managedObjects,
+    addOrUpdateObject: (id) => managedObjects.set(id, own),
+    broadcast: () => { throw new Error('socket failed'); },
+    rollbackImportedObject: (id, expected) => {
+      if (managedObjects.get(id) !== expected) return false;
+      managedObjects.delete(id); rollbacks += 1; return true;
+    },
+  }));
+  strictEqual(managedObjects.has('broadcast-fail'), false);
+  strictEqual(rollbacks, 1);
+});
+
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {
   const html = await buildSingleHtmlDocument({
     sceneDocument: {
