@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import { strictEqual, deepStrictEqual } from 'node:assert';
 import { loadExportPackageFromUrl } from './load-export-package-from-url.js';
-import { buildSingleHtmlDocument } from '../../../scenesync-export/export/single-html-format.js';
+import {
+  MAX_SINGLE_HTML_DOCUMENT_BYTES,
+  buildSingleHtmlDocument,
+} from '../../../scenesync-export/export/single-html-format.js';
 
 function sceneDocument(extra = {}) {
   return {
@@ -313,11 +316,59 @@ test('loads CORS-readable Single HTML URLs and exposes their embedded assets', a
   deepStrictEqual(fetchImpl.calls, ['https://cdn.example.com/portable/scene.html']);
 });
 
+test('detects a marked Single HTML payload without a doctype or HTML content type', async () => {
+  const payload = JSON.stringify({
+    format: 'single-html-v1', version: 1, assets: {}, sceneDocument: sceneDocument(),
+  });
+  const fetchImpl = createFetch({
+    'https://cdn.example.com/portable/raw': {
+      body: `<meta name="scene-sync-export-format" content="single-html-v1"><script id="scene-sync-single-html-payload">${payload}</script>`,
+      contentType: 'application/octet-stream',
+    },
+  });
+  const result = await loadExportPackageFromUrl('https://cdn.example.com/portable/raw', { fetchImpl });
+  strictEqual(result.valid, true);
+  strictEqual(result.kind, 'single-html-url');
+  strictEqual(result.sceneDocument.objects[0].id, 'box-1');
+});
+
 test('reports a clear blocking diagnostic when a Single HTML URL cannot be fetched with CORS', async () => {
   const fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
   const result = await loadExportPackageFromUrl('https://cdn.example.com/portable/scene.html', { fetchImpl });
   strictEqual(result.valid, false);
   strictEqual(result.reason, 'single-html-fetch-failed');
+  strictEqual(result.shouldBlockGenericImport, true);
+});
+
+test('distinguishes Single HTML HTTP failures from CORS or network failures', async () => {
+  for (const status of [404, 500]) {
+    const fetchImpl = createFetch({
+      'https://cdn.example.com/portable.html': { body: 'not found', ok: false, status },
+    });
+    const result = await loadExportPackageFromUrl('https://cdn.example.com/portable.html', { fetchImpl });
+    strictEqual(result.valid, false);
+    strictEqual(result.reason, 'single-html-http-error');
+    strictEqual(result.status, status);
+    strictEqual(result.shouldBlockGenericImport, true);
+  }
+});
+
+test('rejects an oversized HTML response before converting it to text', async () => {
+  const fetchImpl = async (url) => ({
+    ok: true,
+    status: 200,
+    url: String(url),
+    headers: { get: () => 'text/html' },
+    async blob() {
+      return {
+        size: MAX_SINGLE_HTML_DOCUMENT_BYTES + 1,
+        text: async () => { throw new Error('oversized payload must not be read'); },
+      };
+    },
+  });
+  const result = await loadExportPackageFromUrl('https://cdn.example.com/portable.html', { fetchImpl });
+  strictEqual(result.valid, false);
+  strictEqual(result.reason, 'single-html-document-too-large');
   strictEqual(result.shouldBlockGenericImport, true);
 });
 

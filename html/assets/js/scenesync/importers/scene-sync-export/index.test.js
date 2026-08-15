@@ -1,5 +1,5 @@
 import { test } from 'node:test';
-import { strictEqual, deepStrictEqual } from 'node:assert';
+import { strictEqual, deepStrictEqual, rejects } from 'node:assert';
 import { showSceneDocumentImportPreview, tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './index.js';
 import { buildSingleHtmlDocument } from '../../../scenesync-export/export/single-html-format.js';
 
@@ -384,5 +384,58 @@ test('explains how to fix a CORS failure for a Single HTML URL', async () => {
   });
   strictEqual(result.handled, true);
   strictEqual(result.error, 'single-html-fetch-failed');
-  strictEqual(toasts[0], 'Single HTML Exportを取得できませんでした。公開元でCORSを許可してください。');
+  strictEqual(toasts[0], 'Single HTML Exportを取得できませんでした。ネットワークを確認し、公開元でCORSを許可してください。');
+});
+
+test('shows an HTTP status instead of a CORS instruction for unavailable Single HTML URLs', async () => {
+  const toasts = [];
+  const result = await tryOpenSceneSyncExportUrl('https://cdn.example.com/missing.html', {
+    managedObjects: new Map(),
+    fetchImpl: createFetch({
+      'https://cdn.example.com/missing.html': { body: 'not found', ok: false, status: 404 },
+    }),
+    showToast: (message) => toasts.push(message),
+  });
+  strictEqual(result.handled, true);
+  strictEqual(result.error, 'single-html-http-error');
+  strictEqual(result.status, 404);
+  strictEqual(toasts[0], 'Single HTML Exportを取得できませんでした（HTTP 404）。URLを確認してください。');
+});
+
+test('disposes preview Blob URLs when applying a Single HTML import fails', async () => {
+  const html = await buildSingleHtmlDocument({
+    sceneDocument: {
+      format: 'scene-sync-export-scene', version: 2,
+      objects: [{
+        id: 'preview-failure', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+        asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
+      }],
+    },
+    manifest: {},
+    files: { 'assets/poster.png': new Uint8Array([1]).buffer },
+    viewerFiles: {},
+  });
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const revoked = [];
+  let calls = 0;
+  URL.createObjectURL = () => 'blob:preview-failure';
+  URL.revokeObjectURL = (url) => revoked.push(url);
+  try {
+    await rejects(() => tryOpenSceneSyncExportFile({
+      name: 'preview-failure.html', type: 'text/html', text: async () => html,
+    }, {
+      managedObjects: new Map(),
+      confirmOpen: () => true,
+      addOrUpdateObject: () => {
+        calls += 1;
+        if (calls > 1) throw new Error('apply failure');
+      },
+      broadcast() {},
+    }), /apply failure/);
+    deepStrictEqual(revoked, ['blob:preview-failure']);
+  } finally {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  }
 });

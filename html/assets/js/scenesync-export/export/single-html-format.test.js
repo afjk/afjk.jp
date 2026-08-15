@@ -132,3 +132,41 @@ test('Single HTML parser rejects malformed marker, version, document, and assets
   assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, sceneDocument: {} }), { isValidSceneDocument }).reason, 'invalid-single-html-scene-document');
   assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, assets: { 'bad.bin': { mime: 'application/octet-stream', base64: 'not base64!' } } }), { isValidSceneDocument }).reason, 'invalid-single-html-assets');
 });
+
+test('Single HTML parser ignores comments and data-* attributes while accepting quoted case-insensitive attributes', () => {
+  const payload = JSON.stringify({
+    format: SINGLE_HTML_EXPORT_FORMAT,
+    version: 1,
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] },
+    assets: {},
+  });
+  const html = `<!-- <meta name="scene-sync-export-format" content="single-html-v1"><script id="scene-sync-single-html-payload">bad</script> -->
+    <meta data-name="scene-sync-export-format" content="single-html-v1">
+    <script data-id="scene-sync-single-html-payload">bad</script>
+    <META NAME='scene-sync-export-format' CONTENT='single-html-v1'>
+    <SCRIPT ID='scene-sync-single-html-payload' TYPE='application/json'>${payload}</SCRIPT>`;
+  const parsed = parseSingleHtmlExportDocument(html, { isValidSceneDocument });
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.sceneDocument.format, 'scene-sync-export-scene');
+});
+
+test('Single HTML parser enforces document, asset count, decoded asset, total asset, and safe path limits before decoding', () => {
+  const payload = {
+    format: SINGLE_HTML_EXPORT_FORMAT,
+    version: 1,
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] },
+    assets: { 'assets/a.bin': { mime: 'application/octet-stream', base64: 'AAAA' } },
+  };
+  const htmlFor = (value) => `<meta name="scene-sync-export-format" content="single-html-v1"><script id="scene-sync-single-html-payload">${JSON.stringify(value)}</script>`;
+  assert.equal(parseSingleHtmlExportDocument(htmlFor(payload), { isValidSceneDocument, limits: { documentBytes: 1 } }).reason, 'single-html-document-too-large');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor(payload), { isValidSceneDocument, limits: { assetBytes: 2 } }).reason, 'single-html-asset-too-large');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor({ ...payload, assets: {
+    'assets/a.bin': payload.assets['assets/a.bin'], 'assets/b.bin': payload.assets['assets/a.bin'],
+  } }), { isValidSceneDocument, limits: { assetCount: 1 } }).reason, 'single-html-too-many-assets');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor({ ...payload, assets: {
+    'assets/a.bin': payload.assets['assets/a.bin'], 'assets/b.bin': payload.assets['assets/a.bin'],
+  } }), { isValidSceneDocument, limits: { totalAssetBytes: 5 } }).reason, 'single-html-assets-too-large');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor({ ...payload, assets: {
+    '../escape.bin': payload.assets['assets/a.bin'],
+  } }), { isValidSceneDocument }).reason, 'invalid-single-html-assets');
+});

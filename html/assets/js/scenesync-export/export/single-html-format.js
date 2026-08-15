@@ -2,6 +2,13 @@ export const SINGLE_HTML_EXPORT_FORMAT = 'single-html-v1';
 export const SINGLE_HTML_EXPORT_VERSION = 1;
 const MODULE_SPECIFIER_PREFIX = 'scene-sync-single-html/';
 const SINGLE_HTML_PAYLOAD_ID = 'scene-sync-single-html-payload';
+// Single HTML is intended for portable scenes, not unbounded archive uploads.
+// These limits leave room for typical images/audio and are deliberately below
+// the 500 MiB GLB cache limit used by Scene Sync's general asset pipeline.
+export const MAX_SINGLE_HTML_DOCUMENT_BYTES = 100 * 1024 * 1024;
+export const MAX_SINGLE_HTML_ASSET_COUNT = 2048;
+export const MAX_SINGLE_HTML_ASSET_BYTES = 64 * 1024 * 1024;
+export const MAX_SINGLE_HTML_TOTAL_ASSET_BYTES = 96 * 1024 * 1024;
 
 function normalizePath(path) {
   const output = [];
@@ -84,41 +91,125 @@ export function inferSingleHtmlAssetMime(path) {
   }[extension] || 'application/octet-stream';
 }
 
-function getHtmlAttribute(tag, name) {
-  const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  const match = String(tag).match(new RegExp(
-    `\\b${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`,
-    'iu',
-  ));
-  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+function utf8ByteLength(value) {
+  let length = 0;
+  const text = String(value);
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) length += 1;
+    else if (code < 0x800) length += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length
+      && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+      length += 4;
+      index += 1;
+    } else length += 3;
+  }
+  return length;
+}
+
+function withoutHtmlComments(html) {
+  return String(html).replace(/<!--[\s\S]*?(?:-->|$)/gu, '');
+}
+
+function openingTags(html, expectedName) {
+  const tags = [];
+  const lowerName = expectedName.toLowerCase();
+  const source = withoutHtmlComments(html);
+  let index = 0;
+  while (index < source.length) {
+    const start = source.indexOf('<', index);
+    if (start < 0) break;
+    const candidate = source.slice(start + 1, start + 1 + lowerName.length);
+    const boundary = source[start + 1 + lowerName.length];
+    if (candidate.toLowerCase() !== lowerName || !(/[\s/>]/u.test(boundary || ''))) {
+      index = start + 1;
+      continue;
+    }
+    let quote = null;
+    let end = start + 1 + lowerName.length;
+    for (; end < source.length; end += 1) {
+      const char = source[end];
+      if (quote) {
+        if (char === quote) quote = null;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === '>') {
+        tags.push({ opening: source.slice(start, end + 1), end: end + 1, source });
+        break;
+      }
+    }
+    index = end < source.length ? end + 1 : source.length;
+  }
+  return tags;
+}
+
+function parseOpeningTagAttributes(openingTag, tagName) {
+  const attributes = new Map();
+  let index = 1 + tagName.length;
+  const end = openingTag.length - 1;
+  while (index < end) {
+    while (index < end && /\s/u.test(openingTag[index])) index += 1;
+    if (index >= end || openingTag[index] === '/') break;
+    const nameStart = index;
+    while (index < end && !/[\s=/>]/u.test(openingTag[index])) index += 1;
+    const name = openingTag.slice(nameStart, index).toLowerCase();
+    if (!name) break;
+    while (index < end && /\s/u.test(openingTag[index])) index += 1;
+    let value = '';
+    if (openingTag[index] === '=') {
+      index += 1;
+      while (index < end && /\s/u.test(openingTag[index])) index += 1;
+      const quote = openingTag[index];
+      if (quote === '"' || quote === "'") {
+        index += 1;
+        const valueStart = index;
+        while (index < end && openingTag[index] !== quote) index += 1;
+        value = openingTag.slice(valueStart, index);
+        if (openingTag[index] === quote) index += 1;
+      } else {
+        const valueStart = index;
+        while (index < end && !/[\s>]/u.test(openingTag[index])) index += 1;
+        value = openingTag.slice(valueStart, index);
+      }
+    }
+    if (!attributes.has(name)) attributes.set(name, value);
+  }
+  return attributes;
 }
 
 function findSingleHtmlMarker(html) {
-  const tags = String(html).match(/<meta\b[^>]*>/giu) || [];
-  for (const tag of tags) {
-    if (getHtmlAttribute(tag, 'name')?.toLowerCase() === 'scene-sync-export-format') {
-      return getHtmlAttribute(tag, 'content');
+  for (const tag of openingTags(html, 'meta')) {
+    const attributes = parseOpeningTagAttributes(tag.opening, 'meta');
+    if (attributes.get('name') === 'scene-sync-export-format') {
+      return attributes.get('content') ?? '';
     }
   }
   return null;
 }
 
 function findSingleHtmlPayloadText(html) {
-  const scripts = String(html).matchAll(/<script\b[^>]*>[\s\S]*?<\/script\s*>/giu);
-  for (const script of scripts) {
-    const tagEnd = script[0].indexOf('>');
-    const openingTag = script[0].slice(0, tagEnd + 1);
-    if (getHtmlAttribute(openingTag, 'id') !== SINGLE_HTML_PAYLOAD_ID) continue;
-    return script[0].slice(tagEnd + 1).replace(/<\/script\s*>$/iu, '');
+  for (const tag of openingTags(html, 'script')) {
+    const attributes = parseOpeningTagAttributes(tag.opening, 'script');
+    if (attributes.get('id') !== SINGLE_HTML_PAYLOAD_ID) continue;
+    const closing = /<\/script\s*>/giu;
+    closing.lastIndex = tag.end;
+    const match = closing.exec(tag.source);
+    if (!match) return null;
+    return tag.source.slice(tag.end, match.index);
   }
   return null;
 }
 
-function decodeBase64(base64) {
+function estimatedBase64DecodedBytes(base64) {
   if (typeof base64 !== 'string'
     || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(base64)) {
     throw new Error('invalid base64');
   }
+  return (base64.length / 4) * 3 - (base64.endsWith('==') ? 2 : (base64.endsWith('=') ? 1 : 0));
+}
+
+function decodeBase64(base64) {
+  estimatedBase64DecodedBytes(base64);
 
   if (typeof Buffer !== 'undefined') {
     return new Uint8Array(Buffer.from(base64, 'base64'));
@@ -130,17 +221,39 @@ function decodeBase64(base64) {
   return bytes;
 }
 
-function validateSingleHtmlAssets(assets) {
-  if (!assets || typeof assets !== 'object' || Array.isArray(assets)) return false;
+function resolveSingleHtmlLimits(limits = {}) {
+  return {
+    documentBytes: Number.isFinite(limits.documentBytes) ? limits.documentBytes : MAX_SINGLE_HTML_DOCUMENT_BYTES,
+    assetCount: Number.isFinite(limits.assetCount) ? limits.assetCount : MAX_SINGLE_HTML_ASSET_COUNT,
+    assetBytes: Number.isFinite(limits.assetBytes) ? limits.assetBytes : MAX_SINGLE_HTML_ASSET_BYTES,
+    totalAssetBytes: Number.isFinite(limits.totalAssetBytes) ? limits.totalAssetBytes : MAX_SINGLE_HTML_TOTAL_ASSET_BYTES,
+  };
+}
+
+function validateSingleHtmlAssets(assets, limits) {
+  if (!assets || typeof assets !== 'object' || Array.isArray(assets)) return { valid: false, reason: 'invalid-single-html-assets' };
+  const entries = Object.entries(assets);
+  if (entries.length > limits.assetCount) return { valid: false, reason: 'single-html-too-many-assets' };
+  let totalBytes = 0;
   try {
-    for (const [path, asset] of Object.entries(assets)) {
-      if (!path || typeof asset?.mime !== 'string' || typeof asset?.base64 !== 'string') return false;
-      decodeBase64(asset.base64);
+    for (const [path, asset] of entries) {
+      if (!isSafeSingleHtmlAssetPath(path) || typeof asset?.mime !== 'string' || typeof asset?.base64 !== 'string') {
+        return { valid: false, reason: 'invalid-single-html-assets' };
+      }
+      const assetBytes = estimatedBase64DecodedBytes(asset.base64);
+      if (assetBytes > limits.assetBytes) return { valid: false, reason: 'single-html-asset-too-large' };
+      totalBytes += assetBytes;
+      if (totalBytes > limits.totalAssetBytes) return { valid: false, reason: 'single-html-assets-too-large' };
     }
   } catch {
-    return false;
+    return { valid: false, reason: 'invalid-single-html-assets' };
   }
-  return true;
+  return { valid: true, totalBytes };
+}
+
+function isSafeSingleHtmlAssetPath(path) {
+  if (typeof path !== 'string' || !path || path.startsWith('/') || path.includes('\\')) return false;
+  return path.split('/').every((part) => part && part !== '.' && part !== '..');
 }
 
 /**
@@ -148,7 +261,11 @@ function validateSingleHtmlAssets(assets) {
  * DOM APIs: imports must also work in Node-based validation/tests, and HTML
  * must never be executed merely to inspect an export.
  */
-export function parseSingleHtmlExportDocument(html, { isValidSceneDocument } = {}) {
+export function parseSingleHtmlExportDocument(html, { isValidSceneDocument, limits } = {}) {
+  const resolvedLimits = resolveSingleHtmlLimits(limits);
+  if (typeof html !== 'string' || utf8ByteLength(html) > resolvedLimits.documentBytes) {
+    return { valid: false, reason: 'single-html-document-too-large' };
+  }
   const marker = findSingleHtmlMarker(html);
   if (marker == null) return { valid: false, reason: 'not-single-html-export' };
   if (marker !== SINGLE_HTML_EXPORT_FORMAT) {
@@ -174,9 +291,8 @@ export function parseSingleHtmlExportDocument(html, { isValidSceneDocument } = {
   if (typeof isValidSceneDocument === 'function' && !isValidSceneDocument(payload.sceneDocument)) {
     return { valid: false, reason: 'invalid-single-html-scene-document' };
   }
-  if (!validateSingleHtmlAssets(payload.assets)) {
-    return { valid: false, reason: 'invalid-single-html-assets' };
-  }
+  const assets = validateSingleHtmlAssets(payload.assets, resolvedLimits);
+  if (!assets.valid) return assets;
 
   return {
     valid: true,

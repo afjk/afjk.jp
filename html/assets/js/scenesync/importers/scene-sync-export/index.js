@@ -235,7 +235,6 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     showToast?.(`Scene Sync Exportを復元中…（プレビュー表示 / 0/${objects.length}）`, 60000);
   }
 
-  let completed = false;
   let stats;
   let settingsResult;
   let behaviorsResult = null;
@@ -266,9 +265,8 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     });
 
     behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
-    completed = true;
   } finally {
-    if (completed) preview.dispose();
+    preview.dispose();
   }
 
   const behaviorCount = behaviorsResult?.applied || 0;
@@ -306,10 +304,12 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
   if (!result.valid) {
     if (result.shouldBlockGenericImport) {
       const message = result.reason === 'single-html-fetch-failed'
-        ? 'Single HTML Exportを取得できませんでした。公開元でCORSを許可してください。'
-        : `Scene Sync Export URLを読み込めませんでした（${result.reason}）`;
+        ? 'Single HTML Exportを取得できませんでした。ネットワークを確認し、公開元でCORSを許可してください。'
+        : result.reason === 'single-html-http-error'
+          ? `Single HTML Exportを取得できませんでした（HTTP ${result.status || 'error'}）。URLを確認してください。`
+          : `Scene Sync Export URLを読み込めませんでした（${result.reason}）`;
       showToast?.(message);
-      return { handled: true, error: result.reason };
+      return { handled: true, error: result.reason, status: result.status || 0 };
     }
     return { handled: false, reason: result.reason };
   }
@@ -351,7 +351,6 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
     showToast?.(`Scene Sync Exportを復元中…（プレビュー表示 / 0/${objects.length}）`, 60000);
   }
 
-  let completed = false;
   let stats;
   let settingsResult;
   let behaviorsResult = null;
@@ -382,9 +381,8 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
     });
 
     behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
-    completed = true;
   } finally {
-    if (completed) preview.dispose();
+    preview.dispose();
   }
 
   const behaviorCount = behaviorsResult?.applied || 0;
