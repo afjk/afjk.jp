@@ -137,6 +137,26 @@ test('target preserves visible diagnostic and safe coded import error ACK for op
   });
 });
 
+test('target sends a timeout error ACK and releases busy after an aborted loader', async () => {
+  const replies = [];
+  const opener = { postMessage: (message, origin) => replies.push({ message, origin }) };
+  const windowRef = createFakeTargetWindow(opener);
+  let attempts = 0;
+  const session = createHandoffTargetSession({
+    windowRef, locationRef: { search: targetSearch }, validateMessage: validating,
+    applyMessage: async () => {
+      attempts += 1;
+      const error = new Error('deadline'); error.code = 'handoff-url-timeout'; throw error;
+    },
+  });
+  await windowRef.emitMessage({ source: opener, origin: 'https://source.test', data: validMessage });
+  assert.equal(replies.at(-1).message.reason, 'handoff-url-timeout');
+  assert.equal(session.getState().busy, false);
+  await windowRef.emitMessage({ source: opener, origin: 'https://source.test', data: validMessage });
+  assert.equal(attempts, 2);
+  assert.equal(replies.at(-1).message.reason, 'handoff-url-timeout');
+});
+
 test('target binds URL handoff sourceUrl to the postMessage origin', async () => {
   const replies = [];
   const opener = { postMessage: (message, origin) => replies.push({ message, origin }) };

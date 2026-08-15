@@ -9613,7 +9613,7 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
   addLoadingOverlay(objectId, info.name || objectId, info);
   const promise = prebuilt
     ? Promise.resolve(prebuilt)
-    : loadVideoTextureFromUrl(videoUrl, { THREE });
+    : loadVideoTextureFromUrl(videoUrl, { THREE, signal: options.signal });
 
   return promise.then((bundle) => {
     removeLoadingOverlay(objectId);
@@ -9704,7 +9704,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
     ? Promise.resolve(prebuilt)
     : (async () => {
         const { loadImageTextureFromUrl, planeSizeFromAspect } = await import('./loaders/url-importers/image.js');
-        const bundle = await loadImageTextureFromUrl(imageUrl, { THREE });
+        const bundle = await loadImageTextureFromUrl(imageUrl, { THREE, signal: options.signal });
         const { width, height } = planeSizeFromAspect(bundle.aspect);
         return { ...bundle, width, height };
       })();
@@ -9901,7 +9901,7 @@ function loadTextObject(objectId, info, asset, existing, options = {}) {
   const normalizedAsset = normalizeTextAsset(asset, info);
 
   const textPromise = (normalizedAsset.source === 'url' && normalizedAsset.url)
-    ? fetch(normalizedAsset.url, { mode: 'cors' }).then((r) => {
+    ? fetch(normalizedAsset.url, { mode: 'cors', signal: options.signal }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.text();
       })

@@ -283,6 +283,75 @@ test('strict async media loader failures reject without a fallback mutation or b
   strictEqual(broadcasts.length, 0);
 });
 
+test('strict never-settling media loader races AbortSignal and consumes late rejection', async () => {
+  const controller = new AbortController();
+  const managedObjects = new Map();
+  const broadcasts = [];
+  let rejectLate;
+  let loaderOptions;
+  const importing = applySceneDocument({
+    objects: [{
+      id: 'hung-image', name: 'Hung', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'image', source: 'blob', url: 'https://blob.example/hung.png' },
+    }],
+  }, {
+    managedObjects, signal: controller.signal, strictAssetUploads: true,
+    assertObjectAvailable: (id) => {
+      if (!controller.signal.aborted && !managedObjects.has(id)) return;
+      const error = new Error('deadline'); error.code = 'handoff-url-timeout'; throw error;
+    },
+    addOrUpdateObject: (_id, _payload, options) => {
+      loaderOptions = options;
+      return new Promise((_resolve, reject) => { rejectLate = reject; });
+    },
+    broadcast: (payload) => broadcasts.push(payload),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await rejects(importing, { code: 'handoff-url-timeout' });
+  strictEqual(loaderOptions.signal, controller.signal);
+  strictEqual(broadcasts.length, 0);
+  rejectLate(new Error('late image decode failure'));
+  await Promise.resolve();
+  strictEqual(managedObjects.size, 0);
+});
+
+test('strict never-settling GLB loader races AbortSignal without later mutation', async () => {
+  const controller = new AbortController();
+  const managedObjects = new Map();
+  const broadcasts = [];
+  let resolveLate;
+  const zip = createFakeZip({ 'assets/hung.glb': new ArrayBuffer(8) });
+  const importing = applySceneDocument({
+    objects: [{
+      id: 'hung-glb', name: 'Hung GLB', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      importAsset: { kind: 'glb-file', path: 'assets/hung.glb', originalName: 'hung.glb', mime: 'model/gltf-binary' },
+    }],
+  }, {
+    managedObjects, signal: controller.signal, strictAssetUploads: true, zip,
+    assertObjectAvailable: (id) => {
+      if (!controller.signal.aborted && !managedObjects.has(id)) return;
+      const error = new Error('deadline'); error.code = 'handoff-url-timeout'; throw error;
+    },
+    importGlbFileAsSceneObject: (_file, options) => new Promise((resolve) => {
+      resolveLate = () => {
+        try { options.beforeCommit('hung-glb', { owner: 'late-glb' }); } catch {}
+        resolve();
+      };
+    }),
+    addOrUpdateObject() {},
+    broadcast: (payload) => broadcasts.push(payload),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await rejects(importing, { code: 'handoff-url-timeout' });
+  ok(resolveLate);
+  resolveLate();
+  await Promise.resolve();
+  strictEqual(managedObjects.size, 0);
+  strictEqual(broadcasts.length, 0);
+});
+
 test('imports ZIP-bundled image/text/audio assets as shared Scene Sync URLs', async () => {
   const managedObjects = new Map();
   const calls = { addOrUpdate: [], broadcast: [], uploads: [] };

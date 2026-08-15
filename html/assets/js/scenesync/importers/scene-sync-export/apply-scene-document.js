@@ -8,6 +8,39 @@
 // `addOrUpdateObject` + `broadcast` as before.
 import { uploadZipAsset } from './zip-asset-upload.js';
 
+function handoffTimeoutError() {
+  const error = new Error('URL handoff timed out');
+  error.code = 'handoff-url-timeout';
+  return error;
+}
+
+// Race only the caller's wait with AbortSignal. The original promise always
+// retains both handlers, so a late loader rejection cannot become unhandled;
+// its beforeCommit guard rejects any late resolve before scene mutation.
+function awaitWithHandoffAbort(operation, signal) {
+  const promise = Promise.resolve(operation);
+  if (!signal) return promise;
+  if (signal.aborted) {
+    promise.catch(() => {});
+    return Promise.reject(handoffTimeoutError());
+  }
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const finish = (callback, value) => {
+      if (finished) return;
+      finished = true;
+      signal.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    const onAbort = () => finish(reject, handoffTimeoutError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -251,14 +284,14 @@ export async function applySceneDocument(sceneDocument, {
     if (obj.importAsset?.kind === 'glb-file') {
       const entry = zip?.file(obj.importAsset.path);
       if (entry && importGlbFileAsSceneObject) {
-        const buffer = await entry.async('arraybuffer');
+        const buffer = await awaitWithHandoffAbort(entry.async('arraybuffer'), signal);
         const file = new File(
           [buffer],
           obj.importAsset.originalName,
           { type: obj.importAsset.mime || 'model/gltf-binary' }
         );
 
-        await importGlbFileAsSceneObject(file, {
+        await awaitWithHandoffAbort(importGlbFileAsSceneObject(file, {
           objectId: obj.id,
           name: obj.name || obj.id,
           position: obj.position,
@@ -277,7 +310,7 @@ export async function applySceneDocument(sceneDocument, {
             onObjectCandidate?.(obj.id, model);
             assertObjectAvailable?.(obj.id);
           },
-        });
+        }), signal);
 
         glbImported += 1;
         onObjectCommitted?.(obj.id);
@@ -323,6 +356,7 @@ export async function applySceneDocument(sceneDocument, {
     const loadedObject = addOrUpdateObject(obj.id, payload, {
       source: 'scene-sync-export-import',
       strictLoad: strictAssetUploads,
+      signal,
       beforeCommit: (objectId, candidate) => {
         onObjectCandidate?.(objectId, candidate);
         assertObjectAvailable?.(objectId);
@@ -331,7 +365,7 @@ export async function applySceneDocument(sceneDocument, {
     // Normal realtime callers retain fire-and-forget loaders. URL and embedded
     // handoffs wait until an async media/text object is actually committed.
     if (strictAssetUploads && loadedObject && typeof loadedObject.then === 'function') {
-      await loadedObject;
+      await awaitWithHandoffAbort(loadedObject, signal);
     }
     onObjectCommitted?.(obj.id);
     broadcast(payload);

@@ -5,7 +5,7 @@
  * @returns {Promise<{video, texture, planeWidth, planeHeight, aspect}>}
  */
 export async function loadVideoTextureFromUrl(url, opts) {
-  const { THREE, maxEdgeMeters = 2, timeoutMs = 15000 } = opts;
+  const { THREE, maxEdgeMeters = 2, timeoutMs = 15000, signal } = opts;
   const video = document.createElement('video');
   video.crossOrigin = 'anonymous';
   video.src = url;
@@ -18,16 +18,25 @@ export async function loadVideoTextureFromUrl(url, opts) {
   await new Promise((resolve, reject) => {
     let settled = false;
     let timerId = null;
+    let onAbort = null;
     const finish = (fn, arg) => {
       if (settled) return;
       settled = true;
       if (timerId !== null) clearTimeout(timerId);
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
       fn(arg);
     };
     const onLoaded = () => finish(resolve);
     const onError = () => finish(reject, new Error('動画の読み込みに失敗しました（CORS 設定が必要、または URL が無効です）'));
     video.addEventListener('loadedmetadata', onLoaded, { once: true });
     video.addEventListener('error', onError, { once: true });
+    onAbort = () => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      finish(reject, signal?.reason || new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     timerId = setTimeout(() => finish(reject, new Error('動画の読み込みがタイムアウトしました')), timeoutMs);
   });
 
