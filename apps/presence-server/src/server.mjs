@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL, pathToFileURL } from 'node:url';
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream, createWriteStream, renameSync } from 'node:fs';
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 import { encodeSession, decodeSession } from './gpt-session.mjs';
 import { createSceneSyncConfig } from './scenesync/config.mjs';
@@ -11,6 +11,7 @@ import { validateUpload, isGlbLike } from './scenesync/upload-guards.mjs';
 import { validateSceneSyncPayload } from './scenesync/message-schema.mjs';
 import { createSceneSyncLogger } from './scenesync/logger.mjs';
 import { createGlbBackupManager } from './scenesync/glb-backup.mjs';
+import { createServerPullImporter, validateImportJobInput } from './scenesync/server-pull-import.mjs';
 
 // IP hash salt — stable within process lifetime if not provided
 const localIpHashSalt = randomUUID();
@@ -60,6 +61,7 @@ const sceneSyncLogger = createSceneSyncLogger({
 });
 const glbBackupManager = createGlbBackupManager(sceneSyncConfig, sceneSyncLogger);
 const uploadRateLimiter = createPerActorRateLimiter(sceneSyncConfig.uploadsPerActorPerMinute);
+const serverPullRateLimiter = createPerActorRateLimiter(sceneSyncConfig.serverPullsPerActorPerMinute);
 
 // id → { buffer: Buffer|null, file: string|null, size: number, createdAt: number }
 const blobs = new Map();
@@ -979,6 +981,24 @@ function sendJson(res, statusCode, payload, extraHeaders = {}) {
   }).end(JSON.stringify(payload));
 }
 
+// Import jobs are a same-origin control plane, unlike the public presence API.
+// Do not attach permissive CORS headers: another origin must not be able to
+// turn a visitor's browser into a server-pull client.
+function sendImportJson(res, statusCode, payload) {
+  res.writeHead(statusCode, {
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  }).end(JSON.stringify(payload));
+}
+
+function isSameOriginImportRequest(req) {
+  const origin = String(req.headers.origin || '');
+  if (!origin) return false;
+  const fetchSite = String(req.headers['sec-fetch-site'] || '');
+  return sceneSyncConfig.serverPullAllowedOrigins.includes(origin) && (!fetchSite || fetchSite === 'same-origin');
+}
+
 function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
@@ -1459,12 +1479,58 @@ function recordTransfer(entry) {
   saveStats(stats);
 }
 
+async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
+  const temporaryPath = `${BLOB_DIR}/.${id}.part`;
+  const filePath = `${BLOB_DIR}/${id}.import`;
+  let size = 0;
+  try {
+    mkdirSync(BLOB_DIR, { recursive: true });
+    const output = createWriteStream(temporaryPath, { flags: 'wx' });
+    const waitForDrain = () => new Promise((resolve, reject) => {
+      const done = () => { output.off('error', failed); resolve(); };
+      const failed = (error) => { output.off('drain', done); reject(error); };
+      output.once('drain', done);
+      output.once('error', failed);
+    });
+    for await (const raw of body) {
+      if (signal?.aborted) throw createHttpError(504, 'handoff-url-timeout');
+      const chunk = Buffer.from(raw);
+      size += chunk.length;
+      if (size > maxBytes) throw createHttpError(413, 'handoff-remote-asset-too-large');
+      if (!output.write(chunk)) await waitForDrain();
+    }
+    await new Promise((resolve, reject) => {
+      output.once('error', reject);
+      output.end(resolve);
+    });
+    renameSync(temporaryPath, filePath);
+    blobs.set(id, {
+      size,
+      createdAt: Date.now(),
+      contentType: mime || 'application/octet-stream',
+      buffer: null,
+      file: filePath,
+    });
+    return { size, mime, url: `/presence/blob/${id}` };
+  } catch (error) {
+    try { unlinkSync(temporaryPath); } catch {}
+    try { unlinkSync(filePath); } catch {}
+    throw error;
+  }
+}
+
 function createPresenceServer() {
   sceneSyncLogger.log('server_start', {
     maxUploadBytes: sceneSyncConfig.maxUploadBytes,
     maxJsonBytes: sceneSyncConfig.maxJsonBytes,
     maxRoomConnections: sceneSyncConfig.maxRoomConnections,
     maxObjectsPerRoom: sceneSyncConfig.maxObjectsPerRoom,
+  });
+  const importJobs = new Map();
+  let activeServerPulls = 0;
+  const serverPullImporter = createServerPullImporter({
+    storeAsset: storeServerPulledBlob,
+    removeAsset: async (id) => deleteBlob(id),
   });
   const server = createServer(async (req, res) => {
     const path = req.url.split('?')[0].replace(/\/+/g, '/');
@@ -1476,6 +1542,76 @@ function createPresenceServer() {
         res.writeHead(204).end();
       } else {
         res.writeHead(204, CORS).end();
+      }
+      return;
+    }
+
+  // ── Scene Sync server-pull URL handoff ─────────────────────────────
+  // This is intentionally a two-step, one-use import job. It is not a proxy:
+  // the only successful response is a validated Scene Sync document with
+  // materialized local blob URLs.
+    if (req.method === 'POST' && path === '/scene-sync/import-jobs') {
+      if (!isSameOriginImportRequest(req)) {
+        sendImportJson(res, 403, { error: 'handoff-origin-forbidden' });
+        return;
+      }
+      let input;
+      try { input = validateImportJobInput(await readJsonBody(req)); }
+      catch (error) { sendImportJson(res, error?.status || 400, { error: error?.code || 'handoff-invalid-import-job' }); return; }
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      if (!serverPullRateLimiter.allow(actorId)) {
+        sendImportJson(res, 429, { error: 'handoff-rate-limited' });
+        return;
+      }
+      if (importJobs.size >= 100) {
+        sendImportJson(res, 429, { error: 'handoff-import-job-capacity' });
+        return;
+      }
+      const jobId = randomUUID().replace(/-/g, '');
+      const token = `${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`;
+      const expiresAt = Date.now() + 10 * 60 * 1000;
+      importJobs.set(jobId, { ...input, token, actorId, expiresAt });
+      sendImportJson(res, 201, { jobId, token, expiresAt });
+      return;
+    }
+
+    const materializeMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/materialize$/u);
+    if (req.method === 'POST' && materializeMatch) {
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
+      const job = importJobs.get(materializeMatch[1]);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      // Delete before the remote request: replay cannot turn this endpoint into
+      // a repeated fetch primitive, even if the first request times out.
+      importJobs.delete(materializeMatch[1]);
+      if (!job || job.expiresAt < Date.now() || job.actorId !== actorId || typeof body.token !== 'string' || body.token !== job.token) {
+        sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });
+        return;
+      }
+      if (activeServerPulls >= 2) {
+        sendImportJson(res, 429, { error: 'handoff-server-pull-busy' });
+        return;
+      }
+      activeServerPulls += 1;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      req.once('aborted', abort);
+      try {
+        const result = await serverPullImporter(job.sourceUrl, { signal: controller.signal });
+        sendImportJson(res, 200, {
+          sceneDocument: result.sceneDocument,
+          assetCount: result.assetCount,
+          totalBytes: result.totalBytes,
+        });
+      } catch (error) {
+        const status = Number(error?.status) || 400;
+        const code = typeof error?.code === 'string' && /^handoff-[a-z0-9-]{1,100}$/u.test(error.code)
+          ? error.code : 'handoff-server-pull-failed';
+        sendImportJson(res, status, { error: code });
+      } finally {
+        req.off('aborted', abort);
+        activeServerPulls -= 1;
       }
       return;
     }
@@ -2268,6 +2404,13 @@ function createPresenceServer() {
     }
   }, BLOB_CLEANUP_INTERVAL);
 
+  const importJobCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, job] of importJobs) {
+      if (job.expiresAt <= now) importJobs.delete(id);
+    }
+  }, BLOB_CLEANUP_INTERVAL);
+
   let connectionSummaryInterval = null;
   if (sceneSyncConfig.connectionSummaryIntervalMs > 0) {
     connectionSummaryInterval = setInterval(() => {
@@ -2306,12 +2449,14 @@ function createPresenceServer() {
     if (cleanupComplete) return;
     cleanupComplete = true;
     clearInterval(blobCleanupInterval);
+    clearInterval(importJobCleanupInterval);
     clearInterval(heartbeatInterval);
     if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
     rooms.clear();
     roomObjectIds.clear();
     roomPhysicsTimelines.clear();
     clientsByIpHash.clear();
+    importJobs.clear();
     pendingSceneRequests.forEach(({ timer, resolve }) => {
       clearTimeout(timer);
       resolve({ objects: {} });

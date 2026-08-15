@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node --test tests/api.test.mjs tests/inferred-room.test.mjs tests/scenesync-guards.test.mjs tests/loomlet-graph-clipboard.test.mjs tests/clipboard-import-manager.test.mjs",
+    "test": "node --test tests/api.test.mjs tests/inferred-room.test.mjs tests/scenesync-guards.test.mjs tests/loomlet-graph-clipboard.test.mjs tests/clipboard-import-manager.test.mjs tests/server-pull-import.test.mjs",
     "test:loomlet-graph-clipboard": "node --test tests/loomlet-graph-clipboard.test.mjs",
     "test:clipboard-import-manager": "node --test tests/clipboard-import-manager.test.mjs",
     "scenesync:cleanup-backups": "node scripts/cleanup-backups.mjs",

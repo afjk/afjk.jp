@@ -37,6 +37,9 @@ export function createSceneSyncConfig(env = process.env) {
     glbBackupS3AccessKeyId: env.SCENE_SYNC_GLB_BACKUP_S3_ACCESS_KEY_ID || '',
     glbBackupS3SecretAccessKey: env.SCENE_SYNC_GLB_BACKUP_S3_SECRET_ACCESS_KEY || '',
     uploadsPerActorPerMinute: parseIntEnv(env.SCENE_SYNC_UPLOADS_PER_ACTOR_PER_MINUTE, 10, 1),
+    serverPullsPerActorPerMinute: parseIntEnv(env.SCENE_SYNC_SERVER_PULLS_PER_ACTOR_PER_MINUTE, 3, 1),
+    serverPullAllowedOrigins: (env.SCENE_SYNC_SERVER_PULL_ALLOWED_ORIGINS || 'https://afjk.jp,https://staging.afjk.jp')
+      .split(',').map((value) => value.trim().replace(/\/$/u, '')).filter(Boolean),
   };
 
   if (env.NODE_ENV === 'production' && !config.actorHashSalt) {

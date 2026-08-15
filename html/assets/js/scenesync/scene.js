@@ -9222,8 +9222,7 @@ function addOrUpdateObject(objectId, info, options = {}) {
         return;
       case 'mesh':
         if (asset.source === 'url' && asset.url) {
-          loadMeshObjectFromUrl(objectId, info, asset.url, existing, options.prebuiltGlbModel);
-          return;
+          return loadMeshObjectFromUrl(objectId, info, asset.url, existing, options.prebuiltGlbModel, options);
         }
         if (asset.meshPath) {
           loadMeshObject(objectId, info, asset.meshPath, existing, options);
@@ -10331,17 +10330,18 @@ function disposeMaterial(material) {
   material.dispose();
 }
 
-function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null) {
+function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
 
   const promise = prebuilt
     ? Promise.resolve({ model: prebuilt })
     : (async () => {
         const { loadGlbFromUrl } = await import('./loaders/url-importers/glb.js');
-        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader });
+        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader, signal: options.signal, maxBytes: 128 * 1024 * 1024 });
       })();
 
-  promise.then(({ model }) => {
+  return promise.then(({ model }) => {
+    if (options.signal?.aborted || removedObjectIds.has(objectId)) return;
     removeLoadingOverlay(objectId);
     model.userData.objectId = objectId;
     model.userData.name = info.name;
@@ -10382,6 +10382,7 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
       type: 'error',
       message: `GLB の読み込みに失敗しました: ${err?.message || 'CORS/サイズ/形式エラーの可能性'}`,
     });
+    if (options.strictLoad || options.signal?.aborted) throw err;
     const failedInfo = { ...info, name: `${info.name || objectId} (load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xcc3333), failedInfo);
     notifySceneStateChanged('glb-url-load-failed');
@@ -15631,7 +15632,11 @@ function initializeHandoffTarget() {
     },
     ensureRoom: ensureHandoffRoom,
     applyMessage: (message) => message.sourceUrl
-      ? applySceneSyncHandoffUrl({ sourceUrl: message.sourceUrl }, createSceneSyncExportImportContext())
+      ? applySceneSyncHandoffUrl({
+          sourceUrl: message.sourceUrl,
+          sessionId: message.sessionId,
+          requestId: message.requestId,
+        }, createSceneSyncExportImportContext())
       : applySceneSyncHandoffPayload({
           sceneDocument: message.sceneDocument,
           embeddedAssets: message.embeddedAssets,
