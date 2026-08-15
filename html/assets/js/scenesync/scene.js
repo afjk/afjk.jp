@@ -9232,19 +9232,16 @@ function addOrUpdateObject(objectId, info, options = {}) {
         break;
       case 'video':
         if (asset.url) {
-          loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle, options);
-          return;
+          return loadVideoObject(objectId, info, asset.url, existing, options.prebuiltVideoBundle, options);
         }
         break;
       case 'image':
         if (asset.url) {
-          loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle, options);
-          return;
+          return loadImageObject(objectId, info, asset.url, existing, options.prebuiltImageBundle, options);
         }
         break;
       case 'text':
-        loadTextObject(objectId, info, asset, existing);
-        return;
+        return loadTextObject(objectId, info, asset, existing, options);
       default:
         console.warn(`unsupported asset type: ${asset.type}`);
         replaceManagedObject(objectId, buildUnsupportedAssetObject(objectId, info), info);
@@ -9604,13 +9601,21 @@ function buildStereoMediaGroup({ stereo, aspect, texture }) {
   });
 }
 
+function assertStrictLoadedObjectCommit(options, objectId, candidate) {
+  if (options?.strictLoad) options.beforeCommit?.(objectId, candidate);
+}
+
+function strictLoadFailure(options, error) {
+  if (options?.strictLoad) throw error;
+}
+
 function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, options = {}) {
   addLoadingOverlay(objectId, info.name || objectId, info);
   const promise = prebuilt
     ? Promise.resolve(prebuilt)
     : loadVideoTextureFromUrl(videoUrl, { THREE });
 
-  promise.then((bundle) => {
+  return promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const stereo = normalizeStereoMedia(info.asset);
     let group;
@@ -9643,6 +9648,24 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
     group.userData.assetType = 'video';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
 
+    // The handoff loader may have awaited media while a peer created this ID.
+    // Check before touching the existing object, then commit synchronously.
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      const error = new Error('Video object load was cancelled');
+      error.code = 'handoff-object-load-cancelled';
+      strictLoadFailure(options, error);
+      return null;
+    }
+    try {
+      assertStrictLoadedObjectCommit(options, objectId, group);
+    } catch (error) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      throw error;
+    }
+
     if (existing) {
       group.position.copy(existing.position);
       group.quaternion.copy(existing.quaternion);
@@ -9651,21 +9674,18 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
       scene.remove(existing);
     }
 
-    if (removedObjectIds.has(objectId)) {
-      group.userData?.disposable?.();
-      cleanupPreviewForLoadedObject(options);
-      return;
-    }
-
     replaceManagedObject(objectId, group, info);
     cleanupPreviewForLoadedObject(options);
+    return group;
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
     if (removedObjectIds.has(objectId)) {
       cleanupPreviewForLoadedObject(options);
-      return;
+      strictLoadFailure(options, err);
+      return null;
     }
+    strictLoadFailure(options, err);
     if (!existing) {
       const failedInfo = { ...info, name: `${info.name || objectId} (動画読み込み失敗)` };
       replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0xff4444), failedInfo);
@@ -9689,7 +9709,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
         return { ...bundle, width, height };
       })();
 
-  promise.then((bundle) => {
+  return promise.then((bundle) => {
     removeLoadingOverlay(objectId);
     const { texture, width, height } = bundle;
     const stereo = normalizeStereoMedia(info.asset);
@@ -9736,6 +9756,22 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
     group.userData.assetType = 'image';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      const error = new Error('Image object load was cancelled');
+      error.code = 'handoff-object-load-cancelled';
+      strictLoadFailure(options, error);
+      return null;
+    }
+    try {
+      assertStrictLoadedObjectCommit(options, objectId, group);
+    } catch (error) {
+      group.userData?.disposable?.();
+      cleanupPreviewForLoadedObject(options);
+      throw error;
+    }
+
     if (existing) {
       group.position.copy(existing.position);
       group.quaternion.copy(existing.quaternion);
@@ -9744,21 +9780,18 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
       scene.remove(existing);
     }
 
-    if (removedObjectIds.has(objectId)) {
-      group.userData?.disposable?.();
-      cleanupPreviewForLoadedObject(options);
-      return;
-    }
-
     replaceManagedObject(objectId, group, info);
     cleanupPreviewForLoadedObject(options);
+    return group;
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
     if (removedObjectIds.has(objectId)) {
       cleanupPreviewForLoadedObject(options);
-      return;
+      strictLoadFailure(options, err);
+      return null;
     }
+    strictLoadFailure(options, err);
     showToast({
       type: 'error',
       message: `画像の読み込みに失敗しました: ${err?.message || 'CORS エラーの可能性'}`,
@@ -9864,7 +9897,7 @@ function bakeTextPanelScaleToLayout(object) {
   return true;
 }
 
-function loadTextObject(objectId, info, asset, existing) {
+function loadTextObject(objectId, info, asset, existing, options = {}) {
   const normalizedAsset = normalizeTextAsset(asset, info);
 
   const textPromise = (normalizedAsset.source === 'url' && normalizedAsset.url)
@@ -9874,7 +9907,7 @@ function loadTextObject(objectId, info, asset, existing) {
       })
     : Promise.resolve(normalizedAsset.text || '');
 
-  textPromise.then((resolvedText) => {
+  return textPromise.then((resolvedText) => {
     const shouldAutoFitLayout =
       normalizedAsset.source === 'url' &&
       normalizedAsset.layout?.autoFit === true;
@@ -9937,6 +9970,20 @@ function loadTextObject(objectId, info, asset, existing) {
       material.dispose();
     };
 
+    if (removedObjectIds.has(objectId)) {
+      group.userData?.disposable?.();
+      const error = new Error('Text object load was cancelled');
+      error.code = 'handoff-object-load-cancelled';
+      strictLoadFailure(options, error);
+      return null;
+    }
+    try {
+      assertStrictLoadedObjectCommit(options, objectId, group);
+    } catch (error) {
+      group.userData?.disposable?.();
+      throw error;
+    }
+
     if (existing) {
       group.position.copy(existing.position);
       group.quaternion.copy(existing.quaternion);
@@ -9944,17 +9991,15 @@ function loadTextObject(objectId, info, asset, existing) {
       if (transformCtrl.object === existing) transformCtrl.detach();
     }
 
-    if (removedObjectIds.has(objectId)) {
-      group.userData?.disposable?.();
-      return;
-    }
-
     replaceManagedObject(objectId, group, info);
+    return group;
   }).catch((err) => {
     console.warn('Failed to load text object for', objectId, ':', err);
     if (removedObjectIds.has(objectId)) {
-      return;
+      strictLoadFailure(options, err);
+      return null;
     }
+    strictLoadFailure(options, err);
     const failedInfo = { ...info, name: `${info.name || objectId} (text load failed)` };
     replaceManagedObject(objectId, buildDefaultBoxObject(objectId, failedInfo, 0x996633), failedInfo);
   });

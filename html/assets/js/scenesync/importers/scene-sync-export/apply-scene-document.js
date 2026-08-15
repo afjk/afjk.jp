@@ -320,7 +320,19 @@ export async function applySceneDocument(sceneDocument, {
       throw error;
     }
     assertObjectAvailable?.(obj.id);
-    addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
+    const loadedObject = addOrUpdateObject(obj.id, payload, {
+      source: 'scene-sync-export-import',
+      strictLoad: strictAssetUploads,
+      beforeCommit: (objectId, candidate) => {
+        onObjectCandidate?.(objectId, candidate);
+        assertObjectAvailable?.(objectId);
+      },
+    });
+    // Normal realtime callers retain fire-and-forget loaders. URL and embedded
+    // handoffs wait until an async media/text object is actually committed.
+    if (strictAssetUploads && loadedObject && typeof loadedObject.then === 'function') {
+      await loadedObject;
+    }
     onObjectCommitted?.(obj.id);
     broadcast(payload);
     reportProgress(obj);
