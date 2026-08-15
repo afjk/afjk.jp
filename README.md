@@ -90,6 +90,9 @@ Unity Editor / Unity Runtime / Godot 4.x / Web ブラウザ間で 3D シーン�
 
 URL 例: `https://afjk.jp/scenesync/?room=abc123`
 
+Single HTML / 外部ページからの `Open in Scene Sync` 連携仕様は
+[`docs/scene-sync-open-handoff.md`](docs/scene-sync-open-handoff.md) を参照。
+
 詳細な技術仕様は [`docs/scene-sync-spec.md`](docs/scene-sync-spec.md) を参照。
 
 AI 連携ドキュメント:

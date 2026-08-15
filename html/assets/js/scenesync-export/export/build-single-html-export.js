@@ -2,7 +2,11 @@ import { createSceneDocumentFromSceneSyncState } from './export-scene-document.j
 import { collectExportAssets } from './collect-export-assets.js';
 import { generateManifest } from './export-manifest.js';
 import { normalizeExportMetadata } from './export-metadata.js';
-import { fetchExportViewerSources } from './build-export-package.js';
+import {
+  fetchExportViewerSources,
+  SINGLE_HTML_HANDOFF_SOURCES,
+  VIEWER_SOURCES,
+} from './build-export-package.js';
 import {
   buildSingleHtmlDocument,
   SINGLE_HTML_EXPORT_FORMAT,
@@ -52,7 +56,10 @@ export async function buildSingleHtmlExport({
     envOrigin,
     assetCache,
   });
-  const { results: viewerFiles, failures } = await fetchExportViewerSources();
+  const { results: viewerFiles, failures } = await fetchExportViewerSources([
+    ...VIEWER_SOURCES,
+    ...SINGLE_HTML_HANDOFF_SOURCES,
+  ]);
   if (failures.length > 0) {
     throw new Error(`Required viewer files could not be fetched: ${failures.map((failure) => failure.dest).join(', ')}`);
   }

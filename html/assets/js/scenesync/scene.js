@@ -10,8 +10,15 @@ import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFa
 import { createThreeApp } from './core/three-app.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
-import { tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './importers/scene-sync-export/index.js';
+import {
+  applySceneSyncHandoffPayload,
+  tryOpenSceneSyncExportFile,
+  tryOpenSceneSyncExportUrl,
+} from './importers/scene-sync-export/index.js';
 import { applySceneDocumentBehaviors } from './importers/scene-sync-export/apply-scene-behaviors.js';
+import { isValidSceneDocument } from '../scenesync-export/viewer/scene-document.js';
+import { validateSingleHtmlEmbeddedAssets } from '../scenesync-export/export/single-html-format.js';
+import { createHandoffTargetSession } from './handoff/target.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
@@ -38,6 +45,7 @@ import { initMediaUrlDialog } from './ui/media-url-dialog.js';
 import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
 import { applySceneSyncDeviceMode, isSceneSyncMobileDevice } from './ui/device-mode.js';
 import { normalizeDisplayName } from './utils/display-name.js';
+import { sanitizeRoomCode } from './utils/room-code.js';
 import { extractYaw } from './utils/math.js';
 import { broadcastObjectDelta } from './objects/object-delta.js';
 import { createXrState } from './xr/xr-state.js';
@@ -5291,12 +5299,6 @@ function buildPresenceRoomUrl(base, roomCode) {
   return `${base}/?room=${encodedRoom}`;
 }
 
-function sanitizeRoomCode(s) {
-  if (!s) return null;
-  const cleaned = String(s).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24);
-  return cleaned || null;
-}
-
 function randomRoomCode() {
   return Math.random().toString(36).slice(2, 8);
 }
@@ -5400,6 +5402,10 @@ const remoteAvatarManager = createRemoteAvatarManager({
 });
 
 let activeRoomCode = sanitizeRoomCode(new URLSearchParams(location.search).get('room'));
+let handoffTargetSession = null;
+let handoffSceneReadyPromise = null;
+let handoffSceneReadyRoomId = null;
+const handoffRoomWaiters = new Set();
 let sceneReceived = false;
 let sceneRequestTimer = null;
 let sceneRequestAttempt = 0;
@@ -6907,6 +6913,8 @@ function resetSceneState() {
   hideToolbar();
   presenceState.peers = [];
   sceneReceived = false;
+  handoffSceneReadyPromise = null;
+  handoffSceneReadyRoomId = null;
   sceneRequestAttempt = 0;
   clearTimeout(sceneRequestTimer);
   updatePeersList();
@@ -6941,6 +6949,54 @@ function applyRoomCode(code) {
   history.replaceState(null, '', u.toString());
   reconnectPresence();
   notifyConnectionStateChanged('room-applied');
+}
+
+function notifyHandoffRoomReady(roomId) {
+  for (const waiter of [...handoffRoomWaiters]) {
+    if (waiter.roomId !== roomId) continue;
+    handoffRoomWaiters.delete(waiter);
+    clearTimeout(waiter.timeoutId);
+    waiter.resolve();
+  }
+}
+
+function prepareHandoffSceneReady({ restoreSnapshot = false } = {}) {
+  if (!handoffTargetSession?.enabled || !sceneReceived || !presenceState.room) return;
+  if (handoffSceneReadyPromise) return;
+  const roomId = presenceState.room;
+  handoffSceneReadyPromise = (async () => {
+    if (restoreSnapshot) {
+      clearTimeout(restoreSnapshotTimer);
+      restoreSnapshotTimer = null;
+      await maybeRestoreRoomSnapshot('scene-sync-handoff-ready');
+    }
+    if (presenceState.room !== roomId || !sceneReceived) return;
+    handoffSceneReadyRoomId = roomId;
+    notifyHandoffRoomReady(roomId);
+    handoffTargetSession.ready();
+  })().catch((error) => {
+    console.warn('[Scene Sync handoff] scene initialization failed', error);
+    showToast('Open in Scene Sync: scene initialization failed');
+  });
+}
+
+function waitForHandoffRoom(roomId, timeoutMs = 12_000) {
+  if (!roomId || handoffSceneReadyRoomId === roomId) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const waiter = { roomId, resolve, reject, timeoutId: null };
+    waiter.timeoutId = setTimeout(() => {
+      handoffRoomWaiters.delete(waiter);
+      reject(new Error('Timed out while joining the requested room'));
+    }, timeoutMs);
+    handoffRoomWaiters.add(waiter);
+  });
+}
+
+async function ensureHandoffRoom(roomId) {
+  if (roomId && activeRoomCode !== roomId) applyRoomCode(roomId);
+  const effectiveRoomId = roomId || presenceState.room;
+  if (!effectiveRoomId) throw new Error('Scene Sync room is not ready');
+  await waitForHandoffRoom(effectiveRoomId);
 }
 
 function generateRoom() {
@@ -7144,6 +7200,7 @@ function connectPresence() {
         if (!hasOtherParticipants()) {
           if (!sceneReceived) sceneReceived = true;
           scheduleMaybeRestoreRoomSnapshot('peers-updated');
+          prepareHandoffSceneReady({ restoreSnapshot: true });
         } else {
           removeSampleCube('peers-updated');
         }
@@ -7215,12 +7272,14 @@ function requestSceneFromPeer() {
   if (peers.length === 0) {
     sceneReceived = true;
     scheduleMaybeRestoreRoomSnapshot('scene-request-no-peers');
+    prepareHandoffSceneReady({ restoreSnapshot: true });
     return;
   }
 
   if (sceneRequestAttempt >= peers.length) {
     console.warn('[SceneSync] All peers failed to respond');
     sceneReceived = true;
+    prepareHandoffSceneReady({ restoreSnapshot: true });
     return;
   }
 
@@ -7528,6 +7587,7 @@ function handleHandoff(data) {
       } else {
         broadcast(inputLogRequest);
       }
+      prepareHandoffSceneReady();
       break;
     }
     case 'scene-request': {
@@ -15432,6 +15492,9 @@ const welcomeDialog = createWelcomeDialog({
 });
 
 function shouldShowWelcome() {
+  if (new URLSearchParams(location.search).get('handoff') === '1' && window.opener) {
+    return false;
+  }
   const welcomeSeen = localStorage.getItem('sceneSync.welcomeSeen') === 'true';
   const displayName = normalizeDisplayName(localStorage.getItem('sceneSync.displayName'));
   return !welcomeSeen || !displayName;
@@ -15450,6 +15513,44 @@ function initializeWelcome() {
 function openHelpDialog() {
   const savedDisplayName = localStorage.getItem('sceneSync.displayName') || '';
   welcomeDialog.open('help', savedDisplayName);
+}
+
+function createSceneSyncExportImportContext() {
+  return {
+    managedObjects,
+    addOrUpdateObject,
+    broadcast,
+    showToast,
+    environmentManager,
+    importGlbFileAsSceneObject,
+    uploadBlobToStore,
+    applySceneBgm,
+    applyScenePhysics,
+    applySceneBehaviors: (behaviors, options = {}) => applySceneDocumentBehaviors(behaviors, {
+      managedObjects,
+      applySceneGraphOperation,
+      broadcast,
+      source: options.source || 'scene-sync-export-import',
+    }),
+  };
+}
+
+function initializeHandoffTarget() {
+  handoffTargetSession = createHandoffTargetSession({
+    validationOptions: {
+      isValidSceneDocument,
+      validateEmbeddedAssets: validateSingleHtmlEmbeddedAssets,
+    },
+    ensureRoom: ensureHandoffRoom,
+    applyMessage: ({ sceneDocument, embeddedAssets }) => applySceneSyncHandoffPayload({
+      sceneDocument,
+      embeddedAssets,
+    }, createSceneSyncExportImportContext()),
+    onDiagnostic(reason, error) {
+      console.warn('[Scene Sync handoff]', reason, error || '');
+      showToast(`Open in Scene Sync: ${reason}`);
+    },
+  });
 }
 
 // ── ルーム満員ダイアログ ──────────────────────────────
@@ -15546,6 +15647,7 @@ mountSceneSyncShellFromDom({
 updateNicknameLabel();
 renderRoomSection();
 syncSceneUiState();
+initializeHandoffTarget();
 initializeWelcome();
 connectPresence();
 

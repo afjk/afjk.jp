@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import { strictEqual, deepStrictEqual, rejects } from 'node:assert';
-import { showSceneDocumentImportPreview, tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './index.js';
+import {
+  applySceneSyncHandoffPayload,
+  showSceneDocumentImportPreview,
+  tryOpenSceneSyncExportFile,
+  tryOpenSceneSyncExportUrl,
+} from './index.js';
 import { buildSingleHtmlDocument } from '../../../scenesync-export/export/single-html-format.js';
 
 function createFakeZip(entries) {
@@ -336,6 +341,51 @@ test('imports local Single HTML exports through the existing asset, settings, ph
   deepStrictEqual(calls.environments, ['outdoor_day']);
   deepStrictEqual(calls.physics, [sceneDocument.physics]);
   deepStrictEqual(calls.behaviors, [sceneDocument.behaviors]);
+});
+
+test('handoff imports embedded image and GLB assets in add mode without confirmation', async () => {
+  const sceneDocument = {
+    format: 'scene-sync-export-scene',
+    version: 2,
+    objects: [
+      {
+        id: 'handoff-poster', position: [1, 2, 3], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+        asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
+      },
+      {
+        id: 'handoff-model', position: [4, 5, 6], rotation: [0, 0, 0, 1], scale: [2, 2, 2],
+        asset: { type: 'mesh', path: 'assets/model.glb', mime: 'model/gltf-binary' },
+      },
+    ],
+  };
+  const calls = { adds: [], broadcasts: [], glb: [], uploads: [] };
+  const result = await applySceneSyncHandoffPayload({
+    sceneDocument,
+    embeddedAssets: {
+      'assets/poster.png': { mime: 'image/png', base64: 'AQI=' },
+      'assets/model.glb': { mime: 'model/gltf-binary', base64: 'Z2xi' },
+    },
+  }, {
+    managedObjects: new Map(),
+    confirmOpen: () => { throw new Error('handoff must not request confirmation'); },
+    addOrUpdateObject: (id, payload, options) => calls.adds.push({ id, payload, options }),
+    broadcast: (payload) => calls.broadcasts.push(payload),
+    uploadBlobToStore: async (blob, mime) => {
+      calls.uploads.push({ size: blob.size, mime });
+      return { url: 'https://blob.test/poster.png', mime };
+    },
+    importGlbFileAsSceneObject: async (file, options) => calls.glb.push({ file, options }),
+  });
+
+  strictEqual(result.handled, true);
+  strictEqual(result.kind, 'single-html-handoff');
+  strictEqual(result.stats.added, 2);
+  strictEqual(result.stats.glbImported, 1);
+  deepStrictEqual(calls.uploads, [{ size: 2, mime: 'image/png' }]);
+  strictEqual(calls.glb[0].file.name, 'model.glb');
+  deepStrictEqual(calls.glb[0].options.position, [4, 5, 6]);
+  const imageAdd = calls.adds.find((entry) => entry.options?.source === 'scene-sync-export-import');
+  strictEqual(imageAdd.payload.asset.url, 'https://blob.test/poster.png');
 });
 
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {

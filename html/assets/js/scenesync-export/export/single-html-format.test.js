@@ -61,6 +61,7 @@ test('single HTML format safely embeds versioned manifest, SceneDocument, and bi
   assert.match(html, /"mime":"image\/png","base64":"iVBORw=="/);
   assert.match(html, /__SCENE_SYNC_SINGLE_HTML_ASSET_URLS__/);
   assert.match(html, /scene-sync-single-html\/viewer\/core\.js/);
+  assert.match(html, /scene-sync-single-html\/scenesync\/handoff\/source\.js/);
   assert.match(html, /rapier_wasm3d_bg\.wasm/);
   assert.equal(html.includes('</script><img'), false);
   assert.match(html, /"physics":\{"enabled":true/);

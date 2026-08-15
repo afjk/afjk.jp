@@ -6,6 +6,7 @@ import { resolveSceneDocumentAssets } from './resolve-export-assets.js';
 import { resolveSceneDocumentAssetsFromUrl } from './resolve-url-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
 import { applySceneDocumentSettings } from './apply-scene-settings.js';
+import { createSingleHtmlAssetZip } from '../../../scenesync-export/export/single-html-format.js';
 
 async function applyImportedBehaviorsIfNeeded(resolvedDocument, context) {
   if (!resolvedDocument.behaviors) return null;
@@ -167,13 +168,10 @@ export async function showSceneDocumentImportPreview(sceneDocument, {
   };
 }
 
-// Entry point for "Open Export": detects Scene Sync Export ZIPs and portable
-// Single HTML files, then upserts their objects into the current scene.
-export async function tryOpenSceneSyncExportFile(file, context = {}) {
-  const isZip = isZipFile(file);
-  const isSingleHtml = isSingleHtmlFile(file);
-  if (!isZip && !isSingleHtml) return { handled: false };
-
+async function applyLoadedSceneSyncExport(result, context, {
+  kind,
+  confirm = true,
+} = {}) {
   const {
     managedObjects,
     addOrUpdateObject,
@@ -188,20 +186,9 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     applySceneBehaviors,
   } = context;
 
-  const result = isSingleHtml
-    ? await loadSingleHtmlExportFromBlob(file)
-    : await loadExportPackageFromBlob(file);
-  if (!result.valid) {
-    if (isSingleHtml && result.reason === 'not-single-html-export') return { handled: false };
-    const label = isSingleHtml ? 'このHTMLはScene Sync Single HTML Exportではありません' : 'このZIPはScene Sync Exportではありません';
-    showToast?.(label);
-    return { handled: true, error: result.reason, kind: isSingleHtml ? 'single-html-local' : 'zip-local' };
-  }
-
   const { document: resolvedDocument } = await resolveSceneDocumentAssets(result.sceneDocument, {
     zip: result.zip,
   });
-
   const objects = resolvedDocument.objects || [];
   const existingObjectIds = new Set(
     objects
@@ -211,22 +198,22 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
   const updateCount = existingObjectIds.size;
   const addCount = objects.length - updateCount;
 
-  const confirmFn = confirmOpen
-    || (typeof window !== 'undefined' ? window.confirm.bind(window) : null);
-  const message =
-    'Scene Sync Exportを読み込みます\n\n'
-    + `- objects: ${objects.length}\n`
-    + `- update existing: ${updateCount}\n`
-    + `- add new: ${addCount}\n\n`
-    + '同じIDのオブジェクトは上書きされます。\n'
-    + 'Exportに含まれない既存オブジェクトは残ります。';
-
-  if (confirmFn && !confirmFn(message)) {
-    return { handled: true, cancelled: true };
+  if (confirm) {
+    const confirmFn = confirmOpen
+      || (typeof window !== 'undefined' ? window.confirm.bind(window) : null);
+    const message =
+      'Scene Sync Exportを読み込みます\n\n'
+      + `- objects: ${objects.length}\n`
+      + `- update existing: ${updateCount}\n`
+      + `- add new: ${addCount}\n\n`
+      + '同じIDのオブジェクトは上書きされます。\n'
+      + 'Exportに含まれない既存オブジェクトは残ります。';
+    if (confirmFn && !confirmFn(message)) {
+      return { handled: true, cancelled: true, kind };
+    }
   }
 
   showToast?.(`Scene Sync Exportを復元中…（0/${objects.length}）`, 60000);
-
   const preview = await showSceneDocumentImportPreview(resolvedDocument, {
     zip: result.zip,
     addOrUpdateObject,
@@ -252,9 +239,10 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
       },
     });
 
-    const settingsMessage = `Scene Sync Exportを復元中…（${objects.length}/${objects.length} / 設定を適用中）`;
-    showToast?.(settingsMessage, 60000);
-
+    showToast?.(
+      `Scene Sync Exportを復元中…（${objects.length}/${objects.length} / 設定を適用中）`,
+      60000,
+    );
     settingsResult = await applySceneDocumentSettings(resolvedDocument, {
       environmentManager,
       broadcast,
@@ -263,7 +251,6 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
       zip: result.zip,
       uploadBlobToStore,
     });
-
     behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
   } finally {
     preview.dispose();
@@ -274,14 +261,50 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
   showToast?.(
     `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}${toastSuffix}）`
   );
-
   return {
     handled: true,
     stats,
     settings: settingsResult,
     behaviors: behaviorsResult,
-    kind: isSingleHtml ? 'single-html-local' : 'zip-local',
+    kind,
   };
+}
+
+export async function applySceneSyncHandoffPayload({
+  sceneDocument,
+  embeddedAssets,
+}, context = {}) {
+  return await applyLoadedSceneSyncExport({
+    sceneDocument,
+    zip: createSingleHtmlAssetZip(embeddedAssets),
+  }, context, {
+    kind: 'single-html-handoff',
+    confirm: false,
+  });
+}
+
+// Entry point for "Open Export": detects Scene Sync Export ZIPs and portable
+// Single HTML files, then upserts their objects into the current scene.
+export async function tryOpenSceneSyncExportFile(file, context = {}) {
+  const isZip = isZipFile(file);
+  const isSingleHtml = isSingleHtmlFile(file);
+  if (!isZip && !isSingleHtml) return { handled: false };
+
+  const { showToast } = context;
+
+  const result = isSingleHtml
+    ? await loadSingleHtmlExportFromBlob(file)
+    : await loadExportPackageFromBlob(file);
+  if (!result.valid) {
+    if (isSingleHtml && result.reason === 'not-single-html-export') return { handled: false };
+    const label = isSingleHtml ? 'このHTMLはScene Sync Single HTML Exportではありません' : 'このZIPはScene Sync Exportではありません';
+    showToast?.(label);
+    return { handled: true, error: result.reason, kind: isSingleHtml ? 'single-html-local' : 'zip-local' };
+  }
+
+  return await applyLoadedSceneSyncExport(result, context, {
+    kind: isSingleHtml ? 'single-html-local' : 'zip-local',
+  });
 }
 
 export async function tryOpenSceneSyncExportUrl(url, context = {}) {
