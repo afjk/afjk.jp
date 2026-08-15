@@ -37,6 +37,7 @@ export async function fetchMeshBlobWithRetry(url, options = {}) {
     retryDelaysMs = DEFAULT_MESH_BLOB_FETCH_RETRY_DELAYS_MS,
     fetchImpl = globalThis.fetch,
     logger = console,
+    signal,
   } = options;
 
   if (typeof fetchImpl !== 'function') {
@@ -52,7 +53,7 @@ export async function fetchMeshBlobWithRetry(url, options = {}) {
     }
 
     try {
-      const response = await fetchImpl(url, { cache: 'no-store' });
+      const response = await fetchImpl(url, { cache: 'no-store', signal });
       const expectedSize = readContentLength(response.headers);
 
       if (!response.ok) {
@@ -87,6 +88,7 @@ export async function fetchMeshBlobWithRetry(url, options = {}) {
       }
     } catch (err) {
       lastError = err;
+      if (signal?.aborted) throw err;
       if (!shouldRetryMeshFetchError(err) || attemptIndex >= maxAttemptIndex) {
         throw err;
       }

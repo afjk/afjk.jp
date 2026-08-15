@@ -1527,6 +1527,7 @@ function createPresenceServer() {
     maxObjectsPerRoom: sceneSyncConfig.maxObjectsPerRoom,
   });
   const importJobs = new Map();
+  const completedImportJobs = new Map();
   let activeServerPulls = 0;
   const serverPullImporter = createServerPullImporter({
     storeAsset: storeServerPulledBlob,
@@ -1567,16 +1568,38 @@ function createPresenceServer() {
         sendImportJson(res, 429, { error: 'handoff-import-job-capacity' });
         return;
       }
+      if (activeServerPulls >= 2) {
+        sendImportJson(res, 429, { error: 'handoff-server-pull-busy' });
+        return;
+      }
       const jobId = randomUUID().replace(/-/g, '');
       const token = `${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`;
       const expiresAt = Date.now() + 10 * 60 * 1000;
-      importJobs.set(jobId, { ...input, token, actorId, expiresAt });
-      sendImportJson(res, 201, { jobId, token, expiresAt });
+      activeServerPulls += 1;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      req.once('aborted', abort);
+      try {
+        const inspection = await serverPullImporter.inspect(input.sourceUrl, { signal: controller.signal });
+        importJobs.set(jobId, { ...input, token, actorId, expiresAt, digest: inspection.digest });
+        // Only metadata leaves the server at inspection time. The target can
+        // reject duplicate IDs before a single remote asset byte is fetched.
+        sendImportJson(res, 201, { jobId, token, expiresAt, digest: inspection.digest, sceneDocument: inspection.sceneDocument });
+      } catch (error) {
+        const status = Number(error?.status) || 400;
+        const code = typeof error?.code === 'string' && /^handoff-[a-z0-9-]{1,100}$/u.test(error.code)
+          ? error.code : 'handoff-server-pull-failed';
+        sendImportJson(res, status, { error: code });
+      } finally {
+        req.off('aborted', abort);
+        activeServerPulls -= 1;
+      }
       return;
     }
 
     const materializeMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/materialize$/u);
     if (req.method === 'POST' && materializeMatch) {
+      if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
@@ -1585,7 +1608,7 @@ function createPresenceServer() {
       // Delete before the remote request: replay cannot turn this endpoint into
       // a repeated fetch primitive, even if the first request times out.
       importJobs.delete(materializeMatch[1]);
-      if (!job || job.expiresAt < Date.now() || job.actorId !== actorId || typeof body.token !== 'string' || body.token !== job.token) {
+      if (!job || job.expiresAt < Date.now() || job.actorId !== actorId || typeof body.token !== 'string' || body.token !== job.token || body.digest !== job.digest) {
         sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });
         return;
       }
@@ -1598,11 +1621,15 @@ function createPresenceServer() {
       const abort = () => controller.abort();
       req.once('aborted', abort);
       try {
-        const result = await serverPullImporter(job.sourceUrl, { signal: controller.signal });
+        const result = await serverPullImporter(job.sourceUrl, { signal: controller.signal, expectedDigest: job.digest });
+        completedImportJobs.set(materializeMatch[1], {
+          token: job.token, actorId, storedIds: result.storedIds, expiresAt: Date.now() + BLOB_TTL_MS,
+        });
         sendImportJson(res, 200, {
           sceneDocument: result.sceneDocument,
           assetCount: result.assetCount,
           totalBytes: result.totalBytes,
+          cleanup: { jobId: materializeMatch[1], token: job.token },
         });
       } catch (error) {
         const status = Number(error?.status) || 400;
@@ -1613,6 +1640,24 @@ function createPresenceServer() {
         req.off('aborted', abort);
         activeServerPulls -= 1;
       }
+      return;
+    }
+
+    const cleanupMatch = path.match(/^\/scene-sync\/import-jobs\/([a-f0-9]{32})\/cleanup$/u);
+    if (req.method === 'POST' && cleanupMatch) {
+      if (!isSameOriginImportRequest(req)) { sendImportJson(res, 403, { error: 'handoff-origin-forbidden' }); return; }
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (error) { sendImportJson(res, error?.status || 400, { error: 'handoff-invalid-import-job' }); return; }
+      const completed = completedImportJobs.get(cleanupMatch[1]);
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt);
+      completedImportJobs.delete(cleanupMatch[1]);
+      if (!completed || completed.expiresAt < Date.now() || completed.actorId !== actorId || completed.token !== body.token) {
+        sendImportJson(res, 404, { error: 'handoff-import-job-not-found' });
+        return;
+      }
+      for (const id of completed.storedIds) deleteBlob(id);
+      sendImportJson(res, 204, {});
       return;
     }
 
@@ -2409,6 +2454,9 @@ function createPresenceServer() {
     for (const [id, job] of importJobs) {
       if (job.expiresAt <= now) importJobs.delete(id);
     }
+    for (const [id, job] of completedImportJobs) {
+      if (job.expiresAt <= now) completedImportJobs.delete(id);
+    }
   }, BLOB_CLEANUP_INTERVAL);
 
   let connectionSummaryInterval = null;
@@ -2457,6 +2505,7 @@ function createPresenceServer() {
     roomPhysicsTimelines.clear();
     clientsByIpHash.clear();
     importJobs.clear();
+    completedImportJobs.clear();
     pendingSceneRequests.forEach(({ timer, resolve }) => {
       clearTimeout(timer);
       resolve({ objects: {} });

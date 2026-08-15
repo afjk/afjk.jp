@@ -1,7 +1,7 @@
 // Server-side materialization for Scene Sync URL handoffs.  This deliberately
 // accepts an export *description*, never exposes a fetched response, and only
 // returns a validated document whose assets point to our blob store.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -17,7 +17,6 @@ export const SERVER_PULL_LIMITS = Object.freeze({
   overallTimeoutMs: 10 * 60 * 1000,
 });
 
-const SAFE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?\/)(?!.*\\)(?!.*[%](?:2e|2f))/iu;
 const HANDOFF_ID = /^[A-Za-z0-9_-]{22,128}$/u;
 
 function failure(code, status = 400) {
@@ -161,10 +160,21 @@ function extractMarker(html) {
 
 function assertSceneDocument(document) {
   if (!document || typeof document !== 'object' || Array.isArray(document)
-    || document.format !== 'scene-sync-export-scene' || !Array.isArray(document.objects)) {
+    || document.format !== 'scene-sync-export-scene' || document.version !== 2 || !Array.isArray(document.objects)) {
     throw failure('handoff-invalid-scene-document');
   }
   if (document.objects.length > 10_000) throw failure('handoff-too-many-objects', 413);
+  let nodes = 0; let stringBytes = 0;
+  const visit = (value, depth = 0) => {
+    nodes += 1;
+    if (nodes > 250_000 || depth > 64) throw failure('handoff-scene-too-complex', 413);
+    if (typeof value === 'string') { stringBytes += Buffer.byteLength(value); if (stringBytes > SERVER_PULL_LIMITS.maxDocumentBytes) throw failure('handoff-scene-too-large', 413); return; }
+    if (value === null || typeof value === 'boolean') return;
+    if (typeof value === 'number') { if (!Number.isFinite(value)) throw failure('handoff-invalid-scene-document'); return; }
+    if (!value || typeof value !== 'object') throw failure('handoff-invalid-scene-document');
+    for (const [key, child] of Object.entries(value)) { stringBytes += Buffer.byteLength(key); visit(child, depth + 1); }
+  };
+  visit(document);
   const ids = new Set();
   for (const object of document.objects) {
     if (!object || typeof object !== 'object' || typeof object.id !== 'string' || !object.id || object.id.length > 256
@@ -174,12 +184,17 @@ function assertSceneDocument(document) {
     if (object.position.length !== 3 || object.rotation.length !== 4 || object.scale.length !== 3
       || ![...object.position, ...object.rotation, ...object.scale].every(Number.isFinite)) throw failure('handoff-invalid-scene-document');
     ids.add(object.id);
+    const asset = object.asset;
+    if (asset && (typeof asset !== 'object' || !['primitive', 'mesh', 'image', 'video', 'text'].includes(asset.type))) {
+      throw failure('handoff-invalid-asset-type');
+    }
   }
 }
 
 function assetUrl(value, baseUrl, sourceOrigin) {
   if (typeof value !== 'string' || !value || value.length > 1024) throw failure('handoff-unsafe-asset-path');
-  if (!SAFE_PATH.test(value) || value.includes('?') || value.includes('#') || /\u0000|[\x00-\x1f]/u.test(value)) throw failure('handoff-unsafe-asset-path');
+  if (value.startsWith('/') || value.includes('\\') || value.includes('?') || value.includes('#') || /\u0000|[\x00-\x1f]|%2e|%2f/iu.test(value)
+    || value.split('/').some((segment) => !segment || segment === '.' || segment === '..' || segment.includes(':'))) throw failure('handoff-unsafe-asset-path');
   const url = safeUrl(new URL(value, baseUrl).href, { allowHttpForTests: baseUrl.protocol === 'http:' });
   if (url.origin !== sourceOrigin) throw failure('handoff-cross-origin-asset', 403);
   return url;
@@ -255,8 +270,7 @@ export function createServerPullImporter({
   const resolvedLimits = { ...SERVER_PULL_LIMITS, ...limits };
   const fetchOptions = { fetchImpl, resolveHost, allowHttpForTests, limits: resolvedLimits };
 
-  return async function importSceneSyncUrl(sourceUrl, { signal } = {}) {
-    const stored = [];
+  async function inspect(sourceUrl, { signal } = {}) {
     const deadline = new AbortController();
     const abort = () => deadline.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -264,7 +278,13 @@ export function createServerPullImporter({
     try {
       const sourceOrigin = safeUrl(sourceUrl, { allowHttpForTests }).origin;
       const first = await fetchSafe(sourceUrl, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+      const firstType = contentType(first.response.headers);
       const firstText = await readTextLimited(first.response, resolvedLimits.maxDocumentBytes);
+      // Server pull intentionally has no ZIP or Single HTML semantics. Their
+      // payloads would be arbitrary remote bodies rather than a static marker.
+      if (/zip|octet-stream/u.test(firstType) || /scene-sync-export-format/i.test(firstText)) {
+        throw failure('handoff-url-kind-rejected');
+      }
       let sceneUrl = first.url;
       let sceneText = firstText;
       const marker = extractMarker(firstText);
@@ -275,9 +295,24 @@ export function createServerPullImporter({
         sceneUrl = scene.url;
         sceneText = await readTextLimited(scene.response, resolvedLimits.maxDocumentBytes);
       }
-      let document;
-      try { document = JSON.parse(sceneText); } catch { throw failure('handoff-invalid-scene-json'); }
-      assertSceneDocument(document);
+      let sceneDocument;
+      try { sceneDocument = JSON.parse(sceneText); } catch { throw failure('handoff-invalid-scene-json'); }
+      assertSceneDocument(sceneDocument);
+      const digest = createHash('sha256').update(JSON.stringify(sceneDocument)).digest('base64url');
+      return { sceneDocument, sceneUrl, sourceOrigin, digest };
+    } finally {
+      clearTimeout(deadlineTimer);
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
+  async function importSceneSyncUrl(sourceUrl, { signal, expectedDigest } = {}) {
+    const stored = [];
+    try {
+      const inspected = await inspect(sourceUrl, { signal });
+      if (expectedDigest && expectedDigest !== inspected.digest) throw failure('handoff-inspection-changed', 409);
+      const { sceneUrl, sourceOrigin } = inspected;
+      const document = inspected.sceneDocument;
       const refs = collectAssets(document, sceneUrl, resolvedLimits.maxAssets);
       const unique = new Map();
       for (const ref of refs) if (!unique.has(ref.url.href)) unique.set(ref.url.href, ref);
@@ -285,14 +320,14 @@ export function createServerPullImporter({
       let total = 0;
       const materialized = new Map();
       for (const ref of unique.values()) {
-        const fetched = await fetchSafe(ref.url.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+        const fetched = await fetchSafe(ref.url.href, { ...fetchOptions, signal, requiredOrigin: sourceOrigin });
         const mime = contentType(fetched.response.headers);
         if (!mimeAllowed(ref.type, mime)) { fetched.response.destroy?.(); throw failure('handoff-invalid-asset-mime'); }
         const declared = Number(header(fetched.response.headers, 'content-length'));
         const allowance = Math.min(resolvedLimits.maxAssetBytes, resolvedLimits.maxTotalBytes - total);
         if (allowance <= 0 || (Number.isFinite(declared) && declared > allowance)) throw failure('handoff-remote-assets-too-large', 413);
         const id = randomUUID().replace(/-/g, '');
-        const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: mime || 'application/octet-stream', maxBytes: allowance, signal: deadline.signal });
+        const storedAsset = await storeAsset({ id, body: fetched.response.body || fetched.response, mime: mime || 'application/octet-stream', maxBytes: allowance, signal });
         if (!storedAsset || !Number.isFinite(storedAsset.size) || storedAsset.size > allowance) throw failure('handoff-asset-store-failed', 500);
         stored.push(id); total += storedAsset.size;
         materialized.set(ref.url.href, { id, size: storedAsset.size, url: storedAsset.url, mime: storedAsset.mime || mime });
@@ -301,15 +336,14 @@ export function createServerPullImporter({
         const saved = materialized.get(ref.url.href);
         ref.assign(saved);
       }
-      return { sceneDocument: document, assetCount: unique.size, totalBytes: total, storedIds: stored };
+      return { sceneDocument: document, assetCount: unique.size, totalBytes: total, storedIds: stored, digest: inspected.digest };
     } catch (error) {
       await Promise.allSettled(stored.map((id) => removeAsset(id)));
       throw error;
-    } finally {
-      clearTimeout(deadlineTimer);
-      signal?.removeEventListener('abort', abort);
     }
-  };
+  }
+  importSceneSyncUrl.inspect = inspect;
+  return importSceneSyncUrl;
 }
 
 export function validateImportJobInput(body) {

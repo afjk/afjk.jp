@@ -9369,7 +9369,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     return;
   }
 
-  (async () => {
+  return (async () => {
     try {
       const incomingAssetId = info.asset?.assetId || info.assetId || null;
       let cachedRecord = null;
@@ -9407,7 +9407,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
 
       let blob = null;
       try {
-        const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath });
+        const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath, signal: options.signal });
         blob = result.blob;
       } catch (fetchErr) {
         const status = Number(fetchErr?.status || 0);
@@ -9459,7 +9459,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         source: 'network',
       });
 
-      glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
+      await glbLoader.loadFromUrl(objectUrl, initialPosition, scene, async (model) => {
         try {
           markCrashProbe('glb-load-success', {
             objectId,
@@ -9500,6 +9500,22 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             };
           }
 
+          if (removedObjectIds.has(objectId) || options.signal?.aborted) {
+            scene.remove(model);
+            cleanupPreviewForLoadedObject(options);
+            const error = new Error('Mesh object load was cancelled');
+            error.code = 'handoff-object-load-cancelled';
+            strictLoadFailure(options, error);
+            return;
+          }
+          try {
+            assertStrictLoadedObjectCommit(options, objectId, model);
+          } catch (error) {
+            scene.remove(model);
+            cleanupPreviewForLoadedObject(options);
+            throw error;
+          }
+
           if (existing) {
             model.position.copy(existing.position);
             model.quaternion.copy(existing.quaternion);
@@ -9509,10 +9525,19 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           }
 
           if (removedObjectIds.has(objectId)) {
+            scene.remove(model);
             cleanupPreviewForLoadedObject(options);
             return;
           }
 
+          if (options.signal?.aborted) {
+            scene.remove(model);
+            cleanupPreviewForLoadedObject(options);
+            const error = new Error('Mesh object load was cancelled');
+            error.code = 'handoff-object-load-cancelled';
+            strictLoadFailure(options, error);
+            return;
+          }
           replaceManagedObject(objectId, model, info);
           cleanupPreviewForLoadedObject(options);
 
@@ -9553,6 +9578,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           URL.revokeObjectURL(objectUrl);
           return;
         }
+        if (options.strictLoad) throw err;
         if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
         } else if (!suppressSnapshotSaveOnFailure) {
@@ -9569,6 +9595,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         cleanupPreviewForLoadedObject(options);
         return;
       }
+      if (options.strictLoad) throw err;
       if (!existing && !skipFallbackOnFailure) {
         replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
       } else if (!suppressSnapshotSaveOnFailure) {

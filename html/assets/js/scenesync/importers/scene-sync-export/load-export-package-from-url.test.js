@@ -426,3 +426,17 @@ test('returns invalid for non-SceneSync URLs so generic URL handling can continu
     'https://example.com/page/current.json',
   ]);
 });
+
+test('marks an opaque browser fetch TypeError as structured networkFailure', async () => {
+  const fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
+  const result = await loadExportPackageFromUrl('https://no-acao.example/world/', { fetchImpl, handoffOnly: true });
+  strictEqual(result.valid, false);
+  strictEqual(result.networkFailure, true);
+});
+
+test('does not mark HTTP failures as networkFailure', async () => {
+  const fetchImpl = async (url) => response({ url: String(url), body: 'no', ok: false, status: 403 });
+  const result = await loadExportPackageFromUrl('https://denied.example/scene.json', { fetchImpl, handoffOnly: true });
+  strictEqual(result.valid, false);
+  strictEqual(result.networkFailure, false);
+});

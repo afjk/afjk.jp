@@ -390,10 +390,27 @@ function isCorsOrNetworkUrlFailure(result) {
   // Browsers intentionally do not expose whether a TypeError is CORS, DNS, or
   // a dropped connection. Only use the server fallback for those opaque fetch
   // failures; HTTP/schema errors remain browser-direct failures.
-  return (result?.attempts || []).some((attempt) => /(?:fetch-failed|fetch-threw|direct-fetch-threw)/u.test(String(attempt?.reason || '')));
+  return result?.networkFailure === true;
 }
 
-async function materializeHandoffOnServer({ sourceUrl, sessionId, requestId }, { serverFetchImpl, signal } = {}) {
+function preflightHandoffObjectIds(sceneDocument, managedObjects) {
+  const seen = new Set();
+  for (const object of sceneDocument?.objects || []) {
+    if (seen.has(object.id)) {
+      const error = new Error(`Duplicate object ID: ${object.id}`);
+      error.code = 'handoff-duplicate-object-id';
+      throw error;
+    }
+    seen.add(object.id);
+    if (managedObjects?.has(object.id)) {
+      const error = new Error(`Object ID already exists: ${object.id}`);
+      error.code = 'handoff-object-id-conflict';
+      throw error;
+    }
+  }
+}
+
+async function inspectHandoffOnServer({ sourceUrl, sessionId, requestId }, { serverFetchImpl, signal } = {}) {
   if (!sessionId || !requestId) throw new Error('missing handoff binding');
   const request = serverFetchImpl || globalThis.fetch?.bind(globalThis);
   if (typeof request !== 'function') throw new Error('fetch is not available');
@@ -404,21 +421,28 @@ async function materializeHandoffOnServer({ sourceUrl, sessionId, requestId }, {
   });
   if (!created.ok) throw new Error('server pull job rejected');
   const job = await created.json();
+  if (!job?.sceneDocument || typeof job.digest !== 'string') throw new Error('server pull inspection invalid');
+  return { request, job };
+}
+
+async function materializeInspectedHandoffOnServer({ request, job }, { signal } = {}) {
+  const headers = { 'content-type': 'application/json' };
   const materialized = await request(`/presence/scene-sync/import-jobs/${encodeURIComponent(job.jobId)}/materialize`, {
     method: 'POST', credentials: 'same-origin', headers, signal,
-    body: JSON.stringify({ token: job.token }),
+    body: JSON.stringify({ token: job.token, digest: job.digest }),
   });
   if (!materialized.ok) throw new Error('server pull import failed');
   const payload = await materialized.json();
   if (!payload?.sceneDocument || typeof payload.sceneDocument !== 'object') throw new Error('server pull response invalid');
-  return payload.sceneDocument;
+  return { sceneDocument: payload.sceneDocument, cleanup: payload.cleanup || null };
 }
 
 export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId }, context = {}) {
   const controller = new AbortController();
+  let serverCleanup = null;
   const timeout = setTimeout(() => controller.abort(), context.handoffTimeoutMs || DEFAULT_URL_HANDOFF_TIMEOUT_MS);
   try {
-    const result = await loadExportPackageFromUrl(sourceUrl, {
+    let result = await loadExportPackageFromUrl(sourceUrl, {
       fetchImpl: context.fetchImpl,
       signal: controller.signal,
       maxDocumentBytes: DEFAULT_URL_HANDOFF_DOCUMENT_LIMIT_BYTES,
@@ -430,10 +454,14 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
         failure.code = 'handoff-url-load-failed';
         throw failure;
       }
-      const sceneDocument = await materializeHandoffOnServer({ sourceUrl, sessionId, requestId }, {
+      const inspected = await inspectHandoffOnServer({ sourceUrl, sessionId, requestId }, {
         serverFetchImpl: context.serverFetchImpl,
         signal: controller.signal,
       });
+      preflightHandoffObjectIds(inspected.job.sceneDocument, context.managedObjects);
+      const staged = await materializeInspectedHandoffOnServer(inspected, { signal: controller.signal });
+      serverCleanup = { request: inspected.request, ...staged.cleanup };
+      const sceneDocument = staged.sceneDocument;
       result = { valid: true, sceneDocument, kind: 'server-pull-handoff' };
     }
     if (!URL_HANDOFF_KINDS.has(result.kind) && result.kind !== 'server-pull-handoff') {
@@ -461,6 +489,14 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
       showPreview: false,
     });
   } catch (cause) {
+    if (serverCleanup?.jobId && serverCleanup?.token) {
+      // Best effort only; the server independently TTL-cleans any blobs when
+      // the browser disconnects before this request can run.
+      void serverCleanup.request(`/presence/scene-sync/import-jobs/${encodeURIComponent(serverCleanup.jobId)}/cleanup`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: serverCleanup.token }),
+      }).catch(() => {});
+    }
     if (controller.signal.aborted) {
       const failure = new Error('Scene Sync URL handoff timed out');
       failure.code = 'handoff-url-timeout';
@@ -469,6 +505,7 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
     if (typeof cause?.code === 'string' && cause.code.startsWith('handoff-')) throw cause;
     const failure = new Error('Scene Sync URL handoff import failed');
     failure.code = 'handoff-url-import-failed';
+    failure.cause = cause;
     throw failure;
   } finally {
     clearTimeout(timeout);

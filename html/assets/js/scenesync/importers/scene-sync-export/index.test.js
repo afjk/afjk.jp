@@ -126,6 +126,9 @@ function response({ url, body, contentType = 'application/json', ok = true, stat
     async text() {
       return typeof body === 'string' ? body : JSON.stringify(body);
     },
+    async json() {
+      return typeof body === 'string' ? JSON.parse(body) : body;
+    },
   };
 }
 
@@ -459,6 +462,41 @@ test('URL handoff preflights existing IDs before it fetches publisher assets', a
     (error) => error.code === 'handoff-object-id-conflict',
   );
   strictEqual(calls, 1, 'only scene.json may be fetched before ID preflight rejects');
+});
+
+test('URL handoff uses server pull only for opaque network failure and materializes after inspection', async () => {
+  const document = {
+    format: 'scene-sync-export-scene', version: 2,
+    objects: [{ id: 'server-pull', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], asset: { type: 'primitive', primitive: 'box' } }],
+  };
+  const calls = [];
+  let result;
+  try { result = await applySceneSyncHandoffUrl({
+    sourceUrl: 'https://no-acao.example/world/', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22),
+  }, {
+    managedObjects: new Map(), addOrUpdateObject: () => {}, broadcast: () => {},
+    fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+    serverFetchImpl: async (url, options = {}) => {
+      calls.push({ url: String(url), body: options.body });
+      if (String(url).endsWith('/import-jobs')) return response({ url: String(url), body: { jobId: 'a'.repeat(32), token: 'token', digest: 'digest', sceneDocument: document } });
+      return response({ url: String(url), body: { sceneDocument: document } });
+    },
+  }); } catch (error) { throw error.cause || error; }
+  strictEqual(result.handled, true);
+  strictEqual(calls.length, 2);
+  strictEqual(JSON.parse(calls[1].body).digest, 'digest');
+});
+
+test('URL handoff does not call server pull for HTTP failure', async () => {
+  let serverCalls = 0;
+  await rejects(
+    () => applySceneSyncHandoffUrl({ sourceUrl: 'https://denied.example/scene.json', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) }, {
+      managedObjects: new Map(), fetchImpl: async (url) => response({ url: String(url), body: 'denied', ok: false, status: 403 }),
+      serverFetchImpl: async () => { serverCalls += 1; throw new Error('must not call'); },
+    }),
+    (error) => error.code === 'handoff-url-load-failed',
+  );
+  strictEqual(serverCalls, 0);
 });
 
 test('direct URL import confirms before fetching assets', async () => {

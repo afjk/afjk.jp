@@ -227,6 +227,7 @@ function blockingResult(result, attempts) {
     status: result?.status || result?.fetched?.status || 0,
     attempts,
     shouldBlockGenericImport: true,
+    networkFailure: Boolean(result?.networkFailure) || attempts.some((attempt) => attempt?.networkFailure === true),
   };
 }
 
@@ -299,7 +300,9 @@ export async function loadExportPackageFromUrl(url, options = {}) {
   const attempts = [];
 
   const directFetched = await fetchBlob(parsed.href, fetchImpl, fetchOptions).catch((error) => (
-    { ok: false, reason: error?.message || 'direct-fetch-threw', error, url: parsed.href }
+    // Fetch intentionally turns a CORS failure into an opaque TypeError. Keep
+    // that fact structured so only URL handoff may choose server materialize.
+    { ok: false, reason: 'direct-fetch-threw', error, networkFailure: error instanceof TypeError, url: parsed.href }
   ));
   let directText = null;
   if (directFetched.ok) {
@@ -379,9 +382,9 @@ export async function loadExportPackageFromUrl(url, options = {}) {
       return blockingResult(currentResult, attempts);
     }
   } else {
-    attempts.push({ step: 'direct-scene-json', reason: directFetched.reason || 'fetch-failed' });
+    attempts.push({ step: 'direct-scene-json', reason: directFetched.reason || 'fetch-failed', networkFailure: Boolean(directFetched.networkFailure) });
     if (isZipUrl(parsed.href) || isSceneJsonUrl(parsed.href) || isCurrentJsonUrl(parsed.href)) {
-      return blockingResult({ reason: directFetched.reason || 'fetch-failed', error: directFetched.error }, attempts);
+        return blockingResult({ reason: directFetched.reason || 'fetch-failed', error: directFetched.error, networkFailure: directFetched.networkFailure }, attempts);
     }
     if (isHtmlUrl(parsed.href)) {
       return blockingResult(singleHtmlFetchFailure(directFetched), attempts);
@@ -413,5 +416,6 @@ export async function loadExportPackageFromUrl(url, options = {}) {
     valid: false,
     reason: 'not-scene-sync-export-url',
     attempts,
+    networkFailure: attempts.some((attempt) => attempt.networkFailure === true),
   };
 }
