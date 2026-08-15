@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { URL, pathToFileURL } from 'node:url';
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream, createWriteStream, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream, createWriteStream, renameSync, readdirSync, statfsSync } from 'node:fs';
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 import { encodeSession, decodeSession } from './gpt-session.mjs';
 import { createSceneSyncConfig } from './scenesync/config.mjs';
@@ -62,6 +62,8 @@ const sceneSyncLogger = createSceneSyncLogger({
 const glbBackupManager = createGlbBackupManager(sceneSyncConfig, sceneSyncLogger);
 const uploadRateLimiter = createPerActorRateLimiter(sceneSyncConfig.uploadsPerActorPerMinute);
 const serverPullRateLimiter = createPerActorRateLimiter(sceneSyncConfig.serverPullsPerActorPerMinute);
+let serverPullReservedBytes = 0;
+let serverPullLiveBytes = 0;
 
 // id → { buffer: Buffer|null, file: string|null, size: number, createdAt: number }
 const blobs = new Map();
@@ -1483,8 +1485,17 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
   const temporaryPath = `${BLOB_DIR}/.${id}.part`;
   const filePath = `${BLOB_DIR}/${id}.import`;
   let size = 0;
+  let reserved = false;
   try {
     mkdirSync(BLOB_DIR, { recursive: true });
+    if (serverPullLiveBytes + serverPullReservedBytes + maxBytes > sceneSyncConfig.serverPullMaxLiveBytes) {
+      throw createHttpError(413, 'handoff-server-pull-capacity');
+    }
+    const fs = statfsSync(BLOB_DIR);
+    const freeBytes = Number(fs.bavail) * Number(fs.bsize);
+    if (!Number.isFinite(freeBytes) || freeBytes < maxBytes) throw createHttpError(507, 'handoff-server-pull-disk-full');
+    serverPullReservedBytes += maxBytes;
+    reserved = true;
     const output = createWriteStream(temporaryPath, { flags: 'wx' });
     const waitForDrain = () => new Promise((resolve, reject) => {
       const done = () => { output.off('error', failed); resolve(); };
@@ -1510,16 +1521,35 @@ async function storeServerPulledBlob({ id, body, mime, maxBytes, signal }) {
       contentType: mime || 'application/octet-stream',
       buffer: null,
       file: filePath,
+      serverPullBytes: size,
     });
+    serverPullLiveBytes += size;
+    serverPullReservedBytes -= maxBytes;
+    reserved = false;
     return { size, mime, url: `/presence/blob/${id}` };
   } catch (error) {
     try { unlinkSync(temporaryPath); } catch {}
     try { unlinkSync(filePath); } catch {}
     throw error;
+  } finally {
+    if (reserved) serverPullReservedBytes -= maxBytes;
   }
 }
 
 function createPresenceServer() {
+  // Import blobs are process-local TTL state. They cannot be safely served
+  // after a restart, so remove stale partial/staged files before accepting
+  // jobs instead of leaking disk space indefinitely.
+  try {
+    mkdirSync(BLOB_DIR, { recursive: true });
+    for (const name of readdirSync(BLOB_DIR)) {
+      if (/^(?:\.[a-f0-9]{32}\.part|[a-f0-9]{32}\.import)$/u.test(name)) {
+        try { unlinkSync(`${BLOB_DIR}/${name}`); } catch {}
+      }
+    }
+  } catch (error) {
+    log('server pull blob sweep failed', error?.message || String(error));
+  }
   sceneSyncLogger.log('server_start', {
     maxUploadBytes: sceneSyncConfig.maxUploadBytes,
     maxJsonBytes: sceneSyncConfig.maxJsonBytes,
@@ -2554,6 +2584,7 @@ function deleteBlob(id) {
   if (entry.file) {
     try { unlinkSync(entry.file); } catch {}
   }
+  if (entry.serverPullBytes) serverPullLiveBytes = Math.max(0, serverPullLiveBytes - entry.serverPullBytes);
   blobs.delete(id);
   log('blob deleted', id);
 }
