@@ -1,6 +1,7 @@
-import { isZipFile } from './detect-scene-sync-export.js';
+import { isSingleHtmlFile, isZipFile } from './detect-scene-sync-export.js';
 import { loadExportPackageFromBlob } from './load-export-package.js';
 import { loadExportPackageFromUrl } from './load-export-package-from-url.js';
+import { loadSingleHtmlExportFromBlob } from './load-single-html-export.js';
 import { resolveSceneDocumentAssets } from './resolve-export-assets.js';
 import { resolveSceneDocumentAssetsFromUrl } from './resolve-url-assets.js';
 import { applySceneDocument } from './apply-scene-document.js';
@@ -17,7 +18,7 @@ async function applyImportedBehaviorsIfNeeded(resolvedDocument, context) {
   });
 }
 
-export { isZipFile };
+export { isSingleHtmlFile, isZipFile };
 
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -166,10 +167,12 @@ export async function showSceneDocumentImportPreview(sceneDocument, {
   };
 }
 
-// Entry point for "Open Export": detects whether `file` is a Scene Sync Export
-// ZIP and, if so, upserts its objects into the current scene.
+// Entry point for "Open Export": detects Scene Sync Export ZIPs and portable
+// Single HTML files, then upserts their objects into the current scene.
 export async function tryOpenSceneSyncExportFile(file, context = {}) {
-  if (!isZipFile(file)) return { handled: false };
+  const isZip = isZipFile(file);
+  const isSingleHtml = isSingleHtmlFile(file);
+  if (!isZip && !isSingleHtml) return { handled: false };
 
   const {
     managedObjects,
@@ -185,10 +188,14 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     applySceneBehaviors,
   } = context;
 
-  const result = await loadExportPackageFromBlob(file);
+  const result = isSingleHtml
+    ? await loadSingleHtmlExportFromBlob(file)
+    : await loadExportPackageFromBlob(file);
   if (!result.valid) {
-    showToast?.('このZIPはScene Sync Exportではありません');
-    return { handled: true, error: result.reason };
+    if (isSingleHtml && result.reason === 'not-single-html-export') return { handled: false };
+    const label = isSingleHtml ? 'このHTMLはScene Sync Single HTML Exportではありません' : 'このZIPはScene Sync Exportではありません';
+    showToast?.(label);
+    return { handled: true, error: result.reason, kind: isSingleHtml ? 'single-html-local' : 'zip-local' };
   }
 
   const { document: resolvedDocument } = await resolveSceneDocumentAssets(result.sceneDocument, {
@@ -270,7 +277,13 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     `Scene Sync Exportを読み込みました（追加: ${stats.added} / 更新: ${stats.updated} / GLB: ${stats.glbImported || 0}${toastSuffix}）`
   );
 
-  return { handled: true, stats, settings: settingsResult, behaviors: behaviorsResult };
+  return {
+    handled: true,
+    stats,
+    settings: settingsResult,
+    behaviors: behaviorsResult,
+    kind: isSingleHtml ? 'single-html-local' : 'zip-local',
+  };
 }
 
 export async function tryOpenSceneSyncExportUrl(url, context = {}) {
@@ -292,7 +305,10 @@ export async function tryOpenSceneSyncExportUrl(url, context = {}) {
   const result = await loadExportPackageFromUrl(url, { fetchImpl });
   if (!result.valid) {
     if (result.shouldBlockGenericImport) {
-      showToast?.(`Scene Sync Export URLを読み込めませんでした（${result.reason}）`);
+      const message = result.reason === 'single-html-fetch-failed'
+        ? 'Single HTML Exportを取得できませんでした。公開元でCORSを許可してください。'
+        : `Scene Sync Export URLを読み込めませんでした（${result.reason}）`;
+      showToast?.(message);
       return { handled: true, error: result.reason };
     }
     return { handled: false, reason: result.reason };

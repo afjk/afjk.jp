@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { strictEqual, deepStrictEqual } from 'node:assert';
-import { showSceneDocumentImportPreview, tryOpenSceneSyncExportUrl } from './index.js';
+import { showSceneDocumentImportPreview, tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './index.js';
+import { buildSingleHtmlDocument } from '../../../scenesync-export/export/single-html-format.js';
 
 function createFakeZip(entries) {
   return {
@@ -276,4 +277,112 @@ test('stops generic URL fallback for explicit invalid Scene Sync Export URLs', a
   strictEqual(calls.addOrUpdate.length, 0);
   strictEqual(calls.broadcast.length, 0);
   strictEqual(calls.toasts[0], 'Scene Sync Export URLを読み込めませんでした（invalid-scene-document）');
+});
+
+test('imports local Single HTML exports through the existing asset, settings, physics, and Loomlet paths', async () => {
+  const sceneDocument = {
+    format: 'scene-sync-export-scene',
+    version: 2,
+    skybox: { type: 'env', envId: 'outdoor_day' },
+    physics: { enabled: true, gravity: [0, -9.81, 0] },
+    behaviors: { scene: { id: 'loomlet-1', nodes: [] } },
+    bgm: { name: 'BGM', asset: { path: 'assets/bgm.mp3', mime: 'audio/mpeg' } },
+    objects: [{
+      id: 'poster', name: 'Poster', position: [2, 3, 4], rotation: [0, 0.5, 0, 0.5], scale: [2, 2, 2],
+      asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
+      audioSources: { default: { asset: { path: 'assets/narration.mp3', mime: 'audio/mpeg' } } },
+    }],
+  };
+  const html = await buildSingleHtmlDocument({
+    sceneDocument,
+    manifest: { singleHtml: { format: 'single-html-v1', version: 1 } },
+    files: {
+      'assets/poster.png': new Uint8Array([1, 2]).buffer,
+      'assets/narration.mp3': new Uint8Array([3, 4, 5]).buffer,
+      'assets/bgm.mp3': new Uint8Array([6, 7, 8, 9]).buffer,
+    },
+    viewerFiles: {},
+  });
+  const calls = { adds: [], broadcasts: [], uploaded: [], environments: [], physics: [], behaviors: [], bgm: [] };
+  const result = await tryOpenSceneSyncExportFile({
+    name: 'portable-scene.html', type: 'text/html', text: async () => html,
+  }, {
+    managedObjects: new Map(),
+    confirmOpen: () => true,
+    addOrUpdateObject: (id, payload, options) => calls.adds.push({ id, payload, options }),
+    broadcast: (payload) => calls.broadcasts.push(payload),
+    uploadBlobToStore: async (blob, mime) => {
+      const url = `https://blob.test/${blob.size}`;
+      calls.uploaded.push({ size: blob.size, mime, url });
+      return { url };
+    },
+    environmentManager: { loadEnvironment: (id) => calls.environments.push(id) },
+    applyScenePhysics: (physics) => { calls.physics.push(physics); return physics; },
+    applySceneBehaviors: async (behaviors) => { calls.behaviors.push(behaviors); return { applied: 1 }; },
+    applySceneBgm: (bgm) => calls.bgm.push(bgm),
+  });
+
+  strictEqual(result.handled, true);
+  strictEqual(result.kind, 'single-html-local');
+  strictEqual(result.stats.added, 1);
+  deepStrictEqual(calls.uploaded.map((entry) => entry.size), [2, 3, 4]);
+  const finalAdd = calls.adds.find((entry) => entry.options?.source === 'scene-sync-export-import');
+  deepStrictEqual(finalAdd.payload.position, [2, 3, 4]);
+  deepStrictEqual(finalAdd.payload.rotation, [0, 0.5, 0, 0.5]);
+  deepStrictEqual(finalAdd.payload.scale, [2, 2, 2]);
+  strictEqual(finalAdd.payload.asset.url, 'https://blob.test/2');
+  strictEqual(finalAdd.payload.audioSources.default.url, 'https://blob.test/3');
+  strictEqual(calls.bgm[0].url, 'https://blob.test/4');
+  deepStrictEqual(calls.environments, ['outdoor_day']);
+  deepStrictEqual(calls.physics, [sceneDocument.physics]);
+  deepStrictEqual(calls.behaviors, [sceneDocument.behaviors]);
+});
+
+test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {
+  const html = await buildSingleHtmlDocument({
+    sceneDocument: {
+      format: 'scene-sync-export-scene', version: 2,
+      objects: [{
+        id: 'remote-poster', position: [1, 2, 3], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+        asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
+      }],
+    },
+    manifest: { singleHtml: { format: 'single-html-v1', version: 1 } },
+    files: { 'assets/poster.png': new Uint8Array([9, 8, 7]).buffer },
+    viewerFiles: {},
+  });
+  const calls = { adds: [], uploads: 0 };
+  const result = await tryOpenSceneSyncExportUrl('https://cdn.example.com/portable.html', {
+    managedObjects: new Map(),
+    confirmOpen: () => true,
+    fetchImpl: createFetch({
+      'https://cdn.example.com/portable.html': { body: html, contentType: 'text/html' },
+    }),
+    addOrUpdateObject: (id, payload, options) => calls.adds.push({ id, payload, options }),
+    broadcast() {},
+    uploadBlobToStore: async (blob) => {
+      calls.uploads += 1;
+      strictEqual(blob.size, 3);
+      return { url: 'https://blob.test/remote-poster.png' };
+    },
+  });
+
+  strictEqual(result.handled, true);
+  strictEqual(result.kind, 'single-html-url');
+  strictEqual(calls.uploads, 1);
+  const finalAdd = calls.adds.find((entry) => entry.options?.source === 'scene-sync-export-import');
+  strictEqual(finalAdd.payload.asset.url, 'https://blob.test/remote-poster.png');
+  deepStrictEqual(finalAdd.payload.position, [1, 2, 3]);
+});
+
+test('explains how to fix a CORS failure for a Single HTML URL', async () => {
+  const toasts = [];
+  const result = await tryOpenSceneSyncExportUrl('https://cdn.example.com/portable.html', {
+    managedObjects: new Map(),
+    fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+    showToast: (message) => toasts.push(message),
+  });
+  strictEqual(result.handled, true);
+  strictEqual(result.error, 'single-html-fetch-failed');
+  strictEqual(toasts[0], 'Single HTML Exportを取得できませんでした。公開元でCORSを許可してください。');
 });

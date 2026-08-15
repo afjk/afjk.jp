@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { strictEqual, deepStrictEqual } from 'node:assert';
 import { loadExportPackageFromUrl } from './load-export-package-from-url.js';
+import { buildSingleHtmlDocument } from '../../../scenesync-export/export/single-html-format.js';
 
 function sceneDocument(extra = {}) {
   return {
@@ -283,6 +284,41 @@ test('loads HTML scene-sync-export marker without executing HTML', async () => {
   strictEqual(result.valid, true);
   strictEqual(result.kind, 'html-marker-url');
   strictEqual(result.baseUrl, 'https://example.com/worlds/demo/data/');
+});
+
+test('loads CORS-readable Single HTML URLs and exposes their embedded assets', async () => {
+  const html = await buildSingleHtmlDocument({
+    sceneDocument: sceneDocument({
+      physics: { enabled: true },
+      objects: [{
+        ...sceneDocument().objects[0],
+        id: 'portable-box',
+        asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
+      }],
+    }),
+    manifest: { singleHtml: { format: 'single-html-v1', version: 1 } },
+    files: { 'assets/poster.png': new Uint8Array([137, 80, 78, 71]).buffer },
+    viewerFiles: {},
+  });
+  const fetchImpl = createFetch({
+    'https://cdn.example.com/portable/scene.html': { body: html, contentType: 'text/html' },
+  });
+
+  const result = await loadExportPackageFromUrl('https://cdn.example.com/portable/scene.html', { fetchImpl });
+  strictEqual(result.valid, true);
+  strictEqual(result.kind, 'single-html-url');
+  strictEqual(result.sceneDocument.objects[0].id, 'portable-box');
+  const asset = await result.zip.file('assets/poster.png').async('arraybuffer');
+  deepStrictEqual(Array.from(new Uint8Array(asset)), [137, 80, 78, 71]);
+  deepStrictEqual(fetchImpl.calls, ['https://cdn.example.com/portable/scene.html']);
+});
+
+test('reports a clear blocking diagnostic when a Single HTML URL cannot be fetched with CORS', async () => {
+  const fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
+  const result = await loadExportPackageFromUrl('https://cdn.example.com/portable/scene.html', { fetchImpl });
+  strictEqual(result.valid, false);
+  strictEqual(result.reason, 'single-html-fetch-failed');
+  strictEqual(result.shouldBlockGenericImport, true);
 });
 
 test('returns invalid for non-SceneSync URLs so generic URL handling can continue', async () => {

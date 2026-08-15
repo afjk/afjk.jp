@@ -4,9 +4,12 @@ import {
   SINGLE_HTML_EXPORT_FORMAT,
   buildSingleHtmlDocument,
   encodeSingleHtmlAssets,
+  createSingleHtmlAssetZip,
+  parseSingleHtmlExportDocument,
   rewriteSingleHtmlModuleImports,
   stringifySafeEmbeddedJson,
 } from './single-html-format.js';
+import { isValidSceneDocument } from '../viewer/scene-document.js';
 
 test('single HTML format safely embeds versioned manifest, SceneDocument, and binary assets', async () => {
   const sceneDocument = {
@@ -87,4 +90,45 @@ test('safe JSON escaping prevents script element termination', () => {
   assert.equal(encoded.includes('</script>'), false);
   assert.equal(encoded.includes('&'), false);
   assert.match(encoded, /\\u003C\/script\\u003E/);
+});
+
+test('Single HTML export parses without DOM execution and restores embedded binary assets', async () => {
+  const sceneDocument = {
+    format: 'scene-sync-export-scene',
+    version: 2,
+    physics: { enabled: true, gravity: [0, -9.81, 0] },
+    loomlet: { graphs: [{ id: 'loomlet-1', nodes: [] }] },
+    objects: [{
+      id: 'poster', position: [2, 3, 4], rotation: [0, 0.5, 0, 0.5], scale: [2, 2, 2],
+      asset: { type: 'image', path: 'assets/poster.png' },
+    }],
+  };
+  const html = await buildSingleHtmlDocument({
+    sceneDocument,
+    manifest: { singleHtml: { format: SINGLE_HTML_EXPORT_FORMAT, version: 1 } },
+    files: { 'assets/poster.png': new Uint8Array([137, 80, 78, 71]).buffer },
+    viewerFiles: {},
+  });
+
+  const parsed = parseSingleHtmlExportDocument(html, { isValidSceneDocument });
+  assert.equal(parsed.valid, true);
+  assert.deepEqual(parsed.sceneDocument, sceneDocument);
+  const buffer = await createSingleHtmlAssetZip(parsed.payload.assets)
+    .file('assets/poster.png').async('arraybuffer');
+  assert.deepEqual(Array.from(new Uint8Array(buffer)), [137, 80, 78, 71]);
+});
+
+test('Single HTML parser rejects malformed marker, version, document, and assets', () => {
+  const base = {
+    format: SINGLE_HTML_EXPORT_FORMAT,
+    version: 1,
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] },
+    assets: {},
+  };
+  const htmlFor = (marker, payload) => `<meta name="scene-sync-export-format" content="${marker}"><script id="scene-sync-single-html-payload" type="application/json">${JSON.stringify(payload)}</script>`;
+
+  assert.equal(parseSingleHtmlExportDocument(htmlFor('single-html-v999', base), { isValidSceneDocument }).reason, 'invalid-single-html-marker');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, version: 99 }), { isValidSceneDocument }).reason, 'unsupported-single-html-version');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, sceneDocument: {} }), { isValidSceneDocument }).reason, 'invalid-single-html-scene-document');
+  assert.equal(parseSingleHtmlExportDocument(htmlFor(SINGLE_HTML_EXPORT_FORMAT, { ...base, assets: { 'bad.bin': { mime: 'application/octet-stream', base64: 'not base64!' } } }), { isValidSceneDocument }).reason, 'invalid-single-html-assets');
 });
