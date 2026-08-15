@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import { strictEqual, deepStrictEqual, rejects } from 'node:assert';
-import { showSceneDocumentImportPreview, tryOpenSceneSyncExportFile, tryOpenSceneSyncExportUrl } from './index.js';
+import {
+  applySceneSyncHandoffPayload,
+  showSceneDocumentImportPreview,
+  tryOpenSceneSyncExportFile,
+  tryOpenSceneSyncExportUrl,
+} from './index.js';
 import { buildSingleHtmlDocument } from '../../../scenesync-export/export/single-html-format.js';
 
 function createFakeZip(entries) {
@@ -336,6 +341,168 @@ test('imports local Single HTML exports through the existing asset, settings, ph
   deepStrictEqual(calls.environments, ['outdoor_day']);
   deepStrictEqual(calls.physics, [sceneDocument.physics]);
   deepStrictEqual(calls.behaviors, [sceneDocument.behaviors]);
+});
+
+test('handoff imports embedded image and GLB assets in add mode without confirmation', async () => {
+  const sceneDocument = {
+    format: 'scene-sync-export-scene',
+    version: 2,
+    skybox: { type: 'env', envId: 'must-not-apply' },
+    bgm: { url: 'https://example.test/must-not-apply.mp3' },
+    physics: { enabled: true, gravity: [0, -1, 0] },
+    behaviors: { scene: { nodes: [], edges: [] } },
+    objects: [
+      {
+        id: 'handoff-poster', position: [1, 2, 3], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+        asset: { type: 'image', path: 'assets/poster.png', mime: 'image/png' },
+      },
+      {
+        id: 'handoff-model', position: [4, 5, 6], rotation: [0, 0, 0, 1], scale: [2, 2, 2],
+        asset: { type: 'mesh', path: 'assets/model.glb', mime: 'model/gltf-binary' },
+      },
+    ],
+  };
+  const calls = { adds: [], broadcasts: [], glb: [], uploads: [], settings: 0, behaviors: 0 };
+  const result = await applySceneSyncHandoffPayload({
+    sceneDocument,
+    embeddedAssets: {
+      'assets/poster.png': { mime: 'image/png', base64: 'AQI=' },
+      'assets/model.glb': { mime: 'model/gltf-binary', base64: 'Z2xi' },
+    },
+  }, {
+    managedObjects: new Map(),
+    confirmOpen: () => { throw new Error('handoff must not request confirmation'); },
+    addOrUpdateObject: (id, payload, options) => calls.adds.push({ id, payload, options }),
+    broadcast: (payload) => calls.broadcasts.push(payload),
+    uploadBlobToStore: async (blob, mime) => {
+      calls.uploads.push({ size: blob.size, mime });
+      return { url: 'https://blob.test/poster.png', mime };
+    },
+    importGlbFileAsSceneObject: async (file, options) => {
+      options.beforeCommit?.();
+      calls.glb.push({ file, options });
+    },
+    environmentManager: { loadEnvironment: () => { calls.settings += 1; } },
+    applySceneBgm: () => { calls.settings += 1; },
+    applyScenePhysics: () => { calls.settings += 1; },
+    applySceneBehaviors: () => { calls.behaviors += 1; },
+  });
+
+  strictEqual(result.handled, true);
+  strictEqual(result.kind, 'single-html-handoff');
+  strictEqual(result.stats.added, 2);
+  strictEqual(result.stats.glbImported, 1);
+  deepStrictEqual(calls.uploads, [{ size: 2, mime: 'image/png' }]);
+  strictEqual(calls.glb[0].file.name, 'model.glb');
+  deepStrictEqual(calls.glb[0].options.position, [4, 5, 6]);
+  strictEqual(calls.adds.length, 1, 'handoff must skip preview mutations');
+  const imageAdd = calls.adds.find((entry) => entry.options?.source === 'scene-sync-export-import');
+  strictEqual(imageAdd.payload.asset.url, 'https://blob.test/poster.png');
+  strictEqual(calls.settings, 0);
+  strictEqual(calls.behaviors, 0);
+  strictEqual(result.settings, undefined);
+  strictEqual(result.behaviors, null);
+});
+
+test('handoff add rejects duplicate and existing object IDs before preview, update, or broadcast', async () => {
+  const baseObject = {
+    id: 'existing', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+    asset: { type: 'primitive', primitive: 'box' },
+  };
+  const calls = { adds: 0, broadcasts: 0 };
+  const context = {
+    managedObjects: new Map([['existing', {}]]),
+    addOrUpdateObject: () => { calls.adds += 1; },
+    broadcast: () => { calls.broadcasts += 1; },
+  };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [baseObject] },
+      embeddedAssets: {},
+    }, context),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(calls.adds, 0);
+  strictEqual(calls.broadcasts, 0);
+
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ ...baseObject, id: 'duplicate' }, { ...baseObject, id: 'duplicate' }],
+      },
+      embeddedAssets: {},
+    }, { ...context, managedObjects: new Map() }),
+    (error) => error.code === 'handoff-duplicate-object-id',
+  );
+  strictEqual(calls.adds, 0);
+  strictEqual(calls.broadcasts, 0);
+});
+
+test('handoff final guards preserve peer objects added during image upload or GLB load', async () => {
+  const base = {
+    position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+  };
+
+  const imageRemote = { owner: 'peer-image' };
+  const imageObjects = new Map();
+  const imageCalls = { adds: 0, broadcasts: 0, uploads: 0 };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ ...base, id: 'raced-image', asset: { type: 'image', path: 'assets/race.png' } }],
+      },
+      embeddedAssets: { 'assets/race.png': { mime: 'image/png', base64: 'AQ==' } },
+    }, {
+      managedObjects: imageObjects,
+      addOrUpdateObject: () => { imageCalls.adds += 1; },
+      broadcast: () => { imageCalls.broadcasts += 1; },
+      uploadBlobToStore: async () => {
+        imageCalls.uploads += 1;
+        imageObjects.set('raced-image', imageRemote);
+        return { url: 'https://blob.test/race.png', mime: 'image/png' };
+      },
+    }),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(imageCalls.uploads, 1);
+  strictEqual(imageCalls.adds, 0);
+  strictEqual(imageCalls.broadcasts, 0);
+  strictEqual(imageObjects.get('raced-image'), imageRemote);
+
+  const glbRemote = { owner: 'peer-glb' };
+  const glbObjects = new Map();
+  const glbCalls = { mutations: 0, broadcasts: 0, uploads: 0, loads: 0 };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ ...base, id: 'raced-glb', asset: { type: 'mesh', path: 'assets/race.glb' } }],
+      },
+      embeddedAssets: { 'assets/race.glb': { mime: 'model/gltf-binary', base64: 'Z2xi' } },
+    }, {
+      managedObjects: glbObjects,
+      addOrUpdateObject: () => { glbCalls.mutations += 1; },
+      broadcast: () => { glbCalls.broadcasts += 1; },
+      uploadBlobToStore: async () => { glbCalls.uploads += 1; },
+      importGlbFileAsSceneObject: async (_file, options) => {
+        glbCalls.loads += 1;
+        await Promise.resolve();
+        glbObjects.set('raced-glb', glbRemote);
+        options.beforeCommit();
+        glbCalls.mutations += 1;
+        glbCalls.broadcasts += 1;
+        glbCalls.uploads += 1;
+      },
+    }),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(glbCalls.loads, 1);
+  strictEqual(glbCalls.mutations, 0);
+  strictEqual(glbCalls.broadcasts, 0);
+  strictEqual(glbCalls.uploads, 0);
+  strictEqual(glbObjects.get('raced-glb'), glbRemote);
 });
 
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {

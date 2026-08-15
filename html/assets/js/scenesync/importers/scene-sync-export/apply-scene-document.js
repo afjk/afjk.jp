@@ -183,6 +183,7 @@ export async function applySceneDocument(sceneDocument, {
   zip,
   uploadBlobToStore,
   existingObjectIds,
+  assertObjectAvailable,
   onProgress,
 } = {}) {
   let added = 0;
@@ -244,6 +245,9 @@ export async function applySceneDocument(sceneDocument, {
           physics: obj.physics,
           selectAfterLoad: false,
           source: 'scene-sync-export-import',
+          beforeCommit: typeof assertObjectAvailable === 'function'
+            ? () => assertObjectAvailable(obj.id)
+            : undefined,
         });
 
         glbImported += 1;
@@ -278,6 +282,9 @@ export async function applySceneDocument(sceneDocument, {
     if (prepared.audioSources) payload.audioSources = prepared.audioSources;
     if (obj.physics) payload.physics = obj.physics;
 
+    // Handoff callers use this synchronous final guard after every awaited
+    // asset-staging step. Keep guard → mutation → broadcast in one turn.
+    assertObjectAvailable?.(obj.id);
     addOrUpdateObject(obj.id, payload, { source: 'scene-sync-export-import' });
     broadcast(payload);
     reportProgress(obj);

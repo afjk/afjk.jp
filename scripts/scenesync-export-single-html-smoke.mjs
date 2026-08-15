@@ -4,7 +4,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
-import { VIEWER_SOURCES } from '../html/assets/js/scenesync-export/export/build-export-package.js';
+import {
+  SINGLE_HTML_HANDOFF_SOURCES,
+  VIEWER_SOURCES,
+} from '../html/assets/js/scenesync-export/export/build-export-package.js';
 import { buildSingleHtmlDocument } from '../html/assets/js/scenesync-export/export/single-html-format.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,7 +104,10 @@ function addSingleHtmlTestInstrumentation(viewerFiles) {
 
 async function loadViewerFiles() {
   const files = {};
-  for (const { src, dest, binary = false, transform = null } of VIEWER_SOURCES) {
+  for (const { src, dest, binary = false, transform = null } of [
+    ...VIEWER_SOURCES,
+    ...SINGLE_HTML_HANDOFF_SOURCES,
+  ]) {
     const absolutePath = path.join(repoRoot, 'html', src.replace(/^\//u, ''));
     const raw = await readFile(absolutePath);
     const content = binary ? raw : raw.toString('utf8');
@@ -169,9 +175,18 @@ try {
     if (message.type() === 'error' || message.type() === 'warning') consoleErrors.push(message.text());
   });
   page.on('request', (request) => requestUrls.push(request.url()));
+  await page.addInitScript(() => {
+    window.open = (url) => {
+      globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_OPEN_URL__ = String(url);
+      return null;
+    };
+  });
   await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
+  await page.locator('#scene-sync-handoff-room').fill(' Smoke Room! ');
+  await page.locator('#scene-sync-handoff button').click();
+  await page.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent.includes('Popup was blocked'));
   await page.waitForTimeout(800);
   await page.waitForFunction(() => globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA, null, { timeout: 10000 });
   const initialDynamicBodyY = await page.evaluate(() => {
@@ -214,6 +229,12 @@ try {
     playerRate: document.querySelector('[data-player-rate="2"]')?.dataset.active,
     playerTime: document.querySelector('[data-player-current-time]')?.textContent,
     bgmControlPresent: [...document.querySelectorAll('#viewer-controls button')].some((button) => button.textContent.includes('BGM')),
+    handoff: {
+      present: Boolean(document.getElementById('scene-sync-handoff')),
+      room: document.getElementById('scene-sync-handoff-room')?.value,
+      status: document.getElementById('scene-sync-handoff-status')?.textContent,
+      openUrl: globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_OPEN_URL__ || null,
+    },
     bgmAudio: (() => {
       const audio = globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__;
       return audio ? { readyState: audio.readyState, paused: audio.paused, error: audio.error?.message || null } : null;
@@ -235,6 +256,11 @@ try {
   assert(!state.missingNoticeVisible, 'Embedded image or GLB was reported missing');
   assert(state.playerRate === 'true' && state.playerTime !== '00:00.00', 'Playback controls did not update the embedded scene clock');
   assert(state.bgmControlPresent, 'Embedded audio did not produce a playback control');
+  assert(state.handoff.present, 'Single HTML did not render the Open in Scene Sync controls');
+  assert(state.handoff.room === 'smokeroom', 'Single HTML did not sanitize the optional Room ID');
+  assert(new URL(state.handoff.openUrl).searchParams.get('handoff') === '1', 'Single HTML handoff URL omitted handoff mode');
+  assert(new URL(state.handoff.openUrl).searchParams.get('room') === 'smokeroom', 'Single HTML handoff URL omitted the sanitized room');
+  assert(state.handoff.status.includes('Popup was blocked'), 'Single HTML did not show popup-blocked feedback');
   assert(state.bgmAudio?.readyState >= 2 && state.bgmAudio.error === null && state.bgmAudio.paused === false, 'Embedded audio did not become playable after a user action');
   assert(state.dynamicBodyY < initialDynamicBodyY - 0.05, 'Rapier did not move the dynamic body under gravity');
   assert(!requestUrls.some((url) => url.startsWith('file:') && url !== pathToFileURL(htmlPath).href), `Unexpected sibling file request: ${requestUrls.join(', ')}`);

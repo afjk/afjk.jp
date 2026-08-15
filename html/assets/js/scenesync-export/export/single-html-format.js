@@ -60,7 +60,7 @@ export async function arrayBufferToBase64(value) {
 }
 
 export async function encodeSingleHtmlAssets(files = {}) {
-  const assets = {};
+  const assets = Object.create(null);
   for (const [path, value] of Object.entries(files)) {
     if (value == null) continue;
     const blob = value instanceof Blob ? value : null;
@@ -261,7 +261,10 @@ function validateSingleHtmlAssets(assets, limits) {
   let totalBytes = 0;
   try {
     for (const [path, asset] of entries) {
-      if (!isSafeSingleHtmlAssetPath(path) || typeof asset?.mime !== 'string' || typeof asset?.base64 !== 'string') {
+      if (!isSafeSingleHtmlAssetPath(path)
+        || !asset || typeof asset !== 'object' || Array.isArray(asset)
+        || !Object.hasOwn(asset, 'mime') || typeof asset.mime !== 'string'
+        || !Object.hasOwn(asset, 'base64') || typeof asset.base64 !== 'string') {
         return { valid: false, reason: 'invalid-single-html-assets' };
       }
       const assetBytes = estimatedBase64DecodedBytes(asset.base64);
@@ -275,9 +278,30 @@ function validateSingleHtmlAssets(assets, limits) {
   return { valid: true, totalBytes };
 }
 
+export function validateSingleHtmlEmbeddedAssets(assets, options = {}) {
+  const resolvedLimits = resolveSingleHtmlLimits(options);
+  if (options.sceneDocument !== undefined) {
+    let serializedDocument;
+    try {
+      serializedDocument = JSON.stringify({
+        sceneDocument: options.sceneDocument,
+        assets,
+      });
+    } catch {
+      return { valid: false, reason: 'invalid-single-html-scene-document' };
+    }
+    if (typeof serializedDocument !== 'string'
+      || utf8ByteLength(serializedDocument) > resolvedLimits.documentBytes) {
+      return { valid: false, reason: 'single-html-document-too-large' };
+    }
+  }
+  return validateSingleHtmlAssets(assets, resolvedLimits);
+}
+
 function isSafeSingleHtmlAssetPath(path) {
   if (typeof path !== 'string' || !path || path.startsWith('/') || path.includes('\\')) return false;
-  return path.split('/').every((part) => part && part !== '.' && part !== '..');
+  return path.split('/').every((part) => part && part !== '.' && part !== '..'
+    && part !== '__proto__' && part !== 'constructor' && part !== 'prototype');
 }
 
 /**
@@ -314,7 +338,7 @@ export function parseSingleHtmlExportDocument(html, { isValidSceneDocument, limi
   if (typeof isValidSceneDocument === 'function' && !isValidSceneDocument(payload.sceneDocument)) {
     return { valid: false, reason: 'invalid-single-html-scene-document' };
   }
-  const assets = validateSingleHtmlAssets(payload.assets, resolvedLimits);
+  const assets = validateSingleHtmlEmbeddedAssets(payload.assets, resolvedLimits);
   if (!assets.valid) return assets;
 
   return {
@@ -334,6 +358,7 @@ export function parseSingleHtmlExportDocument(html, { isValidSceneDocument, limi
 export function createSingleHtmlAssetZip(assets = {}) {
   return {
     file(path) {
+      if (!assets || typeof assets !== 'object' || !Object.hasOwn(assets, path)) return null;
       const asset = assets[path];
       if (!asset) return null;
       return {
@@ -399,6 +424,12 @@ function makeRuntimeScript() {
   importMap.type = 'importmap';
   importMap.textContent = JSON.stringify({ imports });
   document.head.appendChild(importMap);
+  import('scene-sync-single-html/scenesync/handoff/source.js')
+    .then(({ mountSingleHtmlHandoff }) => mountSingleHtmlHandoff({
+      sceneDocument: payload.sceneDocument,
+      embeddedAssets: payload.assets,
+    }))
+    .catch((error) => console.error('[Scene Sync handoff]', error));
   import('scene-sync-single-html/viewer/viewer.js').catch((error) => {
     const loading = document.getElementById('loading-overlay');
     if (loading) loading.textContent = 'Failed to start scene: ' + error.message;
@@ -421,12 +452,15 @@ export async function buildSingleHtmlDocument({
   const viewerCss = [
     viewerFiles['viewer/viewer.css'],
     viewerFiles['viewer/player-shell.css'],
+    viewerFiles['scenesync/handoff/source.css'],
   ].filter((source) => typeof source === 'string').join('\n');
   const modules = {};
   const embeddedFiles = { ...files };
 
   for (const [path, source] of Object.entries(viewerFiles)) {
-    if (path === 'viewer/viewer.css' || path === 'viewer/player-shell.css') continue;
+    if (path === 'viewer/viewer.css'
+      || path === 'viewer/player-shell.css'
+      || path === 'scenesync/handoff/source.css') continue;
     if (typeof source === 'string') {
       let rewritten = rewriteSingleHtmlModuleImports(source, path);
       if (path === 'viewer/rapier/rapier.js') {

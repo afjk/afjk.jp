@@ -554,6 +554,8 @@ async function run() {
 
     const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
     await page.locator('#export-btn').click();
+    await page.locator('#export-dialog:not([hidden])').waitFor({ state: 'visible' });
+    await page.locator('#export-submit').click();
     const download = await downloadPromise;
     const downloadPath = await download.path();
     assert(downloadPath, 'Download path unavailable');

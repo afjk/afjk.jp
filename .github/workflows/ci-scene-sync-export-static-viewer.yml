@@ -5,6 +5,9 @@ on:
     paths:
       - "html/assets/js/scenesync-export/export/**"
       - "html/assets/js/scenesync-export/viewer/**"
+      - "html/assets/js/scenesync/handoff/**"
+      - "html/assets/js/scenesync/importers/scene-sync-export/**"
+      - "html/assets/js/scenesync/scene.js"
       - "html/assets/js/scenesync/scene-physics.js"
       - "html/assets/js/scenesync/physics/**"
       - "html/assets/js/scenesync/plugins/scene-sync-physics-plugin.js"
@@ -17,6 +20,7 @@ on:
       - "html/assets/vendor/rapier-deterministic/**"
       - "scripts/scenesync-export-static-viewer-smoke.mjs"
       - "scripts/scenesync-export-single-html-smoke.mjs"
+      - "scripts/scenesync-handoff-browser-e2e.mjs"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ci-scene-sync-export-static-viewer.yml"
@@ -47,6 +51,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install presence server dependencies
+        run: npm ci --prefix apps/presence-server
+
+      - name: Run export, import, and handoff unit suite
+        run: npm run test:scene-sync-export-import
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
@@ -55,3 +65,6 @@ jobs:
 
       - name: Run Single HTML file playback smoke
         run: npm run test:e2e:scene-sync-export-single-html
+
+      - name: Run Open in Scene Sync handoff E2E
+        run: npm run test:e2e:scene-sync-handoff

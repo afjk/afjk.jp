@@ -58,6 +58,15 @@ export const VIEWER_SOURCES = [
   },
 ];
 
+// Only Single HTML exports expose the opener handoff UI. Keeping these out of
+// VIEWER_SOURCES leaves Static ZIP contents and behavior unchanged.
+export const SINGLE_HTML_HANDOFF_SOURCES = [
+  { src: '/assets/js/scenesync/handoff/protocol.js', dest: 'scenesync/handoff/protocol.js' },
+  { src: '/assets/js/scenesync/handoff/source.js', dest: 'scenesync/handoff/source.js' },
+  { src: '/assets/js/scenesync/handoff/source.css', dest: 'scenesync/handoff/source.css' },
+  { src: '/assets/js/scenesync/utils/room-code.js', dest: 'scenesync/utils/room-code.js' },
+];
+
 const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -213,12 +222,12 @@ async function addExportThumbnail(zip, {
   return { path: 'thumbnail.png', mode: thumbnail.mode };
 }
 
-export async function fetchExportViewerSources() {
+export async function fetchExportViewerSources(sources = VIEWER_SOURCES) {
   const results = {};
   const failures = [];
 
   await Promise.all(
-    VIEWER_SOURCES.map(async ({ src, dest, binary = false, transform = null }) => {
+    sources.map(async ({ src, dest, binary = false, transform = null }) => {
       try {
         const res = await fetch(src);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
