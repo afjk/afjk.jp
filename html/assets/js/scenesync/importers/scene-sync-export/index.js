@@ -171,6 +171,8 @@ export async function showSceneDocumentImportPreview(sceneDocument, {
 async function applyLoadedSceneSyncExport(result, context, {
   kind,
   confirm = true,
+  rejectExistingObjectIds = false,
+  applySceneLevel = true,
 } = {}) {
   const {
     managedObjects,
@@ -190,6 +192,15 @@ async function applyLoadedSceneSyncExport(result, context, {
     zip: result.zip,
   });
   const objects = resolvedDocument.objects || [];
+  const incomingObjectIds = new Set();
+  for (const object of objects) {
+    if (incomingObjectIds.has(object.id)) {
+      const error = new Error(`Duplicate object ID: ${object.id}`);
+      error.code = 'handoff-duplicate-object-id';
+      throw error;
+    }
+    incomingObjectIds.add(object.id);
+  }
   const existingObjectIds = new Set(
     objects
       .filter((obj) => managedObjects.has(obj.id))
@@ -197,6 +208,12 @@ async function applyLoadedSceneSyncExport(result, context, {
   );
   const updateCount = existingObjectIds.size;
   const addCount = objects.length - updateCount;
+
+  if (rejectExistingObjectIds && existingObjectIds.size > 0) {
+    const error = new Error(`Object ID already exists: ${[...existingObjectIds][0]}`);
+    error.code = 'handoff-object-id-conflict';
+    throw error;
+  }
 
   if (confirm) {
     const confirmFn = confirmOpen
@@ -239,19 +256,21 @@ async function applyLoadedSceneSyncExport(result, context, {
       },
     });
 
-    showToast?.(
-      `Scene Sync Exportを復元中…（${objects.length}/${objects.length} / 設定を適用中）`,
-      60000,
-    );
-    settingsResult = await applySceneDocumentSettings(resolvedDocument, {
-      environmentManager,
-      broadcast,
-      applySceneBgm,
-      applyScenePhysics,
-      zip: result.zip,
-      uploadBlobToStore,
-    });
-    behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
+    if (applySceneLevel) {
+      showToast?.(
+        `Scene Sync Exportを復元中…（${objects.length}/${objects.length} / 設定を適用中）`,
+        60000,
+      );
+      settingsResult = await applySceneDocumentSettings(resolvedDocument, {
+        environmentManager,
+        broadcast,
+        applySceneBgm,
+        applyScenePhysics,
+        zip: result.zip,
+        uploadBlobToStore,
+      });
+      behaviorsResult = await applyImportedBehaviorsIfNeeded(resolvedDocument, { applySceneBehaviors });
+    }
   } finally {
     preview.dispose();
   }
@@ -280,6 +299,8 @@ export async function applySceneSyncHandoffPayload({
   }, context, {
     kind: 'single-html-handoff',
     confirm: false,
+    rejectExistingObjectIds: true,
+    applySceneLevel: false,
   });
 }
 

@@ -6953,7 +6953,7 @@ function applyRoomCode(code) {
 
 function notifyHandoffRoomReady(roomId) {
   for (const waiter of [...handoffRoomWaiters]) {
-    if (waiter.roomId !== roomId) continue;
+    if (waiter.roomId && waiter.roomId !== roomId) continue;
     handoffRoomWaiters.delete(waiter);
     clearTimeout(waiter.timeoutId);
     waiter.resolve();
@@ -6973,15 +6973,14 @@ function prepareHandoffSceneReady({ restoreSnapshot = false } = {}) {
     if (presenceState.room !== roomId || !sceneReceived) return;
     handoffSceneReadyRoomId = roomId;
     notifyHandoffRoomReady(roomId);
-    handoffTargetSession.ready();
   })().catch((error) => {
     console.warn('[Scene Sync handoff] scene initialization failed', error);
     showToast('Open in Scene Sync: scene initialization failed');
   });
 }
 
-function waitForHandoffRoom(roomId, timeoutMs = 12_000) {
-  if (!roomId || handoffSceneReadyRoomId === roomId) return Promise.resolve();
+function waitForHandoffRoom(roomId, timeoutMs = 110_000) {
+  if (handoffSceneReadyRoomId && (!roomId || handoffSceneReadyRoomId === roomId)) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const waiter = { roomId, resolve, reject, timeoutId: null };
     waiter.timeoutId = setTimeout(() => {
@@ -6994,9 +6993,7 @@ function waitForHandoffRoom(roomId, timeoutMs = 12_000) {
 
 async function ensureHandoffRoom(roomId) {
   if (roomId && activeRoomCode !== roomId) applyRoomCode(roomId);
-  const effectiveRoomId = roomId || presenceState.room;
-  if (!effectiveRoomId) throw new Error('Scene Sync room is not ready');
-  await waitForHandoffRoom(effectiveRoomId);
+  await waitForHandoffRoom(roomId || null);
 }
 
 function generateRoom() {
@@ -7156,6 +7153,7 @@ function connectPresence() {
   };
 
   ws.onmessage = (e) => {
+    if (presenceState.ws !== ws) return;
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
 
@@ -15492,9 +15490,7 @@ const welcomeDialog = createWelcomeDialog({
 });
 
 function shouldShowWelcome() {
-  if (new URLSearchParams(location.search).get('handoff') === '1' && window.opener) {
-    return false;
-  }
+  if (handoffTargetSession?.enabled) return false;
   const welcomeSeen = localStorage.getItem('sceneSync.welcomeSeen') === 'true';
   const displayName = normalizeDisplayName(localStorage.getItem('sceneSync.displayName'));
   return !welcomeSeen || !displayName;

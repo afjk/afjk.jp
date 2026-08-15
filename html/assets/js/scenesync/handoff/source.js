@@ -1,6 +1,7 @@
 import {
   HANDOFF_SOURCE_STATES,
   createHandoffMessage,
+  createRandomHandoffId,
   isReadyMessage,
   transitionHandoffSourceState,
   validateAckMessage,
@@ -8,13 +9,15 @@ import {
 import { sanitizeRoomCode } from '../utils/room-code.js';
 
 export const DEFAULT_SCENE_SYNC_HANDOFF_URL = 'https://afjk.jp/scenesync/';
-export const DEFAULT_HANDOFF_TIMEOUT_MS = 15_000;
+export const DEFAULT_HANDOFF_READY_TIMEOUT_MS = 25_000;
+export const DEFAULT_HANDOFF_ACK_TIMEOUT_MS = 120_000;
 
 function statusForFailure(reason) {
   return {
     blocked: 'Popup was blocked. Allow popups and try again.',
     closed: 'Scene Sync was closed before the import finished.',
-    timeout: 'Scene Sync did not respond in time. Please try again.',
+    'ready-timeout': 'Scene Sync did not become ready in time. Please try again.',
+    'import-timeout': 'Scene Sync did not finish importing in time. Please try again.',
   }[reason] || `Scene Sync could not import this export (${reason}).`;
 }
 
@@ -23,7 +26,8 @@ export function createHandoffSourceController({
   targetUrl = DEFAULT_SCENE_SYNC_HANDOFF_URL,
   sceneDocument,
   embeddedAssets,
-  timeoutMs = DEFAULT_HANDOFF_TIMEOUT_MS,
+  readyTimeoutMs = DEFAULT_HANDOFF_READY_TIMEOUT_MS,
+  ackTimeoutMs = DEFAULT_HANDOFF_ACK_TIMEOUT_MS,
   closedPollMs = 250,
   onStateChange = () => {},
 } = {}) {
@@ -31,6 +35,8 @@ export function createHandoffSourceController({
   let popup = null;
   let targetOrigin = null;
   let requestedRoomId = null;
+  let sessionId = null;
+  let requestId = null;
   let timeoutId = null;
   let closedIntervalId = null;
 
@@ -45,6 +51,13 @@ export function createHandoffSourceController({
     closedIntervalId = null;
   }
 
+  function armTimeout(delay, reason) {
+    if (timeoutId != null) windowRef.clearTimeout(timeoutId);
+    timeoutId = windowRef.setTimeout(() => {
+      finish('timeout', { reason, message: statusForFailure(reason) });
+    }, delay);
+  }
+
   function finish(event, detail = {}) {
     state = transitionHandoffSourceState(state, event);
     stopTimers();
@@ -54,11 +67,15 @@ export function createHandoffSourceController({
   function handleMessage(event) {
     if (!popup || event.source !== popup || event.origin !== targetOrigin) return;
 
-    if (isReadyMessage(event.data) && state === HANDOFF_SOURCE_STATES.WAITING_READY) {
+    if (isReadyMessage(event.data, { sessionId, requestId })
+      && state === HANDOFF_SOURCE_STATES.WAITING_READY) {
       state = transitionHandoffSourceState(state, 'ready');
       emit({ message: 'Sending scene…' });
+      armTimeout(ackTimeoutMs, 'import-timeout');
       try {
         popup.postMessage(createHandoffMessage({
+          sessionId,
+          requestId,
           roomId: requestedRoomId,
           sceneDocument,
           embeddedAssets,
@@ -73,7 +90,7 @@ export function createHandoffSourceController({
     }
 
     if (state !== HANDOFF_SOURCE_STATES.WAITING_ACK) return;
-    const ack = validateAckMessage(event.data);
+    const ack = validateAckMessage(event.data, { sessionId, requestId });
     if (!ack.valid) return;
     if (ack.ok) {
       finish('ack', { message: 'Opened in Scene Sync.' });
@@ -89,10 +106,24 @@ export function createHandoffSourceController({
 
   function open(roomId) {
     stopTimers();
+    if (popup && !popup.closed) {
+      try { popup.close(); } catch {}
+    }
+    popup = null;
+    state = HANDOFF_SOURCE_STATES.IDLE;
     const cleanedRoomId = sanitizeRoomCode(roomId);
     requestedRoomId = cleanedRoomId;
+    try {
+      sessionId = createRandomHandoffId(windowRef.crypto || globalThis.crypto);
+      requestId = createRandomHandoffId(windowRef.crypto || globalThis.crypto);
+    } catch {
+      finish('error', { reason: 'random-unavailable', message: statusForFailure('random-unavailable') });
+      return { opened: false, reason: 'random-unavailable' };
+    }
     const url = new URL(targetUrl, windowRef.location?.href || DEFAULT_SCENE_SYNC_HANDOFF_URL);
     url.searchParams.set('handoff', '1');
+    url.searchParams.set('handoffSession', sessionId);
+    url.searchParams.set('handoffRequest', requestId);
     if (cleanedRoomId) url.searchParams.set('room', cleanedRoomId);
     else url.searchParams.delete('room');
     targetOrigin = url.origin;
@@ -111,15 +142,13 @@ export function createHandoffSourceController({
     }
     emit({ message: 'Waiting for Scene Sync…' });
 
-    timeoutId = windowRef.setTimeout(() => {
-      finish('timeout', { reason: 'timeout', message: statusForFailure('timeout') });
-    }, timeoutMs);
+    armTimeout(readyTimeoutMs, 'ready-timeout');
     closedIntervalId = windowRef.setInterval(() => {
       if (popup?.closed) {
         finish('closed', { reason: 'closed', message: statusForFailure('closed') });
       }
     }, closedPollMs);
-    return { opened: true, url: url.toString(), roomId: cleanedRoomId };
+    return { opened: true, url: url.toString(), roomId: cleanedRoomId, sessionId, requestId };
   }
 
   return {
@@ -150,7 +179,7 @@ export function mountSingleHtmlHandoff({
     <label for="scene-sync-handoff-room">Open in Scene Sync</label>
     <div class="scene-sync-handoff-row">
       <input id="scene-sync-handoff-room" name="room" type="text" maxlength="24"
-        pattern="[A-Za-z0-9-]{1,24}" autocomplete="off" placeholder="Room ID (optional)">
+        autocomplete="off" placeholder="Room ID (optional)">
       <button type="submit" class="viewer-btn">Open</button>
     </div>
     <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;

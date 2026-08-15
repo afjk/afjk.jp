@@ -1,19 +1,39 @@
 import {
+  SCENE_SYNC_HANDOFF_TYPE,
   createAckMessage,
   createReadyMessage,
+  isValidHandoffId,
   validateHandoffMessage,
 } from './protocol.js';
+import { isSanitizedRoomCode } from '../utils/room-code.js';
+
+export function readHandoffTargetContext(locationRef = globalThis.location) {
+  try {
+    const params = new URLSearchParams(locationRef?.search || '');
+    const sessionId = params.get('handoffSession');
+    const requestId = params.get('handoffRequest');
+    const roomId = params.get('room');
+    const valid = params.get('handoff') === '1'
+      && isValidHandoffId(sessionId)
+      && isValidHandoffId(requestId)
+      && (roomId == null || isSanitizedRoomCode(roomId));
+    return { valid, sessionId, requestId, roomId: roomId || null };
+  } catch {
+    return { valid: false, sessionId: null, requestId: null, roomId: null };
+  }
+}
 
 export function isHandoffTargetLocation(locationRef = globalThis.location) {
-  try {
-    return new URLSearchParams(locationRef?.search || '').get('handoff') === '1';
-  } catch {
-    return false;
-  }
+  return readHandoffTargetContext(locationRef).valid;
 }
 
 function replyOrigin(origin) {
   return typeof origin === 'string' && origin !== 'null' && origin ? origin : '*';
+}
+
+function safeErrorReason(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  return /^handoff-[a-z0-9-]{1,100}$/u.test(code) ? code : 'handoff-import-failed';
 }
 
 export function createHandoffTargetSession({
@@ -25,11 +45,20 @@ export function createHandoffTargetSession({
   applyMessage,
   onDiagnostic = () => {},
 } = {}) {
-  const enabled = isHandoffTargetLocation(locationRef);
-  const opener = enabled ? windowRef?.opener : null;
-  let ready = false;
+  const context = readHandoffTargetContext(locationRef);
+  const opener = context.valid ? windowRef?.opener : null;
+  const enabled = Boolean(context.valid && opener);
   let busy = false;
   let complete = false;
+
+  function ack(ok, reason) {
+    return createAckMessage({
+      sessionId: context.sessionId,
+      requestId: context.requestId,
+      ok,
+      reason,
+    });
+  }
 
   function postToOpener(message, origin = '*') {
     try {
@@ -39,14 +68,31 @@ export function createHandoffTargetSession({
     }
   }
 
-  async function handleMessage(event) {
-    if (!enabled || !opener || !ready || busy || complete) return;
-    if (event.source !== opener) return;
+  function matchesBoundRequest(value) {
+    return value?.type === SCENE_SYNC_HANDOFF_TYPE
+      && value?.sessionId === context.sessionId
+      && value?.requestId === context.requestId;
+  }
 
-    const validation = validateMessage(event.data, validationOptions);
+  async function handleMessage(event) {
+    if (!enabled || event.source !== opener) return;
+    if (busy || complete) {
+      if (!matchesBoundRequest(event.data)) return;
+      const reason = busy ? 'handoff-busy' : 'handoff-replay';
+      onDiagnostic(reason);
+      postToOpener(ack(false, reason), replyOrigin(event.origin));
+      return;
+    }
+
+    const validation = validateMessage(event.data, {
+      ...validationOptions,
+      expectedSessionId: context.sessionId,
+      expectedRequestId: context.requestId,
+      expectedRoomId: context.roomId,
+    });
     if (!validation.valid) {
       onDiagnostic(validation.reason);
-      postToOpener(createAckMessage({ ok: false, reason: validation.reason }), replyOrigin(event.origin));
+      postToOpener(ack(false, validation.reason), replyOrigin(event.origin));
       return;
     }
 
@@ -56,30 +102,33 @@ export function createHandoffTargetSession({
       if (typeof applyMessage !== 'function') throw new Error('Handoff importer is unavailable');
       await applyMessage(validation);
       complete = true;
-      postToOpener(createAckMessage({ ok: true }), replyOrigin(event.origin));
+      postToOpener(ack(true), replyOrigin(event.origin));
     } catch (error) {
-      onDiagnostic('handoff-import-failed', error);
-      postToOpener(createAckMessage({ ok: false, reason: 'handoff-import-failed' }), replyOrigin(event.origin));
+      const reason = safeErrorReason(error);
+      onDiagnostic(reason, error);
+      postToOpener(ack(false, reason), replyOrigin(event.origin));
     } finally {
       busy = false;
     }
   }
 
-  if (enabled && opener) windowRef.addEventListener('message', handleMessage);
+  if (enabled) {
+    windowRef.addEventListener('message', handleMessage);
+    postToOpener(createReadyMessage({
+      sessionId: context.sessionId,
+      requestId: context.requestId,
+    }), '*');
+  }
 
   return {
-    enabled: Boolean(enabled && opener),
-    ready() {
-      if (!enabled || !opener || ready) return false;
-      ready = true;
-      postToOpener(createReadyMessage(), '*');
-      return true;
-    },
+    enabled,
+    context,
+    ready() { return false; },
     dispose() {
-      if (enabled && opener) windowRef.removeEventListener('message', handleMessage);
+      if (enabled) windowRef.removeEventListener('message', handleMessage);
     },
     getState() {
-      return { ready, busy, complete };
+      return { ready: enabled, busy, complete };
     },
   };
 }

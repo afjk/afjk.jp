@@ -347,6 +347,10 @@ test('handoff imports embedded image and GLB assets in add mode without confirma
   const sceneDocument = {
     format: 'scene-sync-export-scene',
     version: 2,
+    skybox: { type: 'env', envId: 'must-not-apply' },
+    bgm: { url: 'https://example.test/must-not-apply.mp3' },
+    physics: { enabled: true, gravity: [0, -1, 0] },
+    behaviors: { scene: { nodes: [], edges: [] } },
     objects: [
       {
         id: 'handoff-poster', position: [1, 2, 3], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
@@ -358,7 +362,7 @@ test('handoff imports embedded image and GLB assets in add mode without confirma
       },
     ],
   };
-  const calls = { adds: [], broadcasts: [], glb: [], uploads: [] };
+  const calls = { adds: [], broadcasts: [], glb: [], uploads: [], settings: 0, behaviors: 0 };
   const result = await applySceneSyncHandoffPayload({
     sceneDocument,
     embeddedAssets: {
@@ -375,6 +379,10 @@ test('handoff imports embedded image and GLB assets in add mode without confirma
       return { url: 'https://blob.test/poster.png', mime };
     },
     importGlbFileAsSceneObject: async (file, options) => calls.glb.push({ file, options }),
+    environmentManager: { loadEnvironment: () => { calls.settings += 1; } },
+    applySceneBgm: () => { calls.settings += 1; },
+    applyScenePhysics: () => { calls.settings += 1; },
+    applySceneBehaviors: () => { calls.behaviors += 1; },
   });
 
   strictEqual(result.handled, true);
@@ -386,6 +394,45 @@ test('handoff imports embedded image and GLB assets in add mode without confirma
   deepStrictEqual(calls.glb[0].options.position, [4, 5, 6]);
   const imageAdd = calls.adds.find((entry) => entry.options?.source === 'scene-sync-export-import');
   strictEqual(imageAdd.payload.asset.url, 'https://blob.test/poster.png');
+  strictEqual(calls.settings, 0);
+  strictEqual(calls.behaviors, 0);
+  strictEqual(result.settings, undefined);
+  strictEqual(result.behaviors, null);
+});
+
+test('handoff add rejects duplicate and existing object IDs before preview, update, or broadcast', async () => {
+  const baseObject = {
+    id: 'existing', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+    asset: { type: 'primitive', primitive: 'box' },
+  };
+  const calls = { adds: 0, broadcasts: 0 };
+  const context = {
+    managedObjects: new Map([['existing', {}]]),
+    addOrUpdateObject: () => { calls.adds += 1; },
+    broadcast: () => { calls.broadcasts += 1; },
+  };
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [baseObject] },
+      embeddedAssets: {},
+    }, context),
+    (error) => error.code === 'handoff-object-id-conflict',
+  );
+  strictEqual(calls.adds, 0);
+  strictEqual(calls.broadcasts, 0);
+
+  await rejects(
+    () => applySceneSyncHandoffPayload({
+      sceneDocument: {
+        format: 'scene-sync-export-scene', version: 2,
+        objects: [{ ...baseObject, id: 'duplicate' }, { ...baseObject, id: 'duplicate' }],
+      },
+      embeddedAssets: {},
+    }, { ...context, managedObjects: new Map() }),
+    (error) => error.code === 'handoff-duplicate-object-id',
+  );
+  strictEqual(calls.adds, 0);
+  strictEqual(calls.broadcasts, 0);
 });
 
 test('imports CORS-readable Single HTML URLs through the same local-asset upload path', async () => {

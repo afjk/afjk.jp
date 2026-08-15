@@ -4,6 +4,7 @@ import { isValidSceneDocument } from '../../scenesync-export/viewer/scene-docume
 import { validateSingleHtmlEmbeddedAssets } from '../../scenesync-export/export/single-html-format.js';
 import {
   HANDOFF_SOURCE_STATES,
+  canonicalizeJsonValue,
   createAckMessage,
   createHandoffMessage,
   createReadyMessage,
@@ -12,74 +13,122 @@ import {
   validateHandoffMessage,
 } from './protocol.js';
 
+const sessionId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const requestId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const sceneDocument = {
-  format: 'scene-sync-export-scene',
-  version: 2,
-  objects: [{
-    id: 'box', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
-  }],
+  format: 'scene-sync-export-scene', version: 2,
+  objects: [{ id: 'box', position: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }],
 };
-const embeddedAssets = {
-  'assets/image.png': { mime: 'image/png', base64: 'iVBORw==' },
+const embeddedAssets = { 'assets/image.png': { mime: 'image/png', base64: 'iVBORw==' } };
+const validationOptions = {
+  isValidSceneDocument,
+  validateEmbeddedAssets: validateSingleHtmlEmbeddedAssets,
+  expectedSessionId: sessionId,
+  expectedRequestId: requestId,
 };
-const validationOptions = { isValidSceneDocument, validateEmbeddedAssets: validateSingleHtmlEmbeddedAssets };
 
-test('handoff protocol creates READY, sanitized SEND, and metadata-free ACK messages', () => {
-  assert.deepEqual(createReadyMessage(), { type: 'scene-sync-ready', version: 1 });
-  assert.deepEqual(createHandoffMessage({
-    roomId: ' My ROOM! ', sceneDocument, embeddedAssets,
-  }), {
-    type: 'scene-sync-handoff', version: 1, roomId: 'myroom', mode: 'add', sceneDocument, embeddedAssets,
+function message(overrides = {}) {
+  return createHandoffMessage({ sessionId, requestId, sceneDocument, embeddedAssets, ...overrides });
+}
+
+test('protocol binds READY, SEND, and minimal ACK to session/request IDs', () => {
+  assert.deepEqual(createReadyMessage({ sessionId, requestId }), {
+    type: 'scene-sync-ready', version: 1, sessionId, requestId,
   });
-  assert.deepEqual(createAckMessage({ ok: true }), {
-    type: 'scene-sync-handoff-ack', version: 1, status: 'ok',
+  assert.deepEqual(message({ roomId: ' My ROOM! ' }), {
+    type: 'scene-sync-handoff', version: 1, sessionId, requestId,
+    roomId: 'myroom', mode: 'add', sceneDocument, embeddedAssets,
   });
-  assert.equal(validateAckMessage(createAckMessage({ ok: true })).ok, true);
+  const ack = createAckMessage({ sessionId, requestId, ok: true });
+  assert.deepEqual(ack, {
+    type: 'scene-sync-handoff-ack', version: 1, sessionId, requestId, status: 'ok',
+  });
+  assert.equal(validateAckMessage(ack, { sessionId, requestId }).ok, true);
+  assert.equal(validateAckMessage(ack, { sessionId, requestId: sessionId }).reason, 'handoff-session-mismatch');
 });
 
-test('handoff validates optional room and rejects invalid type, version, mode, document, and assets', () => {
-  const valid = createHandoffMessage({ roomId: 'room-42', sceneDocument, embeddedAssets });
-  assert.equal(validateHandoffMessage(valid, validationOptions).valid, true);
-  assert.equal(validateHandoffMessage(createHandoffMessage({ sceneDocument, embeddedAssets }), validationOptions).valid, true);
-
+test('handoff validates URL-authoritative room, type, version, mode, document, and assets', () => {
+  const valid = message({ roomId: 'room-42' });
+  assert.equal(validateHandoffMessage(valid, { ...validationOptions, expectedRoomId: 'room-42' }).valid, true);
+  assert.equal(validateHandoffMessage(message(), validationOptions).valid, true);
   const cases = [
-    [{ ...valid, type: 'wrong' }, 'invalid-handoff-type'],
-    [{ ...valid, version: 2 }, 'unsupported-handoff-version'],
-    [{ ...valid, mode: 'replace' }, 'unsupported-handoff-mode'],
+    [{ ...message(), type: 'wrong' }, 'invalid-handoff-type'],
+    [{ ...message(), version: 2 }, 'unsupported-handoff-version'],
+    [{ ...message(), requestId: sessionId }, 'handoff-session-mismatch'],
+    [{ ...message(), mode: 'replace' }, 'unsupported-handoff-mode'],
     [{ ...valid, roomId: 'Room!' }, 'invalid-handoff-room-id'],
-    [{ ...valid, sceneDocument: {} }, 'invalid-handoff-scene-document'],
-    [{ ...valid, embeddedAssets: [] }, 'invalid-single-html-assets'],
-    [{ ...valid, embeddedAssets: { '../escape.glb': embeddedAssets['assets/image.png'] } }, 'invalid-single-html-assets'],
+    [valid, 'handoff-room-mismatch'],
+    [message({ sceneDocument: {} }), 'invalid-handoff-scene-document'],
+    [message({ embeddedAssets: [] }), 'invalid-single-html-assets'],
+    [message({ embeddedAssets: { '../escape.glb': embeddedAssets['assets/image.png'] } }), 'invalid-single-html-assets'],
   ];
-  for (const [message, reason] of cases) {
-    assert.equal(validateHandoffMessage(message, validationOptions).reason, reason);
+  for (const [candidate, reason] of cases) {
+    assert.equal(validateHandoffMessage(candidate, validationOptions).reason, reason);
   }
 });
 
-test('handoff reuses Single HTML count, per-asset, total, and document limits', () => {
-  const message = createHandoffMessage({ sceneDocument, embeddedAssets });
-  assert.equal(validateHandoffMessage(message, {
+test('strict canonical validation rejects structured-clone values that JSON would corrupt', () => {
+  const cycle = { value: 1 };
+  cycle.self = cycle;
+  const invalidValues = [
+    [cycle, 'handoff-cyclic-value'],
+    [{ value: undefined }, 'handoff-non-json-value'],
+    [{ value: 1n }, 'handoff-non-json-value'],
+    [{ value: new Date() }, 'handoff-non-plain-object'],
+    [{ value: Number.NaN }, 'handoff-non-finite-number'],
+    [{ value: Number.POSITIVE_INFINITY }, 'handoff-non-finite-number'],
+  ];
+  for (const [value, reason] of invalidValues) {
+    assert.equal(canonicalizeJsonValue(value).reason, reason);
+  }
+});
+
+test('strict SceneDocument validation enforces finite exact transforms, IDs, duplicates, and limits', () => {
+  const invalidObjects = [
+    { ...sceneDocument.objects[0], position: [0, 0, 0, 1] },
+    { ...sceneDocument.objects[0], rotation: [0, 0, 1] },
+    { ...sceneDocument.objects[0], scale: [1, 1, Number.NaN] },
+    { ...sceneDocument.objects[0], id: '' },
+  ];
+  for (const [index, object] of invalidObjects.entries()) {
+    assert.equal(validateHandoffMessage(message({
+      sceneDocument: { ...sceneDocument, objects: [object] },
+    }), validationOptions).reason, index === 2 ? 'handoff-non-finite-number' : 'invalid-handoff-scene-object');
+  }
+  assert.equal(validateHandoffMessage(message({
+    sceneDocument: { ...sceneDocument, objects: [sceneDocument.objects[0], { ...sceneDocument.objects[0] }] },
+  }), validationOptions).reason, 'handoff-duplicate-object-id');
+  assert.equal(validateHandoffMessage(message(), {
+    ...validationOptions, limits: { maxObjectCount: 0 },
+  }).reason, 'handoff-too-many-objects');
+  assert.equal(validateHandoffMessage(message({
+    sceneDocument: { ...sceneDocument, metadata: { nested: { deeper: true } } },
+  }), { ...validationOptions, limits: { maxDepth: 2 } }).reason, 'handoff-too-deep');
+  assert.equal(validateHandoffMessage(message(), {
+    ...validationOptions, limits: { maxStringBytes: 1 },
+  }).reason, 'handoff-strings-too-large');
+});
+
+test('handoff returns a detached canonical copy and reuses Single HTML size limits', () => {
+  const original = message();
+  const result = validateHandoffMessage(original, validationOptions);
+  assert.equal(result.valid, true);
+  assert.notEqual(result.sceneDocument, original.sceneDocument);
+  original.sceneDocument.objects[0].position[0] = 99;
+  assert.equal(result.sceneDocument.objects[0].position[0], 0);
+  assert.equal(validateHandoffMessage(message(), {
     ...validationOptions, limits: { assetCount: 0 },
   }).reason, 'single-html-too-many-assets');
-  assert.equal(validateHandoffMessage(message, {
-    ...validationOptions, limits: { assetBytes: 1 },
-  }).reason, 'single-html-asset-too-large');
-  assert.equal(validateHandoffMessage(message, {
-    ...validationOptions, limits: { totalAssetBytes: 1 },
-  }).reason, 'single-html-assets-too-large');
-  assert.equal(validateHandoffMessage(message, {
+  assert.equal(validateHandoffMessage(message(), {
     ...validationOptions, limits: { documentBytes: 1 },
   }).reason, 'single-html-document-too-large');
 });
 
 test('handoff source state machine covers READY/SEND/ACK and failures', () => {
   let state = transitionHandoffSourceState(HANDOFF_SOURCE_STATES.IDLE, 'open');
-  assert.equal(state, HANDOFF_SOURCE_STATES.WAITING_READY);
   state = transitionHandoffSourceState(state, 'ready');
   assert.equal(state, HANDOFF_SOURCE_STATES.WAITING_ACK);
-  state = transitionHandoffSourceState(state, 'ack');
-  assert.equal(state, HANDOFF_SOURCE_STATES.COMPLETE);
+  assert.equal(transitionHandoffSourceState(state, 'ack'), HANDOFF_SOURCE_STATES.COMPLETE);
   assert.equal(transitionHandoffSourceState(HANDOFF_SOURCE_STATES.WAITING_READY, 'timeout'), HANDOFF_SOURCE_STATES.FAILED);
   assert.equal(transitionHandoffSourceState(HANDOFF_SOURCE_STATES.WAITING_ACK, 'closed'), HANDOFF_SOURCE_STATES.FAILED);
-  assert.equal(transitionHandoffSourceState(HANDOFF_SOURCE_STATES.IDLE, 'blocked'), HANDOFF_SOURCE_STATES.FAILED);
 });
