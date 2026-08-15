@@ -342,7 +342,17 @@ export function createServerPullImporter({
       let sceneUrl = first.url;
       let sceneText = firstText;
       const marker = extractMarker(firstText);
-      if (marker) {
+      if (/\/current\.json$/iu.test(first.url.pathname)) {
+        let current;
+        try { current = JSON.parse(firstText); } catch { throw failure('handoff-invalid-current-json'); }
+        const versionPath = typeof current?.versionPath === 'string' ? current.versionPath
+          : typeof current?.versionId === 'string' ? `versions/${current.versionId}/` : '';
+        if (!versionPath) throw failure('handoff-current-json-missing-version');
+        sceneUrl = assetUrl(`${versionPath.replace(/\/$/u, '')}/scene.json`, new URL('./', first.url), sourceOrigin);
+        const scene = await fetchSafe(sceneUrl.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
+        sceneUrl = scene.url;
+        sceneText = await readTextLimited(scene.response, resolvedLimits.maxDocumentBytes);
+      } else if (marker) {
         sceneUrl = safeUrl(new URL(marker, first.url).href, { allowHttpForTests });
         if (sceneUrl.origin !== first.url.origin) throw failure('handoff-cross-origin-marker', 403);
         const scene = await fetchSafe(sceneUrl.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin });
@@ -356,7 +366,9 @@ export function createServerPullImporter({
         // immutable version directory. This remains same-origin and marker/
         // JSON-only; ZIP and Single HTML are deliberately rejected above.
         if (marker) throw failure('handoff-invalid-scene-json');
-        const directory = new URL('./', first.url);
+        const directory = new URL(first.url);
+        if (!directory.pathname.endsWith('/')) directory.pathname += '/';
+        directory.search = ''; directory.hash = '';
         let sceneCandidate = new URL('scene.json', directory);
         let sceneFetched;
         try { sceneFetched = await fetchSafe(sceneCandidate.href, { ...fetchOptions, signal: deadline.signal, requiredOrigin: sourceOrigin }); }
