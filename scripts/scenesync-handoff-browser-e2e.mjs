@@ -343,6 +343,7 @@ try {
   page.on('pageerror', (error) => sourceDiagnostics.push(`pageerror:${error.message}`));
   await page.goto(pathToFileURL(sourcePath).href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => globalThis.__HANDOFF_SOURCE_READY__ === true);
+  await page.locator('#scene-sync-handoff-toggle').click();
   await page.locator('#scene-sync-handoff-room').fill(roomId);
   const popupPromise = page.waitForEvent('popup');
   await page.locator('#scene-sync-handoff button').click();
@@ -383,6 +384,7 @@ try {
   const urlSource = await browser.newPage({ viewport: { width: 900, height: 700 } });
   await urlSource.goto(`${targetOrigin}/published/index.html`, { waitUntil: 'domcontentloaded' });
   await urlSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  await urlSource.locator('#scene-sync-handoff-toggle').click();
   await urlSource.locator('#scene-sync-handoff-room').fill(roomId);
   const urlPopupPromise = urlSource.waitForEvent('popup');
   await urlSource.locator('#scene-sync-handoff button').click();
@@ -406,6 +408,7 @@ try {
   noCorsSource.on('pageerror', (error) => noCorsDiagnostics.push(`source-pageerror:${error.message}`));
   await noCorsSource.goto(noCorsSourceUrl, { waitUntil: 'domcontentloaded' });
   await noCorsSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  await noCorsSource.locator('#scene-sync-handoff-toggle').click();
   await noCorsSource.locator('#scene-sync-handoff-room').fill(roomId);
   const noCorsPopupPromise = noCorsSource.waitForEvent('popup');
   await noCorsSource.locator('#scene-sync-handoff button').click();
