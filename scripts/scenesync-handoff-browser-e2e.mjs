@@ -773,15 +773,19 @@ try {
     `#sceneSyncHandoffInline=v1.e30&handoffToken=${fakeToken}`,
     '#sceneSyncHandoffInline=v1.e30&sceneSyncHandoffInline=v1.e30',
     '#sceneSyncHandoffInline=%',
+    '#sceneSyncHandoffInline=v1.bnVsbA',
     `#sceneSyncHandoffInline=v1.${'a'.repeat(524400)}`,
   ]) {
     const malformedTarget = await browser.newPage();
+    const malformedErrors = [];
+    malformedTarget.on('pageerror', (error) => malformedErrors.push(error.message));
     await malformedTarget.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     await malformedTarget.evaluate(({ token, sessionId, requestId }) => {
       sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify({ token, sessionId, requestId, roomId: null }));
     }, { token: fakeToken, sessionId: fakeSession, requestId: fakeRequest });
     await malformedTarget.goto(`${targetUrl}${fragment}`, { waitUntil: 'domcontentloaded' });
     await malformedTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
+    assert.deepEqual(malformedErrors, [], `invalid inline fragment threw during bootstrap: ${fragment.slice(0, 80)}`);
     await malformedTarget.close();
   }
   await new Promise((resolve) => setTimeout(resolve, 500));

@@ -15,6 +15,10 @@ function validateInlineHandoffEnvelope(value) {
   const canonical = canonicalizeJsonValue(value, INLINE_HANDOFF_PAYLOAD_LIMITS);
   if (!canonical.valid) return canonical;
   const envelope = canonical.value;
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)
+    || (Object.getPrototypeOf(envelope) !== Object.prototype && Object.getPrototypeOf(envelope) !== null)) {
+    return { valid: false, reason: 'invalid-inline-handoff-envelope' };
+  }
   const expected = ['kind', 'payload', 'requestId', 'roomId', 'sessionId', 'version'];
   const keys = Object.keys(envelope).sort();
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])

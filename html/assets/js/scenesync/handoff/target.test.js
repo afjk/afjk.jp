@@ -230,6 +230,23 @@ test('inline target rejects URL payloads without claiming or applying', async ()
   assert.equal(statuses.at(-1).state, 'failed');
 });
 
+test('inline target rejects null, primitive, and array envelopes without throwing or applying', async () => {
+  for (const value of [null, 'not-an-envelope', [], 1]) {
+    const windowRef = { setTimeout: () => 1, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/' } };
+    const statuses = []; let applied = false; let ensured = false;
+    const session = createHandoffTokenTargetSession({
+      windowRef, locationRef: windowRef.location,
+      bootstrap: { inlinePayload: encodeInlineHandoffPayload(value) },
+      fetchRef: () => { throw new Error('inline handoff must not claim'); },
+      ensureRoom: async () => { ensured = true; }, applyPayload: async () => { applied = true; }, onStatus: (detail) => statuses.push(detail),
+    });
+    await session.ready();
+    assert.equal(ensured, false);
+    assert.equal(applied, false);
+    assert.equal(statuses.at(-1).state, 'failed');
+  }
+});
+
 test('inline target rejects a room mismatch before claiming or applying', async () => {
   const windowRef = { setTimeout: () => 1, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/?room=other-room', search: '?room=other-room' } };
   const statuses = []; let ensured = false; let applied = false;
