@@ -198,3 +198,39 @@ test('token target claims once then applies embedded and URL payloads exclusivel
   await url.ready();
   assert.deepEqual(urlCalls, ['https://static.test/world/']);
 });
+
+function createTimersWindow() {
+  const timers = new Map(); let id = 0;
+  return {
+    location: { href: 'https://afjk.jp/scenesync/' },
+    setTimeout(fn) { const next = ++id; timers.set(next, fn); return next; },
+    clearTimeout(timer) { timers.delete(timer); },
+    fireAll() { for (const fn of [...timers.values()]) fn(); },
+    timerCount: () => timers.size,
+  };
+}
+
+test('token target aborts a hung claim at its overall deadline', async () => {
+  const windowRef = createTimersWindow(); const statuses = []; let signal;
+  const session = createHandoffTokenTargetSession({
+    windowRef, locationRef: windowRef.location, maxWaitMs: 1,
+    bootstrap: { token: 'c'.repeat(64), sessionId, requestId, roomId: null },
+    fetchRef: (_url, init) => { signal = init.signal; return new Promise(() => {}); }, onStatus: (detail) => statuses.push(detail),
+  });
+  await Promise.resolve(); windowRef.fireAll(); await Promise.resolve();
+  assert.equal(signal.aborted, true);
+  assert.equal(statuses.at(-1).state, 'timeout');
+  session.dispose();
+});
+
+test('token target disposes during 202 backoff without a timeout status', async () => {
+  const windowRef = createTimersWindow(); const statuses = [];
+  const session = createHandoffTokenTargetSession({
+    windowRef, locationRef: windowRef.location,
+    bootstrap: { token: 'd'.repeat(64), sessionId, requestId, roomId: null },
+    fetchRef: async () => ({ status: 202, ok: false, headers: { get: () => null } }), onStatus: (detail) => statuses.push(detail),
+  });
+  await Promise.resolve(); await Promise.resolve();
+  session.dispose(); windowRef.fireAll(); await Promise.resolve();
+  assert.equal(statuses.some((detail) => detail.state === 'timeout'), false);
+});

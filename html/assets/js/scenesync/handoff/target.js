@@ -157,7 +157,7 @@ export function createHandoffTokenTargetSession({
 } = {}) {
   if (!bootstrap) return { enabled: false, dispose() {}, getState: () => ({ ready: false }) };
   const controller = new AbortController();
-  let disposed = false; let complete = false;
+  let disposed = false; let complete = false; let timedOut = false;
   const started = Date.now();
   const endpoint = new URL('/presence/scene-sync/handoff-tokens/claim', locationRef?.href || windowRef?.location?.href).href;
   const roomId = isSanitizedRoomCode(bootstrap.roomId) ? bootstrap.roomId : null;
@@ -168,7 +168,10 @@ export function createHandoffTokenTargetSession({
     const id = windowRef.setTimeout(finish, ms);
     controller.signal.addEventListener('abort', aborted, { once: true });
   });
-  const overallTimer = windowRef.setTimeout(() => controller.abort(), maxWaitMs);
+  const overallTimer = windowRef.setTimeout(() => {
+    timedOut = true; controller.abort();
+    if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' });
+  }, maxWaitMs);
   const run = (async () => {
     let backoff = 250;
     try {
@@ -192,13 +195,13 @@ export function createHandoffTokenTargetSession({
         await applyPayload(validation.payload, bootstrap, { signal: controller.signal });
         complete = true; onStatus({ state: 'complete', message: 'Token transfer imported.' }); return;
       } catch (error) {
-        if (controller.signal.aborted) { if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); return; }
+        if (controller.signal.aborted) { if (!disposed && !timedOut) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); return; }
         onStatus({ state: 'failed', message: 'Token transfer import failed.' }); return;
       }
     }
     if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' });
     } catch (error) {
-      if (controller.signal.aborted) { if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); }
+      if (controller.signal.aborted) { if (!disposed && !timedOut) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); }
       else onStatus({ state: 'failed', message: 'Token transfer import failed.' });
     } finally { windowRef.clearTimeout?.(overallTimer); }
   })();
