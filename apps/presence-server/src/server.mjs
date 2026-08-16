@@ -12,6 +12,8 @@ import { validateSceneSyncPayload } from './scenesync/message-schema.mjs';
 import { createSceneSyncLogger } from './scenesync/logger.mjs';
 import { createGlbBackupManager } from './scenesync/glb-backup.mjs';
 import { createServerPullImporter, validateImportJobInput } from './scenesync/server-pull-import.mjs';
+import { createHandoffTokenStore } from './scenesync/handoff-token-store.mjs';
+import { isValidHandoffToken, validateHandoffTokenPayload } from './scenesync/handoff-token-payload.mjs';
 
 // IP hash salt — stable within process lifetime if not provided
 const localIpHashSalt = randomUUID();
@@ -19,10 +21,12 @@ const localIpHashSalt = randomUUID();
 const PORT = Number(process.env.PORT || 8787);
 const HEARTBEAT_MS = 30000;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const HANDOFF_BINDING_ID_PATTERN = /^[A-Za-z0-9_-]{22,128}$/u;
 const sceneSyncConfig = createSceneSyncConfig(process.env);
 const MAX_MESSAGE_SIZE = sceneSyncConfig.maxJsonBytes;
 const STATS_FILE = process.env.STATS_FILE || '/data/stats.json';
 const STATS_ARCHIVE_DIR = process.env.STATS_ARCHIVE_DIR || '/data/archive';
+const isValidHandoffId = (value) => typeof value === 'string' && HANDOFF_BINDING_ID_PATTERN.test(value);
 
 // ── Scene Graph Protocol ────────────────────────────────────────────────────
 const SCENE_GRAPH_MESSAGE_TYPES = new Set([
@@ -1001,6 +1005,30 @@ function isSameOriginImportRequest(req, allowedOrigins = sceneSyncConfig.serverP
   return allowedOrigins.includes(origin) && (!fetchSite || fetchSite === 'same-origin');
 }
 
+function sendTokenJson(res, statusCode, payload) {
+  res.writeHead(statusCode, {
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  }).end(JSON.stringify(payload));
+}
+
+const HANDOFF_TOKEN_UPLOAD_CORS = Object.freeze({
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-allow-headers': 'content-type',
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+});
+
+function sendTokenUploadJson(res, statusCode, payload) {
+  res.writeHead(statusCode, { 'content-type': 'application/json', ...HANDOFF_TOKEN_UPLOAD_CORS }).end(JSON.stringify(payload));
+}
+
+function isTokenClaimRequestSameOrigin(req, allowedOrigins = sceneSyncConfig.serverPullAllowedOrigins) {
+  return isSameOriginImportRequest(req, allowedOrigins);
+}
+
 function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
@@ -1550,6 +1578,7 @@ function createPresenceServer({
   serverPullFetchImpl,
   serverPullResolveHost,
   serverPullAllowHttpForTests = false,
+  handoffTokenDir,
 } = {}) {
   // Import blobs are process-local TTL state. They cannot be safely served
   // after a restart, so remove stale partial/staged files before accepting
@@ -1573,6 +1602,19 @@ function createPresenceServer({
   const importJobs = new Map();
   const completedImportJobs = new Map();
   let activeServerPulls = 0;
+  const effectiveHandoffTokenDir = handoffTokenDir || sceneSyncConfig.handoffTokenDir;
+  const handoffTokenStore = createHandoffTokenStore({
+    dir: effectiveHandoffTokenDir,
+    maxEntries: sceneSyncConfig.handoffTokenMaxEntries,
+    maxActiveUploads: sceneSyncConfig.handoffTokenMaxActiveUploads,
+    maxStagedBytes: sceneSyncConfig.handoffTokenMaxStagedBytes,
+    maxEncodedBytes: sceneSyncConfig.handoffTokenMaxEncodedBytes,
+    minFreeBytes: sceneSyncConfig.handoffTokenMinFreeBytes,
+  });
+  const handoffTokenRateLimiter = createPerActorRateLimiter(sceneSyncConfig.handoffTokenUploadsPerIpPerMinute);
+  const handoffTokenClaimRateLimiter = createPerActorRateLimiter(sceneSyncConfig.handoffTokenClaimsPerIpPerMinute);
+  let inFlightTokenUploads = 0;
+  let activeTokenClaims = 0;
   // Injection is used by isolated integration tests to supply an in-process
   // HTTPS/DNS transport. Production always constructs the hardened default.
   const serverPullImporter = injectedServerPullImporter || createServerPullImporter({
@@ -1587,7 +1629,9 @@ function createPresenceServer({
 
   // CORS preflight
     if (req.method === 'OPTIONS') {
-      if (path.startsWith('/scene-sync/import-jobs')) {
+      if (path === '/scene-sync/handoff-tokens/upload') {
+        res.writeHead(204, HANDOFF_TOKEN_UPLOAD_CORS).end();
+      } else if (path === '/scene-sync/handoff-tokens/claim' || path.startsWith('/scene-sync/import-jobs')) {
         // This control plane is same-origin only; do not advertise it through
         // the otherwise public presence API's wildcard CORS policy.
         res.writeHead(204, { 'cache-control': 'no-store' }).end();
@@ -1597,6 +1641,106 @@ function createPresenceServer({
       } else {
         res.writeHead(204, CORS).end();
       }
+      return;
+    }
+
+  // ── Opener-free Scene Sync handoff tokens ──────────────────────────
+  // The token is *only* accepted in the bounded JSON body.  Uploads stage to
+  // a private .part file and publish only after JSON + payload validation.
+    if (req.method === 'POST' && path === '/scene-sync/handoff-tokens/upload') {
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, {
+        trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false,
+      });
+      const declaredLength = Number(req.headers['content-length'] || 0);
+      if (!handoffTokenRateLimiter.allow(actorId)) { sendTokenUploadJson(res, 429, { error: 'handoff-token-rate-limited' }); return; }
+      if (Number.isFinite(declaredLength) && declaredLength > sceneSyncConfig.handoffTokenMaxEncodedBytes) {
+        sendTokenUploadJson(res, 413, { error: 'handoff-token-body-too-large' }); return;
+      }
+      if (inFlightTokenUploads >= sceneSyncConfig.handoffTokenMaxActiveUploads) { sendTokenUploadJson(res, 429, { error: 'handoff-token-capacity' }); return; }
+      try { handoffTokenStore.reserveRequest(); } catch (error) { sendTokenUploadJson(res, Number(error?.status) || 429, { error: error?.code || 'handoff-token-capacity' }); return; }
+      inFlightTokenUploads += 1;
+      let requestReserved = true;
+      const temporaryPath = `${effectiveHandoffTokenDir}/.upload-${randomUUID()}.part`;
+      let output = null;
+      let earlyToken = null;
+      let aborted = false;
+      let total = 0;
+      const abort = () => { aborted = true; try { output?.destroy(); } catch {} try { req.destroy(); } catch {} };
+      req.once('aborted', abort);
+      res.once('close', abort);
+      req.setTimeout(sceneSyncConfig.handoffTokenUploadIdleTimeoutMs, abort);
+      const timeout = setTimeout(abort, sceneSyncConfig.handoffTokenUploadMaxDurationMs);
+      try {
+        mkdirSync(effectiveHandoffTokenDir, { recursive: true });
+        output = createWriteStream(temporaryPath, { flags: 'wx' });
+        output.on('error', () => {});
+        const waitForDrain = () => new Promise((resolve, reject) => {
+          const done = () => { output.off('error', failed); resolve(); };
+          const failed = (error) => { output.off('drain', done); reject(error); };
+          output.once('drain', done); output.once('error', failed);
+        });
+        for await (const raw of req) {
+          if (aborted) throw createHttpError(408, 'handoff-token-upload-aborted');
+          const chunk = Buffer.from(raw); total += chunk.length;
+          if (total > sceneSyncConfig.handoffTokenMaxEncodedBytes) throw createHttpError(413, 'handoff-token-body-too-large');
+          if (!output.write(chunk)) await waitForDrain();
+        }
+        await new Promise((resolve, reject) => { output.once('error', reject); output.end(resolve); });
+        if (aborted) throw createHttpError(408, 'handoff-token-upload-aborted');
+        // This is the only intentional materialisation: maxEncodedBytes is
+        // capped (56 MiB default) before readFileSync/JSON.parse, while the
+        // decoded payload validator caps embedded bytes at 32 MiB.
+        const raw = readFileSync(temporaryPath);
+        let body;
+        try { body = JSON.parse(raw.toString('utf8')); } catch { throw createHttpError(400, 'handoff-token-invalid-json'); }
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 4
+          || !Object.hasOwn(body, 'token') || !Object.hasOwn(body, 'sessionId') || !Object.hasOwn(body, 'requestId') || !Object.hasOwn(body, 'payload')
+          || !isValidHandoffToken(body.token) || !isValidHandoffId(body.sessionId) || !isValidHandoffId(body.requestId)) {
+          throw createHttpError(400, 'handoff-token-invalid-request');
+        }
+        if (!earlyToken) { handoffTokenStore.begin(body.token, { requestReserved: true }); requestReserved = false; earlyToken = body.token; }
+        const validation = validateHandoffTokenPayload(body.payload);
+        if (!validation.valid) throw createHttpError(400, 'handoff-token-invalid-payload');
+        if (validation.payload.mode === 'url') {
+          const origin = String(req.headers.origin || '');
+          if (!origin || origin === 'null' || new URL(validation.payload.sourceUrl).origin !== origin) {
+            throw createHttpError(403, 'handoff-token-source-origin-mismatch');
+          }
+        }
+        // Do not retain the bearer token in ready staging data. The token has
+        // already been converted to a SHA-256 map/file key by the store.
+        writeFileSync(temporaryPath, JSON.stringify({ sessionId: body.sessionId, requestId: body.requestId, payload: validation.payload }), 'utf8');
+        total = readFileSync(temporaryPath).length;
+        renameSync(temporaryPath, handoffTokenStore.paths.partPath(body.token));
+        const expiresAt = handoffTokenStore.publish(body.token, total, body);
+        sendTokenUploadJson(res, 201, { status: 'ready', expiresAt });
+      } catch (error) {
+        const code = typeof error?.code === 'string' && /^handoff-token-[a-z0-9-]{1,100}$/u.test(error.code) ? error.code : 'handoff-token-upload-failed';
+        if (!res.writableEnded) sendTokenUploadJson(res, Number(error?.status) || 500, { error: code });
+        if (earlyToken) handoffTokenStore.cancel(earlyToken);
+        try { output?.destroy(); } catch {}
+        try { unlinkSync(temporaryPath); } catch {}
+      } finally {
+        clearTimeout(timeout); req.off('aborted', abort); res.off('close', abort); if (requestReserved) handoffTokenStore.releaseRequest(); inFlightTokenUploads -= 1;
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && path === '/scene-sync/handoff-tokens/claim') {
+      if (!isTokenClaimRequestSameOrigin(req, serverPullAllowedOrigins)) { sendTokenJson(res, 403, { error: 'handoff-token-origin-forbidden' }); return; }
+      let body;
+      try { body = await readJsonBody(req); } catch { sendTokenJson(res, 400, { error: 'handoff-token-invalid-request' }); return; }
+      if (!body || Object.keys(body).length !== 3 || !isValidHandoffToken(body.token)
+        || !isValidHandoffId(body.sessionId) || !isValidHandoffId(body.requestId)) { sendTokenJson(res, 400, { error: 'handoff-token-invalid-request' }); return; }
+      const actorId = getActorIdFromRequest(req, sceneSyncConfig.actorHashSalt, { trustProxy: sceneSyncConfig.trustReverseProxy, includeUserAgent: false });
+      if (!handoffTokenClaimRateLimiter.allow(actorId) || activeTokenClaims >= sceneSyncConfig.handoffTokenMaxActiveClaims) { sendTokenJson(res, 202, { status: 'pending' }); return; }
+      activeTokenClaims += 1;
+      let claimed;
+      try { claimed = await handoffTokenStore.claim(body.token, body); } finally { activeTokenClaims -= 1; }
+      // Unknown, expired, malformed, and in-flight uploads intentionally have
+      // the same non-sensitive 202 response.
+      if (claimed.state !== 'ready') { sendTokenJson(res, 202, { status: 'pending' }); return; }
+      sendTokenJson(res, 200, { payload: claimed.payload });
       return;
     }
 
@@ -2546,6 +2690,8 @@ function createPresenceServer({
     }
   }, BLOB_CLEANUP_INTERVAL);
 
+  const handoffTokenCleanupInterval = setInterval(() => handoffTokenStore.sweep(), BLOB_CLEANUP_INTERVAL);
+
   let connectionSummaryInterval = null;
   if (sceneSyncConfig.connectionSummaryIntervalMs > 0) {
     connectionSummaryInterval = setInterval(() => {
@@ -2585,6 +2731,7 @@ function createPresenceServer({
     cleanupComplete = true;
     clearInterval(blobCleanupInterval);
     clearInterval(importJobCleanupInterval);
+    clearInterval(handoffTokenCleanupInterval);
     clearInterval(heartbeatInterval);
     if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
     rooms.clear();
