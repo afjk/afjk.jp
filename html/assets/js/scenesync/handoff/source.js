@@ -289,7 +289,7 @@ export function mountSingleHtmlHandoff({
       const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState;
       if (tokenButton) tokenButton.hidden = !offerToken;
       if (tokenButton) tokenButton.disabled = detail.state === 'token-uploading';
-      if (button && tokenModeArmed) button.disabled = true;
+      if (button && tokenState) button.disabled = true;
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
     },
@@ -339,7 +339,7 @@ export function mountUrlHandoff({
       if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
       const tokenState = String(detail.state || '').startsWith('token-');
       if (tokenButton) { tokenButton.hidden = !(embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState); tokenButton.disabled = detail.state === 'token-uploading'; }
-      if (button && tokenModeArmed) button.disabled = true;
+      if (button && tokenState) button.disabled = true;
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
     },

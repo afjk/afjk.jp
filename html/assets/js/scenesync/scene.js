@@ -6984,16 +6984,18 @@ function prepareHandoffSceneReady({ restoreSnapshot = false } = {}) {
 
 function waitForHandoffRoom(roomId, timeoutMs = 110_000, { signal } = {}) {
   if (handoffSceneReadyRoomId && (!roomId || handoffSceneReadyRoomId === roomId)) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(Object.assign(new Error('Handoff room wait aborted'), { name: 'AbortError' }));
   return new Promise((resolve, reject) => {
-    const waiter = { roomId, resolve, reject, timeoutId: null };
+    let abort = null;
+    const cleanup = () => { clearTimeout(waiter.timeoutId); signal?.removeEventListener?.('abort', abort); };
+    const waiter = { roomId, resolve: () => { cleanup(); resolve(); }, reject: (error) => { cleanup(); reject(error); }, timeoutId: null };
     waiter.timeoutId = setTimeout(() => {
       handoffRoomWaiters.delete(waiter);
-      reject(new Error('Timed out while joining the requested room'));
+      waiter.reject(new Error('Timed out while joining the requested room'));
     }, timeoutMs);
-    const abort = () => {
+    abort = () => {
       handoffRoomWaiters.delete(waiter);
-      clearTimeout(waiter.timeoutId);
-      reject(Object.assign(new Error('Handoff room wait aborted'), { name: 'AbortError' }));
+      waiter.reject(Object.assign(new Error('Handoff room wait aborted'), { name: 'AbortError' }));
     };
     signal?.addEventListener?.('abort', abort, { once: true });
     handoffRoomWaiters.add(waiter);
