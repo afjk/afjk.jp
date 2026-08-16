@@ -1,9 +1,11 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { request as httpRequest } from 'node:http';
 import { createPresenceServer } from '../src/server.mjs';
+import { createHandoffTokenStore } from '../src/scenesync/handoff-token-store.mjs';
 
 const token = 'a'.repeat(64);
 const sessionId = 's'.repeat(22);
@@ -54,4 +56,46 @@ test('concurrent bound claims have exactly one winner', async () => {
     post('/scene-sync/handoff-tokens/claim', { token: concurrentToken, sessionId, requestId }, headers),
   ]);
   assert.deepEqual(results.map((response) => response.status).sort(), [200, 202]);
+});
+
+test('invalid partial upload leaves no task temp file', async () => {
+  const response = await post('/scene-sync/handoff-tokens/upload', {
+    token: 'd'.repeat(64), sessionId, requestId, payload: { version: 1, mode: 'embedded', sceneDocument: {}, embeddedAssets: {} },
+  }, { origin: 'null' });
+  assert.equal(response.status, 400);
+  assert.equal(readdirSync(dir).some((name) => name.startsWith('.upload-')), false);
+});
+
+test('periodic orphan sweep removes only aged random upload parts', () => {
+  const sweepDir = mkdtempSync(join(tmpdir(), 'handoff-token-orphan-'));
+  try {
+    const oldPart = join(sweepDir, '.upload-00000000-0000-0000-0000-000000000000.part');
+    const freshPart = join(sweepDir, '.upload-11111111-1111-1111-1111-111111111111.part');
+    writeFileSync(oldPart, 'old'); writeFileSync(freshPart, 'fresh');
+    utimesSync(oldPart, new Date(0), new Date(0));
+    const store = createHandoffTokenStore({ dir: sweepDir, now: () => 60_000, minFreeBytes: 0 });
+    // Startup cleanup handles all pre-existing parts; recreate to specifically
+    // exercise the periodic age guard.
+    writeFileSync(oldPart, 'old'); writeFileSync(freshPart, 'fresh');
+    utimesSync(oldPart, new Date(0), new Date(0));
+    store.sweepOrphanUploads(30_000);
+    assert.equal(readdirSync(sweepDir).includes(oldPart.split('/').pop()), false);
+    assert.equal(readdirSync(sweepDir).includes(freshPart.split('/').pop()), true);
+  } finally { rmSync(sweepDir, { recursive: true, force: true }); }
+});
+
+test('aborted backpressured client upload settles cleanup and releases capacity', async () => {
+  await new Promise((resolve) => {
+    const url = new URL(baseUrl + '/scene-sync/handoff-tokens/upload');
+    const req = httpRequest({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'content-type': 'application/json', 'content-length': 2 * 1024 * 1024 } }, resolve);
+    req.on('error', resolve);
+    // Large partial input drives the server writer through normal stream
+    // backpressure before the client tears down its socket.
+    req.write('{"token":"' + 'e'.repeat(64) + '","payload":"' + 'x'.repeat(512 * 1024));
+    setTimeout(() => req.destroy(), 5);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(readdirSync(dir).some((name) => name.startsWith('.upload-')), false);
+  const response = await post('/scene-sync/handoff-tokens/upload', { token: 'f'.repeat(64), sessionId, requestId, payload }, { origin: 'null' });
+  assert.equal(response.status, 201);
 });

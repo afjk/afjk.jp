@@ -1662,10 +1662,17 @@ function createPresenceServer({
       let requestReserved = true;
       const temporaryPath = `${effectiveHandoffTokenDir}/.upload-${randomUUID()}.part`;
       let output = null;
+      let outputClosed = null;
       let earlyToken = null;
       let aborted = false;
       let total = 0;
-      const abort = () => { aborted = true; try { output?.destroy(); } catch {} try { req.destroy(); } catch {} };
+      const abort = () => {
+        aborted = true;
+        // An error makes a writer paused on backpressure reject immediately;
+        // close remains the final cleanup barrier below.
+        try { output?.destroy(new Error('handoff token upload aborted')); } catch {}
+        try { req.destroy(); } catch {}
+      };
       req.once('aborted', abort);
       res.once('close', abort);
       req.setTimeout(sceneSyncConfig.handoffTokenUploadIdleTimeoutMs, abort);
@@ -1674,10 +1681,16 @@ function createPresenceServer({
         mkdirSync(effectiveHandoffTokenDir, { recursive: true });
         output = createWriteStream(temporaryPath, { flags: 'wx' });
         output.on('error', () => {});
+        // `createWriteStream()` opens asynchronously. Keep one close promise
+        // from creation time so failure cleanup cannot unlink before a delayed
+        // open has created an orphan .upload-*.part file.
+        outputClosed = new Promise((resolve) => output.once('close', resolve));
         const waitForDrain = () => new Promise((resolve, reject) => {
-          const done = () => { output.off('error', failed); resolve(); };
-          const failed = (error) => { output.off('drain', done); reject(error); };
-          output.once('drain', done); output.once('error', failed);
+          const cleanup = () => { output.off('drain', done); output.off('error', failed); output.off('close', closed); };
+          const done = () => { cleanup(); resolve(); };
+          const failed = (error) => { cleanup(); reject(error); };
+          const closed = () => { cleanup(); reject(new Error('handoff token upload stream closed')); };
+          output.once('drain', done); output.once('error', failed); output.once('close', closed);
         });
         for await (const raw of req) {
           if (aborted) throw createHttpError(408, 'handoff-token-upload-aborted');
@@ -1719,6 +1732,7 @@ function createPresenceServer({
         if (!res.writableEnded) sendTokenUploadJson(res, Number(error?.status) || 500, { error: code });
         if (earlyToken) handoffTokenStore.cancel(earlyToken);
         try { output?.destroy(); } catch {}
+        try { await outputClosed; } catch {}
         try { unlinkSync(temporaryPath); } catch {}
       } finally {
         clearTimeout(timeout); req.off('aborted', abort); res.off('close', abort); if (requestReserved) handoffTokenStore.releaseRequest(); inFlightTokenUploads -= 1;
@@ -2690,7 +2704,10 @@ function createPresenceServer({
     }
   }, BLOB_CLEANUP_INTERVAL);
 
-  const handoffTokenCleanupInterval = setInterval(() => handoffTokenStore.sweep(), BLOB_CLEANUP_INTERVAL);
+  const handoffTokenCleanupInterval = setInterval(() => {
+    handoffTokenStore.sweep();
+    handoffTokenStore.sweepOrphanUploads(sceneSyncConfig.handoffTokenUploadMaxDurationMs);
+  }, BLOB_CLEANUP_INTERVAL);
 
   let connectionSummaryInterval = null;
   if (sceneSyncConfig.connectionSummaryIntervalMs > 0) {

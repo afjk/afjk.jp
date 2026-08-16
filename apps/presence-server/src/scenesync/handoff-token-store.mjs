@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, renameSync, statfsSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync, statfsSync, statSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 import { validateHandoffTokenPayload } from './handoff-token-payload.mjs';
@@ -109,6 +109,16 @@ export function createHandoffTokenStore({
       } catch { return consumeInvalid(); }
     },
     sweep() { for (const [key, entry] of entries) if (entry.expiresAt <= now()) erase(key, entry); },
+    // Active random upload parts have no map entry until JSON validation. Only
+    // remove old ones so a live streaming request is never disturbed.
+    sweepOrphanUploads(maxAgeMs) {
+      const threshold = now() - maxAgeMs;
+      for (const name of readdirSync(dir)) {
+        if (!/^\.upload-[0-9a-f-]{36}\.part$/u.test(name)) continue;
+        const file = `${dir}/${name}`;
+        try { if (statSync(file).mtimeMs <= threshold) unlinkSync(file); } catch {}
+      }
+    },
     paths: { partPath, readyPath },
     stats: () => ({ entries: entries.size, reservedBytes, liveBytes, requestReservations }),
   };
