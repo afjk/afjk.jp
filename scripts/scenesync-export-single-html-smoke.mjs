@@ -185,7 +185,7 @@ try {
   await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
   await page.locator('#scene-sync-handoff-room').fill(' Smoke Room! ');
-  await page.locator('#scene-sync-handoff button').click();
+  await page.locator('#scene-sync-handoff button[type="submit"]').click();
   await page.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent.includes('Popup was blocked'));
   await page.waitForTimeout(800);
   await page.waitForFunction(() => globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_BGM_AUDIO__?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA, null, { timeout: 10000 });
@@ -264,14 +264,16 @@ try {
   await embeddedPage.setContent('<iframe id="embedded" sandbox="allow-scripts allow-same-origin"></iframe>');
   await embeddedPage.locator('#embedded').evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const embedded = embeddedPage.frames().find((frame) => frame !== embeddedPage.mainFrame());
-  await embedded.waitForSelector('#scene-sync-handoff button');
+  await embedded.waitForSelector('#scene-sync-handoff button[type="submit"]');
   const embeddedState = await embedded.evaluate(() => ({
     input: document.getElementById('scene-sync-handoff-room')?.disabled,
-    button: document.querySelector('#scene-sync-handoff button')?.disabled,
+    primaryButton: document.querySelector('#scene-sync-handoff button[type="submit"]')?.disabled,
+    tokenButtonVisible: !document.querySelector('.scene-sync-token-transfer')?.hidden,
     status: document.getElementById('scene-sync-handoff-status')?.textContent,
   }));
-  assert(embeddedState.input && embeddedState.button, 'sandboxed embedded handoff must be pre-disabled');
-  assert(embeddedState.status?.includes('Direct Scene Sync import is unavailable in this embedded viewer'), 'sandboxed embedded guidance was not shown');
+  assert(embeddedState.input === false && embeddedState.primaryButton && embeddedState.tokenButtonVisible,
+    'proof-positive sandbox must keep the room enabled, disable primary Open, and offer token transfer');
+  assert(embeddedState.status?.includes('Popup access is unavailable here. Use token transfer instead.'), 'sandboxed token-transfer guidance was not shown');
   await embeddedPage.close();
   // Opaque-origin sandboxes cannot expose frameElement to their child. That is
   // inconclusive by design: leave controls enabled and retain runtime popup
@@ -280,9 +282,9 @@ try {
   await opaquePage.setContent('<iframe id="opaque" sandbox="allow-scripts allow-forms"></iframe>');
   await opaquePage.locator('#opaque').evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const opaque = opaquePage.frames().find((frame) => frame !== opaquePage.mainFrame());
-  await opaque.waitForSelector('#scene-sync-handoff button');
+  await opaque.waitForSelector('#scene-sync-handoff button[type="submit"]');
   assert(await opaque.locator('#scene-sync-handoff-room').isDisabled() === false, 'opaque sandbox must not be pre-disabled');
-  assert(await opaque.locator('#scene-sync-handoff button').isDisabled() === false, 'opaque sandbox must retain runtime fallback');
+  assert(await opaque.locator('#scene-sync-handoff button[type="submit"]').isDisabled() === false, 'opaque sandbox must retain runtime fallback');
   await opaque.locator('#scene-sync-handoff').evaluate((form) => form.requestSubmit());
   await opaque.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent.includes('Popup was blocked'), null, { timeout: 10_000 });
   await opaquePage.close();
