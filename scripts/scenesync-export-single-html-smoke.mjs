@@ -283,7 +283,7 @@ try {
   await opaque.waitForSelector('#scene-sync-handoff button');
   assert(await opaque.locator('#scene-sync-handoff-room').isDisabled() === false, 'opaque sandbox must not be pre-disabled');
   assert(await opaque.locator('#scene-sync-handoff button').isDisabled() === false, 'opaque sandbox must retain runtime fallback');
-  await opaque.locator('#scene-sync-handoff button').click();
+  await opaque.locator('#scene-sync-handoff').evaluate((form) => form.requestSubmit());
   await opaque.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent.includes('Popup was blocked'), null, { timeout: 10_000 });
   await opaquePage.close();
   assert(new URL(state.handoff.openUrl).searchParams.get('handoff') === '1', 'Single HTML handoff URL omitted handoff mode');
