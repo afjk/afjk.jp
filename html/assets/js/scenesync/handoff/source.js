@@ -6,6 +6,7 @@ import {
   transitionHandoffSourceState,
   validateAckMessage,
 } from './protocol.js';
+import { encodeInlineHandoffPayload } from './inline-payload.js';
 import { sanitizeRoomCode } from '../utils/room-code.js';
 
 export const DEFAULT_SCENE_SYNC_HANDOFF_URL = 'https://afjk.jp/scenesync/';
@@ -207,17 +208,34 @@ export function createHandoffSourceController({
     stopTokenUpload();
     tokenModeArmed = true;
     const cleanedRoomId = sanitizeRoomCode(roomId);
-    let token; let nextSessionId; let nextRequestId;
+    let nextSessionId; let nextRequestId;
     try {
       const cryptoRef = windowRef.crypto || globalThis.crypto;
-      const bytes = new Uint8Array(32); cryptoRef.getRandomValues(bytes);
-      token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
       nextSessionId = createRandomHandoffId(cryptoRef);
       nextRequestId = createRandomHandoffId(cryptoRef);
     } catch { emit({ state: 'failed', reason: 'random-unavailable', message: statusForFailure('random-unavailable') }); return { opened: false }; }
     const url = new URL(targetUrl, windowRef.location?.href || DEFAULT_SCENE_SYNC_HANDOFF_URL);
     if (cleanedRoomId) url.searchParams.set('room', cleanedRoomId); else url.searchParams.delete('room');
     url.searchParams.delete('handoff'); url.searchParams.delete('handoffSession'); url.searchParams.delete('handoffRequest');
+    const inlinePayload = sourceUrl ? null : encodeInlineHandoffPayload({
+      kind: 'scene-sync-inline-handoff', version: 1,
+      sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId,
+      payload: { version: 1, mode: 'embedded', sceneDocument, embeddedAssets },
+    });
+    if (inlinePayload) {
+      url.hash = `sceneSyncHandoffInline=v1.${inlinePayload}`;
+      // This stays in the explicit click's synchronous stack: providers may
+      // report undefined even when they open the external confirmation link.
+      try { windowRef.open(url.toString(), '_blank'); } catch {}
+      state = 'token-ready';
+      emit({ state, tokenUrl: url.toString(), message: 'Token transfer prepared. Open or copy the link.' });
+      return { opened: true, inline: true, url: url.toString(), sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId };
+    }
+    let token;
+    try {
+      const bytes = new Uint8Array(32); (windowRef.crypto || globalThis.crypto).getRandomValues(bytes);
+      token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } catch { emit({ state: 'failed', reason: 'random-unavailable', message: statusForFailure('random-unavailable') }); return { opened: false }; }
     url.hash = `handoffToken=${token}&handoffSession=${nextSessionId}&handoffRequest=${nextRequestId}`;
     try { windowRef.open(url.toString(), '_blank'); } catch {}
     const endpoint = new URL('/presence/scene-sync/handoff-tokens/upload', url.origin).href;
@@ -251,7 +269,10 @@ export function createHandoffSourceController({
       tokenUploadTimeoutId = null; tokenUploadController = null;
       if (error?.name === 'AbortError') return;
       state = 'token-failed';
-      emit({ state: 'token-failed', tokenUrl: url.toString(), message: 'Token transfer could not be prepared. Retry creates a new link.' });
+      const cspBlocked = !sourceUrl && error?.name === 'TypeError';
+      emit({ state: 'token-failed', tokenUrl: url.toString(), message: cspBlocked
+        ? 'Token transfer was blocked here. Download the Single HTML or open it in a regular tab.'
+        : 'Token transfer could not be prepared. Retry creates a new link.' });
     });
     return { opened: true, url: url.toString(), token, sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId };
   }
@@ -368,7 +389,13 @@ function mountHandoffPanel({
       const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState;
       if (tokenButton) tokenButton.hidden = !offerToken;
       if (tokenButton) tokenButton.disabled = detail.state === 'token-uploading';
-      if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
+      if (tokenLink && detail.state === 'token-failed') {
+        tokenLink.hidden = true;
+        tokenLink.removeAttribute('href');
+        tokenLink.textContent = '';
+      } else if (detail.tokenUrl && tokenLink) {
+        tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link';
+      }
       busy = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
         || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
       if (button) button.disabled = busy || tokenState || embeddedPopupUnsupported;

@@ -49,6 +49,9 @@ function createFakeWindow(popups = []) {
 
 const sceneDocument = { format: 'scene-sync-export-scene', version: 2, objects: [] };
 const embeddedAssets = {};
+const oversizedInlineAssets = {
+  'assets/large.bin': { mime: 'application/octet-stream', base64: 'A'.repeat(600 * 1024) },
+};
 
 test('embedded popup guidance is proof-only for sandboxed current frame', () => {
   const top = {}; top.top = top;
@@ -190,11 +193,11 @@ test('retry closes the old popup and ignores stale READY/ACK messages', () => {
   assert.equal(controller.getState(), 'waiting-ack');
 });
 
-test('token transfer is explicit, opens before upload, and uploads after a null opener', async () => {
+test('oversized embedded token transfer is explicit, opens before upload, and uploads after a null opener', async () => {
   const windowRef = createFakeWindow();
   const order = [];
   const controller = createHandoffSourceController({
-    windowRef, targetUrl: 'https://target.test/scenesync/', sceneDocument, embeddedAssets,
+    windowRef, targetUrl: 'https://target.test/scenesync/', sceneDocument, embeddedAssets: oversizedInlineAssets,
     fetchRef: async (url, init) => { order.push({ kind: 'fetch', url, init }); return { ok: true }; },
   });
   assert.equal(controller.open().reason, 'blocked');
@@ -210,12 +213,29 @@ test('token transfer is explicit, opens before upload, and uploads after a null 
   assert.match(body.token, /^[a-f0-9]{64}$/);
   assert.equal(body.payload.mode, 'embedded');
   assert.equal(new URL(opened.url).hash.includes(body.token), true);
+  assert.equal(new URL(opened.url).hash.includes('handoffInline'), false);
+});
+
+test('small embedded token transfer uses a fragment-only inline payload and no upload', () => {
+  const windowRef = createFakeWindow();
+  const calls = [];
+  const controller = createHandoffSourceController({
+    windowRef, targetUrl: 'https://target.test/scenesync/', sceneDocument, embeddedAssets,
+    fetchRef: (...args) => { calls.push(args); return Promise.resolve({ ok: true }); },
+  });
+  const opened = controller.openToken('Room-42!');
+  const url = new URL(opened.url);
+  assert.equal(opened.inline, true);
+  assert.equal(windowRef.opened.length, 1);
+  assert.equal(calls.length, 0);
+  assert.match(url.hash, /^#sceneSyncHandoffInline=v1\.[A-Za-z0-9_-]+$/u);
+  assert.equal(controller.getState(), 'token-ready');
 });
 
 test('token transfer sends URL payload without embedded scene data', async () => {
   const windowRef = createFakeWindow(); let body = null;
   const controller = createHandoffSourceController({ windowRef, targetUrl: 'https://target.test/', sourceUrl: 'https://static.test/world/', fetchRef: async (_url, init) => { body = JSON.parse(init.body); return { ok: true }; } });
-  controller.openToken(); await Promise.resolve(); await Promise.resolve();
+  controller.openToken(); await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(body.payload, { version: 1, mode: 'url', sourceUrl: 'https://static.test/world/' });
 });
 
@@ -223,7 +243,7 @@ test('hung token upload times out and stale completion cannot overwrite a retry'
   const windowRef = createFakeWindow();
   const states = []; let resolveFirst;
   const controller = createHandoffSourceController({
-    windowRef, sceneDocument, embeddedAssets, tokenUploadTimeoutMs: 1,
+    windowRef, sceneDocument, embeddedAssets: oversizedInlineAssets, tokenUploadTimeoutMs: 1,
     fetchRef: () => new Promise((resolve) => { resolveFirst = resolve; }), onStateChange: (detail) => states.push(detail),
   });
   controller.openToken(); await Promise.resolve();
@@ -232,4 +252,16 @@ test('hung token upload times out and stale completion cannot overwrite a retry'
   controller.openToken(); await Promise.resolve();
   resolveFirst?.({ ok: true }); await Promise.resolve();
   assert.notEqual(states.at(-1).state, 'token-ready', 'stale first upload cannot win retry state');
+});
+
+test('CSP-blocked oversized Single HTML upload gives regular-tab guidance', async () => {
+  const windowRef = createFakeWindow(); const states = [];
+  const controller = createHandoffSourceController({
+    windowRef, sceneDocument, embeddedAssets: oversizedInlineAssets,
+    fetchRef: async () => { throw new TypeError('Failed to fetch'); },
+    onStateChange: (detail) => states.push(detail),
+  });
+  controller.openToken(); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(states.at(-1).state, 'token-failed');
+  assert.match(states.at(-1).message, /Download the Single HTML|regular tab/u);
 });

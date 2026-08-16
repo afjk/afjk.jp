@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandoffTargetSession, createHandoffTokenTargetSession, readHandoffTargetContext } from './target.js';
+import { encodeInlineHandoffPayload } from './inline-payload.js';
 
 const sessionId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const requestId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -197,6 +198,52 @@ test('token target claims once then applies embedded and URL payloads exclusivel
   });
   await url.ready();
   assert.deepEqual(urlCalls, ['https://static.test/world/']);
+});
+
+test('inline token target strictly validates and applies without a claim request', async () => {
+  const windowRef = { setTimeout: () => 1, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/?room=room-42', search: '?room=room-42' } };
+  const payload = { version: 1, mode: 'embedded', sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] }, embeddedAssets: {} };
+  const calls = [];
+  const session = createHandoffTokenTargetSession({
+    windowRef, locationRef: windowRef.location,
+    bootstrap: { inlinePayload: encodeInlineHandoffPayload({ kind: 'scene-sync-inline-handoff', version: 1, sessionId, requestId, roomId: 'room-42', payload }) },
+    fetchRef: () => { throw new Error('inline handoff must not claim'); },
+    ensureRoom: async (room) => calls.push(`room:${room}`),
+    applyPayload: async (applied) => calls.push(applied.mode),
+  });
+  await session.ready();
+  assert.deepEqual(calls, ['room:room-42', 'embedded']);
+  assert.equal(session.getState().complete, true);
+});
+
+test('inline target rejects URL payloads without claiming or applying', async () => {
+  const windowRef = { setTimeout: () => 1, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/' } };
+  const statuses = []; let applied = false;
+  const session = createHandoffTokenTargetSession({
+    windowRef, locationRef: windowRef.location,
+    bootstrap: { inlinePayload: encodeInlineHandoffPayload({ kind: 'scene-sync-inline-handoff', version: 1, sessionId, requestId, roomId: null, payload: { version: 1, mode: 'url', sourceUrl: 'https://static.test/world/' } }) },
+    fetchRef: () => { throw new Error('inline handoff must not claim'); },
+    applyPayload: async () => { applied = true; }, onStatus: (detail) => statuses.push(detail),
+  });
+  await session.ready();
+  assert.equal(applied, false);
+  assert.equal(statuses.at(-1).state, 'failed');
+});
+
+test('inline target rejects a room mismatch before claiming or applying', async () => {
+  const windowRef = { setTimeout: () => 1, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/?room=other-room', search: '?room=other-room' } };
+  const statuses = []; let ensured = false; let applied = false;
+  const payload = { version: 1, mode: 'embedded', sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] }, embeddedAssets: {} };
+  const session = createHandoffTokenTargetSession({
+    windowRef, locationRef: windowRef.location,
+    bootstrap: { inlinePayload: encodeInlineHandoffPayload({ kind: 'scene-sync-inline-handoff', version: 1, sessionId, requestId, roomId: 'room-42', payload }) },
+    fetchRef: () => { throw new Error('inline handoff must not claim'); },
+    ensureRoom: async () => { ensured = true; }, applyPayload: async () => { applied = true; }, onStatus: (detail) => statuses.push(detail),
+  });
+  await session.ready();
+  assert.equal(ensured, false);
+  assert.equal(applied, false);
+  assert.equal(statuses.at(-1).state, 'failed');
 });
 
 function createTimersWindow() {

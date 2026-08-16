@@ -146,6 +146,38 @@ most 32 MiB decoded assets and 8 MiB SceneDocument JSON; raw ZIP and raw Single
 HTML URLs are not token payload kinds. Static exports transfer their published
 HTTP(S) page URL and retain the existing strict static/server-pull loader.
 
+### Compact inline fallback for CSP-constrained Single HTML
+
+Some artifact hosts block cross-origin `connect-src`, so an explicit token
+click uses a fragment-only inline handoff when an embedded payload is compact
+enough. It never applies to Static URL handoff and never replaces the normal
+opener fast path. Its fragment has exactly one field:
+
+```
+#sceneSyncHandoffInline=v1.<canonical-base64url-utf8-json>
+```
+
+The decoded envelope has exactly `kind`, `version`, `sessionId`, `requestId`,
+`roomId`, and `payload`; `kind` is `scene-sync-inline-handoff`, version is 1,
+and its payload is embedded-only. The envelope room must exactly match the
+non-secret `room` query parameter (including both being absent). The target
+stashes the bounded raw envelope, removes the fragment before module/network
+work, then consumes it once per tab and applies the same strict add-only
+validation and rollback path as a claimed token payload.
+
+The fragment uses canonical Base64URL (no padding), fatal UTF-8, and strict
+limits: sources conservatively create envelopes no larger than 128 KiB, while
+the target rejects anything above 512 KiB encoded / 384 KiB decoded. Scene JSON
+is at most 128 KiB, with at most 32 passive embedded assets, 64 KiB each and
+128 KiB decoded total. Inline
+handoff is intentionally tab-local rather than globally one-use: it cannot
+contact a server, so it is read once from sessionStorage/global fallback and
+is never mixed with a token fragment or opener transfer. Invalid, duplicate,
+mixed, malformed, and oversized inline-looking fragments are scrubbed without
+being applied. Larger Single HTML exports continue to use the token upload;
+if that upload is CSP-blocked, the source directs the user to download/open it
+in a regular tab.
+
 ## Server-pull deployment settings
 
 The control plane is same-origin and sends no CORS headers. Keep the presence

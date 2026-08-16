@@ -23,6 +23,7 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync/runtime/event-timeline.js', dest: 'scenesync/runtime/event-timeline.js' },
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
   { src: '/assets/js/scenesync/handoff/protocol.js', dest: 'scenesync/handoff/protocol.js' },
+  { src: '/assets/js/scenesync/handoff/inline-payload.js', dest: 'scenesync/handoff/inline-payload.js' },
   { src: '/assets/js/scenesync/handoff/source.js', dest: 'scenesync/handoff/source.js' },
   { src: '/assets/js/scenesync/handoff/source.css', dest: 'scenesync/handoff/source.css' },
   { src: '/assets/js/scenesync/utils/room-code.js', dest: 'scenesync/utils/room-code.js' },
@@ -33,6 +34,7 @@ export const VIEWER_SOURCES = [
 
 export const SINGLE_HTML_HANDOFF_SOURCES = [
   { src: '/assets/js/scenesync/handoff/protocol.js', dest: 'scenesync/handoff/protocol.js' },
+  { src: '/assets/js/scenesync/handoff/inline-payload.js', dest: 'scenesync/handoff/inline-payload.js' },
   { src: '/assets/js/scenesync/handoff/source.js', dest: 'scenesync/handoff/source.js' },
   { src: '/assets/js/scenesync/handoff/source.css', dest: 'scenesync/handoff/source.css' },
   { src: '/assets/js/scenesync/utils/room-code.js', dest: 'scenesync/utils/room-code.js' },

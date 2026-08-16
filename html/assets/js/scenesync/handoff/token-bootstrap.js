@@ -1,15 +1,23 @@
 import { isValidHandoffId } from './protocol.js';
 import { isValidHandoffToken } from './token-payload.js';
 import { isSanitizedRoomCode } from '../utils/room-code.js';
+import { isInlineHandoffPayloadEncoding } from './inline-payload.js';
 
 export const HANDOFF_TOKEN_BOOTSTRAP_KEY = 'sceneSync.handoffToken.v1';
 
 export function validateTokenBootstrap(value) {
-  return Boolean(value && typeof value === 'object'
-    && isValidHandoffToken(value.token)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (Object.hasOwn(value, 'inlinePayload')) {
+    return Object.keys(value).length === 1 && isInlineHandoffPayloadEncoding(value.inlinePayload);
+  }
+  const baseKeys = ['token', 'sessionId', 'requestId', 'roomId'];
+  const keys = Object.keys(value).sort();
+  const expected = baseKeys.sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return false;
+  return isValidHandoffToken(value.token)
     && isValidHandoffId(value.sessionId)
     && isValidHandoffId(value.requestId)
-    && (value.roomId == null || isSanitizedRoomCode(value.roomId)));
+    && (value.roomId == null || isSanitizedRoomCode(value.roomId));
 }
 
 // Read-once prevents a reload from turning a claimed token into another import
