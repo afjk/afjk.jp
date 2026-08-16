@@ -15,6 +15,35 @@ export const DEFAULT_HANDOFF_ACK_TIMEOUT_MS = 120_000;
 // longer than the target's ten-minute deadline while preserving Single HTML.
 export const DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS = 13 * 60 * 1000;
 
+// This is deliberately proof-only.  A top-level page and ordinary iframes can
+// open a user-initiated popup; only a same-origin frame whose *current*
+// frameElement explicitly has sandbox and omits allow-popups is known to be
+// unable to do so.  Cross-origin frame access is intentionally inconclusive.
+export function isEmbeddedPopupUnsupported(windowRef = globalThis.window) {
+  try {
+    if (!windowRef || windowRef.top === windowRef) return false;
+    const frame = windowRef.frameElement;
+    if (!frame || typeof frame.getAttribute !== 'function') return false;
+    if (typeof frame.hasAttribute === 'function' ? !frame.hasAttribute('sandbox') : frame.getAttribute('sandbox') == null) return false;
+    const tokens = String(frame.getAttribute('sandbox') || '').toLowerCase().split(/[\t\n\f\r ]+/u).filter(Boolean);
+    return !tokens.includes('allow-popups');
+  } catch {
+    return false;
+  }
+}
+
+const EMBEDDED_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open or download the Single HTML export in a regular tab.';
+const EMBEDDED_URL_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open the published page in a regular tab.';
+
+function applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message = EMBEDDED_POPUP_MESSAGE }) {
+  if (!isEmbeddedPopupUnsupported(windowRef)) return false;
+  if (roomInput) roomInput.disabled = true;
+  if (button) button.disabled = true;
+  if (status) status.textContent = message;
+  form.dataset.state = 'embedded-popup-unsupported';
+  return true;
+}
+
 function statusForFailure(reason) {
   return {
     blocked: 'Popup was blocked. Allow popups and try again.',
@@ -193,6 +222,7 @@ export function mountSingleHtmlHandoff({
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
+  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef });
   const controller = createHandoffSourceController({
     windowRef,
     targetUrl,
@@ -208,6 +238,7 @@ export function mountSingleHtmlHandoff({
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (embeddedPopupUnsupported) return;
     const cleaned = sanitizeRoomCode(roomInput?.value);
     if (roomInput) roomInput.value = cleaned || '';
     controller.open(cleaned);
@@ -235,6 +266,7 @@ export function mountUrlHandoff({
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
+  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: EMBEDDED_URL_POPUP_MESSAGE });
   const controller = createHandoffSourceController({
     windowRef, targetUrl, sourceUrl,
     onStateChange(detail) {
@@ -245,6 +277,7 @@ export function mountUrlHandoff({
   });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (embeddedPopupUnsupported) return;
     const cleaned = sanitizeRoomCode(roomInput?.value);
     if (roomInput) roomInput.value = cleaned || '';
     controller.open(cleaned);

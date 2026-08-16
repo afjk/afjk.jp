@@ -258,6 +258,34 @@ try {
   assert(state.bgmControlPresent, 'Embedded audio did not produce a playback control');
   assert(state.handoff.present, 'Single HTML did not render the Open in Scene Sync controls');
   assert(state.handoff.room === 'smokeroom', 'Single HTML did not sanitize the optional Room ID');
+  // Claude-style nested srcdoc sandbox: this is the one proof-positive case
+  // where the control is pre-disabled rather than waiting for window.open.
+  const embeddedPage = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  await embeddedPage.setContent('<iframe id="embedded" sandbox="allow-scripts allow-same-origin"></iframe>');
+  await embeddedPage.locator('#embedded').evaluate((frame, source) => { frame.srcdoc = source; }, html);
+  const embedded = embeddedPage.frames().find((frame) => frame !== embeddedPage.mainFrame());
+  await embedded.waitForSelector('#scene-sync-handoff button');
+  const embeddedState = await embedded.evaluate(() => ({
+    input: document.getElementById('scene-sync-handoff-room')?.disabled,
+    button: document.querySelector('#scene-sync-handoff button')?.disabled,
+    status: document.getElementById('scene-sync-handoff-status')?.textContent,
+  }));
+  assert(embeddedState.input && embeddedState.button, 'sandboxed embedded handoff must be pre-disabled');
+  assert(embeddedState.status?.includes('Direct Scene Sync import is unavailable in this embedded viewer'), 'sandboxed embedded guidance was not shown');
+  await embeddedPage.close();
+  // Opaque-origin sandboxes cannot expose frameElement to their child. That is
+  // inconclusive by design: leave controls enabled and retain runtime popup
+  // blocking rather than guessing from a provider/frame heuristic.
+  const opaquePage = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  await opaquePage.setContent('<iframe id="opaque" sandbox="allow-scripts allow-forms"></iframe>');
+  await opaquePage.locator('#opaque').evaluate((frame, source) => { frame.srcdoc = source; }, html);
+  const opaque = opaquePage.frames().find((frame) => frame !== opaquePage.mainFrame());
+  await opaque.waitForSelector('#scene-sync-handoff button');
+  assert(await opaque.locator('#scene-sync-handoff-room').isDisabled() === false, 'opaque sandbox must not be pre-disabled');
+  assert(await opaque.locator('#scene-sync-handoff button').isDisabled() === false, 'opaque sandbox must retain runtime fallback');
+  await opaque.locator('#scene-sync-handoff').evaluate((form) => form.requestSubmit());
+  await opaque.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent.includes('Popup was blocked'), null, { timeout: 10_000 });
+  await opaquePage.close();
   assert(new URL(state.handoff.openUrl).searchParams.get('handoff') === '1', 'Single HTML handoff URL omitted handoff mode');
   assert(new URL(state.handoff.openUrl).searchParams.get('room') === 'smokeroom', 'Single HTML handoff URL omitted the sanitized room');
   assert(state.handoff.status.includes('Popup was blocked'), 'Single HTML did not show popup-blocked feedback');
