@@ -765,7 +765,7 @@ try {
   const fakeToken = 'a'.repeat(64);
   const fakeSession = 'b'.repeat(22);
   const fakeRequest = 'c'.repeat(22);
-  for (const fragment of [
+  for (const [index, fragment] of [
     '#handoffToken=bad',
     `#handoffToken=${fakeToken}&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}&extra=1`,
     `#handoffToken=${fakeToken}&handoffToken=${fakeToken}&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}`,
@@ -775,7 +775,7 @@ try {
     '#sceneSyncHandoffInline=%',
     '#sceneSyncHandoffInline=v1.bnVsbA',
     `#sceneSyncHandoffInline=v1.${'a'.repeat(524400)}`,
-  ]) {
+  ].entries()) {
     const malformedTarget = await browser.newPage();
     const malformedErrors = [];
     malformedTarget.on('pageerror', (error) => malformedErrors.push(error.message));
@@ -783,7 +783,12 @@ try {
     await malformedTarget.evaluate(({ token, sessionId, requestId }) => {
       sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify({ token, sessionId, requestId, roomId: null }));
     }, { token: fakeToken, sessionId: fakeSession, requestId: fakeRequest });
-    await malformedTarget.goto(`${targetUrl}${fragment}`, { waitUntil: 'domcontentloaded' });
+    // A hash-only navigation does not rerun the early head bootstrap. Change
+    // a harmless query value as well so this is a full document navigation.
+    const invalidUrl = new URL(targetUrl);
+    invalidUrl.searchParams.set('bootstrap-invalid-case', String(index));
+    invalidUrl.hash = fragment.slice(1);
+    await malformedTarget.goto(invalidUrl.href, { waitUntil: 'domcontentloaded' });
     await malformedTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
     assert.deepEqual(malformedErrors, [], `invalid inline fragment threw during bootstrap: ${fragment.slice(0, 80)}`);
     await malformedTarget.close();
