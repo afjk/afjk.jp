@@ -218,3 +218,18 @@ test('token transfer sends URL payload without embedded scene data', async () =>
   controller.openToken(); await Promise.resolve(); await Promise.resolve();
   assert.deepEqual(body.payload, { version: 1, mode: 'url', sourceUrl: 'https://static.test/world/' });
 });
+
+test('hung token upload times out and stale completion cannot overwrite a retry', async () => {
+  const windowRef = createFakeWindow();
+  const states = []; let resolveFirst;
+  const controller = createHandoffSourceController({
+    windowRef, sceneDocument, embeddedAssets, tokenUploadTimeoutMs: 1,
+    fetchRef: () => new Promise((resolve) => { resolveFirst = resolve; }), onStateChange: (detail) => states.push(detail),
+  });
+  controller.openToken(); await Promise.resolve();
+  windowRef.fireTimeout();
+  assert.equal(states.at(-1).state, 'token-failed');
+  controller.openToken(); await Promise.resolve();
+  resolveFirst?.({ ok: true }); await Promise.resolve();
+  assert.notEqual(states.at(-1).state, 'token-ready', 'stale first upload cannot win retry state');
+});

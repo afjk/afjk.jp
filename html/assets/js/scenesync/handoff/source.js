@@ -14,6 +14,7 @@ export const DEFAULT_HANDOFF_ACK_TIMEOUT_MS = 120_000;
 // URL handoff can materialize up to 500 MiB. Keep source-side ACK waiting
 // longer than the target's ten-minute deadline while preserving Single HTML.
 export const DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS = 13 * 60 * 1000;
+export const DEFAULT_TOKEN_UPLOAD_TIMEOUT_MS = 11 * 60 * 1000;
 
 // This is deliberately proof-only.  A top-level page and ordinary iframes can
 // open a user-initiated popup; only a same-origin frame whose *current*
@@ -61,6 +62,7 @@ export function createHandoffSourceController({
   sourceUrl,
   readyTimeoutMs = DEFAULT_HANDOFF_READY_TIMEOUT_MS,
   ackTimeoutMs = DEFAULT_HANDOFF_ACK_TIMEOUT_MS,
+  tokenUploadTimeoutMs = DEFAULT_TOKEN_UPLOAD_TIMEOUT_MS,
   closedPollMs = 250,
   onStateChange = () => {},
   fetchRef = globalThis.fetch,
@@ -74,6 +76,8 @@ export function createHandoffSourceController({
   let timeoutId = null;
   let closedIntervalId = null;
   let tokenUploadController = null;
+  let tokenUploadTimeoutId = null;
+  let tokenUploadGeneration = 0;
   let tokenModeArmed = false;
 
   function emit(detail = {}) {
@@ -85,6 +89,13 @@ export function createHandoffSourceController({
     if (closedIntervalId != null) windowRef.clearInterval(closedIntervalId);
     timeoutId = null;
     closedIntervalId = null;
+  }
+
+  function stopTokenUpload() {
+    if (tokenUploadTimeoutId != null) windowRef.clearTimeout(tokenUploadTimeoutId);
+    tokenUploadTimeoutId = null;
+    tokenUploadController?.abort();
+    tokenUploadController = null;
   }
 
   function armTimeout(delay, reason) {
@@ -193,7 +204,7 @@ export function createHandoffSourceController({
     // This function is called only by an explicit fallback click. Keep open
     // before JSON/fetch so a sandbox wrapper returning undefined still gets a
     // real external navigation attempt in the user gesture stack.
-    tokenUploadController?.abort();
+    stopTokenUpload();
     tokenModeArmed = true;
     const cleanedRoomId = sanitizeRoomCode(roomId);
     let token; let nextSessionId; let nextRequestId;
@@ -211,20 +222,33 @@ export function createHandoffSourceController({
     try { windowRef.open(url.toString(), '_blank'); } catch {}
     const endpoint = new URL('/presence/scene-sync/handoff-tokens/upload', url.origin).href;
     tokenUploadController = new AbortController();
+    const uploadController = tokenUploadController;
+    const generation = ++tokenUploadGeneration;
     state = 'token-uploading';
     emit({ state: 'token-uploading', tokenUrl: url.toString(), message: 'Token link opened. Preparing transfer…' });
     // Do not make upload success an import acknowledgement; the target owns
     // claim/import state and the token link remains useful if its first tab was blocked.
+    tokenUploadTimeoutId = windowRef.setTimeout(() => {
+      if (generation !== tokenUploadGeneration || tokenUploadController !== uploadController) return;
+      uploadController.abort(); tokenUploadController = null; tokenUploadTimeoutId = null;
+      state = 'token-failed'; emit({ state, tokenUrl: url.toString(), message: 'Token transfer preparation timed out. Retry creates a new link.' });
+    }, tokenUploadTimeoutMs);
     Promise.resolve().then(() => fetchRef(endpoint, {
-      method: 'POST', credentials: 'omit', signal: tokenUploadController.signal,
+      method: 'POST', credentials: 'omit', signal: uploadController.signal,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token, sessionId: nextSessionId, requestId: nextRequestId,
         payload: sourceUrl ? { version: 1, mode: 'url', sourceUrl } : { version: 1, mode: 'embedded', sceneDocument, embeddedAssets } }),
     })).then((response) => {
+      if (generation !== tokenUploadGeneration || tokenUploadController !== uploadController) return;
+      if (tokenUploadTimeoutId != null) windowRef.clearTimeout(tokenUploadTimeoutId);
+      tokenUploadTimeoutId = null; tokenUploadController = null;
       if (!response?.ok) throw new Error('upload failed');
       state = 'token-ready';
       emit({ state: 'token-ready', tokenUrl: url.toString(), message: 'Token transfer prepared. Open or copy the link.' });
     }).catch((error) => {
+      if (generation !== tokenUploadGeneration || (tokenUploadController && tokenUploadController !== uploadController)) return;
+      if (tokenUploadTimeoutId != null) windowRef.clearTimeout(tokenUploadTimeoutId);
+      tokenUploadTimeoutId = null; tokenUploadController = null;
       if (error?.name === 'AbortError') return;
       state = 'token-failed';
       emit({ state: 'token-failed', tokenUrl: url.toString(), message: 'Token transfer could not be prepared. Retry creates a new link.' });
@@ -239,7 +263,7 @@ export function createHandoffSourceController({
     getPopup: () => popup,
     dispose() {
       stopTimers();
-      tokenUploadController?.abort();
+      stopTokenUpload();
       windowRef.removeEventListener('message', handleMessage);
     },
   };
