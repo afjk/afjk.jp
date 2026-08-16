@@ -277,7 +277,7 @@ try {
   // inconclusive by design: leave controls enabled and retain runtime popup
   // blocking rather than guessing from a provider/frame heuristic.
   const opaquePage = await browser.newPage({ viewport: { width: 800, height: 600 } });
-  await opaquePage.setContent('<iframe id="opaque" sandbox="allow-scripts"></iframe>');
+  await opaquePage.setContent('<iframe id="opaque" sandbox="allow-scripts allow-forms"></iframe>');
   await opaquePage.locator('#opaque').evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const opaque = opaquePage.frames().find((frame) => frame !== opaquePage.mainFrame());
   await opaque.waitForSelector('#scene-sync-handoff button');
