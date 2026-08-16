@@ -7,31 +7,52 @@ Issue: #526
 ## 結論
 
 SceneSyncで3DGSを扱う交換形式として `GLB + KHR_gaussian_splatting` を採用する方針は妥当。
-ただし、現時点ではThree.jsの `GLTFLoader` とSparkの間に直接の `KHR_gaussian_splatting` 連携はないため、SceneSync側にアダプタ層が必要。
+ただし、2026-08-16時点ではThree.js `GLTFLoader` とSparkに `KHR_gaussian_splatting` GLBを直接渡す経路はないため、SceneSync側にKHR accessorからSplat rendererへ変換するアダプタ層が必要。
 
-本Issueでは、本番ローダーへ変更を入れる前段として次を追加した。
+本IssueのSpikeでは、そのアダプタの最小形まで実装した。
 
 - `KHR_gaussian_splatting` を含むGLB/JSONを検出・検証するInspector
-- InspectorのNode.jsテスト
-- Spark 2.1.0 + Three.js r180で3DGSを描画する独立Smokeページ
+- GLB BIN chunk / accessorの最小デコーダ
+- SH0係数からdiffuse RGBを復元する処理
+- 8 splatsの実バイナリ `KHR_gaussian_splatting` GLB fixture
+- fixture生成スクリプト
+- fixtureを直接デコードするNode.jsテスト
+- KHR GLB → accessor decode → Spark `SplatMesh` を確認する独立Smokeページ
 
-## 現在のSceneSync
+## 実GLB fixture
 
-SceneSync本体とExport ViewerはThree.js r170をCDN import mapで使用している。
-Export Viewerでは `GLTFLoader` を利用して通常GLBを読み込んでいる。
+`html/scenesync/experiments/fixtures/minimal-khr-gaussian-splatting.glb`
 
-主な確認箇所:
+内容:
 
-- `html/scenesync/index.html`
-- `html/assets/js/scenesync-export/export/build-export-package.js`
-- `html/assets/js/scenesync-export/viewer/create-viewer-core.js`
+- GLB 2.0
+- 8 splats
+- 非圧縮
+- primitive mode: `POINTS (0)`
+- `POSITION`
+- `KHR_gaussian_splatting:ROTATION`
+- `KHR_gaussian_splatting:SCALE`
+- `KHR_gaussian_splatting:OPACITY`
+- `KHR_gaussian_splatting:SH_DEGREE_0_COEF_0`
+- `kernel: ellipse`
+- `colorSpace: srgb_rec709_display`
+- `projection: perspective`
+- `sortingMethod: cameraDistance`
+
+高次SHやSPZ圧縮拡張は意図的に含めていない。base extensionからrendererまでの経路だけを分離して検証するためのfixture。
+
+生成:
+
+```bash
+node scripts/generate-minimal-khr-gaussian-splatting.mjs
+```
 
 ## KHR_gaussian_splatting
 
 Khronosの `KHR_gaussian_splatting` は2026-08-16時点でRelease Candidate。
 3D Gaussian SplatをglTFのPOINTS primitiveとして表現し、位置・回転・スケール・Opacity・SH係数をattributeとして格納する。
 
-SceneSyncでまず対応すべきbase ellipse kernelの必須条件:
+base ellipse kernelの必須条件:
 
 - primitive `mode` は `POINTS (0)`
 - `POSITION`
@@ -39,54 +60,88 @@ SceneSyncでまず対応すべきbase ellipse kernelの必須条件:
 - `KHR_gaussian_splatting:SCALE`
 - `KHR_gaussian_splatting:OPACITY`
 - `KHR_gaussian_splatting:SH_DEGREE_0_COEF_0`
-- extensionの `kernel` はbase specでは `ellipse`
-- `colorSpace` はbase specでは `srgb_rec709_display` または `lin_rec709_display`
+- `kernel: ellipse`
+- `colorSpace: srgb_rec709_display` または `lin_rec709_display`
 - `projection` のbase値は `perspective`
 - `sortingMethod` のbase値は `cameraDistance`
+
+SH0のみの場合のdiffuse colorは仕様通り次で復元する。
+
+```text
+Color = SH0 * 0.2820947917738781 + 0.5
+```
 
 仕様:
 https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting
 
-## Three.js
+## Three.js / Spark
 
-2026-08-16時点のThree.js `GLTFLoader` の公式対応extension一覧に `KHR_gaussian_splatting` は含まれていない。
-ただし `GLTFLoader.register()` により外部pluginを追加できる。
+SceneSync本体とExport Viewerは現在Three.js r170を使用している。
+最新Spark 2.1.0は `three >= 0.180.0` を要求するため、正式採用する場合はThree.js更新が必要。
 
-したがって、将来のSceneSync実装は次のどちらかになる。
+SparkはPLY / SPZ / SPLAT / KSPLAT / SOG等を直接ロードできるが、`KHR_gaussian_splatting` GLBは直接入力として扱わない。
+一方 `PackedSplats` / `SplatMesh` / `constructSplats` があるため、SceneSync側でglTF accessorをデコードして渡せる。
 
-1. `GLTFLoader` pluginとしてKHR primitiveをSplat rendererへ置き換える
-2. GLB JSON / accessorをSceneSync側で読み、KHR primitiveのみ別rendererへ渡す
+今回のSmokeページでは次の経路を実装した。
 
-既存の通常Meshとの混在GLBを考えると、1またはGLTFLoader parserを利用した2が望ましい。
+```text
+minimal-khr-gaussian-splatting.glb
+        ↓
+GLB JSON + BIN chunk parse
+        ↓
+KHR accessor decode
+        ↓
+POSITION / SCALE / ROTATION / OPACITY / SH0
+        ↓
+SH0 → RGB
+        ↓
+Spark SplatMesh.constructSplats
+        ↓
+SparkRenderer
+```
 
-Three.js docs:
-https://threejs.org/docs/#examples/en/loaders/GLTFLoader
+## 現在のデコーダ範囲
 
-## Spark
+`html/assets/js/scenesync/loaders/khr-gaussian-splatting.js`
 
-SparkはThree.jsへ統合しやすく、通常MeshとSplatの混在、複数Splat、raycast、WebXR等に向く。
+現時点で以下を扱う。
 
-最新のSpark 2.1.0は `three >= 0.180.0` をpeer dependencyとして要求する。
-SceneSyncは現在r170なので、最新Sparkを正式採用する場合はThree.js更新が必要。
+- GLB 2.0 JSON/BIN chunk
+- accessor / bufferView
+- byteStride
+- float / byte / short系component type
+- normalized整数attribute
+- base ellipse KHR primitive
+- SH0 → diffuse RGB
 
-Sparkが公式に直接ロード対象として挙げているのはPLY / SPZ / SPLAT / KSPLAT / SOG等であり、`KHR_gaussian_splatting` GLBは直接の入力形式として列挙されていない。
-一方 `PackedSplats` / `SplatMesh({ packedSplats })` / `constructSplats` APIがあるため、glTF accessorからSpark用データへ変換するアダプタを実装できる。
+Spikeなので以下はまだ未対応。
 
-Spark:
-https://github.com/sparkjsdev/spark
+- sparse accessor
+- 外部 `.bin` を参照する `.gltf`
+- SH1〜SH3をSpark SHへ渡す処理
+- KHR compression extensions
+- GLTFLoader pluginとしての統合
+- node hierarchy / global transformをKHR primitive単位で適用する本番統合
 
-## Three.js更新について
+## テスト
 
-### 判断
+```bash
+npm run test:3dgs-khr
+```
 
-最新Spark 2.1.0を使うなら、SceneSyncのThree.jsを少なくともr180へ上げる必要がある。
+テストには実バイナリfixtureを読み込み、以下を確認するケースを追加した。
 
-ただし本Issueでは本番Three.jsをまだ更新しない。
-理由は、SceneSyncではGLB、画像、動画、Physics、Export Viewer、Single HTML Export、WebXRなど広い経路でThree.jsを利用しており、r170 -> r180更新は独立した回帰確認を伴うため。
+- KHR primitiveとしてvalid
+- primitive数 = 1
+- splat数 = 8
+- position / rotation / opacity
+- SH0から復元したRGB
 
-まず独立Smokeページをr180で動かし、その後本番更新を行う方が安全。
+このChatGPT実行環境ではGitHub raw/CDNへの外部ネットワーク接続が拒否されたため、NodeテストとブラウザSmokeの実行自体は未完了。GLBバイナリについてはローカル生成時にヘッダ、JSON/BIN chunk、5 accessor、8 splatsの値まで構造検証済み。
 
-### 更新時に確認する項目
+## Three.js更新時の回帰確認
+
+r170 → r180を本番へ入れる場合は少なくとも次を確認する。
 
 - 通常GLB / Draco GLB
 - Image / Video object
@@ -99,40 +154,10 @@ https://github.com/sparkjsdev/spark
 - Single HTML Export
 - 既存E2E smoke tests
 
-## 実装案
-
-次の段階では、GLTFLoaderでGLBをロードした後、`gltf.parser.json` のprimitive extensionとaccessor indexを使い、`parser.getDependency('accessor', index)` から以下を取得する。
-
-- POSITION -> center
-- SCALE -> splat scale
-- ROTATION -> quaternion
-- OPACITY -> opacity
-- SH_DEGREE_0_COEF_0 -> base color
-- SH1〜SH3 -> SparkのSHデータへ変換（段階対応でも可）
-
-これをSparkの `PackedSplats` / `SplatMesh` に変換する。
-
-初期MVPではSH0のみで描画し、その後SH1〜SH3を追加する方法も検討できる。ただし標準GLBとして入力を受ける以上、未対応SHを黙って破棄するのではなく、明示的に品質制限を通知する。
-
-## 追加ファイル
-
-- `html/assets/js/scenesync/loaders/khr-gaussian-splatting.js`
-- `html/assets/js/scenesync/loaders/khr-gaussian-splatting.test.js`
-- `html/scenesync/experiments/3dgs-spark-smoke.html`
-
-テスト:
-
-```bash
-npm run test:3dgs-khr
-```
-
-SmokeページはSpark自体の3DGS描画確認用であり、現時点ではSPZを使用する。`KHR_gaussian_splatting` GLB -> Spark変換は次の実装ステップ。
-
 ## Issue #526の残作業
 
-- 実在する `KHR_gaussian_splatting` サンプルGLBをfixtureとして追加する
-- KHR accessor -> Spark `PackedSplats` の最小変換を実装する
-- ブラウザ上でKHR GLBをGaussianとして描画する
+- 実ブラウザで `3dgs-spark-smoke.html` を開き、8 splatsがGaussianとして描画されることを確認する
 - r180上で既存SceneSync経路の回帰確認を実施する
+- 本番統合方式を `GLTFLoader.register()` plugin / SceneSync独自adapterのどちらにするか最終決定する
 
-ここまで確認できたらIssue #527のSceneSync Web Editor統合へ進む。
+KHR GLBからSparkへデータを渡す最小アダプタまでは実装済みなので、Smokeが通ればIssue #527のSceneSync Web Editor統合へ進める。
