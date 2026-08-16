@@ -24,6 +24,7 @@
     "test:e2e:scene-sync-export-single-html": "node scripts/scenesync-export-single-html-smoke.mjs",
     "test:e2e:scene-sync-export-import": "node scripts/scenesync-export-import-browser-e2e.mjs",
     "test:e2e:scene-sync-handoff": "node scripts/scenesync-handoff-browser-e2e.mjs",
+    "test:e2e:scene-sync-token-handoff": "node scripts/scenesync-handoff-browser-e2e.mjs",
     "test:e2e:scene-sync-physics-live-room": "node scripts/scenesync-physics-live-room-smoke.mjs",
     "test:e2e:scene-sync-loomlet-interaction": "node scripts/scenesync-loomlet-interaction-multipeer-smoke.mjs",
     "test:e2e:scene-sync-unity-physics-presence": "node scripts/scenesync-unity-physics-presence-smoke.mjs",

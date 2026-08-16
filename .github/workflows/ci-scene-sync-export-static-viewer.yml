@@ -8,6 +8,7 @@ on:
       - "html/assets/js/scenesync/handoff/**"
       - "html/assets/js/scenesync/importers/scene-sync-export/**"
       - "html/assets/js/scenesync/scene.js"
+      - "html/scenesync/index.html"
       - "html/assets/js/scenesync/scene-physics.js"
       - "html/assets/js/scenesync/physics/**"
       - "html/assets/js/scenesync/plugins/scene-sync-physics-plugin.js"
@@ -72,5 +73,5 @@ jobs:
       - name: Run Single HTML file playback smoke
         run: npm run test:e2e:scene-sync-export-single-html
 
-      - name: Run Open in Scene Sync handoff E2E
-        run: npm run test:e2e:scene-sync-handoff
+      - name: Run Open in Scene Sync and token fallback E2E
+        run: npm run test:e2e:scene-sync-token-handoff
