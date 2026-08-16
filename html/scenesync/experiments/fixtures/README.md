@@ -13,7 +13,7 @@
 - `kernel: ellipse`
 - `colorSpace: srgb_rec709_display`
 
-高次SHや圧縮拡張は含めず、KHR base extensionからSparkへの変換確認に用途を限定する。
+高次SHや圧縮拡張は含めず、Three.js標準の `GLTFGaussianSplatLoaderExtension` でbase extensionを直接ロードする確認に用途を限定する。
 
 再生成:
 
@@ -23,4 +23,4 @@ node scripts/generate-minimal-khr-gaussian-splatting.mjs
 
 描画確認:
 
-`../3dgs-spark-smoke.html` がこのGLBをfetchし、KHR accessorをデコードしてSpark `SplatMesh`へ渡す。
+`../3dgs-three-native-smoke.html` がこのGLBを `GLTFLoader.register()` + `GLTFGaussianSplatLoaderExtension` で直接読み込み、`GaussianSplatMesh` として描画する。
