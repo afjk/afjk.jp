@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import {
+  decodeGaussianSplatGlb,
   inspectGaussianSplatGlb,
   inspectGaussianSplatGltf,
   parseGlbJson,
@@ -89,4 +91,22 @@ test('inspectGaussianSplatGlb inspects a GLB directly', () => {
   const result = inspectGaussianSplatGlb(makeGlb(makeValidJson()));
   assert.equal(result.valid, true);
   assert.equal(result.primitives[0].extension.kernel, 'ellipse');
+});
+
+test('minimal fixture is a real KHR_gaussian_splatting GLB and decodes 8 splats', async () => {
+  const fixtureUrl = new URL('../../../../scenesync/experiments/fixtures/minimal-khr-gaussian-splatting.glb', import.meta.url);
+  const bytes = await readFile(fixtureUrl);
+  const decoded = decodeGaussianSplatGlb(bytes);
+
+  assert.equal(decoded.inspection.valid, true);
+  assert.equal(decoded.primitives.length, 1);
+  assert.equal(decoded.primitives[0].splats.length, 8);
+
+  const first = decoded.primitives[0].splats[0];
+  assert.deepEqual(first.position.map((value) => Number(value.toFixed(3))), [-0.6, -0.4, 0]);
+  assert.deepEqual(first.rotation, [0, 0, 0, 1]);
+  assert.ok(Math.abs(first.opacity - 0.95) < 1e-5);
+  assert.ok(first.color[0] > 0.99);
+  assert.ok(first.color[1] > 0.19 && first.color[1] < 0.21);
+  assert.ok(first.color[2] > 0.19 && first.color[2] < 0.21);
 });
