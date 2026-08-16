@@ -261,7 +261,7 @@ try {
   // Claude-style nested srcdoc sandbox: this is the one proof-positive case
   // where the control is pre-disabled rather than waiting for window.open.
   const embeddedPage = await browser.newPage({ viewport: { width: 800, height: 600 } });
-  await embeddedPage.setContent('<iframe id="embedded" sandbox="allow-scripts"></iframe>');
+  await embeddedPage.setContent('<iframe id="embedded" sandbox="allow-scripts allow-same-origin"></iframe>');
   await embeddedPage.locator('#embedded').evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const embedded = embeddedPage.frames().find((frame) => frame !== embeddedPage.mainFrame());
   await embedded.waitForSelector('#scene-sync-handoff button');

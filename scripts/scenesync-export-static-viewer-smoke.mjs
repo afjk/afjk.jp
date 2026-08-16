@@ -423,6 +423,7 @@ async function runViewerSmoke(exportRoot) {
         loadingHidden: loadingOverlay?.classList.contains('hidden') === true,
       missingHidden: missingNotice?.classList.contains('hidden') === true,
       handoffPresent: Boolean(document.getElementById('scene-sync-handoff')),
+      handoffOpenDisabled: document.querySelector('#scene-sync-handoff button')?.disabled,
       handoffSourceUrl: location.href,
       pixelSamples: window.__sceneSyncStaticViewerSmokePixels || [],
       };
@@ -432,6 +433,7 @@ async function runViewerSmoke(exportRoot) {
     assert(result.canvas.loadingHidden, 'Viewer loading overlay did not finish');
     assert(result.canvas.missingHidden, 'Viewer reported missing scene assets');
     assert(result.canvas.handoffPresent, 'Static viewer did not mount Open in Scene Sync');
+    assert(result.canvas.handoffOpenDisabled === false, 'Top-level static handoff must remain enabled');
     assert(result.canvas.handoffSourceUrl === result.url, 'Static viewer handoff did not use its published page URL');
     assert(result.httpErrors.length === 0, `HTTP errors while loading viewer: ${JSON.stringify(result.httpErrors, null, 2)}`);
     assert(result.requestFailures.length === 0, `Request failures while loading viewer: ${JSON.stringify(result.requestFailures, null, 2)}`);
