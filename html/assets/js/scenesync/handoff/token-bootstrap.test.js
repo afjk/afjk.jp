@@ -11,4 +11,7 @@ test('token bootstrap consumes a valid record exactly once and rejects stale mal
   assert.equal(consumeTokenBootstrap({ windowRef: {}, storageRef: storage }), null);
   values.set(HANDOFF_TOKEN_BOOTSTRAP_KEY, '{bad');
   assert.equal(consumeTokenBootstrap({ windowRef: {}, storageRef: storage }), null);
+  const fallback = { __SCENE_SYNC_HANDOFF_TOKEN_BOOTSTRAP__: record, get sessionStorage() { throw new Error('blocked'); } };
+  assert.deepEqual(consumeTokenBootstrap({ windowRef: fallback }), record);
+  assert.equal(consumeTokenBootstrap({ windowRef: fallback }), null);
 });

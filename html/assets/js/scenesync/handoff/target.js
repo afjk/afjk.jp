@@ -153,7 +153,7 @@ export function createHandoffTokenTargetSession({
   ensureRoom = async () => {},
   applyPayload,
   onStatus = () => {},
-  maxWaitMs = 5 * 60 * 1000,
+  maxWaitMs = 11 * 60 * 1000,
 } = {}) {
   if (!bootstrap) return { enabled: false, dispose() {}, getState: () => ({ ready: false }) };
   const controller = new AbortController();
@@ -162,8 +162,11 @@ export function createHandoffTokenTargetSession({
   const endpoint = new URL('/presence/scene-sync/handoff-tokens/claim', locationRef?.href || windowRef?.location?.href).href;
   const roomId = isSanitizedRoomCode(bootstrap.roomId) ? bootstrap.roomId : null;
   const delay = (ms) => new Promise((resolve) => {
-    const id = windowRef.setTimeout(resolve, ms);
-    controller.signal.addEventListener('abort', () => { windowRef.clearTimeout?.(id); resolve(); }, { once: true });
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; controller.signal.removeEventListener('abort', aborted); resolve(); };
+    const aborted = () => { windowRef.clearTimeout?.(id); finish(); };
+    const id = windowRef.setTimeout(finish, ms);
+    controller.signal.addEventListener('abort', aborted, { once: true });
   });
   const overallTimer = windowRef.setTimeout(() => controller.abort(), maxWaitMs);
   const run = (async () => {

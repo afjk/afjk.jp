@@ -14,9 +14,12 @@ export function validateTokenBootstrap(value) {
 
 // Read-once prevents a reload from turning a claimed token into another import
 // attempt. The inline head bootstrap is intentionally independent of modules.
-export function consumeTokenBootstrap({ windowRef = globalThis.window, storageRef = windowRef?.sessionStorage } = {}) {
+export function consumeTokenBootstrap({ windowRef = globalThis.window, storageRef } = {}) {
   let raw = null;
-  try { raw = storageRef?.getItem?.(HANDOFF_TOKEN_BOOTSTRAP_KEY); storageRef?.removeItem?.(HANDOFF_TOKEN_BOOTSTRAP_KEY); } catch {}
+  try {
+    const storage = storageRef === undefined ? windowRef?.sessionStorage : storageRef;
+    raw = storage?.getItem?.(HANDOFF_TOKEN_BOOTSTRAP_KEY); storage?.removeItem?.(HANDOFF_TOKEN_BOOTSTRAP_KEY);
+  } catch {}
   if (raw) {
     try { const value = JSON.parse(raw); if (validateTokenBootstrap(value)) return value; } catch {}
   }

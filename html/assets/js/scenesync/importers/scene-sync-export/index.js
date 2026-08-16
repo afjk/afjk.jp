@@ -440,6 +440,9 @@ async function materializeInspectedHandoffOnServer({ request, job }, { signal } 
 export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId }, context = {}) {
   const controller = new AbortController();
   let serverCleanup = null;
+  const abortFromParent = () => controller.abort();
+  if (context.signal?.aborted) controller.abort();
+  context.signal?.addEventListener?.('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), context.handoffTimeoutMs || DEFAULT_URL_HANDOFF_TIMEOUT_MS);
   try {
     const pullOnServer = async () => {
@@ -538,6 +541,7 @@ export async function applySceneSyncHandoffUrl({ sourceUrl, sessionId, requestId
     throw failure;
   } finally {
     clearTimeout(timeout);
+    context.signal?.removeEventListener?.('abort', abortFromParent);
   }
 }
 

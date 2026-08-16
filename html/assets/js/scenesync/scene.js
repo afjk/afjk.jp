@@ -6982,7 +6982,7 @@ function prepareHandoffSceneReady({ restoreSnapshot = false } = {}) {
   });
 }
 
-function waitForHandoffRoom(roomId, timeoutMs = 110_000) {
+function waitForHandoffRoom(roomId, timeoutMs = 110_000, { signal } = {}) {
   if (handoffSceneReadyRoomId && (!roomId || handoffSceneReadyRoomId === roomId)) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const waiter = { roomId, resolve, reject, timeoutId: null };
@@ -6990,13 +6990,19 @@ function waitForHandoffRoom(roomId, timeoutMs = 110_000) {
       handoffRoomWaiters.delete(waiter);
       reject(new Error('Timed out while joining the requested room'));
     }, timeoutMs);
+    const abort = () => {
+      handoffRoomWaiters.delete(waiter);
+      clearTimeout(waiter.timeoutId);
+      reject(Object.assign(new Error('Handoff room wait aborted'), { name: 'AbortError' }));
+    };
+    signal?.addEventListener?.('abort', abort, { once: true });
     handoffRoomWaiters.add(waiter);
   });
 }
 
-async function ensureHandoffRoom(roomId) {
+async function ensureHandoffRoom(roomId, { signal } = {}) {
   if (roomId && activeRoomCode !== roomId) applyRoomCode(roomId);
-  await waitForHandoffRoom(roomId || null);
+  await waitForHandoffRoom(roomId || null, 110_000, { signal });
 }
 
 function generateRoom() {
@@ -15664,23 +15670,18 @@ function createSceneSyncExportImportContext() {
 function initializeHandoffTarget() {
   // An explicit legacy opener handoff wins over stale sessionStorage from a
   // prior token navigation; consume it without issuing a claim.
-  if (readHandoffTargetContext().valid) {
+  const legacyHandoff = readHandoffTargetContext().valid;
+  if (legacyHandoff) {
     consumeTokenBootstrap();
-    handoffTargetSession = createHandoffTargetSession({
-      validationOptions: { isValidSceneDocument, validateEmbeddedAssets: validateSingleHtmlEmbeddedAssets },
-      ensureRoom: ensureHandoffRoom,
-      applyMessage: (message) => message.sourceUrl ? applySceneSyncHandoffUrl({ sourceUrl: message.sourceUrl, sessionId: message.sessionId, requestId: message.requestId }, createSceneSyncExportImportContext()) : applySceneSyncHandoffPayload({ sceneDocument: message.sceneDocument, embeddedAssets: message.embeddedAssets }, createSceneSyncExportImportContext()),
-    });
-    return;
   }
-  const tokenSession = createHandoffTokenTargetSession({
+  const tokenSession = legacyHandoff ? null : createHandoffTokenTargetSession({
     ensureRoom: ensureHandoffRoom,
     applyPayload: (payload, binding, options = {}) => payload.mode === 'url'
       ? applySceneSyncHandoffUrl({ sourceUrl: payload.sourceUrl, sessionId: binding.sessionId, requestId: binding.requestId }, { ...createSceneSyncExportImportContext(), signal: options.signal })
       : applySceneSyncHandoffPayload({ sceneDocument: payload.sceneDocument, embeddedAssets: payload.embeddedAssets }, { ...createSceneSyncExportImportContext(), signal: options.signal }),
     onStatus(detail) { showToast(`Open in Scene Sync: ${detail.message}`); },
   });
-  if (tokenSession.enabled) {
+  if (tokenSession?.enabled) {
     handoffTargetSession = tokenSession;
     return;
   }

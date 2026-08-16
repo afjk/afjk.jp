@@ -74,6 +74,7 @@ export function createHandoffSourceController({
   let timeoutId = null;
   let closedIntervalId = null;
   let tokenUploadController = null;
+  let tokenModeArmed = false;
 
   function emit(detail = {}) {
     onStateChange({ state, ...detail });
@@ -141,7 +142,7 @@ export function createHandoffSourceController({
   windowRef.addEventListener('message', handleMessage);
 
   function open(roomId) {
-    if (state === 'token-uploading') return { opened: false, reason: 'token-uploading' };
+    if (tokenModeArmed) return { opened: false, reason: 'token-mode-active' };
     stopTimers();
     if (popup && !popup.closed) {
       try { popup.close(); } catch {}
@@ -193,6 +194,7 @@ export function createHandoffSourceController({
     // before JSON/fetch so a sandbox wrapper returning undefined still gets a
     // real external navigation attempt in the user gesture stack.
     tokenUploadController?.abort();
+    tokenModeArmed = true;
     const cleanedRoomId = sanitizeRoomCode(roomId);
     let token; let nextSessionId; let nextRequestId;
     try {
@@ -283,8 +285,11 @@ export function mountSingleHtmlHandoff({
       if (status) status.textContent = detail.message || '';
       if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
         || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
-      const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED;
+      const tokenState = String(detail.state || '').startsWith('token-');
+      const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState;
       if (tokenButton) tokenButton.hidden = !offerToken;
+      if (tokenButton) tokenButton.disabled = detail.state === 'token-uploading';
+      if (button && tokenModeArmed) button.disabled = true;
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
     },
@@ -332,7 +337,9 @@ export function mountUrlHandoff({
     onStateChange(detail) {
       if (status) status.textContent = detail.message || '';
       if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
-      if (tokenButton) tokenButton.hidden = !(embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED);
+      const tokenState = String(detail.state || '').startsWith('token-');
+      if (tokenButton) { tokenButton.hidden = !(embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState); tokenButton.disabled = detail.state === 'token-uploading'; }
+      if (button && tokenModeArmed) button.disabled = true;
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
     },
