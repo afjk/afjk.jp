@@ -134,6 +134,18 @@ direct CORS contract—or, for its fallback path, the HTTPS/default-port,
 same-origin, public-DNS, and passive-MIME rules above—works. A URL handoff is add-only, has no confirmation dialog, and
 does not apply scene-level settings.
 
+## Opener-free token fallback
+
+The normal `window.open` + `postMessage` handoff remains the default. When a
+wrapper/sandbox cannot return a usable opener, the user may explicitly choose
+**Open using token transfer**. A 256-bit token and its session/request binding
+are carried only in the target URL fragment, which the target immediately
+stores for one read and removes from the address bar. The upload/claim API
+keeps the token in JSON bodies only. Embedded Single HTML payloads allow at
+most 32 MiB decoded assets and 8 MiB SceneDocument JSON; raw ZIP and raw Single
+HTML URLs are not token payload kinds. Static exports transfer their published
+HTTP(S) page URL and retain the existing strict static/server-pull loader.
+
 ## Server-pull deployment settings
 
 The control plane is same-origin and sends no CORS headers. Keep the presence

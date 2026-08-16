@@ -19,7 +19,8 @@ import {
 import { applySceneDocumentBehaviors } from './importers/scene-sync-export/apply-scene-behaviors.js';
 import { isValidSceneDocument } from '../scenesync-export/viewer/scene-document.js';
 import { validateSingleHtmlEmbeddedAssets } from '../scenesync-export/export/single-html-format.js';
-import { createHandoffTargetSession } from './handoff/target.js';
+import { createHandoffTargetSession, createHandoffTokenTargetSession, readHandoffTargetContext } from './handoff/target.js';
+import { consumeTokenBootstrap } from './handoff/token-bootstrap.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
@@ -6981,21 +6982,29 @@ function prepareHandoffSceneReady({ restoreSnapshot = false } = {}) {
   });
 }
 
-function waitForHandoffRoom(roomId, timeoutMs = 110_000) {
+function waitForHandoffRoom(roomId, timeoutMs = 110_000, { signal } = {}) {
   if (handoffSceneReadyRoomId && (!roomId || handoffSceneReadyRoomId === roomId)) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(Object.assign(new Error('Handoff room wait aborted'), { name: 'AbortError' }));
   return new Promise((resolve, reject) => {
-    const waiter = { roomId, resolve, reject, timeoutId: null };
+    let abort = null;
+    const cleanup = () => { clearTimeout(waiter.timeoutId); signal?.removeEventListener?.('abort', abort); };
+    const waiter = { roomId, resolve: () => { cleanup(); resolve(); }, reject: (error) => { cleanup(); reject(error); }, timeoutId: null };
     waiter.timeoutId = setTimeout(() => {
       handoffRoomWaiters.delete(waiter);
-      reject(new Error('Timed out while joining the requested room'));
+      waiter.reject(new Error('Timed out while joining the requested room'));
     }, timeoutMs);
+    abort = () => {
+      handoffRoomWaiters.delete(waiter);
+      waiter.reject(Object.assign(new Error('Handoff room wait aborted'), { name: 'AbortError' }));
+    };
+    signal?.addEventListener?.('abort', abort, { once: true });
     handoffRoomWaiters.add(waiter);
   });
 }
 
-async function ensureHandoffRoom(roomId) {
+async function ensureHandoffRoom(roomId, { signal } = {}) {
   if (roomId && activeRoomCode !== roomId) applyRoomCode(roomId);
-  await waitForHandoffRoom(roomId || null);
+  await waitForHandoffRoom(roomId || null, 110_000, { signal });
 }
 
 function generateRoom() {
@@ -15661,6 +15670,23 @@ function createSceneSyncExportImportContext() {
 }
 
 function initializeHandoffTarget() {
+  // An explicit legacy opener handoff wins over stale sessionStorage from a
+  // prior token navigation; consume it without issuing a claim.
+  const legacyHandoff = readHandoffTargetContext().valid;
+  if (legacyHandoff) {
+    consumeTokenBootstrap();
+  }
+  const tokenSession = legacyHandoff ? null : createHandoffTokenTargetSession({
+    ensureRoom: ensureHandoffRoom,
+    applyPayload: (payload, binding, options = {}) => payload.mode === 'url'
+      ? applySceneSyncHandoffUrl({ sourceUrl: payload.sourceUrl, sessionId: binding.sessionId, requestId: binding.requestId }, { ...createSceneSyncExportImportContext(), signal: options.signal })
+      : applySceneSyncHandoffPayload({ sceneDocument: payload.sceneDocument, embeddedAssets: payload.embeddedAssets }, { ...createSceneSyncExportImportContext(), signal: options.signal }),
+    onStatus(detail) { showToast(`Open in Scene Sync: ${detail.message}`); },
+  });
+  if (tokenSession?.enabled) {
+    handoffTargetSession = tokenSession;
+    return;
+  }
   handoffTargetSession = createHandoffTargetSession({
     validationOptions: {
       isValidSceneDocument,
@@ -15779,6 +15805,7 @@ updateNicknameLabel();
 renderRoomSection();
 syncSceneUiState();
 initializeHandoffTarget();
+globalThis.addEventListener?.('pagehide', () => handoffTargetSession?.dispose?.(), { once: true });
 initializeWelcome();
 connectPresence();
 

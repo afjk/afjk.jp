@@ -14,6 +14,7 @@ export const DEFAULT_HANDOFF_ACK_TIMEOUT_MS = 120_000;
 // URL handoff can materialize up to 500 MiB. Keep source-side ACK waiting
 // longer than the target's ten-minute deadline while preserving Single HTML.
 export const DEFAULT_URL_HANDOFF_ACK_TIMEOUT_MS = 13 * 60 * 1000;
+export const DEFAULT_TOKEN_UPLOAD_TIMEOUT_MS = 11 * 60 * 1000;
 
 // This is deliberately proof-only.  A top-level page and ordinary iframes can
 // open a user-initiated popup; only a same-origin frame whose *current*
@@ -32,12 +33,12 @@ export function isEmbeddedPopupUnsupported(windowRef = globalThis.window) {
   }
 }
 
-const EMBEDDED_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open or download the Single HTML export in a regular tab.';
-const EMBEDDED_URL_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open the published page in a regular tab.';
+const EMBEDDED_POPUP_MESSAGE = 'Popup access is unavailable here. Use token transfer instead.';
+const EMBEDDED_URL_POPUP_MESSAGE = 'Popup access is unavailable here. Use token transfer instead.';
 
 function applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message = EMBEDDED_POPUP_MESSAGE }) {
   if (!isEmbeddedPopupUnsupported(windowRef)) return false;
-  if (roomInput) roomInput.disabled = true;
+  // Keep room selection available: token handoff still needs the URL-authoritative room.
   if (button) button.disabled = true;
   if (status) status.textContent = message;
   form.dataset.state = 'embedded-popup-unsupported';
@@ -61,8 +62,10 @@ export function createHandoffSourceController({
   sourceUrl,
   readyTimeoutMs = DEFAULT_HANDOFF_READY_TIMEOUT_MS,
   ackTimeoutMs = DEFAULT_HANDOFF_ACK_TIMEOUT_MS,
+  tokenUploadTimeoutMs = DEFAULT_TOKEN_UPLOAD_TIMEOUT_MS,
   closedPollMs = 250,
   onStateChange = () => {},
+  fetchRef = globalThis.fetch,
 } = {}) {
   let state = HANDOFF_SOURCE_STATES.IDLE;
   let popup = null;
@@ -72,6 +75,10 @@ export function createHandoffSourceController({
   let requestId = null;
   let timeoutId = null;
   let closedIntervalId = null;
+  let tokenUploadController = null;
+  let tokenUploadTimeoutId = null;
+  let tokenUploadGeneration = 0;
+  let tokenModeArmed = false;
 
   function emit(detail = {}) {
     onStateChange({ state, ...detail });
@@ -82,6 +89,13 @@ export function createHandoffSourceController({
     if (closedIntervalId != null) windowRef.clearInterval(closedIntervalId);
     timeoutId = null;
     closedIntervalId = null;
+  }
+
+  function stopTokenUpload() {
+    if (tokenUploadTimeoutId != null) windowRef.clearTimeout(tokenUploadTimeoutId);
+    tokenUploadTimeoutId = null;
+    tokenUploadController?.abort();
+    tokenUploadController = null;
   }
 
   function armTimeout(delay, reason) {
@@ -139,6 +153,7 @@ export function createHandoffSourceController({
   windowRef.addEventListener('message', handleMessage);
 
   function open(roomId) {
+    if (tokenModeArmed) return { opened: false, reason: 'token-mode-active' };
     stopTimers();
     if (popup && !popup.closed) {
       try { popup.close(); } catch {}
@@ -185,12 +200,70 @@ export function createHandoffSourceController({
     return { opened: true, url: url.toString(), roomId: cleanedRoomId, sessionId, requestId };
   }
 
+  function openToken(roomId) {
+    // This function is called only by an explicit fallback click. Keep open
+    // before JSON/fetch so a sandbox wrapper returning undefined still gets a
+    // real external navigation attempt in the user gesture stack.
+    stopTokenUpload();
+    tokenModeArmed = true;
+    const cleanedRoomId = sanitizeRoomCode(roomId);
+    let token; let nextSessionId; let nextRequestId;
+    try {
+      const cryptoRef = windowRef.crypto || globalThis.crypto;
+      const bytes = new Uint8Array(32); cryptoRef.getRandomValues(bytes);
+      token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      nextSessionId = createRandomHandoffId(cryptoRef);
+      nextRequestId = createRandomHandoffId(cryptoRef);
+    } catch { emit({ state: 'failed', reason: 'random-unavailable', message: statusForFailure('random-unavailable') }); return { opened: false }; }
+    const url = new URL(targetUrl, windowRef.location?.href || DEFAULT_SCENE_SYNC_HANDOFF_URL);
+    if (cleanedRoomId) url.searchParams.set('room', cleanedRoomId); else url.searchParams.delete('room');
+    url.searchParams.delete('handoff'); url.searchParams.delete('handoffSession'); url.searchParams.delete('handoffRequest');
+    url.hash = `handoffToken=${token}&handoffSession=${nextSessionId}&handoffRequest=${nextRequestId}`;
+    try { windowRef.open(url.toString(), '_blank'); } catch {}
+    const endpoint = new URL('/presence/scene-sync/handoff-tokens/upload', url.origin).href;
+    tokenUploadController = new AbortController();
+    const uploadController = tokenUploadController;
+    const generation = ++tokenUploadGeneration;
+    state = 'token-uploading';
+    emit({ state: 'token-uploading', tokenUrl: url.toString(), message: 'Token link opened. Preparing transfer…' });
+    // Do not make upload success an import acknowledgement; the target owns
+    // claim/import state and the token link remains useful if its first tab was blocked.
+    tokenUploadTimeoutId = windowRef.setTimeout(() => {
+      if (generation !== tokenUploadGeneration || tokenUploadController !== uploadController) return;
+      uploadController.abort(); tokenUploadController = null; tokenUploadTimeoutId = null;
+      state = 'token-failed'; emit({ state, tokenUrl: url.toString(), message: 'Token transfer preparation timed out. Retry creates a new link.' });
+    }, tokenUploadTimeoutMs);
+    Promise.resolve().then(() => fetchRef(endpoint, {
+      method: 'POST', credentials: 'omit', signal: uploadController.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, sessionId: nextSessionId, requestId: nextRequestId,
+        payload: sourceUrl ? { version: 1, mode: 'url', sourceUrl } : { version: 1, mode: 'embedded', sceneDocument, embeddedAssets } }),
+    })).then((response) => {
+      if (generation !== tokenUploadGeneration || tokenUploadController !== uploadController) return;
+      if (tokenUploadTimeoutId != null) windowRef.clearTimeout(tokenUploadTimeoutId);
+      tokenUploadTimeoutId = null; tokenUploadController = null;
+      if (!response?.ok) throw new Error('upload failed');
+      state = 'token-ready';
+      emit({ state: 'token-ready', tokenUrl: url.toString(), message: 'Token transfer prepared. Open or copy the link.' });
+    }).catch((error) => {
+      if (generation !== tokenUploadGeneration || (tokenUploadController && tokenUploadController !== uploadController)) return;
+      if (tokenUploadTimeoutId != null) windowRef.clearTimeout(tokenUploadTimeoutId);
+      tokenUploadTimeoutId = null; tokenUploadController = null;
+      if (error?.name === 'AbortError') return;
+      state = 'token-failed';
+      emit({ state: 'token-failed', tokenUrl: url.toString(), message: 'Token transfer could not be prepared. Retry creates a new link.' });
+    });
+    return { opened: true, url: url.toString(), token, sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId };
+  }
+
   return {
     open,
+    openToken,
     getState: () => state,
     getPopup: () => popup,
     dispose() {
       stopTimers();
+      stopTokenUpload();
       windowRef.removeEventListener('message', handleMessage);
     },
   };
@@ -223,6 +296,8 @@ function createHandoffElements(documentRef) {
   form.innerHTML = `<label for="scene-sync-handoff-room">Open in Scene Sync</label>
     <p class="scene-sync-handoff-hint">${HANDOFF_HINT}</p>
     <div class="scene-sync-handoff-row"><input id="scene-sync-handoff-room" name="room" type="text" maxlength="24" autocomplete="off" placeholder="Room ID (optional)"><button type="submit" class="viewer-btn">Open</button></div>
+    <button type="button" class="viewer-btn scene-sync-token-transfer" hidden>Open using token transfer</button>
+    <a class="scene-sync-token-link" hidden target="_blank" rel="noopener">Copy/open token link</a>
     <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;
 
   dock.appendChild(toggle);
@@ -248,6 +323,8 @@ function mountHandoffPanel({
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
+  const tokenButton = form.querySelector('.scene-sync-token-transfer');
+  const tokenLink = form.querySelector('.scene-sync-token-link');
 
   let busy = false;
 
@@ -282,15 +359,19 @@ function mountHandoffPanel({
     form, roomInput, button, status, windowRef, message: embeddedMessage,
   });
   if (embeddedPopupUnsupported) dock.dataset.state = form.dataset.state;
-
   const controller = createHandoffSourceController({
     ...controllerOptions,
     windowRef,
     onStateChange(detail) {
+      if (status) status.textContent = detail.message || '';
+      const tokenState = String(detail.state || '').startsWith('token-');
+      const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState;
+      if (tokenButton) tokenButton.hidden = !offerToken;
+      if (tokenButton) tokenButton.disabled = detail.state === 'token-uploading';
+      if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       busy = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
         || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
-      if (status) status.textContent = detail.message || '';
-      if (button) button.disabled = busy;
+      if (button) button.disabled = busy || tokenState || embeddedPopupUnsupported;
       form.dataset.state = detail.state;
       dock.dataset.state = detail.state;
     },
@@ -298,11 +379,13 @@ function mountHandoffPanel({
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (embeddedPopupUnsupported) return;
+    if (embeddedPopupUnsupported) { tokenButton?.click(); return; }
     const cleaned = sanitizeRoomCode(roomInput?.value);
     if (roomInput) roomInput.value = cleaned || '';
     controller.open(cleaned);
   });
+  tokenButton?.addEventListener('click', () => controller.openToken(sanitizeRoomCode(roomInput?.value)));
+  if (embeddedPopupUnsupported && tokenButton) tokenButton.hidden = false;
 
   return {
     ...controller,

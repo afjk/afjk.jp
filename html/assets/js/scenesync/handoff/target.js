@@ -6,6 +6,8 @@ import {
   validateHandoffMessage,
 } from './protocol.js';
 import { isSanitizedRoomCode } from '../utils/room-code.js';
+import { validateHandoffTokenPayload } from './token-payload.js';
+import { consumeTokenBootstrap } from './token-bootstrap.js';
 
 export function readHandoffTargetContext(locationRef = globalThis.location) {
   try {
@@ -141,4 +143,67 @@ export function createHandoffTargetSession({
       return { ready: enabled, busy, complete };
     },
   };
+}
+
+export function createHandoffTokenTargetSession({
+  windowRef = globalThis.window,
+  locationRef = globalThis.location,
+  fetchRef = globalThis.fetch,
+  bootstrap = consumeTokenBootstrap({ windowRef }),
+  ensureRoom = async () => {},
+  applyPayload,
+  onStatus = () => {},
+  maxWaitMs = 11 * 60 * 1000,
+} = {}) {
+  if (!bootstrap) return { enabled: false, dispose() {}, getState: () => ({ ready: false }) };
+  const controller = new AbortController();
+  let disposed = false; let complete = false; let timedOut = false;
+  const started = Date.now();
+  const endpoint = new URL('/presence/scene-sync/handoff-tokens/claim', locationRef?.href || windowRef?.location?.href).href;
+  const roomId = isSanitizedRoomCode(bootstrap.roomId) ? bootstrap.roomId : null;
+  const delay = (ms) => new Promise((resolve) => {
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; controller.signal.removeEventListener('abort', aborted); resolve(); };
+    const aborted = () => { windowRef.clearTimeout?.(id); finish(); };
+    const id = windowRef.setTimeout(finish, ms);
+    controller.signal.addEventListener('abort', aborted, { once: true });
+  });
+  const overallTimer = windowRef.setTimeout(() => {
+    timedOut = true; controller.abort();
+    if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' });
+  }, maxWaitMs);
+  const run = (async () => {
+    let backoff = 250;
+    try {
+    // Room/snapshot readiness precedes destructive one-use claim. A full room
+    // must not consume an otherwise valid transfer.
+    await ensureRoom(roomId, { signal: controller.signal });
+    onStatus({ state: 'waiting', message: 'Waiting for token transfer upload…' });
+    while (!disposed && Date.now() - started < maxWaitMs) {
+      try {
+        const response = await fetchRef(endpoint, { method: 'POST', credentials: 'same-origin', signal: controller.signal,
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: bootstrap.token, sessionId: bootstrap.sessionId, requestId: bootstrap.requestId }) });
+        if (response.status === 202 || response.status === 404) {
+          const retry = Math.min(5_000, Number(response.headers?.get?.('retry-after')) * 1000 || backoff);
+          await delay(retry); backoff = Math.min(5_000, backoff * 2); continue;
+        }
+        if (!response.ok) throw new Error('claim failed');
+        const body = await response.json();
+        const validation = validateHandoffTokenPayload(body?.payload);
+        if (!validation.valid) throw new Error('invalid payload');
+        if (typeof applyPayload !== 'function') throw new Error('handoff importer unavailable');
+        await applyPayload(validation.payload, bootstrap, { signal: controller.signal });
+        complete = true; onStatus({ state: 'complete', message: 'Token transfer imported.' }); return;
+      } catch (error) {
+        if (controller.signal.aborted) { if (!disposed && !timedOut) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); return; }
+        onStatus({ state: 'failed', message: 'Token transfer import failed.' }); return;
+      }
+    }
+    if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' });
+    } catch (error) {
+      if (controller.signal.aborted) { if (!disposed && !timedOut) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); }
+      else onStatus({ state: 'failed', message: 'Token transfer import failed.' });
+    } finally { windowRef.clearTimeout?.(overallTimer); }
+  })();
+  return { enabled: true, context: { roomId, ...bootstrap }, ready: () => run, dispose() { disposed = true; controller.abort(); }, getState: () => ({ ready: true, complete }) };
 }

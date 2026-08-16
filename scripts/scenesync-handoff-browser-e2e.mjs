@@ -63,6 +63,8 @@ function resolveStaticPath(urlPath) {
 function createStaticServer(presenceHttpUrl, publishedRoot = null) {
   return createServer(async (req, res) => {
     requestLog.push(`${req.method || 'GET'} ${req.url || '/'}`);
+    const requestPath = new URL(req.url || '/', 'http://localhost').pathname;
+    const receivedAt = Date.now();
     try {
       const url = new URL(req.url || '/', 'http://localhost');
       if (publishedRoot && url.pathname.startsWith('/published/')) {
@@ -81,6 +83,19 @@ function createStaticServer(presenceHttpUrl, publishedRoot = null) {
       }
       if (url.pathname.startsWith('/presence/')) {
         const body = req.method === 'PUT' || req.method === 'POST' ? await readRequest(req) : undefined;
+        if (requestPath.endsWith('/handoff-tokens/upload')) {
+          let upload = null;
+          try { upload = JSON.parse(body?.toString('utf8') || ''); } catch {}
+          tokenUploads.push({
+            receivedAt,
+            cookie: req.headers.cookie || '',
+            mode: upload?.payload?.mode,
+            hasSceneDocument: Object.hasOwn(upload?.payload || {}, 'sceneDocument'),
+            hasEmbeddedAssets: Object.hasOwn(upload?.payload || {}, 'embeddedAssets'),
+            sourceUrl: upload?.payload?.sourceUrl || null,
+          });
+        }
+        if (requestPath.endsWith('/handoff-tokens/claim')) tokenClaims.push({ receivedAt });
         const upstreamBase = typeof presenceHttpUrl === 'function' ? presenceHttpUrl() : presenceHttpUrl;
         const upstream = await fetch(`${upstreamBase}${url.pathname.replace('/presence', '')}${url.search}`, {
           method: req.method,
@@ -88,7 +103,7 @@ function createStaticServer(presenceHttpUrl, publishedRoot = null) {
           body,
         });
         const bytes = Buffer.from(await upstream.arrayBuffer());
-        res.writeHead(upstream.status, Object.fromEntries([...upstream.headers].filter(([name]) => ['content-type', 'x-content-type-options', 'content-security-policy', 'cache-control'].includes(name))));
+        res.writeHead(upstream.status, Object.fromEntries([...upstream.headers].filter(([name]) => ['content-type', 'x-content-type-options', 'content-security-policy', 'cache-control', 'access-control-allow-origin', 'access-control-allow-methods', 'access-control-allow-headers'].includes(name))));
         res.end(bytes);
         return;
       }
@@ -113,6 +128,23 @@ function createStaticServer(presenceHttpUrl, publishedRoot = null) {
 function createNoCorsPublisher(targetAppUrl, targetOrigin, sceneDocument, triangle) {
   return createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://localhost');
+    if (url.pathname === '/wrapper/' || url.pathname === '/wrapper/index.html') {
+      res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html>
+        <iframe id="token-source" sandbox="allow-scripts allow-same-origin" src="/world/"></iframe>
+        <script>
+          globalThis.__tokenNavigationAttempts = [];
+          const frame = document.getElementById('token-source');
+          frame.addEventListener('load', () => {
+            frame.contentWindow.open = (href) => {
+              globalThis.__tokenNavigationAttempts.push({ href, at: Date.now() });
+              parent.postMessage({ type: 'scene-sync-token-navigation-attempt' }, '*');
+              return undefined;
+            };
+            document.documentElement.dataset.openHook = 'ready';
+          });
+        <\/script>`);
+      return;
+    }
     if (url.pathname === '/world/' || url.pathname === '/world/index.html') {
       res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html>
         <link rel="scene-sync-export" href="./scene.json"><div id="viewer-ui"></div>
@@ -222,6 +254,7 @@ async function loadHandoffFiles() {
 let presenceServer;
 let staticServer;
 let publisherServer;
+let tokenPublisherServer;
 let observer;
 let browser;
 let tempDir;
@@ -229,11 +262,16 @@ let tempDir;
 // terminate while an awaited browser-side status promise is still pending.
 const keepAlive = setInterval(() => {}, 1_000);
 const requestLog = [];
+// Never retain or print bearer tokens: the test records only the transport
+// shape and timing needed to prove the opener-free flow.
+const tokenUploads = [];
+const tokenClaims = [];
 try {
   tempDir = await mkdtemp(path.join(os.tmpdir(), 'scene-sync-handoff-e2e-'));
   // Must be set before dynamically importing server.mjs, whose blob directory
   // is configured at module evaluation time.
   process.env.BLOB_DIR = path.join(tempDir, 'blobs');
+  process.env.SCENE_SYNC_HANDOFF_TOKEN_DIR = path.join(tempDir, 'handoff-tokens');
   process.env.SCENE_SYNC_GLB_BACKUP_DIR = path.join(tempDir, 'glb-backup');
   process.env.SCENE_SYNC_GLB_BACKUP_MIN_FREE_BYTES = '0';
   let presenceHttpUrl = '';
@@ -277,10 +315,43 @@ try {
     '<body>',
     `<body><script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetUrl)};<\/script>`,
   );
+  const tokenSceneDocument = structuredClone(sceneDocument);
+  tokenSceneDocument.objects[0].id = 'token-embedded-image';
+  tokenSceneDocument.objects[1].id = 'token-embedded-glb';
+  const tokenSourceHtml = (await buildSingleHtmlDocument({
+    sceneDocument: tokenSceneDocument,
+    manifest: { singleHtml: { format: 'single-html-v1', version: 1 } },
+    files: {
+      'assets/pixel.png': Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')),
+      'assets/triangle.glb': createTriangleGlb(),
+    },
+    viewerFiles: await loadHandoffFiles(),
+  })).replace(
+    '<body>',
+    `<body><script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetUrl)};<\/script>`,
+  );
   const sourcePath = path.join(tempDir, 'source.html');
   await writeFile(sourcePath, sourceHtml);
   const publishedDir = path.join(tempDir, 'published');
   await mkdir(path.join(publishedDir, 'assets'), { recursive: true });
+  await writeFile(path.join(publishedDir, 'embedded-source.html'), tokenSourceHtml);
+  // This is deliberately a same-origin, sandboxed host. Its open() shim is a
+  // ChatGPT/Claude-style external-confirmation simulation: it observes the
+  // navigation synchronously but returns undefined to the child.
+  await writeFile(path.join(publishedDir, 'embedded-wrapper.html'), `<!doctype html>
+    <iframe id="token-source" sandbox="allow-scripts allow-same-origin" src="./embedded-source.html"></iframe>
+    <script>
+      globalThis.__tokenNavigationAttempts = [];
+      const frame = document.getElementById('token-source');
+      frame.addEventListener('load', () => {
+        frame.contentWindow.open = (href) => {
+          globalThis.__tokenNavigationAttempts.push({ href, at: Date.now() });
+          parent.postMessage({ type: 'scene-sync-token-navigation-attempt' }, '*');
+          return undefined;
+        };
+        document.documentElement.dataset.openHook = 'ready';
+      });
+    <\/script>`);
   await writeFile(path.join(publishedDir, 'index.html'), `<!doctype html>
     <link rel="scene-sync-export" href="./scene.json"><div id="viewer-ui"></div>
     <script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetUrl)};<\/script>
@@ -306,6 +377,10 @@ try {
   // addresses before DNS resolution.
   publisherServer = await listen(createNoCorsPublisher(targetUrl, targetOrigin, noCorsDocument, createTriangleGlb()), null);
   const noCorsSourceUrl = `${serverUrl(publisherServer, 'http', 'localhost')}/world/`;
+  const noCorsTokenDocument = structuredClone(noCorsDocument);
+  noCorsTokenDocument.objects[0].id = 'token-no-acao-triangle';
+  tokenPublisherServer = await listen(createNoCorsPublisher(targetUrl, targetOrigin, noCorsTokenDocument, createTriangleGlb()), null);
+  const noCorsTokenWrapperUrl = `${serverUrl(tokenPublisherServer, 'http', 'localhost')}/wrapper/`;
 
   const observedAdds = new Map();
   const observerDiagnostics = [];
@@ -318,6 +393,9 @@ try {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       observerDiagnostics.push(JSON.stringify(message));
+      if (message.type === 'handoff' && message.payload?.kind === 'scene-add' && message.payload.objectId) {
+        observedAdds.set(message.payload.objectId, message.payload);
+      }
       if (message.type === 'handoff' && message.payload?.kind === 'scene-add'
         && ['handoff-e2e-image', 'handoff-e2e-glb'].includes(message.payload.objectId)) {
         observedAdds.set(message.payload.objectId, message.payload);
@@ -335,6 +413,13 @@ try {
       }
     });
   });
+  async function waitForObservedAdd(objectId, label) {
+    const deadline = Date.now() + TEST_TIMEOUT_MS;
+    while (!observedAdds.has(objectId) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!observedAdds.has(objectId)) throw new Error(`Timed out waiting for ${label}`);
+  }
 
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
@@ -345,9 +430,10 @@ try {
   await page.waitForFunction(() => globalThis.__HANDOFF_SOURCE_READY__ === true);
   await page.locator('#scene-sync-handoff-toggle').click();
   await page.locator('#scene-sync-handoff-room').fill(roomId);
-  const popupPromise = page.waitForEvent('popup');
-  await page.locator('#scene-sync-handoff button').click();
-  const popup = await popupPromise;
+  const [popup] = await Promise.all([
+    page.waitForEvent('popup'),
+    page.locator('#scene-sync-handoff button[type="submit"]').click(),
+  ]);
   const popupDiagnostics = [];
   popup.on('console', (message) => popupDiagnostics.push(`console:${message.type()}:${message.text()}`));
   popup.on('pageerror', (error) => popupDiagnostics.push(`pageerror:${error.message}`));
@@ -384,10 +470,11 @@ try {
   const urlSource = await browser.newPage({ viewport: { width: 900, height: 700 } });
   await urlSource.goto(`${targetOrigin}/published/index.html`, { waitUntil: 'domcontentloaded' });
   await urlSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  assert.equal(await urlSource.locator('#scene-sync-handoff button[type="submit"]').isDisabled(), false, 'top-level static Open button must remain enabled');
   await urlSource.locator('#scene-sync-handoff-toggle').click();
   await urlSource.locator('#scene-sync-handoff-room').fill(roomId);
   const urlPopupPromise = urlSource.waitForEvent('popup');
-  await urlSource.locator('#scene-sync-handoff button').click();
+  await urlSource.locator('#scene-sync-handoff button[type="submit"]').click();
   const urlPopup = await urlPopupPromise;
   await urlPopup.waitForLoadState('domcontentloaded');
   await urlSource.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Opened in Scene Sync.', null, { timeout: TEST_TIMEOUT_MS });
@@ -399,6 +486,7 @@ try {
   assert.equal(urlAsset?.source, 'blob');
   assert.equal(urlAsset?.path, undefined);
   assert.equal(observedAdds.get('url-handoff-image')?.asset?.path, undefined);
+  assert.equal(tokenUploads.length, 0, 'successful top-level opener handoff must not upload a token');
   // This publisher deliberately sends no ACAO header.  Browser direct fetch
   // fails opaquely; the test-only injected server transport performs the
   // inspect/materialize path and streams the triangle GLB into a carrier blob.
@@ -411,7 +499,7 @@ try {
   await noCorsSource.locator('#scene-sync-handoff-toggle').click();
   await noCorsSource.locator('#scene-sync-handoff-room').fill(roomId);
   const noCorsPopupPromise = noCorsSource.waitForEvent('popup');
-  await noCorsSource.locator('#scene-sync-handoff button').click();
+  await noCorsSource.locator('#scene-sync-handoff button[type="submit"]').click();
   const noCorsPopup = await noCorsPopupPromise;
   noCorsPopup.on('console', (message) => noCorsDiagnostics.push(`popup:${message.type()}:${message.text()}`));
   noCorsPopup.on('pageerror', (error) => noCorsDiagnostics.push(`popup-pageerror:${error.message}`));
@@ -447,7 +535,161 @@ try {
   assert.equal(requestLog.some((entry) => entry.includes('/presence/scene-sync/import-jobs')), true);
   assert.equal(requestLog.some((entry) => entry.includes('/materialize')), true);
   assert.equal(requestLog.some((entry) => entry.includes('/presence/blob/')), true);
+
+  // Opener-free embedded transfer: a same-origin sandbox wrapper reports the
+  // child navigation externally but returns undefined, as hosted AI viewers
+  // commonly do. The real target is then opened from that confirmation URL.
+  const browserContext = page.context();
+  await browserContext.addCookies([{
+    name: 'handoff-e2e-cookie', value: 'must-not-upload', domain: '127.0.0.1', path: '/',
+  }]);
+  const tokenDiagnostics = [];
+  const embeddedTokenWrapper = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  embeddedTokenWrapper.on('console', (message) => tokenDiagnostics.push(`embedded-wrapper:${message.type()}:${message.text()}`));
+  embeddedTokenWrapper.on('pageerror', (error) => tokenDiagnostics.push(`embedded-wrapper-pageerror:${error.message}`));
+  await embeddedTokenWrapper.goto(`${targetOrigin}/published/embedded-wrapper.html`, { waitUntil: 'domcontentloaded' });
+  await embeddedTokenWrapper.waitForFunction(() => document.documentElement.dataset.openHook === 'ready');
+  const embeddedTokenFrame = embeddedTokenWrapper.frames().find((frame) => frame.url().includes('/published/embedded-source.html'));
+  assert(embeddedTokenFrame, 'sandboxed Single HTML source frame did not load');
+  await embeddedTokenFrame.waitForFunction(() => globalThis.__HANDOFF_SOURCE_READY__ === true);
+  assert.equal(await embeddedTokenFrame.locator('#scene-sync-handoff').isHidden(), true, 'sandboxed Single HTML handoff starts collapsed');
+  await embeddedTokenFrame.locator('#scene-sync-handoff-toggle').click();
+  assert.equal(await embeddedTokenFrame.locator('#scene-sync-handoff-room').isDisabled(), false, 'token fallback must keep room input available');
+  assert.equal(await embeddedTokenFrame.locator('.scene-sync-token-transfer').isVisible(), true, 'sandboxed Single HTML must explicitly offer token transfer');
+  await embeddedTokenFrame.locator('#scene-sync-handoff-room').fill(roomId);
+  const embeddedUploadsBefore = tokenUploads.length;
+  const embeddedClaimsBefore = tokenClaims.length;
+  await embeddedTokenFrame.locator('.scene-sync-token-transfer').click();
+  await embeddedTokenFrame.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Token transfer prepared. Open or copy the link.', null, { timeout: TEST_TIMEOUT_MS });
+  const embeddedAttempt = await embeddedTokenWrapper.evaluate(() => globalThis.__tokenNavigationAttempts?.[0] || null);
+  assert(embeddedAttempt?.href, 'sandbox wrapper did not receive the token target navigation attempt');
+  assert.equal(tokenUploads.length, embeddedUploadsBefore + 1, 'token upload did not occur after the simulated external confirmation');
+  const embeddedUpload = tokenUploads.at(-1);
+  assert.equal(embeddedAttempt.at <= embeddedUpload.receivedAt, true, 'source upload started before it attempted token target navigation');
+  assert.equal(embeddedUpload.cookie, '', 'token upload must omit cookies');
+  assert.equal(embeddedUpload.mode, 'embedded');
+  assert.equal(tokenClaims.length, embeddedClaimsBefore, 'source must not claim its own transfer');
+  const embeddedTokenTarget = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  const embeddedTargetUrls = [];
+  embeddedTokenTarget.on('request', (request) => embeddedTargetUrls.push(request.url()));
+  embeddedTokenTarget.on('console', (message) => tokenDiagnostics.push(`embedded-target:${message.type()}:${message.text()}`));
+  embeddedTokenTarget.on('pageerror', (error) => tokenDiagnostics.push(`embedded-target-pageerror:${error.message}`));
+  await embeddedTokenTarget.goto(embeddedAttempt.href, { waitUntil: 'domcontentloaded' });
+  await embeddedTokenTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
+  await waitForObservedAdd('token-embedded-image', 'embedded token image broadcast');
+  await waitForObservedAdd('token-embedded-glb', 'embedded token mesh broadcast');
+  const embeddedTokenState = await embeddedTokenTarget.evaluate(async () => {
+    const { managedObjects, presenceState } = await import('/assets/js/scenesync/scene.js');
+    const mesh = managedObjects.get('token-embedded-glb');
+    let meshCount = 0; let vertices = 0; let boxGeometry = false;
+    mesh?.traverse?.((node) => {
+      if (!node.isMesh) return;
+      meshCount += 1; vertices = Math.max(vertices, node.geometry?.attributes?.position?.count || 0);
+      boxGeometry ||= node.geometry?.type === 'BoxGeometry';
+    });
+    return {
+      room: presenceState.room,
+      image: managedObjects.get('token-embedded-image')?.userData?.asset || null,
+      mesh: mesh?.userData?.asset || null,
+      meshCount, vertices, boxGeometry,
+      bootstrap: sessionStorage.getItem('sceneSync.handoffToken.v1'),
+    };
+  });
+  assert.equal(embeddedTokenState.room, roomId);
+  assert.equal(embeddedTokenState.image?.type, 'image');
+  assert.equal(embeddedTokenState.mesh?.type, 'mesh');
+  assert.equal(embeddedTokenState.meshCount > 0 && embeddedTokenState.vertices === 3 && !embeddedTokenState.boxGeometry, true, 'token import must produce the real triangle mesh');
+  assert.equal(embeddedTokenState.bootstrap, null, 'token bootstrap must be consumed exactly once');
+  assert.equal(observedAdds.get('token-embedded-glb')?.asset?.source, 'carrier');
+  assert.equal(await embeddedTokenFrame.locator('#scene-sync-handoff-status').textContent(), 'Token transfer prepared. Open or copy the link.', 'source must report preparation, not an import ACK');
+  assert.equal(embeddedTokenTarget.url().includes('handoffToken'), false, 'target address bar retained the token fragment');
+  assert.equal([...embeddedTargetUrls, ...requestLog].some((value) => value.includes('handoffToken')), false, 'token leaked into an HTTP request URL');
+  const embeddedToken = new URL(embeddedAttempt.href).hash.slice(1).split('&').reduce((out, pair) => {
+    const [key, value] = pair.split('='); out[key] = value; return out;
+  }, {});
+  const replayStatus = await embeddedTokenTarget.evaluate(async (binding) => (await fetch('/presence/scene-sync/handoff-tokens/claim', {
+    method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: binding.handoffToken, sessionId: binding.handoffSession, requestId: binding.handoffRequest }),
+  })).status, embeddedToken);
+  assert.equal(replayStatus, 202, 'claimed token must not be claimable a second time');
+
+  // A static viewer in the same wrapper must stage only its published URL.
+  // The no-ACAO publisher makes the target exercise the existing direct
+  // browser failure -> server-pull materialisation path.
+  const urlTokenWrapper = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  urlTokenWrapper.on('console', (message) => tokenDiagnostics.push(`url-wrapper:${message.type()}:${message.text()}`));
+  urlTokenWrapper.on('pageerror', (error) => tokenDiagnostics.push(`url-wrapper-pageerror:${error.message}`));
+  await urlTokenWrapper.goto(noCorsTokenWrapperUrl, { waitUntil: 'domcontentloaded' });
+  await urlTokenWrapper.waitForFunction(() => document.documentElement.dataset.openHook === 'ready');
+  const urlTokenFrame = urlTokenWrapper.frames().find((frame) => frame.url().includes('/world/'));
+  assert(urlTokenFrame, 'sandboxed static source frame did not load');
+  await urlTokenFrame.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  assert.equal(await urlTokenFrame.locator('#scene-sync-handoff').isHidden(), true, 'sandboxed static handoff starts collapsed');
+  await urlTokenFrame.locator('#scene-sync-handoff-toggle').click();
+  assert.equal(await urlTokenFrame.locator('.scene-sync-token-transfer').isVisible(), true, 'sandboxed static viewer must explicitly offer token transfer');
+  await urlTokenFrame.locator('#scene-sync-handoff-room').fill(roomId);
+  const urlTokenUploadsBefore = tokenUploads.length;
+  await urlTokenFrame.locator('.scene-sync-token-transfer').click();
+  await urlTokenFrame.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Token transfer prepared. Open or copy the link.', null, { timeout: TEST_TIMEOUT_MS });
+  const urlTokenAttempt = await urlTokenWrapper.evaluate(() => globalThis.__tokenNavigationAttempts?.at(-1) || null);
+  assert(urlTokenAttempt?.href, 'static sandbox wrapper did not receive token navigation');
+  assert.equal(tokenUploads.length > urlTokenUploadsBefore, true, 'static token upload did not occur');
+  const urlTokenUpload = tokenUploads.at(-1);
+  assert.equal(urlTokenAttempt.at <= urlTokenUpload.receivedAt, true, 'static token upload started before navigation attempt');
+  assert.deepEqual({ mode: urlTokenUpload.mode, hasSceneDocument: urlTokenUpload.hasSceneDocument, hasEmbeddedAssets: urlTokenUpload.hasEmbeddedAssets }, {
+    mode: 'url', hasSceneDocument: false, hasEmbeddedAssets: false,
+  }, 'Static token handoff must send only mode:url/sourceUrl');
+  assert.equal(urlTokenUpload.sourceUrl, `${serverUrl(tokenPublisherServer, 'http', 'localhost')}/world/`);
+  const urlTokenTarget = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  urlTokenTarget.on('console', (message) => tokenDiagnostics.push(`url-target:${message.type()}:${message.text()}`));
+  urlTokenTarget.on('pageerror', (error) => tokenDiagnostics.push(`url-target-pageerror:${error.message}`));
+  await urlTokenTarget.goto(urlTokenAttempt.href, { waitUntil: 'domcontentloaded' });
+  await urlTokenTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
+  await waitForObservedAdd('token-no-acao-triangle', 'static token server-pull broadcast');
+  const tokenNoCorsObject = await urlTokenTarget.evaluate(async () => {
+    const { managedObjects } = await import('/assets/js/scenesync/scene.js');
+    const model = managedObjects.get('token-no-acao-triangle');
+    let meshCount = 0; let vertices = 0; let boxGeometry = false;
+    model?.traverse?.((node) => { if (node.isMesh) { meshCount += 1; vertices = Math.max(vertices, node.geometry?.attributes?.position?.count || 0); boxGeometry ||= node.geometry?.type === 'BoxGeometry'; } });
+    return { asset: model?.userData?.asset || null, meshCount, vertices, boxGeometry };
+  });
+  assert.equal(tokenNoCorsObject.asset?.source, 'carrier');
+  assert.equal(tokenNoCorsObject.meshCount > 0 && tokenNoCorsObject.vertices === 3 && !tokenNoCorsObject.boxGeometry, true, 'static token server-pull must import the real GLB');
+
+  // Token-looking fragments are always scrubbed, but malformed, extra, and
+  // duplicate forms must never start a claim. A stale bootstrap must also lose
+  // to an explicit legacy opener request.
+  const claimsBeforeInvalidFragments = tokenClaims.length;
+  const fakeToken = 'a'.repeat(64);
+  const fakeSession = 'b'.repeat(22);
+  const fakeRequest = 'c'.repeat(22);
+  for (const fragment of [
+    '#handoffToken=bad',
+    `#handoffToken=${fakeToken}&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}&extra=1`,
+    `#handoffToken=${fakeToken}&handoffToken=${fakeToken}&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}`,
+  ]) {
+    const malformedTarget = await browser.newPage();
+    await malformedTarget.goto(`${targetUrl}${fragment}`, { waitUntil: 'domcontentloaded' });
+    await malformedTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
+    await malformedTarget.close();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(tokenClaims.length, claimsBeforeInvalidFragments, 'invalid token fragments must never claim');
+  const legacySource = await browser.newPage();
+  await legacySource.goto(`${targetOrigin}/published/embedded-wrapper.html`, { waitUntil: 'domcontentloaded' });
+  await legacySource.evaluate(({ token, sessionId, requestId }) => {
+    sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify({ token, sessionId, requestId, roomId: null }));
+  }, { token: fakeToken, sessionId: fakeSession, requestId: fakeRequest });
+  const legacyPopupPromise = legacySource.waitForEvent('popup');
+  await legacySource.evaluate(({ url }) => window.open(url, '_blank'), {
+    url: `${targetUrl}?handoff=1&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}`,
+  });
+  const legacyPopup = await legacyPopupPromise;
+  await legacyPopup.waitForLoadState('domcontentloaded');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(tokenClaims.length, claimsBeforeInvalidFragments, 'legacy opener query must consume stale bootstrap without claiming');
   const allowedPopupWarning = /GL Driver Message|unknown input adapter/u;
+  const allowedSandboxWrapperWarning = /^(?:embedded-wrapper|url-wrapper):warning:An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing\.$/u;
   const unexpectedDiagnostics = [
     ...sourceDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')
       || entry.startsWith('console:warning:')),
@@ -456,6 +698,15 @@ try {
     ...noCorsDiagnostics.filter((entry) => {
       // The one expected direct-path error is the browser's opaque no-ACAO
       // fetch diagnostic. Every other page error/warning remains a failure.
+      if (/Access to fetch at .*CORS policy|Failed to fetch|net::ERR_FAILED|unknown input adapter/u.test(entry)) return false;
+      return /pageerror:|:error:|:warning:/u.test(entry);
+    }),
+    ...tokenDiagnostics.filter((entry) => {
+      // No-ACAO static imports intentionally report only their direct browser
+      // fetch failure before falling back to the server-pull importer.
+      // Chromium also warns exactly once for each deliberate same-origin
+      // sandbox wrapper. Do not permit other wrapper diagnostics.
+      if (allowedSandboxWrapperWarning.test(entry)) return false;
       if (/Access to fetch at .*CORS policy|Failed to fetch|net::ERR_FAILED|unknown input adapter/u.test(entry)) return false;
       return /pageerror:|:error:|:warning:/u.test(entry);
     }),
@@ -468,6 +719,7 @@ try {
   if (observer && observer.readyState !== WebSocket.CLOSED) observer.terminate();
   await closeServer(staticServer);
   await closeServer(publisherServer);
+  await closeServer(tokenPublisherServer);
   await presenceServer?.stop?.();
   if (tempDir) await rm(tempDir, { recursive: true, force: true });
 }

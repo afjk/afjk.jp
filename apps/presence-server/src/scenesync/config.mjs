@@ -38,6 +38,20 @@ export function createSceneSyncConfig(env = process.env) {
     glbBackupS3SecretAccessKey: env.SCENE_SYNC_GLB_BACKUP_S3_SECRET_ACCESS_KEY || '',
     uploadsPerActorPerMinute: parseIntEnv(env.SCENE_SYNC_UPLOADS_PER_ACTOR_PER_MINUTE, 10, 1),
     serverPullsPerActorPerMinute: parseIntEnv(env.SCENE_SYNC_SERVER_PULLS_PER_ACTOR_PER_MINUTE, 3, 1),
+    // Process-private runtime state; production compose explicitly uses /data.
+    handoffTokenDir: env.SCENE_SYNC_HANDOFF_TOKEN_DIR || join(tmpdir(), `scene-sync-handoff-${process.pid}`),
+    // 32 MiB decoded payloads can be ~44.8 MiB JSON after base64. This is a
+    // separate streamed cap, never the general 1 MiB control-plane cap.
+    handoffTokenMaxEncodedBytes: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_MAX_ENCODED_BYTES, 56 * 1024 * 1024, 1),
+    handoffTokenMaxStagedBytes: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_MAX_STAGED_BYTES, 128 * 1024 * 1024, 1),
+    handoffTokenMinFreeBytes: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_MIN_FREE_BYTES, 256 * 1024 * 1024, 0),
+    handoffTokenMaxEntries: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_MAX_ENTRIES, 32, 1),
+    handoffTokenMaxActiveUploads: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_MAX_ACTIVE_UPLOADS, 4, 1),
+    handoffTokenUploadsPerIpPerMinute: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_UPLOADS_PER_IP_PER_MINUTE, 6, 1),
+    handoffTokenUploadIdleTimeoutMs: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_UPLOAD_IDLE_TIMEOUT_MS, 60_000, 1),
+    handoffTokenUploadMaxDurationMs: Math.min(parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_UPLOAD_MAX_DURATION_MS, 10 * 60 * 1000, 1), 10 * 60 * 1000),
+    handoffTokenClaimsPerIpPerMinute: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_CLAIMS_PER_IP_PER_MINUTE, 30, 1),
+    handoffTokenMaxActiveClaims: parseIntEnv(env.SCENE_SYNC_HANDOFF_TOKEN_MAX_ACTIVE_CLAIMS, 2, 1),
     serverPullMaxLiveBytes: parseIntEnv(env.SCENE_SYNC_SERVER_PULL_MAX_LIVE_BYTES, 524_288_000, 1),
     serverPullAllowedOrigins: (env.SCENE_SYNC_SERVER_PULL_ALLOWED_ORIGINS || 'https://afjk.jp,https://staging.afjk.jp')
       .split(',').map((value) => value.trim().replace(/\/$/u, '')).filter(Boolean),
@@ -50,3 +64,5 @@ export function createSceneSyncConfig(env = process.env) {
 
   return config;
 }
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';

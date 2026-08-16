@@ -1,6 +1,35 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
+  <script>
+  // Must run before styles/modules: secrets stay in the fragment only long
+  // enough to move into sessionStorage, then the address bar is scrubbed.
+  (() => {
+    const hash = location.hash.slice(1);
+    const purportsToBeToken = /(?:^|&)handoffToken(?:=|&|$)/.test(hash);
+    try {
+    const pairs = hash ? hash.split('&') : [];
+    const values = Object.create(null);
+    for (const pair of pairs) {
+      const match = /^([^=]+)=([^=]+)$/.exec(pair || '');
+      if (!match || Object.hasOwn(values, match[1])) return;
+      values[match[1]] = decodeURIComponent(match[2]);
+    }
+    if (pairs.length !== 3 || !/^[a-f0-9]{64}$/.test(values.handoffToken || '')
+      || !/^[A-Za-z0-9_-]{22,128}$/.test(values.handoffSession || '')
+      || !/^[A-Za-z0-9_-]{22,128}$/.test(values.handoffRequest || '')) return;
+    const record = { token: values.handoffToken, sessionId: values.handoffSession, requestId: values.handoffRequest,
+      roomId: new URLSearchParams(location.search).get('room') || null };
+    try { sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify(record)); }
+    catch { globalThis.__SCENE_SYNC_HANDOFF_TOKEN_BOOTSTRAP__ = record; }
+    } catch {}
+    finally {
+      // Any fragment that claims to carry a token is sensitive even when it is
+      // malformed, duplicated, or rejected. Never leave it for later scripts.
+      if (purportsToBeToken) try { history.replaceState(history.state, '', location.pathname + location.search); } catch {}
+    }
+  })();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scene Sync — afjk.jp</title>

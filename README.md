@@ -140,6 +140,20 @@ curl -o file.zip https://pipe.afjk.jp/mypath
 
 ICE サーバー設定（STUN / TURN）は `GET /presence/api/ice-config` で配信される。
 
+### Scene Sync opener-free handoff tokens
+
+`POST /presence/scene-sync/handoff-tokens/upload` is a credentialless public
+JSON endpoint (wildcard CORS); its body carries a 256-bit lowercase-hex token,
+session/request binding IDs, and either an embedded SceneDocument payload or a
+same-Origin static-export URL. Tokens never appear in routes or queries.
+`POST /presence/scene-sync/handoff-tokens/claim` is same-origin only and binds
+all three values before returning a one-use payload. Embedded assets are capped
+at 32 MiB decoded in total (and per asset), SceneDocument JSON at 8 MiB, and
+the streamed encoded request at 56 MiB. Set the `SCENE_SYNC_HANDOFF_TOKEN_*`
+environment variables in `docker-compose.yml` to tune quota, disk reserve,
+rate, and upload timeout settings; payloads remain private staging files and
+are never served as web content.
+
 ### TURN サーバー (coturn)
 
 企業ネットワークや 4G など Symmetric NAT 環境での WebRTC 接続を中継するリレーサーバー。通常起動（`docker compose up -d`）に含まれており、常時起動する。
