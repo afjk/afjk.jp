@@ -7,7 +7,17 @@
   (() => {
     const hash = location.hash.slice(1);
     const purportsToBeToken = hash.includes('handoffToken') || hash.includes('handoffInline') || hash.includes('sceneSyncHandoffInline');
+    // A current token-looking fragment, even a malformed one, supersedes any
+    // prior tab state. Clear before parsing so it cannot revive a stale valid
+    // claim while an invalid/mixed/oversized fragment is being rejected.
+    if (purportsToBeToken) {
+      try { sessionStorage.removeItem('sceneSync.handoffToken.v1'); } catch {}
+      try { delete globalThis.__SCENE_SYNC_HANDOFF_TOKEN_BOOTSTRAP__; } catch {}
+    }
     try {
+    // Check raw input before split/decodeURIComponent. The inline value itself
+    // may be 512 KiB; this leaves only a small allowance for its field name.
+    if (hash.length > 524352) return;
     const pairs = hash ? hash.split('&') : [];
     const values = Object.create(null);
     for (const pair of pairs) {

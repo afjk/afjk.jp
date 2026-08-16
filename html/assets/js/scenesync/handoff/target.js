@@ -9,20 +9,10 @@ import {
 import { isSanitizedRoomCode } from '../utils/room-code.js';
 import { validateHandoffTokenPayload } from './token-payload.js';
 import { consumeTokenBootstrap } from './token-bootstrap.js';
-import { decodeInlineHandoffPayload } from './inline-payload.js';
-
-const INLINE_HANDOFF_LIMITS = Object.freeze({
-  maxDecodedBytes: 128 * 1024,
-  maxAssetBytes: 64 * 1024,
-  maxAssetCount: 32,
-  maxSceneDocumentBytes: 128 * 1024,
-  maxStringBytes: 384 * 1024,
-  maxDepth: 32,
-  maxNodes: 50_000,
-});
+import { decodeInlineHandoffPayload, INLINE_HANDOFF_PAYLOAD_LIMITS } from './inline-payload.js';
 
 function validateInlineHandoffEnvelope(value) {
-  const canonical = canonicalizeJsonValue(value, INLINE_HANDOFF_LIMITS);
+  const canonical = canonicalizeJsonValue(value, INLINE_HANDOFF_PAYLOAD_LIMITS);
   if (!canonical.valid) return canonical;
   const envelope = canonical.value;
   const expected = ['kind', 'payload', 'requestId', 'roomId', 'sessionId', 'version'];
@@ -33,7 +23,7 @@ function validateInlineHandoffEnvelope(value) {
     || (envelope.roomId != null && !isSanitizedRoomCode(envelope.roomId))) {
     return { valid: false, reason: 'invalid-inline-handoff-envelope' };
   }
-  const payload = validateHandoffTokenPayload(envelope.payload, INLINE_HANDOFF_LIMITS);
+  const payload = validateHandoffTokenPayload(envelope.payload, INLINE_HANDOFF_PAYLOAD_LIMITS);
   if (!payload.valid || payload.payload.mode !== 'embedded') {
     return { valid: false, reason: 'invalid-inline-handoff-payload' };
   }

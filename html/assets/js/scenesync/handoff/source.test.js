@@ -232,6 +232,25 @@ test('small embedded token transfer uses a fragment-only inline payload and no u
   assert.equal(controller.getState(), 'token-ready');
 });
 
+test('inline-ineligible asset and count boundaries use the server token path', async () => {
+  const tooLargeAsset = { 'assets/large.bin': { mime: 'application/octet-stream', base64: Buffer.alloc(64 * 1024 + 1).toString('base64') } };
+  const tooManyAssets = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [
+    `assets/${index}.bin`, { mime: 'application/octet-stream', base64: Buffer.alloc(1).toString('base64') },
+  ]));
+  for (const embeddedAssets of [tooLargeAsset, tooManyAssets]) {
+    const windowRef = createFakeWindow(); const fetches = [];
+    const controller = createHandoffSourceController({
+      windowRef, sceneDocument, embeddedAssets,
+      fetchRef: async (...args) => { fetches.push(args); return { ok: true }; },
+    });
+    const opened = controller.openToken();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(opened.inline, undefined);
+    assert.equal(new URL(opened.url).hash.includes('handoffToken='), true);
+    assert.equal(fetches.length, 1);
+  }
+});
+
 test('token transfer sends URL payload without embedded scene data', async () => {
   const windowRef = createFakeWindow(); let body = null;
   const controller = createHandoffSourceController({ windowRef, targetUrl: 'https://target.test/', sourceUrl: 'https://static.test/world/', fetchRef: async (_url, init) => { body = JSON.parse(init.body); return { ok: true }; } });

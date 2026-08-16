@@ -6,7 +6,7 @@ import {
   transitionHandoffSourceState,
   validateAckMessage,
 } from './protocol.js';
-import { encodeInlineHandoffPayload } from './inline-payload.js';
+import { encodeInlineHandoffPayload, isInlineHandoffEnvelopeEligible } from './inline-payload.js';
 import { sanitizeRoomCode } from '../utils/room-code.js';
 
 export const DEFAULT_SCENE_SYNC_HANDOFF_URL = 'https://afjk.jp/scenesync/';
@@ -217,11 +217,13 @@ export function createHandoffSourceController({
     const url = new URL(targetUrl, windowRef.location?.href || DEFAULT_SCENE_SYNC_HANDOFF_URL);
     if (cleanedRoomId) url.searchParams.set('room', cleanedRoomId); else url.searchParams.delete('room');
     url.searchParams.delete('handoff'); url.searchParams.delete('handoffSession'); url.searchParams.delete('handoffRequest');
-    const inlinePayload = sourceUrl ? null : encodeInlineHandoffPayload({
+    const inlineEnvelope = {
       kind: 'scene-sync-inline-handoff', version: 1,
       sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId,
       payload: { version: 1, mode: 'embedded', sceneDocument, embeddedAssets },
-    });
+    };
+    const inlinePayload = sourceUrl || !isInlineHandoffEnvelopeEligible(inlineEnvelope)
+      ? null : encodeInlineHandoffPayload(inlineEnvelope);
     if (inlinePayload) {
       url.hash = `sceneSyncHandoffInline=v1.${inlinePayload}`;
       // This stays in the explicit click's synchronous stack: providers may

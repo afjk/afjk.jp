@@ -759,8 +759,8 @@ try {
   assert.equal(tokenNoCorsObject.meshCount > 0 && tokenNoCorsObject.vertices === 3 && !tokenNoCorsObject.boxGeometry, true, 'static token server-pull must import the real GLB');
 
   // Token-looking fragments are always scrubbed, but malformed, extra, and
-  // duplicate forms must never start a claim. A stale bootstrap must also lose
-  // to an explicit legacy opener request.
+  // duplicate forms must never start a claim. They also must clear a valid
+  // stale bootstrap before parsing, rather than allowing it to be revived.
   const claimsBeforeInvalidFragments = tokenClaims.length;
   const fakeToken = 'a'.repeat(64);
   const fakeSession = 'b'.repeat(22);
@@ -773,8 +773,13 @@ try {
     `#sceneSyncHandoffInline=v1.e30&handoffToken=${fakeToken}`,
     '#sceneSyncHandoffInline=v1.e30&sceneSyncHandoffInline=v1.e30',
     '#sceneSyncHandoffInline=%',
+    `#sceneSyncHandoffInline=v1.${'a'.repeat(524400)}`,
   ]) {
     const malformedTarget = await browser.newPage();
+    await malformedTarget.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+    await malformedTarget.evaluate(({ token, sessionId, requestId }) => {
+      sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify({ token, sessionId, requestId, roomId: null }));
+    }, { token: fakeToken, sessionId: fakeSession, requestId: fakeRequest });
     await malformedTarget.goto(`${targetUrl}${fragment}`, { waitUntil: 'domcontentloaded' });
     await malformedTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
     await malformedTarget.close();
