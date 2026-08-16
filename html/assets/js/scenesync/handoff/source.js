@@ -63,6 +63,7 @@ export function createHandoffSourceController({
   ackTimeoutMs = DEFAULT_HANDOFF_ACK_TIMEOUT_MS,
   closedPollMs = 250,
   onStateChange = () => {},
+  fetchRef = globalThis.fetch,
 } = {}) {
   let state = HANDOFF_SOURCE_STATES.IDLE;
   let popup = null;
@@ -72,6 +73,7 @@ export function createHandoffSourceController({
   let requestId = null;
   let timeoutId = null;
   let closedIntervalId = null;
+  let tokenUploadController = null;
 
   function emit(detail = {}) {
     onStateChange({ state, ...detail });
@@ -185,12 +187,53 @@ export function createHandoffSourceController({
     return { opened: true, url: url.toString(), roomId: cleanedRoomId, sessionId, requestId };
   }
 
+  function openToken(roomId) {
+    // This function is called only by an explicit fallback click. Keep open
+    // before JSON/fetch so a sandbox wrapper returning undefined still gets a
+    // real external navigation attempt in the user gesture stack.
+    tokenUploadController?.abort();
+    const cleanedRoomId = sanitizeRoomCode(roomId);
+    let token; let nextSessionId; let nextRequestId;
+    try {
+      const cryptoRef = windowRef.crypto || globalThis.crypto;
+      const bytes = new Uint8Array(32); cryptoRef.getRandomValues(bytes);
+      token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      nextSessionId = createRandomHandoffId(cryptoRef);
+      nextRequestId = createRandomHandoffId(cryptoRef);
+    } catch { emit({ state: 'failed', reason: 'random-unavailable', message: statusForFailure('random-unavailable') }); return { opened: false }; }
+    const url = new URL(targetUrl, windowRef.location?.href || DEFAULT_SCENE_SYNC_HANDOFF_URL);
+    if (cleanedRoomId) url.searchParams.set('room', cleanedRoomId); else url.searchParams.delete('room');
+    url.searchParams.delete('handoff'); url.searchParams.delete('handoffSession'); url.searchParams.delete('handoffRequest');
+    url.hash = `handoffToken=${token}&handoffSession=${nextSessionId}&handoffRequest=${nextRequestId}`;
+    try { windowRef.open(url.toString(), '_blank'); } catch {}
+    const endpoint = new URL('/presence/scene-sync/handoff-tokens/upload', url.origin).href;
+    tokenUploadController = new AbortController();
+    emit({ state: 'token-uploading', tokenUrl: url.toString(), message: 'Token link opened. Preparing transfer…' });
+    // Do not make upload success an import acknowledgement; the target owns
+    // claim/import state and the token link remains useful if its first tab was blocked.
+    Promise.resolve().then(() => fetchRef(endpoint, {
+      method: 'POST', credentials: 'omit', signal: tokenUploadController.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, sessionId: nextSessionId, requestId: nextRequestId,
+        payload: sourceUrl ? { version: 1, mode: 'url', sourceUrl } : { version: 1, mode: 'embedded', sceneDocument, embeddedAssets } }),
+    })).then((response) => {
+      if (!response?.ok) throw new Error('upload failed');
+      emit({ state: 'token-ready', tokenUrl: url.toString(), message: 'Token transfer prepared. Open or copy the link.' });
+    }).catch((error) => {
+      if (error?.name === 'AbortError') return;
+      emit({ state: 'token-failed', tokenUrl: url.toString(), message: 'Token transfer could not be prepared. Retry creates a new link.' });
+    });
+    return { opened: true, url: url.toString(), token, sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId };
+  }
+
   return {
     open,
+    openToken,
     getState: () => state,
     getPopup: () => popup,
     dispose() {
       stopTimers();
+      tokenUploadController?.abort();
       windowRef.removeEventListener('message', handleMessage);
     },
   };
@@ -216,13 +259,17 @@ export function mountSingleHtmlHandoff({
         autocomplete="off" placeholder="Room ID (optional)">
       <button type="submit" class="viewer-btn">Open</button>
     </div>
+    <button type="button" class="viewer-btn scene-sync-token-transfer" hidden>Open using token transfer</button>
+    <a class="scene-sync-token-link" hidden target="_blank" rel="noopener">Copy/open token link</a>
     <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;
   host.appendChild(form);
 
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
-  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef });
+  const tokenButton = form.querySelector('.scene-sync-token-transfer');
+  const tokenLink = form.querySelector('.scene-sync-token-link');
+  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: 'Popup access is unavailable here. Use token transfer instead.' });
   const controller = createHandoffSourceController({
     windowRef,
     targetUrl,
@@ -232,17 +279,22 @@ export function mountSingleHtmlHandoff({
       if (status) status.textContent = detail.message || '';
       if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
         || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
+      const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED;
+      if (tokenButton) tokenButton.hidden = !offerToken;
+      if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
     },
   });
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (embeddedPopupUnsupported) return;
+    if (embeddedPopupUnsupported) { tokenButton?.click(); return; }
     const cleaned = sanitizeRoomCode(roomInput?.value);
     if (roomInput) roomInput.value = cleaned || '';
     controller.open(cleaned);
   });
+  tokenButton?.addEventListener('click', () => controller.openToken(sanitizeRoomCode(roomInput?.value)));
+  if (embeddedPopupUnsupported && tokenButton) tokenButton.hidden = false;
   return controller;
 }
 
@@ -261,26 +313,34 @@ export function mountUrlHandoff({
   form.className = 'scene-sync-handoff';
   form.innerHTML = `<label for="scene-sync-handoff-room">Open in Scene Sync</label>
     <div class="scene-sync-handoff-row"><input id="scene-sync-handoff-room" name="room" type="text" maxlength="24" autocomplete="off" placeholder="Room ID (optional)"><button type="submit" class="viewer-btn">Open</button></div>
+    <button type="button" class="viewer-btn scene-sync-token-transfer" hidden>Open using token transfer</button>
+    <a class="scene-sync-token-link" hidden target="_blank" rel="noopener">Copy/open token link</a>
     <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;
   host.appendChild(form);
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
-  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: EMBEDDED_URL_POPUP_MESSAGE });
+  const tokenButton = form.querySelector('.scene-sync-token-transfer');
+  const tokenLink = form.querySelector('.scene-sync-token-link');
+  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: 'Popup access is unavailable here. Use token transfer instead.' });
   const controller = createHandoffSourceController({
     windowRef, targetUrl, sourceUrl,
     onStateChange(detail) {
       if (status) status.textContent = detail.message || '';
       if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
+      if (tokenButton) tokenButton.hidden = !(embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED);
+      if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
     },
   });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (embeddedPopupUnsupported) return;
+    if (embeddedPopupUnsupported) { tokenButton?.click(); return; }
     const cleaned = sanitizeRoomCode(roomInput?.value);
     if (roomInput) roomInput.value = cleaned || '';
     controller.open(cleaned);
   });
+  tokenButton?.addEventListener('click', () => controller.openToken(sanitizeRoomCode(roomInput?.value)));
+  if (embeddedPopupUnsupported && tokenButton) tokenButton.hidden = false;
   return controller;
 }

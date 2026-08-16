@@ -189,3 +189,32 @@ test('retry closes the old popup and ignores stale READY/ACK messages', () => {
   });
   assert.equal(controller.getState(), 'waiting-ack');
 });
+
+test('token transfer is explicit, opens before upload, and uploads after a null opener', async () => {
+  const windowRef = createFakeWindow();
+  const order = [];
+  const controller = createHandoffSourceController({
+    windowRef, targetUrl: 'https://target.test/scenesync/', sceneDocument, embeddedAssets,
+    fetchRef: async (url, init) => { order.push({ kind: 'fetch', url, init }); return { ok: true }; },
+  });
+  assert.equal(controller.open().reason, 'blocked');
+  assert.equal(order.length, 0, 'ordinary popup failure never uploads');
+  const opened = controller.openToken('Room-42!');
+  assert.equal(windowRef.opened.length, 2);
+  assert.equal(order.length, 0, 'window.open remains synchronous before fetch');
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(order.length, 1);
+  assert.equal(new URL(order[0].url).origin, 'https://target.test');
+  assert.equal(order[0].init.credentials, 'omit');
+  const body = JSON.parse(order[0].init.body);
+  assert.match(body.token, /^[a-f0-9]{64}$/);
+  assert.equal(body.payload.mode, 'embedded');
+  assert.equal(new URL(opened.url).hash.includes(body.token), true);
+});
+
+test('token transfer sends URL payload without embedded scene data', async () => {
+  const windowRef = createFakeWindow(); let body = null;
+  const controller = createHandoffSourceController({ windowRef, targetUrl: 'https://target.test/', sourceUrl: 'https://static.test/world/', fetchRef: async (_url, init) => { body = JSON.parse(init.body); return { ok: true }; } });
+  controller.openToken(); await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(body.payload, { version: 1, mode: 'url', sourceUrl: 'https://static.test/world/' });
+});

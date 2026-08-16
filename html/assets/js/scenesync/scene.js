@@ -19,7 +19,7 @@ import {
 import { applySceneDocumentBehaviors } from './importers/scene-sync-export/apply-scene-behaviors.js';
 import { isValidSceneDocument } from '../scenesync-export/viewer/scene-document.js';
 import { validateSingleHtmlEmbeddedAssets } from '../scenesync-export/export/single-html-format.js';
-import { createHandoffTargetSession } from './handoff/target.js';
+import { createHandoffTargetSession, createHandoffTokenTargetSession } from './handoff/target.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
@@ -15661,6 +15661,17 @@ function createSceneSyncExportImportContext() {
 }
 
 function initializeHandoffTarget() {
+  const tokenSession = createHandoffTokenTargetSession({
+    ensureRoom: ensureHandoffRoom,
+    applyPayload: (payload, binding) => payload.mode === 'url'
+      ? applySceneSyncHandoffUrl({ sourceUrl: payload.sourceUrl, sessionId: binding.sessionId, requestId: binding.requestId }, createSceneSyncExportImportContext())
+      : applySceneSyncHandoffPayload({ sceneDocument: payload.sceneDocument, embeddedAssets: payload.embeddedAssets }, createSceneSyncExportImportContext()),
+    onStatus(detail) { showToast(`Open in Scene Sync: ${detail.message}`); },
+  });
+  if (tokenSession.enabled) {
+    handoffTargetSession = tokenSession;
+    return;
+  }
   handoffTargetSession = createHandoffTargetSession({
     validationOptions: {
       isValidSceneDocument,
