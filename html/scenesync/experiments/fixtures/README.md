@@ -2,8 +2,9 @@
 
 `minimal-khr-gaussian-splatting.glb` は Issue #526 の技術検証用に生成した最小構成の `KHR_gaussian_splatting` GLB。
 
+- GLB 2.0 / 1,832 bytes
 - 8 splats
-- 非圧縮 GLB 2.0
+- 非圧縮
 - `POSITION`
 - `KHR_gaussian_splatting:ROTATION`
 - `KHR_gaussian_splatting:SCALE`
@@ -13,3 +14,13 @@
 - `colorSpace: srgb_rec709_display`
 
 高次SHや圧縮拡張は含めず、KHR base extensionからSparkへの変換確認に用途を限定する。
+
+再生成:
+
+```bash
+node scripts/generate-minimal-khr-gaussian-splatting.mjs
+```
+
+描画確認:
+
+`../3dgs-spark-smoke.html` がこのGLBをfetchし、KHR accessorをデコードしてSpark `SplatMesh`へ渡す。
