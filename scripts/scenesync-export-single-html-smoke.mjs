@@ -184,6 +184,8 @@ try {
   await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
+  assert(await page.locator('#scene-sync-handoff').isHidden(), 'Open in Scene Sync must start collapsed');
+  await page.locator('#scene-sync-handoff-toggle').click();
   await page.locator('#scene-sync-handoff-room').fill(' Smoke Room! ');
   await page.locator('#scene-sync-handoff button[type="submit"]').click();
   await page.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent.includes('Popup was blocked'));
@@ -264,7 +266,9 @@ try {
   await embeddedPage.setContent('<iframe id="embedded" sandbox="allow-scripts allow-same-origin"></iframe>');
   await embeddedPage.locator('#embedded').evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const embedded = embeddedPage.frames().find((frame) => frame !== embeddedPage.mainFrame());
-  await embedded.waitForSelector('#scene-sync-handoff button[type="submit"]');
+  // The form stays collapsed here: a sandboxed viewer cannot start, so its
+  // loading overlay covers the toggle. Pre-disabled state is what matters.
+  await embedded.waitForSelector('#scene-sync-handoff button[type="submit"]', { state: 'attached' });
   const embeddedState = await embedded.evaluate(() => ({
     input: document.getElementById('scene-sync-handoff-room')?.disabled,
     primaryButton: document.querySelector('#scene-sync-handoff button[type="submit"]')?.disabled,
@@ -282,7 +286,7 @@ try {
   await opaquePage.setContent('<iframe id="opaque" sandbox="allow-scripts allow-forms"></iframe>');
   await opaquePage.locator('#opaque').evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const opaque = opaquePage.frames().find((frame) => frame !== opaquePage.mainFrame());
-  await opaque.waitForSelector('#scene-sync-handoff button[type="submit"]');
+  await opaque.waitForSelector('#scene-sync-handoff button[type="submit"]', { state: 'attached' });
   assert(await opaque.locator('#scene-sync-handoff-room').isDisabled() === false, 'opaque sandbox must not be pre-disabled');
   assert(await opaque.locator('#scene-sync-handoff button[type="submit"]').isDisabled() === false, 'opaque sandbox must retain runtime fallback');
   await opaque.locator('#scene-sync-handoff').evaluate((form) => form.requestSubmit());

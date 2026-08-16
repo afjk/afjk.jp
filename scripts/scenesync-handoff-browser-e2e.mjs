@@ -428,6 +428,7 @@ try {
   page.on('pageerror', (error) => sourceDiagnostics.push(`pageerror:${error.message}`));
   await page.goto(pathToFileURL(sourcePath).href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => globalThis.__HANDOFF_SOURCE_READY__ === true);
+  await page.locator('#scene-sync-handoff-toggle').click();
   await page.locator('#scene-sync-handoff-room').fill(roomId);
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
@@ -470,6 +471,7 @@ try {
   await urlSource.goto(`${targetOrigin}/published/index.html`, { waitUntil: 'domcontentloaded' });
   await urlSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
   assert.equal(await urlSource.locator('#scene-sync-handoff button[type="submit"]').isDisabled(), false, 'top-level static Open button must remain enabled');
+  await urlSource.locator('#scene-sync-handoff-toggle').click();
   await urlSource.locator('#scene-sync-handoff-room').fill(roomId);
   const urlPopupPromise = urlSource.waitForEvent('popup');
   await urlSource.locator('#scene-sync-handoff button[type="submit"]').click();
@@ -494,6 +496,7 @@ try {
   noCorsSource.on('pageerror', (error) => noCorsDiagnostics.push(`source-pageerror:${error.message}`));
   await noCorsSource.goto(noCorsSourceUrl, { waitUntil: 'domcontentloaded' });
   await noCorsSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  await noCorsSource.locator('#scene-sync-handoff-toggle').click();
   await noCorsSource.locator('#scene-sync-handoff-room').fill(roomId);
   const noCorsPopupPromise = noCorsSource.waitForEvent('popup');
   await noCorsSource.locator('#scene-sync-handoff button[type="submit"]').click();
@@ -549,6 +552,8 @@ try {
   const embeddedTokenFrame = embeddedTokenWrapper.frames().find((frame) => frame.url().includes('/published/embedded-source.html'));
   assert(embeddedTokenFrame, 'sandboxed Single HTML source frame did not load');
   await embeddedTokenFrame.waitForFunction(() => globalThis.__HANDOFF_SOURCE_READY__ === true);
+  assert.equal(await embeddedTokenFrame.locator('#scene-sync-handoff').isHidden(), true, 'sandboxed Single HTML handoff starts collapsed');
+  await embeddedTokenFrame.locator('#scene-sync-handoff-toggle').click();
   assert.equal(await embeddedTokenFrame.locator('#scene-sync-handoff-room').isDisabled(), false, 'token fallback must keep room input available');
   assert.equal(await embeddedTokenFrame.locator('.scene-sync-token-transfer').isVisible(), true, 'sandboxed Single HTML must explicitly offer token transfer');
   await embeddedTokenFrame.locator('#scene-sync-handoff-room').fill(roomId);
@@ -619,6 +624,8 @@ try {
   const urlTokenFrame = urlTokenWrapper.frames().find((frame) => frame.url().includes('/world/'));
   assert(urlTokenFrame, 'sandboxed static source frame did not load');
   await urlTokenFrame.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
+  assert.equal(await urlTokenFrame.locator('#scene-sync-handoff').isHidden(), true, 'sandboxed static handoff starts collapsed');
+  await urlTokenFrame.locator('#scene-sync-handoff-toggle').click();
   assert.equal(await urlTokenFrame.locator('.scene-sync-token-transfer').isVisible(), true, 'sandboxed static viewer must explicitly offer token transfer');
   await urlTokenFrame.locator('#scene-sync-handoff-room').fill(roomId);
   const urlTokenUploadsBefore = tokenUploads.length;

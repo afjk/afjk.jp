@@ -33,8 +33,8 @@ export function isEmbeddedPopupUnsupported(windowRef = globalThis.window) {
   }
 }
 
-const EMBEDDED_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open or download the Single HTML export in a regular tab.';
-const EMBEDDED_URL_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open the published page in a regular tab.';
+const EMBEDDED_POPUP_MESSAGE = 'Popup access is unavailable here. Use token transfer instead.';
+const EMBEDDED_URL_POPUP_MESSAGE = 'Popup access is unavailable here. Use token transfer instead.';
 
 function applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message = EMBEDDED_POPUP_MESSAGE }) {
   if (!isEmbeddedPopupUnsupported(windowRef)) return false;
@@ -269,53 +269,111 @@ export function createHandoffSourceController({
   };
 }
 
-export function mountSingleHtmlHandoff({
-  sceneDocument,
-  embeddedAssets,
-  targetUrl = globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ || DEFAULT_SCENE_SYNC_HANDOFF_URL,
-  documentRef = globalThis.document,
-  windowRef = globalThis.window,
-} = {}) {
-  const host = documentRef?.getElementById?.('viewer-ui');
-  if (!host || !sceneDocument || !embeddedAssets) return null;
+// Sharing an export is mostly about *viewing* it, so the handoff stays a small
+// pill in the viewer's control stack and only expands into a panel on demand.
+const HANDOFF_TOGGLE_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 1.5h5v5"/><path d="M14.5 1.5 7.5 8.5"/><path d="M12.5 9v4a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 13V5A1.5 1.5 0 0 1 3 3.5h4"/></svg>';
+const HANDOFF_HINT = 'Import this scene into Scene Sync to keep editing it, or to view it in a headset.';
+
+function createHandoffElements(documentRef) {
+  const dock = documentRef.createElement('div');
+  dock.className = 'scene-sync-handoff-dock';
+  dock.dataset.open = 'false';
+
+  const toggle = documentRef.createElement('button');
+  toggle.type = 'button';
+  toggle.id = 'scene-sync-handoff-toggle';
+  toggle.className = 'scene-sync-handoff-toggle';
+  toggle.title = 'Open in Scene Sync';
+  toggle.setAttribute('aria-label', 'Open in Scene Sync');
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-controls', 'scene-sync-handoff');
+  toggle.innerHTML = `${HANDOFF_TOGGLE_ICON}<span>Scene Sync</span>`;
 
   const form = documentRef.createElement('form');
   form.id = 'scene-sync-handoff';
   form.className = 'scene-sync-handoff';
-  form.innerHTML = `
-    <label for="scene-sync-handoff-room">Open in Scene Sync</label>
-    <div class="scene-sync-handoff-row">
-      <input id="scene-sync-handoff-room" name="room" type="text" maxlength="24"
-        autocomplete="off" placeholder="Room ID (optional)">
-      <button type="submit" class="viewer-btn">Open</button>
-    </div>
+  form.hidden = true;
+  form.innerHTML = `<label for="scene-sync-handoff-room">Open in Scene Sync</label>
+    <p class="scene-sync-handoff-hint">${HANDOFF_HINT}</p>
+    <div class="scene-sync-handoff-row"><input id="scene-sync-handoff-room" name="room" type="text" maxlength="24" autocomplete="off" placeholder="Room ID (optional)"><button type="submit" class="viewer-btn">Open</button></div>
     <button type="button" class="viewer-btn scene-sync-token-transfer" hidden>Open using token transfer</button>
     <a class="scene-sync-token-link" hidden target="_blank" rel="noopener">Copy/open token link</a>
     <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;
-  host.appendChild(form);
+
+  dock.appendChild(toggle);
+  dock.appendChild(form);
+  return { dock, toggle, form };
+}
+
+function mountHandoffPanel({
+  documentRef,
+  windowRef,
+  embeddedMessage,
+  controllerOptions,
+}) {
+  const host = documentRef?.getElementById?.('viewer-ui');
+  if (!host) return null;
+  // Docking into the viewer's button stack keeps the handoff clear of the
+  // bottom-centered player transport, which fills the width on phones.
+  const dockHost = documentRef.getElementById?.('viewer-controls') || host;
+
+  const { dock, toggle, form } = createHandoffElements(documentRef);
+  dockHost.appendChild(dock);
 
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
   const tokenButton = form.querySelector('.scene-sync-token-transfer');
   const tokenLink = form.querySelector('.scene-sync-token-link');
-  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: 'Popup access is unavailable here. Use token transfer instead.' });
+
+  let busy = false;
+
+  function setOpen(open) {
+    form.hidden = !open;
+    dock.dataset.open = open ? 'true' : 'false';
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  toggle.addEventListener('click', () => {
+    const shouldOpen = form.hidden;
+    setOpen(shouldOpen);
+    if (shouldOpen) roomInput?.focus?.();
+  });
+
+  // Capture phase: viewer panels stop pointer events from reaching the document.
+  function handlePointerDown(event) {
+    if (form.hidden || busy || dock.contains(event.target)) return;
+    setOpen(false);
+  }
+
+  function handleKeyDown(event) {
+    if (event.key !== 'Escape' || form.hidden || busy) return;
+    setOpen(false);
+    toggle.focus?.();
+  }
+
+  documentRef.addEventListener('pointerdown', handlePointerDown, true);
+  documentRef.addEventListener('keydown', handleKeyDown, true);
+
+  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({
+    form, roomInput, button, status, windowRef, message: embeddedMessage,
+  });
+  if (embeddedPopupUnsupported) dock.dataset.state = form.dataset.state;
   const controller = createHandoffSourceController({
+    ...controllerOptions,
     windowRef,
-    targetUrl,
-    sceneDocument,
-    embeddedAssets,
     onStateChange(detail) {
       if (status) status.textContent = detail.message || '';
-      if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
-        || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
       const tokenState = String(detail.state || '').startsWith('token-');
       const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState;
       if (tokenButton) tokenButton.hidden = !offerToken;
       if (tokenButton) tokenButton.disabled = detail.state === 'token-uploading';
-      if (button && tokenState) button.disabled = true;
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
+      busy = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
+        || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
+      if (button) button.disabled = busy || tokenState || embeddedPopupUnsupported;
       form.dataset.state = detail.state;
+      dock.dataset.state = detail.state;
     },
   });
 
@@ -328,7 +386,32 @@ export function mountSingleHtmlHandoff({
   });
   tokenButton?.addEventListener('click', () => controller.openToken(sanitizeRoomCode(roomInput?.value)));
   if (embeddedPopupUnsupported && tokenButton) tokenButton.hidden = false;
-  return controller;
+
+  return {
+    ...controller,
+    setOpen,
+    dispose() {
+      documentRef.removeEventListener('pointerdown', handlePointerDown, true);
+      documentRef.removeEventListener('keydown', handleKeyDown, true);
+      controller.dispose();
+    },
+  };
+}
+
+export function mountSingleHtmlHandoff({
+  sceneDocument,
+  embeddedAssets,
+  targetUrl = globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ || DEFAULT_SCENE_SYNC_HANDOFF_URL,
+  documentRef = globalThis.document,
+  windowRef = globalThis.window,
+} = {}) {
+  if (!sceneDocument || !embeddedAssets) return null;
+  return mountHandoffPanel({
+    documentRef,
+    windowRef,
+    embeddedMessage: EMBEDDED_POPUP_MESSAGE,
+    controllerOptions: { targetUrl, sceneDocument, embeddedAssets },
+  });
 }
 
 // Static exports hand off their published page URL. The target fetches the
@@ -339,43 +422,11 @@ export function mountUrlHandoff({
   documentRef = globalThis.document,
   windowRef = globalThis.window,
 } = {}) {
-  const host = documentRef?.getElementById?.('viewer-ui');
-  if (!host || !sourceUrl) return null;
-  const form = documentRef.createElement('form');
-  form.id = 'scene-sync-handoff';
-  form.className = 'scene-sync-handoff';
-  form.innerHTML = `<label for="scene-sync-handoff-room">Open in Scene Sync</label>
-    <div class="scene-sync-handoff-row"><input id="scene-sync-handoff-room" name="room" type="text" maxlength="24" autocomplete="off" placeholder="Room ID (optional)"><button type="submit" class="viewer-btn">Open</button></div>
-    <button type="button" class="viewer-btn scene-sync-token-transfer" hidden>Open using token transfer</button>
-    <a class="scene-sync-token-link" hidden target="_blank" rel="noopener">Copy/open token link</a>
-    <div id="scene-sync-handoff-status" class="scene-sync-handoff-status" role="status" aria-live="polite"></div>`;
-  host.appendChild(form);
-  const roomInput = form.querySelector('[name="room"]');
-  const button = form.querySelector('button');
-  const status = form.querySelector('[role="status"]');
-  const tokenButton = form.querySelector('.scene-sync-token-transfer');
-  const tokenLink = form.querySelector('.scene-sync-token-link');
-  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: 'Popup access is unavailable here. Use token transfer instead.' });
-  const controller = createHandoffSourceController({
-    windowRef, targetUrl, sourceUrl,
-    onStateChange(detail) {
-      if (status) status.textContent = detail.message || '';
-      if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
-      const tokenState = String(detail.state || '').startsWith('token-');
-      if (tokenButton) { tokenButton.hidden = !(embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED || tokenState); tokenButton.disabled = detail.state === 'token-uploading'; }
-      if (button && tokenState) button.disabled = true;
-      if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
-      form.dataset.state = detail.state;
-    },
+  if (!sourceUrl) return null;
+  return mountHandoffPanel({
+    documentRef,
+    windowRef,
+    embeddedMessage: EMBEDDED_URL_POPUP_MESSAGE,
+    controllerOptions: { targetUrl, sourceUrl },
   });
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    if (embeddedPopupUnsupported) { tokenButton?.click(); return; }
-    const cleaned = sanitizeRoomCode(roomInput?.value);
-    if (roomInput) roomInput.value = cleaned || '';
-    controller.open(cleaned);
-  });
-  tokenButton?.addEventListener('click', () => controller.openToken(sanitizeRoomCode(roomInput?.value)));
-  if (embeddedPopupUnsupported && tokenButton) tokenButton.hidden = false;
-  return controller;
 }

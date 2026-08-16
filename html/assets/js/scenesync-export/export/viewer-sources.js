@@ -24,6 +24,7 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/viewer.css', dest: 'viewer/viewer.css' },
   { src: '/assets/js/scenesync/handoff/protocol.js', dest: 'scenesync/handoff/protocol.js' },
   { src: '/assets/js/scenesync/handoff/source.js', dest: 'scenesync/handoff/source.js' },
+  { src: '/assets/js/scenesync/handoff/source.css', dest: 'scenesync/handoff/source.css' },
   { src: '/assets/js/scenesync/utils/room-code.js', dest: 'scenesync/utils/room-code.js' },
   { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier.mjs', dest: 'viewer/rapier/rapier.js', transform: stripSourceMappingUrl },
   { src: '/assets/vendor/rapier-deterministic/0.19.3/rapier_wasm3d_bg.wasm', dest: 'viewer/rapier/rapier_wasm3d_bg.wasm', binary: true },
