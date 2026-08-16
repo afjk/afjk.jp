@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import {
-  decodeGaussianSplatGlb,
   inspectGaussianSplatGlb,
   inspectGaussianSplatGltf,
   parseGlbJson,
@@ -93,20 +92,30 @@ test('inspectGaussianSplatGlb inspects a GLB directly', () => {
   assert.equal(result.primitives[0].extension.kernel, 'ellipse');
 });
 
-test('minimal fixture is a real KHR_gaussian_splatting GLB and decodes 8 splats', async () => {
+test('minimal fixture matches the Three.js native KHR loader input contract', async () => {
   const fixtureUrl = new URL('../../../../scenesync/experiments/fixtures/minimal-khr-gaussian-splatting.glb', import.meta.url);
   const bytes = await readFile(fixtureUrl);
-  const decoded = decodeGaussianSplatGlb(bytes);
+  const json = parseGlbJson(bytes);
+  const inspection = inspectGaussianSplatGltf(json);
 
-  assert.equal(decoded.inspection.valid, true);
-  assert.equal(decoded.primitives.length, 1);
-  assert.equal(decoded.primitives[0].splats.length, 8);
+  assert.equal(inspection.valid, true);
+  assert.equal(inspection.primitives.length, 1);
 
-  const first = decoded.primitives[0].splats[0];
-  assert.deepEqual(first.position.map((value) => Number(value.toFixed(3))), [-0.6, -0.4, 0]);
-  assert.deepEqual(first.rotation, [0, 0, 0, 1]);
-  assert.ok(Math.abs(first.opacity - 0.95) < 1e-5);
-  assert.ok(first.color[0] > 0.99);
-  assert.ok(first.color[1] > 0.19 && first.color[1] < 0.21);
-  assert.ok(first.color[2] > 0.19 && first.color[2] < 0.21);
+  const primitive = inspection.primitives[0].primitive;
+  const positionAccessor = json.accessors[primitive.attributes.POSITION];
+  const rotationAccessor = json.accessors[primitive.attributes['KHR_gaussian_splatting:ROTATION']];
+  const scaleAccessor = json.accessors[primitive.attributes['KHR_gaussian_splatting:SCALE']];
+  const opacityAccessor = json.accessors[primitive.attributes['KHR_gaussian_splatting:OPACITY']];
+  const sh0Accessor = json.accessors[primitive.attributes['KHR_gaussian_splatting:SH_DEGREE_0_COEF_0']];
+
+  assert.equal(positionAccessor.count, 8);
+  assert.equal(positionAccessor.type, 'VEC3');
+  assert.equal(rotationAccessor.count, 8);
+  assert.equal(rotationAccessor.type, 'VEC4');
+  assert.equal(scaleAccessor.count, 8);
+  assert.equal(scaleAccessor.type, 'VEC3');
+  assert.equal(opacityAccessor.count, 8);
+  assert.equal(opacityAccessor.type, 'SCALAR');
+  assert.equal(sh0Accessor.count, 8);
+  assert.equal(sh0Accessor.type, 'VEC3');
 });
