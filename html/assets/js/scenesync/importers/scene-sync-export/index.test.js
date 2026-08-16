@@ -559,6 +559,39 @@ test('URL handoff does not server-pull an HTTP-denied referenced asset', async (
   strictEqual(serverCalls, 0);
 });
 
+test('URL handoff bridges a pre-aborted external signal into direct fetch without mutation', async () => {
+  const external = new AbortController(); external.abort();
+  let fetches = 0; let mutations = 0;
+  await rejects(
+    () => applySceneSyncHandoffUrl({ sourceUrl: 'https://abort.test/scene.json', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) }, {
+      signal: external.signal, managedObjects: new Map(), addOrUpdateObject: () => { mutations += 1; },
+      fetchImpl: async (_url, { signal }) => { fetches += 1; if (signal.aborted) throw new Error('aborted'); throw new Error('unexpected'); },
+    }),
+    (error) => error.code === 'handoff-url-timeout',
+  );
+  strictEqual(fetches, 1);
+  strictEqual(mutations, 0);
+});
+
+test('URL handoff external abort cancels pending direct and server-pull fetches without late apply', async () => {
+  const pending = async (run) => {
+    const external = new AbortController(); let observed = null; let mutations = 0;
+    const promise = run(external, (signal) => new Promise((_resolve, reject) => {
+      observed = signal; signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }), () => { mutations += 1; });
+    await new Promise((resolve) => setTimeout(resolve, 0)); external.abort();
+    await rejects(() => promise, (error) => error.code === 'handoff-url-timeout');
+    strictEqual(observed.aborted, true); strictEqual(mutations, 0);
+  };
+  await pending((external, wait, mutate) => applySceneSyncHandoffUrl({ sourceUrl: 'https://direct.test/scene.json', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) }, {
+    signal: external.signal, managedObjects: new Map(), addOrUpdateObject: mutate, fetchImpl: (_url, { signal }) => wait(signal),
+  }));
+  await pending((external, wait, mutate) => applySceneSyncHandoffUrl({ sourceUrl: 'https://opaque.test/scene.json', sessionId: 'a'.repeat(22), requestId: 'b'.repeat(22) }, {
+    signal: external.signal, managedObjects: new Map(), addOrUpdateObject: mutate,
+    fetchImpl: async () => { throw new TypeError('opaque'); }, serverFetchImpl: (_url, { signal }) => wait(signal),
+  }));
+});
+
 test('direct URL import confirms before fetching assets', async () => {
   let assetFetches = 0;
   const result = await tryOpenSceneSyncExportUrl('https://example.com/world/scene.json', {
