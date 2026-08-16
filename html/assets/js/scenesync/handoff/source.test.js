@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHandoffSourceController } from './source.js';
+import { createHandoffSourceController, isEmbeddedPopupUnsupported } from './source.js';
 
 function createPopup() {
   const sent = [];
@@ -49,6 +49,19 @@ function createFakeWindow(popups = []) {
 
 const sceneDocument = { format: 'scene-sync-export-scene', version: 2, objects: [] };
 const embeddedAssets = {};
+
+test('embedded popup guidance is proof-only for sandboxed current frame', () => {
+  const top = {}; top.top = top;
+  assert.equal(isEmbeddedPopupUnsupported(top), false, 'top-level remains enabled');
+  const unsandboxed = { top: {}, frameElement: { getAttribute: () => null } };
+  assert.equal(isEmbeddedPopupUnsupported(unsandboxed), false, 'ordinary iframe remains enabled');
+  const allowed = { top: {}, frameElement: { getAttribute: () => 'allow-scripts allow-popups' } };
+  assert.equal(isEmbeddedPopupUnsupported(allowed), false, 'allow-popups remains enabled');
+  const blocked = { top: {}, frameElement: { getAttribute: () => 'allow-scripts allow-forms' } };
+  assert.equal(isEmbeddedPopupUnsupported(blocked), true, 'explicit sandbox without allow-popups is unsupported');
+  const inaccessible = { get top() { throw new Error('cross-origin'); } };
+  assert.equal(isEmbeddedPopupUnsupported(inaccessible), false, 'inaccessible frame is inconclusive');
+});
 
 test('source completes bound READY/SEND/ACK and resets READY to import timeout', () => {
   const popup = createPopup();
