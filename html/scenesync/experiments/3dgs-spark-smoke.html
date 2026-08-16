@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SceneSync 3DGS Spark Smoke</title>
+  <title>SceneSync 3DGS KHR → Spark Smoke</title>
   <style>
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #111; color: #fff; font-family: system-ui, sans-serif; }
     canvas { display: block; }
@@ -20,18 +20,19 @@
   </script>
 </head>
 <body>
-  <div id="status">Spark 2.1.0 / Three.js r180\nloading…</div>
+  <div id="status">KHR_gaussian_splatting GLB → Spark 2.1.0\nloading…</div>
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+    import { decodeGaussianSplatGlb } from '../../assets/js/scenesync/loaders/khr-gaussian-splatting.js';
 
     const status = document.querySelector('#status');
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
 
     const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 1000);
-    camera.position.set(0, 0, 3);
+    camera.position.set(0, 0.25, 2.5);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -39,25 +40,50 @@
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0.2, 0);
     controls.enableDamping = true;
 
     const spark = new SparkRenderer({ renderer });
     scene.add(spark);
 
-    // Renderer smoke only. KHR_gaussian_splatting GLB -> Spark conversion is
-    // intentionally kept separate and is the remaining part of issue #526.
-    const splat = new SplatMesh({
-      url: 'https://sparkjs.dev/assets/splats/butterfly.spz',
-      onLoad() {
-        status.textContent = 'Spark 2.1.0 / Three.js r180\nSPZ renderer smoke: OK';
-      },
-    });
-    splat.position.set(0, 0, 0);
-    scene.add(splat);
+    async function loadFixture() {
+      const response = await fetch('./fixtures/minimal-khr-gaussian-splatting.glb');
+      if (!response.ok) throw new Error(`fixture HTTP ${response.status}`);
+      const bytes = await response.arrayBuffer();
+      const decoded = decodeGaussianSplatGlb(bytes);
 
-    splat.initialized.catch((error) => {
+      let totalSplats = 0;
+      const meshes = decoded.primitives.map((primitive) => {
+        totalSplats += primitive.splats.length;
+        const mesh = new SplatMesh({
+          constructSplats(packedSplats) {
+            for (const splat of primitive.splats) {
+              packedSplats.pushSplat(
+                new THREE.Vector3(...splat.position),
+                new THREE.Vector3(...splat.scale),
+                new THREE.Quaternion(...splat.rotation),
+                splat.opacity,
+                new THREE.Color(...splat.color),
+              );
+            }
+          },
+        });
+        scene.add(mesh);
+        return mesh;
+      });
+
+      await Promise.all(meshes.map((mesh) => mesh.initialized));
+      status.textContent = [
+        'KHR_gaussian_splatting GLB → accessor decode → Spark: OK',
+        `primitives: ${decoded.primitives.length}`,
+        `splats: ${totalSplats}`,
+        'Three.js r180 / Spark 2.1.0',
+      ].join('\n');
+    }
+
+    loadFixture().catch((error) => {
       console.error(error);
-      status.textContent = `renderer smoke: FAILED\n${error?.message || error}`;
+      status.textContent = `KHR → Spark smoke: FAILED\n${error?.message || error}`;
     });
 
     addEventListener('resize', () => {
