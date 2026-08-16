@@ -24,21 +24,22 @@ export function isEmbeddedPopupUnsupported(windowRef = globalThis.window) {
     if (!windowRef || windowRef.top === windowRef) return false;
     const frame = windowRef.frameElement;
     if (!frame || typeof frame.getAttribute !== 'function') return false;
-    const sandbox = frame.getAttribute('sandbox');
-    if (sandbox == null) return false;
-    return !String(sandbox).split(/\s+/u).filter(Boolean).includes('allow-popups');
+    if (typeof frame.hasAttribute === 'function' ? !frame.hasAttribute('sandbox') : frame.getAttribute('sandbox') == null) return false;
+    const tokens = String(frame.getAttribute('sandbox') || '').toLowerCase().split(/[\t\n\f\r ]+/u).filter(Boolean);
+    return !tokens.includes('allow-popups');
   } catch {
     return false;
   }
 }
 
-const EMBEDDED_POPUP_MESSAGE = 'This embedded viewer cannot open Scene Sync directly. Open or download the Single HTML export in a regular tab.';
+const EMBEDDED_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open or download the Single HTML export in a regular tab.';
+const EMBEDDED_URL_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in this embedded viewer. Open the published page in a regular tab.';
 
-function applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef }) {
+function applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message = EMBEDDED_POPUP_MESSAGE }) {
   if (!isEmbeddedPopupUnsupported(windowRef)) return false;
   if (roomInput) roomInput.disabled = true;
   if (button) button.disabled = true;
-  if (status) status.textContent = EMBEDDED_POPUP_MESSAGE;
+  if (status) status.textContent = message;
   form.dataset.state = 'embedded-popup-unsupported';
   return true;
 }
@@ -265,7 +266,7 @@ export function mountUrlHandoff({
   const roomInput = form.querySelector('[name="room"]');
   const button = form.querySelector('button');
   const status = form.querySelector('[role="status"]');
-  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef });
+  const embeddedPopupUnsupported = applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message: EMBEDDED_URL_POPUP_MESSAGE });
   const controller = createHandoffSourceController({
     windowRef, targetUrl, sourceUrl,
     onStateChange(detail) {
