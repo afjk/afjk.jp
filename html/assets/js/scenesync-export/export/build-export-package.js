@@ -26,6 +26,7 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
   }
   <\/script>
   <link rel="stylesheet" href="viewer/viewer.css">
+  <link rel="stylesheet" href="scenesync/handoff/source.css">
   <script>
     if (location.protocol === 'file:') {
       window.addEventListener('DOMContentLoaded', function () {

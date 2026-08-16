@@ -70,6 +70,28 @@ for a page explicitly opened with valid handoff IDs and binds the exchange to
 its `window.opener`. ACKs contain the matching IDs and status, but never room or
 scene data.
 
+## Viewer control layout
+
+An exported page is mostly there to be *looked at*: opening it in Scene Sync is
+the secondary path taken to keep editing the scene or to view it in a headset.
+The control is therefore a collapsed pill, not a standing panel.
+
+`mountSingleHtmlHandoff` / `mountUrlHandoff` append a
+`.scene-sync-handoff-dock` to `#viewer-controls` when the viewer has that
+button stack, falling back to `#viewer-ui`. The dock holds
+`#scene-sync-handoff-toggle` and the `#scene-sync-handoff` form, which starts
+with the `hidden` attribute set and expands as a popover anchored under the
+toggle. It closes on the toggle, on `Escape`, and on a pointer press outside
+the dock — but never while a handoff is waiting on READY or ACK, so in-flight
+status stays on screen.
+
+Docking into `#viewer-controls` is what keeps the control off the
+bottom-centered player transport, which spans nearly the full width on phones.
+`order: 1` keeps the dock below Enter VR / BGM even though it mounts first.
+Styling lives in `html/assets/js/scenesync/handoff/source.css`, which Static
+ZIP `index.html` links and Single HTML inlines; it is self-contained and does
+not depend on `viewer.css`.
+
 ## Static export integration contract
 
 Publish `index.html` with `<link rel="scene-sync-export" href="./scene.json">`

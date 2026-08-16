@@ -1,18 +1,84 @@
+/*
+ * Open in Scene Sync.
+ * The dock lives inside #viewer-controls when the viewer has one, so it stacks
+ * with Enter VR / BGM instead of floating over the bottom-centered player
+ * transport. `order` keeps it last even though it mounts before those buttons.
+ */
+.scene-sync-handoff-dock {
+  position: relative;
+  order: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: system-ui, sans-serif;
+  pointer-events: auto;
+}
+
+/* Fallback anchoring for viewers without a #viewer-controls stack. */
+#viewer-ui > .scene-sync-handoff-dock {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+}
+
+.scene-sync-handoff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(20, 20, 28, 0.55);
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.scene-sync-handoff-toggle:hover,
+.scene-sync-handoff-toggle:focus-visible {
+  background: rgba(30, 30, 40, 0.85);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.scene-sync-handoff-dock[data-open="true"] .scene-sync-handoff-toggle {
+  background: rgba(68, 136, 255, 0.85);
+  border-color: rgba(68, 136, 255, 0.9);
+  color: #fff;
+}
+
+.scene-sync-handoff-toggle svg {
+  flex: none;
+}
+
 .scene-sync-handoff {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 25;
   display: flex;
   flex-direction: column;
   gap: 7px;
-  width: min(350px, calc(100vw - 32px));
+  width: min(300px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
   padding: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
-  background: rgba(20, 20, 28, 0.88);
+  background: rgba(20, 20, 28, 0.94);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   color: #fff;
   pointer-events: auto;
   backdrop-filter: blur(8px);
+}
+
+.scene-sync-handoff[hidden] {
+  display: none;
 }
 
 .scene-sync-handoff > label {
@@ -20,29 +86,57 @@
   font-weight: 600;
 }
 
+.scene-sync-handoff-hint {
+  margin: -3px 0 1px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .scene-sync-handoff-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .scene-sync-handoff-row input {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 140px;
   padding: 8px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.35);
   color: #fff;
+  /* Anything under 16px makes iOS Safari zoom the page on focus. */
+  font-size: 16px;
 }
 
-.scene-sync-handoff-row .viewer-btn {
+.scene-sync-handoff-row button {
+  flex: none;
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
+  background: rgba(30, 30, 40, 0.85);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.scene-sync-handoff-row button:hover:not(:disabled) {
+  background: rgba(68, 136, 255, 0.85);
+}
+
+.scene-sync-handoff-row button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .scene-sync-handoff-status {
   min-height: 1.25em;
   color: rgba(255, 255, 255, 0.72);
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .scene-sync-handoff[data-state="failed"] .scene-sync-handoff-status {
@@ -51,4 +145,34 @@
 
 .scene-sync-handoff[data-state="complete"] .scene-sync-handoff-status {
   color: #93e89b;
+}
+
+@media (max-width: 480px) {
+  .scene-sync-handoff-toggle {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  .scene-sync-handoff {
+    width: min(300px, calc(100vw - 24px));
+  }
+}
+
+/*
+ * Landscape phones: a control stack of Enter VR / Enter AR / BGM / Enable Audio
+ * leaves no room below the dock, so a panel anchored to it falls off-screen.
+ * Lead the stack with the dock instead and pin the panel to the viewport, which
+ * puts it at a fixed offset no matter how many buttons the scene produces.
+ */
+@media (max-height: 560px) {
+  .scene-sync-handoff-dock {
+    order: -1;
+  }
+
+  .scene-sync-handoff {
+    position: fixed;
+    top: 46px;
+    right: 16px;
+    max-height: calc(100vh - 58px);
+  }
 }

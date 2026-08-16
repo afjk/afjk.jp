@@ -25,6 +25,11 @@ body {
   position: fixed;
   inset: 0;
   pointer-events: none;
+  /* position:fixed makes this a stacking context, so descendants cannot rise
+     above the player transport (z-index 220) on their own. Overlays here —
+     the loading screen, the file:// warning, the Open in Scene Sync popover —
+     all belong above it, and the layer stays click-through by default. */
+  z-index: 240;
 }
 
 /* ── Loading overlay ── */
@@ -140,12 +145,5 @@ body {
   backdrop-filter: blur(6px);
 }
 
-/* Open in Scene Sync (bundled into Static ZIPs; mirrors handoff/source.css). */
-.scene-sync-handoff { position:absolute; right:16px; bottom:16px; display:flex; flex-direction:column; gap:7px; width:min(350px,calc(100vw - 32px)); padding:12px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(20,20,28,.88); color:#fff; pointer-events:auto; backdrop-filter:blur(8px); }
-.scene-sync-handoff > label { font-size:13px; font-weight:600; }
-.scene-sync-handoff-row { display:flex; gap:8px; }
-.scene-sync-handoff-row input { min-width:0; flex:1; padding:8px 10px; border:1px solid rgba(255,255,255,.18); border-radius:8px; background:rgba(0,0,0,.35); color:#fff; }
-.scene-sync-handoff-row .viewer-btn { border-radius:8px; }
-.scene-sync-handoff-status { min-height:1.25em; color:rgba(255,255,255,.72); font-size:12px; }
-.scene-sync-handoff[data-state="failed"] .scene-sync-handoff-status { color:#ff9b9b; }
-.scene-sync-handoff[data-state="complete"] .scene-sync-handoff-status { color:#93e89b; }
+/* Open in Scene Sync ships its own stylesheet (scenesync/handoff/source.css),
+   linked by the Static ZIP index and inlined into Single HTML exports. */
