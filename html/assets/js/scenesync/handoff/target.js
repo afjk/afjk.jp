@@ -161,9 +161,17 @@ export function createHandoffTokenTargetSession({
   const started = Date.now();
   const endpoint = new URL('/presence/scene-sync/handoff-tokens/claim', locationRef?.href || windowRef?.location?.href).href;
   const roomId = isSanitizedRoomCode(bootstrap.roomId) ? bootstrap.roomId : null;
-  const delay = (ms) => new Promise((resolve) => windowRef.setTimeout(resolve, ms));
+  const delay = (ms) => new Promise((resolve) => {
+    const id = windowRef.setTimeout(resolve, ms);
+    controller.signal.addEventListener('abort', () => { windowRef.clearTimeout?.(id); resolve(); }, { once: true });
+  });
+  const overallTimer = windowRef.setTimeout(() => controller.abort(), maxWaitMs);
   const run = (async () => {
     let backoff = 250;
+    try {
+    // Room/snapshot readiness precedes destructive one-use claim. A full room
+    // must not consume an otherwise valid transfer.
+    await ensureRoom(roomId, { signal: controller.signal });
     onStatus({ state: 'waiting', message: 'Waiting for token transfer upload…' });
     while (!disposed && Date.now() - started < maxWaitMs) {
       try {
@@ -177,16 +185,19 @@ export function createHandoffTokenTargetSession({
         const body = await response.json();
         const validation = validateHandoffTokenPayload(body?.payload);
         if (!validation.valid) throw new Error('invalid payload');
-        await ensureRoom(roomId);
         if (typeof applyPayload !== 'function') throw new Error('handoff importer unavailable');
-        await applyPayload(validation.payload, bootstrap);
+        await applyPayload(validation.payload, bootstrap, { signal: controller.signal });
         complete = true; onStatus({ state: 'complete', message: 'Token transfer imported.' }); return;
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) { if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); return; }
         onStatus({ state: 'failed', message: 'Token transfer import failed.' }); return;
       }
     }
     if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' });
+    } catch (error) {
+      if (controller.signal.aborted) { if (!disposed) onStatus({ state: 'timeout', message: 'Timed out waiting for token transfer upload.' }); }
+      else onStatus({ state: 'failed', message: 'Token transfer import failed.' });
+    } finally { windowRef.clearTimeout?.(overallTimer); }
   })();
   return { enabled: true, context: { roomId, ...bootstrap }, ready: () => run, dispose() { disposed = true; controller.abort(); }, getState: () => ({ ready: true, complete }) };
 }

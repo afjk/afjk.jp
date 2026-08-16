@@ -178,7 +178,7 @@ test('target binds URL handoff sourceUrl to the postMessage origin', async () =>
 
 test('token target claims once then applies embedded and URL payloads exclusively', async () => {
   const token = 'a'.repeat(64);
-  const windowRef = { setTimeout: (fn) => { queueMicrotask(fn); return 1; }, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/' } };
+  const windowRef = { setTimeout: () => 1, clearTimeout() {}, location: { href: 'https://afjk.jp/scenesync/' } };
   const calls = [];
   const embedded = createHandoffTokenTargetSession({
     windowRef, locationRef: windowRef.location,

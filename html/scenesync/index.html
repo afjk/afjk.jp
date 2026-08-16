@@ -6,6 +6,8 @@
   // enough to move into sessionStorage, then the address bar is scrubbed.
   (() => {
     const hash = location.hash.slice(1);
+    const purportsToBeToken = /(?:^|&)handoffToken(?:=|&|$)/.test(hash);
+    try {
     const pairs = hash ? hash.split('&') : [];
     const values = Object.create(null);
     for (const pair of pairs) {
@@ -20,7 +22,12 @@
       roomId: new URLSearchParams(location.search).get('room') || null };
     try { sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify(record)); }
     catch { globalThis.__SCENE_SYNC_HANDOFF_TOKEN_BOOTSTRAP__ = record; }
-    try { history.replaceState(history.state, '', location.pathname + location.search); } catch {}
+    } catch {}
+    finally {
+      // Any fragment that claims to carry a token is sensitive even when it is
+      // malformed, duplicated, or rejected. Never leave it for later scripts.
+      if (purportsToBeToken) try { history.replaceState(history.state, '', location.pathname + location.search); } catch {}
+    }
   })();
   </script>
   <meta charset="UTF-8">

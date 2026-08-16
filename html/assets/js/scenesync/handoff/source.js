@@ -37,7 +37,7 @@ const EMBEDDED_URL_POPUP_MESSAGE = 'Direct Scene Sync import is unavailable in t
 
 function applyEmbeddedPopupGuidance({ form, roomInput, button, status, windowRef, message = EMBEDDED_POPUP_MESSAGE }) {
   if (!isEmbeddedPopupUnsupported(windowRef)) return false;
-  if (roomInput) roomInput.disabled = true;
+  // Keep room selection available: token handoff still needs the URL-authoritative room.
   if (button) button.disabled = true;
   if (status) status.textContent = message;
   form.dataset.state = 'embedded-popup-unsupported';
@@ -141,6 +141,7 @@ export function createHandoffSourceController({
   windowRef.addEventListener('message', handleMessage);
 
   function open(roomId) {
+    if (state === 'token-uploading') return { opened: false, reason: 'token-uploading' };
     stopTimers();
     if (popup && !popup.closed) {
       try { popup.close(); } catch {}
@@ -208,6 +209,7 @@ export function createHandoffSourceController({
     try { windowRef.open(url.toString(), '_blank'); } catch {}
     const endpoint = new URL('/presence/scene-sync/handoff-tokens/upload', url.origin).href;
     tokenUploadController = new AbortController();
+    state = 'token-uploading';
     emit({ state: 'token-uploading', tokenUrl: url.toString(), message: 'Token link opened. Preparing transfer…' });
     // Do not make upload success an import acknowledgement; the target owns
     // claim/import state and the token link remains useful if its first tab was blocked.
@@ -218,9 +220,11 @@ export function createHandoffSourceController({
         payload: sourceUrl ? { version: 1, mode: 'url', sourceUrl } : { version: 1, mode: 'embedded', sceneDocument, embeddedAssets } }),
     })).then((response) => {
       if (!response?.ok) throw new Error('upload failed');
+      state = 'token-ready';
       emit({ state: 'token-ready', tokenUrl: url.toString(), message: 'Token transfer prepared. Open or copy the link.' });
     }).catch((error) => {
       if (error?.name === 'AbortError') return;
+      state = 'token-failed';
       emit({ state: 'token-failed', tokenUrl: url.toString(), message: 'Token transfer could not be prepared. Retry creates a new link.' });
     });
     return { opened: true, url: url.toString(), token, sessionId: nextSessionId, requestId: nextRequestId, roomId: cleanedRoomId };
@@ -278,7 +282,7 @@ export function mountSingleHtmlHandoff({
     onStateChange(detail) {
       if (status) status.textContent = detail.message || '';
       if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY
-        || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
+        || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
       const offerToken = embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED;
       if (tokenButton) tokenButton.hidden = !offerToken;
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
@@ -327,7 +331,7 @@ export function mountUrlHandoff({
     windowRef, targetUrl, sourceUrl,
     onStateChange(detail) {
       if (status) status.textContent = detail.message || '';
-      if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK;
+      if (button) button.disabled = detail.state === HANDOFF_SOURCE_STATES.WAITING_READY || detail.state === HANDOFF_SOURCE_STATES.WAITING_ACK || detail.state === 'token-uploading';
       if (tokenButton) tokenButton.hidden = !(embeddedPopupUnsupported || detail.state === HANDOFF_SOURCE_STATES.FAILED);
       if (detail.tokenUrl && tokenLink) { tokenLink.hidden = false; tokenLink.href = detail.tokenUrl; tokenLink.textContent = 'Copy/open token link'; }
       form.dataset.state = detail.state;
