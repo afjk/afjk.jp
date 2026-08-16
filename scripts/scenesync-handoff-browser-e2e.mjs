@@ -164,6 +164,38 @@ function createNoCorsPublisher(targetAppUrl, targetOrigin, sceneDocument, triang
   });
 }
 
+function createCspInlinePublisher(sourceHtml) {
+  return createServer((req, res) => {
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+    if (pathname === '/wrapper/' || pathname === '/wrapper/index.html') {
+      res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html>
+        <iframe id="inline-source" sandbox="allow-scripts allow-same-origin" src="/inline-source.html"></iframe>
+        <script>
+          globalThis.__inlineNavigationAttempts = [];
+          const frame = document.getElementById('inline-source');
+          frame.addEventListener('load', () => {
+            frame.contentWindow.open = (href) => {
+              globalThis.__inlineNavigationAttempts.push({ href, at: Date.now() });
+              return undefined;
+            };
+            document.documentElement.dataset.openHook = 'ready';
+          });
+        <\/script>`);
+      return;
+    }
+    if (pathname === '/inline-source.html') {
+      // Claude-like CSP: the Scene Sync target is cross-origin, while this
+      // source permits network connections only to itself.
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-security-policy': "default-src 'self' blob: data: https:; script-src 'self' 'unsafe-inline' blob: data: https:; style-src 'self' 'unsafe-inline' blob: data: https:; img-src 'self' blob: data: https:; media-src 'self' blob: data: https:; connect-src 'self'",
+      }).end(sourceHtml);
+      return;
+    }
+    res.writeHead(404).end();
+  });
+}
+
 function waitForOpen(ws) {
   return new Promise((resolve, reject) => {
     ws.once('open', resolve);
@@ -255,6 +287,7 @@ let presenceServer;
 let staticServer;
 let publisherServer;
 let tokenPublisherServer;
+let inlineSourceServer;
 let observer;
 let browser;
 let tempDir;
@@ -324,6 +357,7 @@ try {
     files: {
       'assets/pixel.png': Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')),
       'assets/triangle.glb': createTriangleGlb(),
+      'assets/server-fallback.bin': new Uint8Array(400 * 1024),
     },
     viewerFiles: await loadHandoffFiles(),
   })).replace(
@@ -331,6 +365,21 @@ try {
     `<body><script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetUrl)};<\/script>`,
   );
   const sourcePath = path.join(tempDir, 'source.html');
+  const inlineSceneDocument = structuredClone(sceneDocument);
+  inlineSceneDocument.objects[0].id = 'inline-csp-image';
+  inlineSceneDocument.objects[1].id = 'inline-csp-glb';
+  const inlineSourceHtml = (await buildSingleHtmlDocument({
+    sceneDocument: inlineSceneDocument,
+    manifest: { singleHtml: { format: 'single-html-v1', version: 1 } },
+    files: {
+      'assets/pixel.png': Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')),
+      'assets/triangle.glb': createTriangleGlb(),
+    },
+    viewerFiles: await loadHandoffFiles(),
+  })).replace(
+    '<body>',
+    `<body><script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetUrl)};<\/script>`,
+  );
   await writeFile(sourcePath, sourceHtml);
   const publishedDir = path.join(tempDir, 'published');
   await mkdir(path.join(publishedDir, 'assets'), { recursive: true });
@@ -381,6 +430,8 @@ try {
   noCorsTokenDocument.objects[0].id = 'token-no-acao-triangle';
   tokenPublisherServer = await listen(createNoCorsPublisher(targetUrl, targetOrigin, noCorsTokenDocument, createTriangleGlb()), null);
   const noCorsTokenWrapperUrl = `${serverUrl(tokenPublisherServer, 'http', 'localhost')}/wrapper/`;
+  inlineSourceServer = await listen(createCspInlinePublisher(inlineSourceHtml), null);
+  const inlineCspWrapperUrl = `${serverUrl(inlineSourceServer, 'http', 'localhost')}/wrapper/`;
 
   const observedAdds = new Map();
   const observerDiagnostics = [];
@@ -613,6 +664,57 @@ try {
   })).status, embeddedToken);
   assert.equal(replayStatus, 202, 'claimed token must not be claimable a second time');
 
+  // Claude artifacts commonly disallow the target origin in connect-src. A
+  // compact embedded export must still open as a fragment-only handoff, with
+  // no token upload request to the presence server.
+  const inlineCspWrapper = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  const inlineCspDiagnostics = [];
+  inlineCspWrapper.on('console', (message) => inlineCspDiagnostics.push(`${message.type()}:${message.text()}`));
+  await inlineCspWrapper.goto(inlineCspWrapperUrl, { waitUntil: 'domcontentloaded' });
+  await inlineCspWrapper.waitForFunction(() => document.documentElement.dataset.openHook === 'ready');
+  const inlineCspFrame = inlineCspWrapper.frames().find((frame) => frame.url().includes('/inline-source.html'));
+  assert(inlineCspFrame, 'CSP inline source frame did not load');
+  await inlineCspFrame.waitForFunction(() => globalThis.__HANDOFF_SOURCE_READY__ === true);
+  await inlineCspFrame.locator('#scene-sync-handoff-toggle').click();
+  await inlineCspFrame.locator('#scene-sync-handoff-room').fill(roomId);
+  const inlineUploadsBefore = tokenUploads.length;
+  await inlineCspFrame.locator('.scene-sync-token-transfer').click();
+  await inlineCspFrame.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Token transfer prepared. Open or copy the link.', null, { timeout: TEST_TIMEOUT_MS });
+  const inlineAttempt = await inlineCspWrapper.evaluate(() => globalThis.__inlineNavigationAttempts?.[0] || null);
+  assert(inlineAttempt?.href, 'CSP wrapper did not receive the inline target navigation');
+  assert.match(new URL(inlineAttempt.href).hash, /^#sceneSyncHandoffInline=v1\.[A-Za-z0-9_-]+$/u);
+  assert.equal(tokenUploads.length, inlineUploadsBefore, 'inline handoff must not upload through connect-src');
+  const inlineTarget = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  const inlineTargetUrls = [];
+  inlineTarget.on('request', (request) => inlineTargetUrls.push(request.url()));
+  await inlineTarget.goto(inlineAttempt.href, { waitUntil: 'domcontentloaded' });
+  await inlineTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
+  await waitForObservedAdd('inline-csp-image', 'CSP inline image broadcast');
+  await waitForObservedAdd('inline-csp-glb', 'CSP inline mesh broadcast');
+  const inlineTargetState = await inlineTarget.evaluate(async () => {
+    const { managedObjects, presenceState } = await import('/assets/js/scenesync/scene.js');
+    const model = managedObjects.get('inline-csp-glb');
+    let meshCount = 0; let vertices = 0; let boxGeometry = false;
+    model?.traverse?.((node) => {
+      if (!node.isMesh) return;
+      meshCount += 1;
+      vertices = Math.max(vertices, node.geometry?.attributes?.position?.count || 0);
+      boxGeometry ||= node.geometry?.type === 'BoxGeometry';
+    });
+    return {
+      room: presenceState.room,
+      image: managedObjects.get('inline-csp-image')?.userData?.asset || null,
+      mesh: managedObjects.get('inline-csp-glb')?.userData?.asset || null,
+      meshCount, vertices, boxGeometry,
+    };
+  });
+  assert.equal(inlineTargetState.room, roomId);
+  assert.equal(inlineTargetState.image?.type, 'image');
+  assert.equal(inlineTargetState.mesh?.type, 'mesh');
+  assert.equal(inlineTargetState.meshCount > 0 && inlineTargetState.vertices === 3 && !inlineTargetState.boxGeometry, true, 'inline CSP handoff must import the real triangle mesh');
+  assert.equal([...inlineTargetUrls, ...requestLog].some((value) => value.includes('sceneSyncHandoffInline')), false, 'inline payload leaked into a request URL');
+  assert.equal(inlineCspDiagnostics.some((entry) => /connect-src|Refused to connect/u.test(entry)), false, 'inline handoff must not attempt a CSP-blocked upload');
+
   // A static viewer in the same wrapper must stage only its published URL.
   // The no-ACAO publisher makes the target exercise the existing direct
   // browser failure -> server-pull materialisation path.
@@ -657,20 +759,38 @@ try {
   assert.equal(tokenNoCorsObject.meshCount > 0 && tokenNoCorsObject.vertices === 3 && !tokenNoCorsObject.boxGeometry, true, 'static token server-pull must import the real GLB');
 
   // Token-looking fragments are always scrubbed, but malformed, extra, and
-  // duplicate forms must never start a claim. A stale bootstrap must also lose
-  // to an explicit legacy opener request.
+  // duplicate forms must never start a claim. They also must clear a valid
+  // stale bootstrap before parsing, rather than allowing it to be revived.
   const claimsBeforeInvalidFragments = tokenClaims.length;
   const fakeToken = 'a'.repeat(64);
   const fakeSession = 'b'.repeat(22);
   const fakeRequest = 'c'.repeat(22);
-  for (const fragment of [
+  for (const [index, fragment] of [
     '#handoffToken=bad',
     `#handoffToken=${fakeToken}&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}&extra=1`,
     `#handoffToken=${fakeToken}&handoffToken=${fakeToken}&handoffSession=${fakeSession}&handoffRequest=${fakeRequest}`,
-  ]) {
+    '#sceneSyncHandoffInline=bad',
+    `#sceneSyncHandoffInline=v1.e30&handoffToken=${fakeToken}`,
+    '#sceneSyncHandoffInline=v1.e30&sceneSyncHandoffInline=v1.e30',
+    '#sceneSyncHandoffInline=%',
+    '#sceneSyncHandoffInline=v1.bnVsbA',
+    `#sceneSyncHandoffInline=v1.${'a'.repeat(524400)}`,
+  ].entries()) {
     const malformedTarget = await browser.newPage();
-    await malformedTarget.goto(`${targetUrl}${fragment}`, { waitUntil: 'domcontentloaded' });
+    const malformedErrors = [];
+    malformedTarget.on('pageerror', (error) => malformedErrors.push(error.message));
+    await malformedTarget.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+    await malformedTarget.evaluate(({ token, sessionId, requestId }) => {
+      sessionStorage.setItem('sceneSync.handoffToken.v1', JSON.stringify({ token, sessionId, requestId, roomId: null }));
+    }, { token: fakeToken, sessionId: fakeSession, requestId: fakeRequest });
+    // A hash-only navigation does not rerun the early head bootstrap. Change
+    // a harmless query value as well so this is a full document navigation.
+    const invalidUrl = new URL(targetUrl);
+    invalidUrl.searchParams.set('bootstrap-invalid-case', String(index));
+    invalidUrl.hash = fragment.slice(1);
+    await malformedTarget.goto(invalidUrl.href, { waitUntil: 'domcontentloaded' });
     await malformedTarget.waitForFunction(() => location.hash === '', null, { timeout: TEST_TIMEOUT_MS });
+    assert.deepEqual(malformedErrors, [], `invalid inline fragment threw during bootstrap: ${fragment.slice(0, 80)}`);
     await malformedTarget.close();
   }
   await new Promise((resolve) => setTimeout(resolve, 500));
@@ -720,6 +840,7 @@ try {
   await closeServer(staticServer);
   await closeServer(publisherServer);
   await closeServer(tokenPublisherServer);
+  await closeServer(inlineSourceServer);
   await presenceServer?.stop?.();
   if (tempDir) await rm(tempDir, { recursive: true, force: true });
 }

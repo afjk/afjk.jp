@@ -1,6 +1,7 @@
 import {
   SCENE_SYNC_HANDOFF_TYPE,
   createAckMessage,
+  canonicalizeJsonValue,
   createReadyMessage,
   isValidHandoffId,
   validateHandoffMessage,
@@ -8,6 +9,46 @@ import {
 import { isSanitizedRoomCode } from '../utils/room-code.js';
 import { validateHandoffTokenPayload } from './token-payload.js';
 import { consumeTokenBootstrap } from './token-bootstrap.js';
+import { decodeInlineHandoffPayload, INLINE_HANDOFF_PAYLOAD_LIMITS } from './inline-payload.js';
+
+function validateInlineHandoffEnvelope(value) {
+  const canonical = canonicalizeJsonValue(value, INLINE_HANDOFF_PAYLOAD_LIMITS);
+  if (!canonical.valid) return canonical;
+  const envelope = canonical.value;
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)
+    || (Object.getPrototypeOf(envelope) !== Object.prototype && Object.getPrototypeOf(envelope) !== null)) {
+    return { valid: false, reason: 'invalid-inline-handoff-envelope' };
+  }
+  const expected = ['kind', 'payload', 'requestId', 'roomId', 'sessionId', 'version'];
+  const keys = Object.keys(envelope).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])
+    || envelope.kind !== 'scene-sync-inline-handoff' || envelope.version !== 1
+    || !isValidHandoffId(envelope.sessionId) || !isValidHandoffId(envelope.requestId)
+    || (envelope.roomId != null && !isSanitizedRoomCode(envelope.roomId))) {
+    return { valid: false, reason: 'invalid-inline-handoff-envelope' };
+  }
+  const payload = validateHandoffTokenPayload(envelope.payload, INLINE_HANDOFF_PAYLOAD_LIMITS);
+  if (!payload.valid || payload.payload.mode !== 'embedded') {
+    return { valid: false, reason: 'invalid-inline-handoff-payload' };
+  }
+  return {
+    valid: true,
+    payload: payload.payload,
+    binding: { sessionId: envelope.sessionId, requestId: envelope.requestId, roomId: envelope.roomId || null },
+  };
+}
+
+function readInlineQueryRoom(locationRef) {
+  try {
+    const params = new URLSearchParams(locationRef?.search || '');
+    const values = params.getAll('room');
+    if (values.length > 1) return { valid: false, roomId: null };
+    const roomId = values[0] || null;
+    return { valid: roomId == null || isSanitizedRoomCode(roomId), roomId };
+  } catch {
+    return { valid: false, roomId: null };
+  }
+}
 
 export function readHandoffTargetContext(locationRef = globalThis.location) {
   try {
@@ -160,7 +201,17 @@ export function createHandoffTokenTargetSession({
   let disposed = false; let complete = false; let timedOut = false;
   const started = Date.now();
   const endpoint = new URL('/presence/scene-sync/handoff-tokens/claim', locationRef?.href || windowRef?.location?.href).href;
-  const roomId = isSanitizedRoomCode(bootstrap.roomId) ? bootstrap.roomId : null;
+  const inlinePayload = bootstrap.inlinePayload || null;
+  const inline = inlinePayload ? (() => {
+    const decoded = decodeInlineHandoffPayload(inlinePayload);
+    return decoded.valid ? validateInlineHandoffEnvelope(decoded.value) : decoded;
+  })() : null;
+  const inlineQueryRoom = inlinePayload ? readInlineQueryRoom(locationRef) : null;
+  if (inline?.valid && (!inlineQueryRoom.valid || inline.binding.roomId !== inlineQueryRoom.roomId)) {
+    inline.valid = false;
+  }
+  const roomId = inline?.valid ? inline.binding.roomId
+    : (isSanitizedRoomCode(bootstrap.roomId) ? bootstrap.roomId : null);
   const delay = (ms) => new Promise((resolve) => {
     let settled = false;
     const finish = () => { if (settled) return; settled = true; controller.signal.removeEventListener('abort', aborted); resolve(); };
@@ -177,7 +228,13 @@ export function createHandoffTokenTargetSession({
     try {
     // Room/snapshot readiness precedes destructive one-use claim. A full room
     // must not consume an otherwise valid transfer.
+    if (inlinePayload && !inline?.valid) throw new Error('invalid inline payload');
     await ensureRoom(roomId, { signal: controller.signal });
+    if (inlinePayload) {
+      if (typeof applyPayload !== 'function') throw new Error('handoff importer unavailable');
+      await applyPayload(inline.payload, inline.binding, { signal: controller.signal });
+      complete = true; onStatus({ state: 'complete', message: 'Token transfer imported.' }); return;
+    }
     onStatus({ state: 'waiting', message: 'Waiting for token transfer upload…' });
     while (!disposed && Date.now() - started < maxWaitMs) {
       try {
