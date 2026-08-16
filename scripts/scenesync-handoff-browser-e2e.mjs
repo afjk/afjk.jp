@@ -682,6 +682,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.equal(tokenClaims.length, claimsBeforeInvalidFragments, 'legacy opener query must consume stale bootstrap without claiming');
   const allowedPopupWarning = /GL Driver Message|unknown input adapter/u;
+  const allowedSandboxWrapperWarning = /^(?:embedded-wrapper|url-wrapper):warning:An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing\.$/u;
   const unexpectedDiagnostics = [
     ...sourceDiagnostics.filter((entry) => entry.startsWith('pageerror:') || entry.startsWith('console:error:')
       || entry.startsWith('console:warning:')),
@@ -696,6 +697,9 @@ try {
     ...tokenDiagnostics.filter((entry) => {
       // No-ACAO static imports intentionally report only their direct browser
       // fetch failure before falling back to the server-pull importer.
+      // Chromium also warns exactly once for each deliberate same-origin
+      // sandbox wrapper. Do not permit other wrapper diagnostics.
+      if (allowedSandboxWrapperWarning.test(entry)) return false;
       if (/Access to fetch at .*CORS policy|Failed to fetch|net::ERR_FAILED|unknown input adapter/u.test(entry)) return false;
       return /pageerror:|:error:|:warning:/u.test(entry);
     }),
