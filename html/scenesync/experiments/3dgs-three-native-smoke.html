@@ -37,6 +37,15 @@
 
     const params = new URLSearchParams(location.search);
     const forceWebGL = params.get('forceWebGL') === '1' || !navigator.gpu;
+
+    // `minimal` is the hand-built 8 splat fixture; `ring` is a 16 splat scene
+    // with degree 1 SH produced by the SceneSync PLY importer, so it also
+    // exercises the higher order SH accessors.
+    const FIXTURES = {
+      minimal: './fixtures/minimal-khr-gaussian-splatting.glb',
+      ring: './fixtures/ring-gaussian-splats.glb',
+    };
+    const fixtureName = FIXTURES[params.get('fixture')] ? params.get('fixture') : 'minimal';
     const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
@@ -51,7 +60,7 @@
     loader.register((parser) => new GLTFGaussianSplatLoaderExtension(parser));
 
     try {
-      const gltf = await loader.loadAsync('./fixtures/minimal-khr-gaussian-splatting.glb');
+      const gltf = await loader.loadAsync(FIXTURES[fixtureName]);
       const splats = [];
       gltf.scene.traverse((object) => {
         if (object.isGaussianSplatMesh) splats.push(object);
@@ -66,6 +75,7 @@
 
       status.textContent = [
         'KHR_gaussian_splatting GLB → Three.js native loader: OK',
+        `fixture: ${fixtureName}`,
         `GaussianSplatMesh: ${splats.length}`,
         `splats: ${splatCount}`,
         `backend: ${forceWebGL ? 'WebGL fallback' : 'WebGPU'}`,
