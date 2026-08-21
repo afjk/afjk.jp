@@ -222,6 +222,57 @@ node scripts/generate-gaussian-splat-import-fixtures.mjs
 `ring-gaussian-splats.{ply,spz,glb}`（16 splats / degree 1 SH）を生成する。
 GLBはImporterを通して生成しているため、browser smokeでも実際の変換結果を確認できる。
 
+## Three.js標準ローダーとの突き合わせ
+
+SceneSyncが書くGLBは、KHR仕様のSceneSync側の解釈に基づいている。
+その解釈が正しいかは、**実際にそれを読む実装に食わせる**以外に確かめようがない。
+
+```bash
+node scripts/verify-against-threejs-gaussian-splat.mjs
+```
+
+Three.js `dev`（GS実装入り、commit `04d9e4e`）に対して実行した結果:
+
+| case | 入力 | SH degree | 結果 |
+| --- | --- | ---: | --- |
+| ply-degree-3 | PLY binary LE | 3 | OK |
+| ply-degree-0 | PLY binary LE | 0 | OK |
+| ply-ascii | PLY ascii | 1 | OK |
+| spz-degree-1 | SPZ v2 | 1 | OK |
+| spz-degree-3 | SPZ v3（smallest-three） | 3 | OK |
+
+いずれも `GLTFGaussianSplatLoaderExtension` が `GaussianSplat` を生成し、
+`splatGeometry` から読み戻したposition / color / alphaが**元のPLY / SPZの入力値と一致**した。
+degree 1〜3では `sphericalHarmonics1/2/3` が揃って生成されている。
+
+検証したのはローダーまで。実際のGPU描画（`WebGPURenderer`）は別途必要。
+
+### 一致していた規約
+
+Three.js側の実装（`GaussianSplatUtils.js` / `GLTFGaussianSplatLoaderExtension.js`）と
+SceneSync側で、以下がすべて一致していた。
+
+| 規約 | Three.js dev | SceneSync |
+| --- | --- | --- |
+| `SH_C0` | `0.2820947917738781` | 同値 |
+| SH0 → 色 | `coef * SH_C0 + 0.5` | 同式 |
+| `OPACITY` | `a * 255`（**線形alpha**） | PLYのlogitにsigmoid適用済み |
+| `SCALE` | `Matrix4.compose()` にそのまま渡す（**線形**） | PLYのlogにexp適用済み |
+| `ROTATION` | `Quaternion.set(qx,qy,qz,qw)`（**xyzw**） | PLYのwxyzから並べ替え済み |
+| degree dの係数数 | `degree * 2 + 1` → 3 / 5 / 7 | `SH_COEFS_PER_DEGREE` と同じ |
+
+Three.js側の要求で、満たしていないと例外になるもの（すべて満たしている）:
+
+- `colorSpace` は**必須**（未指定で例外）
+- `kernel` は `ellipse` のみ
+- 同一mesh内でGaussianと非Gaussianのprimitive混在は不可
+- SH bandは**完全**（degree内の係数が全部揃っている）でなければ例外
+- SH bandは**連続**（degree 2があるならdegree 1もある）でなければ例外
+
+なお高次SHは `coef * 128 + 128` で `Uint8ClampedArray` に量子化される。
+つまりThree.js側でSH1〜3は8bitに落ちるため、
+[-1, 1] を超える係数はクランプされる。これはThree.jsの仕様。
+
 ## 性能とメモリ
 
 計測:
@@ -284,7 +335,8 @@ detachされているため、`rereadSource()` でFileから読み直す。
 
 ## 残課題
 
-- ブラウザ実描画での見た目の一致確認（Three.js正式リリース待ち、#526 / #527）
+- GPU描画での確認（`WebGPURenderer`、Three.js正式リリース待ち、#526 / #527）。
+  ローダーまでは `scripts/verify-against-threejs-gaussian-splat.mjs` で検証済み
 - 大容量アセットのasset cache / blob経路（#528）
 - 実ブラウザでのWorker動作確認。Node上ではWorker clientとworker moduleを
   それぞれstub / `self` shim で検証しているが、実際の `new Worker(url, { type: 'module' })`
