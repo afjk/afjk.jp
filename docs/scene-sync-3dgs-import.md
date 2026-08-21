@@ -162,6 +162,24 @@ await importGaussianSplatAsset(bytes, { upAxisCorrection: 'flip-x-180' });
 // → nodes[0].rotation = [1, 0, 0, 0]（X軸180度）
 ```
 
+### Editorでの向き調整はギズモで行う
+
+**Import時の補正にUIは用意しない。** 上下が逆で取り込まれた場合は、
+配置後のオブジェクトを既存のTransformControlsで回転させて対応する。
+
+理由:
+
+- 向きの調整は3DGSに限った話ではなく、SceneSyncには既に回転の手段がある
+- 配置後の回転は既存のtransform同期にそのまま乗るため、プロトコル変更が要らない
+- 再変換・再アップロードが発生しない
+
+`upAxisCorrection` はライブラリ側のオプションとして残す。
+バッチ変換で向きを揃えたい場合はCLIから指定できる。
+
+```bash
+node scripts/convert-gaussian-splat.mjs capture.ply --flip-up
+```
+
 ## 非対応variantの扱い
 
 解釈が曖昧な入力は、黙って劣化させずに理由付きで失敗させる。
@@ -268,8 +286,6 @@ detachされているため、`rereadSource()` でFileから読み直す。
 
 - ブラウザ実描画での見た目の一致確認（Three.js正式リリース待ち、#526 / #527）
 - 大容量アセットのasset cache / blob経路（#528）
-- upAxisCorrection のUI導線（現状は既定 `'none'` 固定、
-  `DragDropManager` の `gaussianSplatUpAxisCorrection` オプションで変更可能）
 - 実ブラウザでのWorker動作確認。Node上ではWorker clientとworker moduleを
   それぞれstub / `self` shim で検証しているが、実際の `new Worker(url, { type: 'module' })`
   経路とCSPの挙動は未確認
