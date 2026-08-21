@@ -3,6 +3,13 @@ import { GLBFileLoader } from '../loaders/glb-file-loader.js';
 import { parseUriList, extractUrlFromText } from '../loaders/url-classifier.js';
 import { generateTemporaryImageObjectId } from '../loaders/image-preview.js';
 import { isSingleHtmlFile, isZipFile } from '../importers/scene-sync-export/detect-scene-sync-export.js';
+import {
+  convertGaussianSplatFileToGlb,
+  describeGaussianSplatImportError,
+  isGaussianSplatFile,
+  LARGE_SOURCE_WARNING_BYTES,
+  formatBytes,
+} from '../loaders/gaussian-splat/gaussian-splat-file-import.js';
 
 function isGlbFile(file) {
   return !!file && /\.glb$/i.test(file.name || '');
@@ -119,6 +126,8 @@ export class DragDropManager {
       THREE: ThreeModule,
       getReplaceTargetForContent = null,
       sceneSyncExportImporter = null,
+      gaussianSplatConverter = convertGaussianSplatFileToGlb,
+      gaussianSplatUpAxisCorrection = 'none',
     } = options || {};
 
     if (!camera || !renderer || !scene) {
@@ -141,6 +150,8 @@ export class DragDropManager {
     this.urlImporter = urlImporter;
     this.getReplaceTargetForContent = getReplaceTargetForContent;
     this.sceneSyncExportImporter = sceneSyncExportImporter;
+    this.gaussianSplatConverter = gaussianSplatConverter;
+    this.gaussianSplatUpAxisCorrection = gaussianSplatUpAxisCorrection;
     this.wallSurfaceOffset = wallSurfaceOffset;
     this.getPlacementTargets = getPlacementTargets;
     this.THREE = ThreeModule || (globalThis.THREE || {});
@@ -440,9 +451,13 @@ export class DragDropManager {
     return this.getPlacementFromClientPoint(event.clientX, event.clientY);
   }
 
-  async _loadFile(file, position) {
+  async _loadFile(file, position, options = {}) {
+    const { originalFile = null } = options;
     const objectId = `web-${Math.random().toString(36).slice(2, 10)}`;
-    const loadInfo = { objectId, file, position, source: 'file' };
+    // The overlay and the object label show the file the user actually dropped,
+    // while everything downstream uses the GLB that gets uploaded.
+    const displayFile = originalFile || file;
+    const loadInfo = { objectId, file: displayFile, position, source: 'file' };
 
     if (this.onLoadStart) {
       await this.onLoadStart(loadInfo);
@@ -451,7 +466,15 @@ export class DragDropManager {
     try {
       const model = await this.glbLoader.loadFromFile(file, position, this.scene);
       model.userData.objectId = objectId;
-      model.userData.name = file.name;
+      model.userData.name = displayFile.name;
+
+      if (originalFile) {
+        model.userData.importedFrom = {
+          fileName: originalFile.name,
+          fileSize: originalFile.size,
+          convertedTo: file.name,
+        };
+      }
 
       if (this.onLoaded) {
         await this.onLoaded(model, file);
@@ -462,6 +485,49 @@ export class DragDropManager {
       if (this.onLoadEnd) {
         await this.onLoadEnd(loadInfo);
       }
+    }
+  }
+
+  /**
+   * Convert a dropped .ply / .spz into a GLB File.
+   *
+   * Conversion runs on the main thread and a real capture can hold millions of
+   * splats, so the toast goes up first and the work is deferred by a frame to
+   * let it paint. Returns null when the file could not be converted; the
+   * failure has already been reported to the user by then.
+   */
+  async _convertGaussianSplatFile(file) {
+    if (file.size >= LARGE_SOURCE_WARNING_BYTES) {
+      this.showToast?.(`Gaussian Splatを変換中… (${formatBytes(file.size)}、時間がかかる場合があります)`);
+    } else {
+      this.showToast?.('Gaussian Splatを変換中…');
+    }
+
+    // Yield once so the toast is on screen before the main thread is tied up.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      const result = await this.gaussianSplatConverter(file, {
+        upAxisCorrection: this.gaussianSplatUpAxisCorrection,
+      });
+
+      console.debug('[drag-drop] gaussian splat converted', {
+        sourceFormat: result.sourceFormat,
+        splatCount: result.splatCount,
+        shDegree: result.shDegree,
+        sourceBytes: result.sourceBytes,
+        glbBytes: result.file.size,
+      });
+
+      this.showToast?.(
+        `${result.splatCount.toLocaleString()} splats を読み込み中… (SH degree ${result.shDegree})`,
+      );
+
+      return result.file;
+    } catch (error) {
+      console.warn('[drag-drop] gaussian splat import failed:', error);
+      this.showToast?.(describeGaussianSplatImportError(error));
+      return null;
     }
   }
 
@@ -482,6 +548,15 @@ export class DragDropManager {
         ? this._createSurfaceQuaternion(normalized.normal)
         : null);
     const placementRotation = surfaceQuaternion?.toArray?.() || null;
+
+    // Gaussian Splat captures become a KHR_gaussian_splatting GLB and then
+    // follow the ordinary GLB path, so upload, broadcast and the asset cache
+    // need no special case.
+    if (isGaussianSplatFile(file)) {
+      const converted = await this._convertGaussianSplatFile(file);
+      if (!converted) return null;
+      return this._loadFile(converted, normalized.position, { originalFile: file });
+    }
 
     if (isGlbFile(file)) {
       return this._loadFile(file, normalized.position);

@@ -26,6 +26,7 @@ SceneDocument / asset cache / Export以降は通常のGLBと同じ経路で扱�
 | `spz-splat-reader.js` | Niantic SPZ v1〜v3 のデコーダ |
 | `khr-glb-writer.js` | `SplatCloud` → KHR GLB のシリアライザ |
 | `import-gaussian-splat.js` | 形式判定を含むエントリポイント |
+| `gaussian-splat-file-import.js` | D&D用のFileラッパーとエラーメッセージ |
 
 外部依存はゼロ。Node / ブラウザ双方でそのまま動作する。
 
@@ -42,6 +43,56 @@ CLI:
 node scripts/convert-gaussian-splat.mjs capture.ply out.glb
 node scripts/convert-gaussian-splat.mjs capture.spz --flip-up
 ```
+
+## D&D Import
+
+`.ply` / `.spz` をSceneSync Editorにドロップすると、変換後のGLBが
+**通常のGLBと同じ経路**（upload / broadcast / asset cache / SceneDocument）に流れる。
+3DGS専用の同期経路やasset種別は追加していない。
+
+```text
+drop capture.ply
+  → DragDropManager.handleFile()
+  → convertGaussianSplatFileToGlb()      # capture.ply → capture.glb
+  → DragDropManager._loadFile()          # 既存のGLB経路
+  → glbLoader.loadFromFile() → upload → broadcast
+```
+
+実装:
+
+- `gaussian-splat-file-import.js` — File → 変換後GLB File、サイズ上限、日本語エラーメッセージ
+- `drag-drop-manager.js` — `isGaussianSplatFile()` 分岐を `isGlbFile()` の前に追加
+
+three.js に依存しないモジュールに変換ロジックを置いているため、
+`drag-drop-manager.js`（three依存でNodeからimport不可）と切り離してテストできる。
+
+オブジェクト名にはドロップした元ファイル名（`capture.ply`）を表示し、
+uploadされるのは変換後の `capture.glb`。元ファイル情報は `userData.importedFrom` に残す。
+
+### 現在の表示（Three.js r170）
+
+**SceneSync本番のThree.jsはr170で、Gaussian Splattingを描画できない。**
+
+ただし変換後のGLBは r170 の `GLTFLoader` でも**正常にパースできる**ことを確認済み。
+
+| 項目 | r170での結果 |
+| --- | --- |
+| パース | 成功（エラーなし） |
+| 生成されるオブジェクト | `THREE.Points` + `PointsMaterial` |
+| KHR attribute | `khr_gaussian_splatting:*` として保持される（小文字化） |
+| 見た目 | 1px の白い点群（`size: 1`, `sizeAttenuation: false`） |
+| 位置・スケール | 正しい |
+
+つまり現状は「**正しい位置に白い点群として表示される**」状態になる。
+Gaussian Splatとしての見た目にはならないが、キャプチャの形状は確認でき、
+Transform / 同期 / Export は通常のGLBとして機能する。
+
+Three.js が Gaussian Splatting を含む正式版になり `WebGPURenderer` へ移行すれば（#527）、
+**同じGLBが再Import不要でそのままGaussian Splatとして描画される。**
+
+なお `normalizeGlbForSceneSync()` は spec/gloss 拡張が無い場合に
+glTF-Transform のパーサへ渡す前に早期returnするため、
+`KHR_gaussian_splatting` GLBが未知拡張として弾かれることはない。
 
 ## 中間表現 `SplatCloud`
 
@@ -154,6 +205,8 @@ GLBはImporterを通して生成しているため、browser smokeでも実際�
 ## 残課題
 
 - 実キャプチャ（数十万〜数百万splat）でのメモリ・処理時間の測定
+- 変換はメインスレッドで実行しているため、大規模キャプチャではWorker化が必要
 - ブラウザ実描画での見た目の一致確認（Three.js正式リリース待ち、#526 / #527）
-- D&D UIへの接続（#531のUI側、#527のSceneDocument統合後）
 - 大容量アセットのasset cache / blob経路（#528）
+- upAxisCorrection をUIトグルとして出す（現状は既定 `'none'` 固定、
+  `DragDropManager` の `gaussianSplatUpAxisCorrection` オプションで変更可能）
