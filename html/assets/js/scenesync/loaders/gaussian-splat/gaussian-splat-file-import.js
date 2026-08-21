@@ -78,6 +78,7 @@ export async function convertGaussianSplatFileToGlb(file, options = {}) {
     onProgress = null,
     importer = importGaussianSplatAssetPreferringWorker,
     signal = null,
+    maxShDegree,
   } = options;
 
   if (!isGaussianSplatFile(file)) {
@@ -98,6 +99,7 @@ export async function convertGaussianSplatFileToGlb(file, options = {}) {
   const result = await importer(arrayBuffer, {
     fileName: file.name,
     upAxisCorrection,
+    maxShDegree,
     signal,
     // Only read again if the Worker path fails; the common case never pays for
     // this, and the buffer above has been transferred away by then.
@@ -113,6 +115,7 @@ export async function convertGaussianSplatFileToGlb(file, options = {}) {
     file: converted,
     splatCount: result.splatCount,
     shDegree: result.shDegree,
+    sourceShDegree: result.sourceShDegree ?? result.shDegree,
     sourceFormat: result.sourceFormat,
     sourceBytes: file.size,
   };

@@ -58,7 +58,7 @@ export function resetWorkerAvailability() {
  * @param {{ fileName?: string, upAxisCorrection?: string, signal?: AbortSignal }} [options]
  */
 export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
-  const { fileName = '', upAxisCorrection = 'none', signal = null } = options;
+  const { fileName = '', upAxisCorrection = 'none', maxShDegree, signal = null } = options;
 
   return new Promise((resolve, reject) => {
     let worker;
@@ -94,6 +94,7 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
           cloud: null,
           splatCount: data.splatCount,
           shDegree: data.shDegree,
+          sourceShDegree: data.sourceShDegree ?? data.shDegree,
           sourceFormat: data.sourceFormat,
         });
       } else {
@@ -108,7 +109,7 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
 
     signal?.addEventListener('abort', onAbort);
 
-    worker.postMessage({ id, arrayBuffer, fileName, upAxisCorrection }, [arrayBuffer]);
+    worker.postMessage({ id, arrayBuffer, fileName, upAxisCorrection, maxShDegree }, [arrayBuffer]);
   });
 }
 

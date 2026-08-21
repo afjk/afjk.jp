@@ -66,6 +66,25 @@ export function createSplatCloud(count, shDegree = 0) {
   };
 }
 
+/** Highest SH degree the KHR extension and Three.js both handle. */
+export const MAX_SH_DEGREE = 3;
+
+/**
+ * Decide the SH degree to keep, given what the source carries and an optional
+ * cap. Higher bands dominate size — degree 3 is 45 floats per splat against 3
+ * for degree 0 — so capping is the main lever on import memory. It is lossy:
+ * the discarded bands are what make a splat's color change with view angle.
+ *
+ * @param {number} sourceDegree degree present in the file
+ * @param {number} [maxShDegree] cap, defaults to keeping everything
+ */
+export function resolveShDegree(sourceDegree, maxShDegree = MAX_SH_DEGREE) {
+  if (!Number.isInteger(maxShDegree) || maxShDegree < 0 || maxShDegree > MAX_SH_DEGREE) {
+    throw new RangeError(`maxShDegree must be an integer 0..${MAX_SH_DEGREE}, got ${maxShDegree}`);
+  }
+  return Math.min(sourceDegree, maxShDegree);
+}
+
 /** Logistic activation: PLY stores opacity as a logit. */
 export function sigmoid(value) {
   return 1 / (1 + Math.exp(-value));

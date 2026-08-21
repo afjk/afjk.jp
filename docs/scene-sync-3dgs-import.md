@@ -44,6 +44,7 @@ CLI:
 ```bash
 node scripts/convert-gaussian-splat.mjs capture.ply out.glb
 node scripts/convert-gaussian-splat.mjs capture.spz --flip-up
+node scripts/convert-gaussian-splat.mjs capture.ply --max-sh-degree 1
 ```
 
 ## D&D Import
@@ -240,6 +241,9 @@ Three.js `dev`（GS実装入り、commit `04d9e4e`）に対して実行した結
 | ply-ascii | PLY ascii | 1 | OK |
 | spz-degree-1 | SPZ v2 | 1 | OK |
 | spz-degree-3 | SPZ v3（smallest-three） | 3 | OK |
+| reduced-to-2 | PLY degree 3 → `maxShDegree: 2` | 2 | OK |
+| reduced-to-1 | PLY degree 3 → `maxShDegree: 1` | 1 | OK |
+| reduced-to-0 | PLY degree 3 → `maxShDegree: 0` | 0 | OK |
 
 いずれも `GLTFGaussianSplatLoaderExtension` が `GaussianSplat` を生成し、
 `splatGeometry` から読み戻したposition / color / alphaが**元のPLY / SPZの入力値と一致**した。
@@ -352,6 +356,39 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome npm run test:e2e:scene-sync-3dgs-
 - **ファイル側の問題**（`UnsupportedPlyVariantError` など）→ inline retryしない。同じ結果になるため
 - **Worker側の問題**（module読み込み失敗、CSP）→ inline retryし、以降そのセッションではWorkerを使わない
 
+### SH degreeの削減（`maxShDegree`）
+
+サイズを決めているのはsplat数ではなく**SH degree**なので、高次bandを落とすのが
+一番効くサイズ対策になる。
+
+```js
+await importGaussianSplatAsset(bytes, { maxShDegree: 1 });
+```
+
+```bash
+node scripts/convert-gaussian-splat.mjs capture.ply --max-sh-degree 0
+```
+
+500,000 splats / degree 3 のPLY（118.3 MB）を変換した場合:
+
+| `maxShDegree` | GLB | 対degree 3 |
+| ---: | ---: | ---: |
+| 3（既定） | 112.5 MB | — |
+| 2 | 72.5 MB | 0.64x |
+| 1 | 43.9 MB | 0.39x |
+| 0 | 26.7 MB | **0.24x** |
+
+**既定は削減しない（`3`）。** 高次SHはview-dependentな見え（見る角度による色の変化）を
+作っている実データであり、落とすと絵が変わる。ロスがある操作なので明示的に選ばせる。
+
+読み取り時点でbandを捨てるため、cloudのメモリも同時に減る。
+ただしsource（PLY 118MB）は保持されるので、RSS全体は比例しては下がらない。
+
+削減してもThree.js側の
+「SH bandは完全かつ連続」という要求は満たす（常にdegree 1..nを残すため）。
+`scripts/verify-against-threejs-gaussian-splat.mjs` に
+degree 2 / 1 / 0 へ削減したケースを含めて検証済み。
+
 ### GLB writeの最適化
 
 `buildSplatAttributes()` はSH係数を実体化せず `write(target, offset)` を返す。
@@ -368,5 +405,3 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome npm run test:e2e:scene-sync-3dgs-
 - 大容量アセットのasset cache / blob経路（#528）
 - 本番デプロイ環境のCSPでの確認。smokeはローカルの静的サーバー（CSPヘッダなし）で
   実行しているため、本番/stagingが `worker-src` を絞っている場合はinline fallbackに落ちる
-- degree 3のSHを落として取り込むオプション（データ量が1/4以下になり、
-  Three.js標準実装は現状SH0しか描画しないため実用上の情報欠落は小さい）

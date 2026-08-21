@@ -16,21 +16,29 @@ import { inspectGaussianSplatGlb } from '../html/assets/js/scenesync/loaders/khr
 function parseArgs(argv) {
   const positional = [];
   let upAxisCorrection = 'none';
+  let maxShDegree;
 
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
     if (arg === '--flip-up') upAxisCorrection = 'flip-x-180';
+    else if (arg === '--max-sh-degree') maxShDegree = Number(argv[++i]);
     else if (arg === '--help' || arg === '-h') return { help: true };
     else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`);
     else positional.push(arg);
   }
 
-  return { input: positional[0], output: positional[1], upAxisCorrection };
+  return { input: positional[0], output: positional[1], upAxisCorrection, maxShDegree };
 }
 
 const USAGE = `Usage: node scripts/convert-gaussian-splat.mjs <input.ply|input.spz> [output.glb] [--flip-up]
 
-  --flip-up   Write a 180 degree rotation about X on the node, for captures
-              authored Y-down. Splat data itself is never rewritten.`;
+  --flip-up            Write a 180 degree rotation about X on the node, for
+                       captures authored Y-down. Splat data is never rewritten.
+  --max-sh-degree <n>  Drop spherical harmonic bands above degree n (0-3).
+                       Degree 3 is 45 floats per splat against 3 at degree 0,
+                       so this is the main lever on size. It is lossy: the
+                       dropped bands are what make a splat's color shift with
+                       view angle.`;
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
@@ -55,6 +63,7 @@ async function main() {
   const result = await importGaussianSplatAsset(bytes, {
     fileName: path.basename(inputPath),
     upAxisCorrection: options.upAxisCorrection,
+    maxShDegree: options.maxShDegree,
   });
 
   const inspection = inspectGaussianSplatGlb(result.glb);
@@ -69,7 +78,8 @@ async function main() {
   console.log(`  -> ${outputPath}`);
   console.log(`     format    ${result.sourceFormat}`);
   console.log(`     splats    ${result.splatCount.toLocaleString()}`);
-  console.log(`     SH degree ${result.shDegree}`);
+  console.log(`     SH degree ${result.shDegree}`
+    + (result.sourceShDegree > result.shDegree ? ` (reduced from ${result.sourceShDegree})` : ''));
   console.log(`     size      ${result.glb.byteLength.toLocaleString()} bytes`);
   if (inspection.warnings.length > 0) {
     console.log(`     warnings  ${inspection.warnings.join('; ')}`);

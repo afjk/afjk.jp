@@ -66,7 +66,7 @@ export function detectSplatFormat(input, fileName = '') {
  * @returns {Promise<{ glb: Uint8Array, cloud: import('./splat-cloud.js').SplatCloud|null, sourceFormat: string, splatCount: number, shDegree: number }>}
  */
 export async function importGaussianSplatAsset(input, options = {}) {
-  const { fileName = '', upAxisCorrection = 'none' } = options;
+  const { fileName = '', upAxisCorrection = 'none', maxShDegree } = options;
   const bytes = toUint8Array(input);
   const format = detectSplatFormat(bytes, fileName);
 
@@ -89,9 +89,9 @@ export async function importGaussianSplatAsset(input, options = {}) {
 
   let cloud;
   if (format === 'ply') {
-    cloud = readGaussianSplatPly(bytes);
+    cloud = readGaussianSplatPly(bytes, { maxShDegree });
   } else if (format === 'spz') {
-    cloud = await readGaussianSplatSpz(bytes);
+    cloud = await readGaussianSplatSpz(bytes, { maxShDegree });
   } else {
     throw new Error(
       `Unrecognized Gaussian Splat container${fileName ? ` for ${fileName}` : ''}. `
@@ -112,6 +112,7 @@ export async function importGaussianSplatAsset(input, options = {}) {
     sourceFormat: cloud.sourceFormat,
     splatCount: cloud.count,
     shDegree: cloud.shDegree,
+    sourceShDegree: cloud.sourceShDegree ?? cloud.shDegree,
   };
 }
 

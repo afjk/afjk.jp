@@ -54,13 +54,27 @@ SceneSync本番統合では、現在の `WebGLRenderer` ベースから `WebGPUR
 
 ## Three.js標準実装の現在の制約
 
-- SH0のみ描画し、SH1〜SH3は現在無視される
-- 同一mesh内にGaussian primitiveと通常primitiveが混在するケースは未対応
+- 同一mesh内にGaussian primitiveと通常primitiveが混在するケースは未対応（例外になる）
+- SH bandは**完全**（degree内の係数が全部揃う）かつ**連続**（degree 2があるならdegree 1もある）
+  でなければ例外
+- `colorSpace` は必須（未指定で例外）、`kernel` は `ellipse` のみ
+- 高次SHは `coef * 128 + 128` で8bitに量子化される（[-1, 1] 超はクランプ）
 - progressive loading / spatial streamingは未対応
 - Gaussian Splat rendererはWebGPURenderer前提
 
-SceneSync v1の3DGS対応ではSH0から開始して問題ない。
 通常MeshとGaussian Splatを同一GLBに入れる場合は、**別meshとして格納する**方針にする。
+
+> **訂正（2026-08-21）**
+>
+> 当初この節に「SH0のみ描画し、SH1〜SH3は現在無視される」と書いていたが、**これは誤り**。
+> `GaussianSplat.js` には `createSphericalHarmonicsComputeNode()` があり、
+> `viewDirection` を用いて SH1〜3 による視点依存の色を実際に計算している
+> （`sphericalHarmonics1Read` 等のstorage bufferを参照）。
+>
+> このため「SceneSync v1はSH0から開始して問題ない」という判断も取り下げる。
+> 高次SHを落とすとview-dependentな見えが失われるため、
+> Importの既定は**全band保持**とし、削減は明示的なオプション
+> （`maxShDegree`）にしている。詳細は `docs/scene-sync-3dgs-import.md`。
 
 ## 実GLB fixture
 

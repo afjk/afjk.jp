@@ -20,6 +20,7 @@ import {
   SH_REST_COEFS_BY_DEGREE,
   createSplatCloud,
   normalizeQuaternion,
+  resolveShDegree,
 } from './splat-cloud.js';
 
 const SPZ_MAGIC = 0x5053474e; // "NGSP" little endian
@@ -106,7 +107,8 @@ function halfToFloat(half) {
  * @param {ArrayBuffer|Uint8Array} input inflated payload, not the gzip stream
  * @returns {import('./splat-cloud.js').SplatCloud}
  */
-export function readSpzPayload(input) {
+export function readSpzPayload(input, options = {}) {
+  const { maxShDegree } = options;
   const bytes = toUint8Array(input);
   const header = parseSpzHeader(bytes);
 
@@ -114,9 +116,11 @@ export function readSpzPayload(input) {
     throw new UnsupportedSpzError(`Unsupported SPZ SH degree: ${header.shDegree}`, 'sh-degree');
   }
 
-  const cloud = createSplatCloud(header.count, header.shDegree);
+  const shDegree = resolveShDegree(header.shDegree, maxShDegree);
+  const cloud = createSplatCloud(header.count, shDegree);
   cloud.sourceFormat = 'spz';
   cloud.antialiased = header.antialiased;
+  cloud.sourceShDegree = header.shDegree;
 
   const { count } = header;
   const positionBytes = header.version === 1 ? count * 3 * 2 : count * 3 * 3;
@@ -182,9 +186,20 @@ export function readSpzPayload(input) {
   offset += rotationBytes;
 
   // Higher order SH, already coefficient-major which is what SplatCloud wants.
+  //
+  // The bands sit contiguously per splat in degree order, so keeping only the
+  // first coefficients of each splat's block is exactly degrees 1..shDegree.
+  // The source stride still spans every band the file carries.
   if (cloud.shRest) {
-    for (let i = 0; i < shBytes; i++) {
-      cloud.shRest[i] = (bytes[offset + i] - 128) / 128;
+    const sourceCoefs = SH_REST_COEFS_BY_DEGREE[header.shDegree];
+    const keptFloats = SH_REST_COEFS_BY_DEGREE[cloud.shDegree] * 3;
+
+    for (let i = 0; i < count; i++) {
+      const source = offset + i * sourceCoefs * 3;
+      const destination = i * keptFloats;
+      for (let j = 0; j < keptFloats; j++) {
+        cloud.shRest[destination + j] = (bytes[source + j] - 128) / 128;
+      }
     }
   }
 
@@ -234,8 +249,8 @@ function readSmallestThreeRotations(bytes, offset, count, target) {
  * @param {ArrayBuffer|Uint8Array} input
  * @returns {Promise<import('./splat-cloud.js').SplatCloud>}
  */
-export async function readGaussianSplatSpz(input) {
+export async function readGaussianSplatSpz(input, options = {}) {
   const bytes = toUint8Array(input);
   const payload = isGzip(bytes) ? await gunzip(bytes) : bytes;
-  return readSpzPayload(payload);
+  return readSpzPayload(payload, options);
 }

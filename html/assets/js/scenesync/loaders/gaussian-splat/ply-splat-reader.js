@@ -16,6 +16,7 @@ import {
   SH_REST_COEFS_BY_DEGREE,
   createSplatCloud,
   normalizeQuaternion,
+  resolveShDegree,
   sigmoid,
 } from './splat-cloud.js';
 
@@ -227,9 +228,12 @@ function readAsciiBody(bytes, bodyOffset, element, propertyNames) {
  * Decode a 3D Gaussian Splatting PLY into a SplatCloud.
  *
  * @param {ArrayBuffer|Uint8Array} input
+ * @param {Object} [options]
+ * @param {number} [options.maxShDegree] drop SH bands above this degree
  * @returns {import('./splat-cloud.js').SplatCloud}
  */
-export function readGaussianSplatPly(input) {
+export function readGaussianSplatPly(input, options = {}) {
+  const { maxShDegree } = options;
   const bytes = toUint8Array(input);
   const { headerText, bodyOffset } = splitPlyHeader(bytes);
   const { format, elements } = parsePlyHeader(headerText);
@@ -246,10 +250,14 @@ export function readGaussianSplatPly(input) {
   const propertyNames = vertex.properties.map((property) => property.name);
   assertSplatProperties(propertyNames);
 
-  const shDegree = detectShDegree(propertyNames);
+  const sourceShDegree = detectShDegree(propertyNames);
+  const shDegree = resolveShDegree(sourceShDegree, maxShDegree);
+  // The stride into f_rest is set by what the file holds, not by what is kept,
+  // so this stays the source count even when bands are dropped.
   const restPropertyCount = propertyNames.filter((name) => /^f_rest_\d+$/.test(name)).length;
   const cloud = createSplatCloud(vertex.count, shDegree);
   cloud.sourceFormat = 'ply';
+  cloud.sourceShDegree = sourceShDegree;
 
   const indexOf = new Map(propertyNames.map((name, index) => [name, index]));
   const restIndices = [];

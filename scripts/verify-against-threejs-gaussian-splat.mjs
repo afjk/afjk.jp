@@ -78,9 +78,10 @@ function expect(label, actual, expected, tolerance) {
   }
 }
 
-async function verifyCase(three, label, source, expectedShDegree, fileName) {
+async function verifyCase(three, label, source, expectedShDegree, fileName, maxShDegree) {
   const { glb, splatCount, shDegree } = await importGaussianSplatAsset(source, {
     fileName,
+    maxShDegree,
   });
 
   const gltf = await parseGlb(three, glb);
@@ -152,6 +153,12 @@ async function main() {
   await verifyCase(three, 'ply-ascii', buildGaussianSplatPly(SPLATS, { shDegree: 1, format: 'ascii' }), 1, 'verify.ply');
   await verifyCase(three, 'spz-degree-1', buildSpzPayload(SPLATS, { version: 2, shDegree: 1 }), 1, 'verify.spz');
   await verifyCase(three, 'spz-degree-3', buildSpzPayload(SPLATS, { version: 3, shDegree: 3 }), 3, 'verify.spz');
+
+  // Reduced SH must still satisfy Three.js's completeness and contiguity rules.
+  const degree3Ply = buildGaussianSplatPly(SPLATS, { shDegree: 3 });
+  await verifyCase(three, 'reduced-to-2', degree3Ply, 2, 'verify.ply', 2);
+  await verifyCase(three, 'reduced-to-1', degree3Ply, 1, 'verify.ply', 1);
+  await verifyCase(three, 'reduced-to-0', degree3Ply, 0, 'verify.ply', 0);
 
   if (failures.length > 0) {
     console.log(`\n${failures.length} mismatch(es):`);

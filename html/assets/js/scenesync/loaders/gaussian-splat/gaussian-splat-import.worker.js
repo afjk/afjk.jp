@@ -8,10 +8,10 @@
 import { importGaussianSplatAsset, serializeImportError } from './import-gaussian-splat.js';
 
 self.addEventListener('message', async (event) => {
-  const { id, arrayBuffer, fileName, upAxisCorrection } = event.data || {};
+  const { id, arrayBuffer, fileName, upAxisCorrection, maxShDegree } = event.data || {};
 
   try {
-    const result = await importGaussianSplatAsset(arrayBuffer, { fileName, upAxisCorrection });
+    const result = await importGaussianSplatAsset(arrayBuffer, { fileName, upAxisCorrection, maxShDegree });
 
     // packGlb allocates an exact-sized buffer, so the view covers it whole and
     // the buffer can be handed over instead of copied. A GLB passed straight
@@ -28,6 +28,7 @@ self.addEventListener('message', async (event) => {
       glb,
       splatCount: result.splatCount,
       shDegree: result.shDegree,
+      sourceShDegree: result.sourceShDegree,
       sourceFormat: result.sourceFormat,
     }, transfer);
   } catch (error) {
