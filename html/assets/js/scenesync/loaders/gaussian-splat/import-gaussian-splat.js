@@ -120,3 +120,27 @@ function deriveName(fileName) {
   const base = fileName.split('/').pop().replace(/\.(ply|spz|glb)$/i, '');
   return base || 'GaussianSplats';
 }
+
+/**
+ * Flatten an import failure into something structuredClone can carry.
+ * Error subclasses do not survive postMessage, so the discriminating fields
+ * are copied out explicitly.
+ */
+export function serializeImportError(error) {
+  return {
+    name: error?.name || 'Error',
+    message: error?.message || String(error),
+    variant: error?.variant ?? null,
+  };
+}
+
+/** Rebuild the original error class from {@link serializeImportError} output. */
+export function reviveImportError(serialized) {
+  if (serialized?.name === 'UnsupportedPlyVariantError') {
+    return new UnsupportedPlyVariantError(serialized.message, serialized.variant);
+  }
+  if (serialized?.name === 'UnsupportedSpzError') {
+    return new UnsupportedSpzError(serialized.message, serialized.variant);
+  }
+  return new Error(serialized?.message || 'Gaussian Splat import failed');
+}

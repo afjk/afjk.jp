@@ -7,10 +7,10 @@
 // Deliberately free of any three.js import so it can be tested in Node.
 
 import {
-  importGaussianSplatAsset,
   UnsupportedPlyVariantError,
   UnsupportedSpzError,
 } from './import-gaussian-splat.js';
+import { importGaussianSplatAssetPreferringWorker } from './gaussian-splat-worker-import.js';
 
 const GAUSSIAN_SPLAT_EXTENSIONS = /\.(ply|spz)$/i;
 
@@ -69,13 +69,15 @@ export function describeGaussianSplatImportError(error) {
  * @param {'none'|'flip-x-180'} [options.upAxisCorrection]
  * @param {(status: { phase: string, file: File, bytes: number }) => void} [options.onProgress]
  * @param {Function} [options.importer] injection point for tests
+ * @param {AbortSignal} [options.signal]
  * @returns {Promise<{ file: File, splatCount: number, shDegree: number, sourceFormat: string, sourceBytes: number }>}
  */
 export async function convertGaussianSplatFileToGlb(file, options = {}) {
   const {
     upAxisCorrection = 'none',
     onProgress = null,
-    importer = importGaussianSplatAsset,
+    importer = importGaussianSplatAssetPreferringWorker,
+    signal = null,
   } = options;
 
   if (!isGaussianSplatFile(file)) {
@@ -96,6 +98,10 @@ export async function convertGaussianSplatFileToGlb(file, options = {}) {
   const result = await importer(arrayBuffer, {
     fileName: file.name,
     upAxisCorrection,
+    signal,
+    // Only read again if the Worker path fails; the common case never pays for
+    // this, and the buffer above has been transferred away by then.
+    rereadSource: () => file.arrayBuffer(),
   });
 
   const glbName = gaussianSplatGlbName(file.name);

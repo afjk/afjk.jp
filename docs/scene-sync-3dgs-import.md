@@ -27,6 +27,8 @@ SceneDocument / asset cache / Export以降は通常のGLBと同じ経路で扱�
 | `khr-glb-writer.js` | `SplatCloud` → KHR GLB のシリアライザ |
 | `import-gaussian-splat.js` | 形式判定を含むエントリポイント |
 | `gaussian-splat-file-import.js` | D&D用のFileラッパーとエラーメッセージ |
+| `gaussian-splat-worker-import.js` | Worker実行とinline fallback |
+| `gaussian-splat-import.worker.js` | Worker本体 |
 
 外部依存はゼロ。Node / ブラウザ双方でそのまま動作する。
 
@@ -202,11 +204,74 @@ node scripts/generate-gaussian-splat-import-fixtures.mjs
 `ring-gaussian-splats.{ply,spz,glb}`（16 splats / degree 1 SH）を生成する。
 GLBはImporterを通して生成しているため、browser smokeでも実際の変換結果を確認できる。
 
+## 性能とメモリ
+
+計測:
+
+```bash
+node --expose-gc --max-old-space-size=6144 scripts/benchmark-gaussian-splat-import.mjs
+```
+
+Node 22 / 単一スレッドでの実測値（decode + GLB write、gzip解凍は除く）:
+
+| splats | SH | format | source | GLB | decode | write | total | RSS |
+| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 200,000 | 0 | ply | 13.0 MB | 10.7 MB | 103 ms | 104 ms | 207 ms | 251 MB |
+| 200,000 | 3 | ply | 47.3 MB | 45.0 MB | 274 ms | 476 ms | 750 ms | 624 MB |
+| 500,000 | 3 | ply | 118.3 MB | 112.5 MB | 830 ms | 1311 ms | 2140 ms | 1313 MB |
+| 1,000,000 | 0 | ply | 64.9 MB | 53.4 MB | 248 ms | 73 ms | 321 ms | 1120 MB |
+| 1,000,000 | 3 | ply | 236.5 MB | 225.1 MB | 1118 ms | 2444 ms | 3562 ms | 2556 MB |
+| 1,000,000 | 3 | spz | 61.0 MB | 225.1 MB | 1023 ms | 863 ms | 1886 ms | 2661 MB |
+
+読み取れること:
+
+- **SH degree 3がコストを支配する。** degree 0とdegree 3で、同じsplat数でもデータ量が約4倍、
+  処理時間が10倍以上になる。degree 3は1 splatあたり45係数 × 3チャンネル = 180 bytes。
+- 1M splats / degree 3 で **3.5秒・2.5GB** に達する。メインスレッドで実行すればEditorは確実に固まり、
+  ブラウザタブのメモリ上限にも近づく。→ Worker化の根拠。
+- SPZの方がsourceは小さい（量子化済み）が、展開後のGLBサイズはPLYと同じ。
+  メモリのピークはsourceではなく**展開後のcloud + GLB**で決まる。
+
+### Worker実行
+
+変換はWorkerで実行し、source ArrayBufferとGLBの双方をtransferする（コピーしない）。
+
+```text
+main thread                    worker
+  file.arrayBuffer()
+  ── postMessage(transfer) ──→  importGaussianSplatAsset()
+  ←── postMessage(transfer) ──  glb
+  new File([glb])
+```
+
+Workerが使えない場合（module worker非対応、CSPの `worker-src` でブロック）は
+メインスレッドでの変換にfallbackする。fallback時はsourceがtransferで
+detachされているため、`rereadSource()` でFileから読み直す。
+事前にコピーを取らないのは、めったに起きないfallbackのために
+毎回sourceのメモリを2倍にしないため。
+
+変換失敗の切り分け:
+
+- **ファイル側の問題**（`UnsupportedPlyVariantError` など）→ inline retryしない。同じ結果になるため
+- **Worker側の問題**（module読み込み失敗、CSP）→ inline retryし、以降そのセッションではWorkerを使わない
+
+### GLB writeの最適化
+
+`buildSplatAttributes()` はSH係数を実体化せず `write(target, offset)` を返す。
+出力バイナリを1回だけ確保して各attributeを直接書き込むため、
+係数ごとの一時配列（1M splats / degree 3で12MB × 15）と、
+連結時の全体コピーが不要になる。
+
+1M splats / degree 3 のwriteで 3450ms → 2444ms、RSS 2742MB → 2556MB。
+
 ## 残課題
 
-- 実キャプチャ（数十万〜数百万splat）でのメモリ・処理時間の測定
-- 変換はメインスレッドで実行しているため、大規模キャプチャではWorker化が必要
 - ブラウザ実描画での見た目の一致確認（Three.js正式リリース待ち、#526 / #527）
 - 大容量アセットのasset cache / blob経路（#528）
-- upAxisCorrection をUIトグルとして出す（現状は既定 `'none'` 固定、
+- upAxisCorrection のUI導線（現状は既定 `'none'` 固定、
   `DragDropManager` の `gaussianSplatUpAxisCorrection` オプションで変更可能）
+- 実ブラウザでのWorker動作確認。Node上ではWorker clientとworker moduleを
+  それぞれstub / `self` shim で検証しているが、実際の `new Worker(url, { type: 'module' })`
+  経路とCSPの挙動は未確認
+- degree 3のSHを落として取り込むオプション（データ量が1/4以下になり、
+  Three.js標準実装は現状SH0しか描画しないため実用上の情報欠落は小さい）

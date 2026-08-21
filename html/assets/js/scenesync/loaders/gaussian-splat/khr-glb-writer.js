@@ -27,33 +27,60 @@ function align4(value) {
   return (value + 3) & ~3;
 }
 
+const COMPONENTS_PER_TYPE = { SCALAR: 1, VEC3: 3, VEC4: 4 };
+
 /**
- * Slice one SH coefficient out of the interleaved shRest array.
- * shRest is [coef0.r, coef0.g, coef0.b, coef1.r, ...] per splat.
+ * Copy a contiguous source array straight into the binary chunk.
+ * Used for every attribute the SplatCloud already stores in accessor order.
  */
-function extractShCoefficient(shRest, count, stride, coefIndex) {
-  const out = new Float32Array(count * 3);
-  for (let i = 0; i < count; i++) {
-    const base = i * stride * 3 + coefIndex * 3;
-    out[i * 3] = shRest[base];
-    out[i * 3 + 1] = shRest[base + 1];
-    out[i * 3 + 2] = shRest[base + 2];
-  }
-  return out;
+function writeContiguous(source) {
+  return (target, floatOffset) => target.set(source, floatOffset);
 }
 
 /**
- * Build the attribute list for a cloud, degree 0 first then any higher bands.
- * @returns {Array<{ semantic: string, data: Float32Array, type: string }>}
+ * Scatter one SH coefficient out of the interleaved shRest array.
+ *
+ * shRest is [coef0.r, coef0.g, coef0.b, coef1.r, ...] per splat, so each
+ * coefficient is a strided slice. Writing it directly into the output avoids a
+ * full temporary copy per coefficient, which for a million splats at degree 3
+ * is fifteen 12 MB allocations.
+ */
+function writeShCoefficient(shRest, count, stride, coefIndex) {
+  return (target, floatOffset) => {
+    for (let i = 0; i < count; i++) {
+      const source = i * stride * 3 + coefIndex * 3;
+      const destination = floatOffset + i * 3;
+      target[destination] = shRest[source];
+      target[destination + 1] = shRest[source + 1];
+      target[destination + 2] = shRest[source + 2];
+    }
+  };
+}
+
+/**
+ * Describe every attribute of a cloud without materializing the SH slices.
+ *
+ * Each descriptor carries a `write(target, floatOffset)` that emits the
+ * attribute into the shared binary chunk, so the writer allocates the payload
+ * exactly once.
+ *
+ * @returns {Array<{ semantic: string, type: string, floatCount: number, write: Function }>}
  */
 export function buildSplatAttributes(cloud) {
+  const { count } = cloud;
+
   const attributes = [
-    { semantic: 'POSITION', data: cloud.positions, type: 'VEC3' },
-    { semantic: `${KHR_GAUSSIAN_SPLATTING}:ROTATION`, data: cloud.rotations, type: 'VEC4' },
-    { semantic: `${KHR_GAUSSIAN_SPLATTING}:SCALE`, data: cloud.scales, type: 'VEC3' },
-    { semantic: `${KHR_GAUSSIAN_SPLATTING}:OPACITY`, data: cloud.opacities, type: 'SCALAR' },
-    { semantic: `${KHR_GAUSSIAN_SPLATTING}:SH_DEGREE_0_COEF_0`, data: cloud.sh0, type: 'VEC3' },
-  ];
+    { semantic: 'POSITION', type: 'VEC3', source: cloud.positions },
+    { semantic: `${KHR_GAUSSIAN_SPLATTING}:ROTATION`, type: 'VEC4', source: cloud.rotations },
+    { semantic: `${KHR_GAUSSIAN_SPLATTING}:SCALE`, type: 'VEC3', source: cloud.scales },
+    { semantic: `${KHR_GAUSSIAN_SPLATTING}:OPACITY`, type: 'SCALAR', source: cloud.opacities },
+    { semantic: `${KHR_GAUSSIAN_SPLATTING}:SH_DEGREE_0_COEF_0`, type: 'VEC3', source: cloud.sh0 },
+  ].map(({ semantic, type, source }) => ({
+    semantic,
+    type,
+    floatCount: count * COMPONENTS_PER_TYPE[type],
+    write: writeContiguous(source),
+  }));
 
   if (cloud.shRest && cloud.shDegree > 0) {
     const stride = SH_REST_COEFS_BY_DEGREE[cloud.shDegree];
@@ -63,8 +90,9 @@ export function buildSplatAttributes(cloud) {
       for (let coef = 0; coef < SH_COEFS_PER_DEGREE[degree]; coef++) {
         attributes.push({
           semantic: `${KHR_GAUSSIAN_SPLATTING}:SH_DEGREE_${degree}_COEF_${coef}`,
-          data: extractShCoefficient(cloud.shRest, cloud.count, stride, coefIndex),
           type: 'VEC3',
+          floatCount: count * 3,
+          write: writeShCoefficient(cloud.shRest, count, stride, coefIndex),
         });
         coefIndex += 1;
       }
@@ -101,23 +129,27 @@ export function writeGaussianSplatGlb(cloud, options = {}) {
   }
 
   const attributes = buildSplatAttributes(cloud);
-  const binaryParts = [];
   const bufferViews = [];
   const accessors = [];
   const primitiveAttributes = {};
+
+  // Every attribute is float32, so each one is already 4 byte aligned and the
+  // layout can be computed up front. Doing so lets the payload be allocated
+  // once and written in place instead of being concatenated afterwards.
   let binaryLength = 0;
+  const layout = attributes.map(({ semantic, type, floatCount, write }) => {
+    const byteOffset = binaryLength;
+    binaryLength += floatCount * 4;
+    return { semantic, type, floatCount, write, byteOffset };
+  });
 
-  for (const { semantic, data, type } of attributes) {
-    const padding = align4(binaryLength) - binaryLength;
-    if (padding > 0) {
-      binaryParts.push(new Uint8Array(padding));
-      binaryLength += padding;
-    }
+  const binary = new Uint8Array(binaryLength);
+  const floatView = new Float32Array(binary.buffer);
 
-    const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    binaryParts.push(bytes);
+  for (const { semantic, type, floatCount, write, byteOffset } of layout) {
+    write(floatView, byteOffset / 4);
 
-    bufferViews.push({ buffer: 0, byteOffset: binaryLength, byteLength: bytes.byteLength });
+    bufferViews.push({ buffer: 0, byteOffset, byteLength: floatCount * 4 });
 
     const accessor = {
       bufferView: bufferViews.length - 1,
@@ -135,10 +167,7 @@ export function writeGaussianSplatGlb(cloud, options = {}) {
 
     primitiveAttributes[semantic] = accessors.length;
     accessors.push(accessor);
-    binaryLength += bytes.byteLength;
   }
-
-  const binary = concatBytes(binaryParts, binaryLength);
 
   const node = { mesh: 0, name };
   if (upAxisCorrection === 'flip-x-180') node.rotation = FLIP_X_180;
@@ -171,16 +200,6 @@ export function writeGaussianSplatGlb(cloud, options = {}) {
   };
 
   return packGlb(gltf, binary);
-}
-
-function concatBytes(parts, totalLength) {
-  const out = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.byteLength;
-  }
-  return out;
 }
 
 /**
