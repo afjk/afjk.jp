@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SceneSync 3DGS Worker Smoke</title>
+  <style>
+    body { margin: 0; padding: 24px; background: #111; color: #eee; font-family: system-ui, sans-serif; font-size: 14px; }
+    h1 { font-size: 16px; margin: 0 0 16px; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #333; vertical-align: top; }
+    th { color: #999; font-weight: 500; }
+    .pass { color: #6ee7a8; }
+    .fail { color: #ff8080; }
+    #summary { margin-top: 16px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>3DGS Worker Smoke</h1>
+  <p>Gaussian Splatの変換がブラウザのWorkerで動くことを確認する。three.js には依存しない。</p>
+  <table id="results">
+    <thead><tr><th>check</th><th>result</th><th>detail</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div id="summary">running…</div>
+
+  <script type="module">
+    import {
+      convertGaussianSplatFileToGlb,
+    } from '../../assets/js/scenesync/loaders/gaussian-splat/gaussian-splat-file-import.js';
+    import {
+      importGaussianSplatAssetInWorker,
+      probeWorkerAvailability,
+    } from '../../assets/js/scenesync/loaders/gaussian-splat/gaussian-splat-worker-import.js';
+    import { inspectGaussianSplatGlb } from '../../assets/js/scenesync/loaders/khr-gaussian-splatting.js';
+    import {
+      buildGaussianSplatPly,
+      buildSpzPayload,
+      gzipBytes,
+    } from '../../assets/js/scenesync/loaders/gaussian-splat/test-fixtures.mjs';
+
+    const SPLATS = [
+      { position: [1, 2, 3], scale: [0.1, 0.2, 0.3], rotation: [0, 0, 0, 1], opacity: 0.75, sh0: [1.5, -0.5, 0.25] },
+      { position: [-4, 5, -6], scale: [0.05, 0.05, 0.05], rotation: [0, Math.SQRT1_2, 0, Math.SQRT1_2], opacity: 0.25, sh0: [-1, 0, 1] },
+    ];
+
+    const results = [];
+    const tbody = document.querySelector('#results tbody');
+
+    function record(name, ok, detail = '') {
+      results.push({ name, ok, detail: String(detail) });
+      const row = tbody.insertRow();
+      row.insertCell().textContent = name;
+      const status = row.insertCell();
+      status.textContent = ok ? 'PASS' : 'FAIL';
+      status.className = ok ? 'pass' : 'fail';
+      row.insertCell().textContent = detail;
+    }
+
+    async function check(name, fn) {
+      try {
+        record(name, true, await fn() ?? '');
+      } catch (error) {
+        record(name, false, error?.message || error);
+      }
+    }
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message);
+    }
+
+    function toArrayBuffer(bytes) {
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    }
+
+    await check('Worker is constructible (module type, CSP permitting)', () => {
+      assert(typeof Worker === 'function', 'Worker global is missing');
+      assert(probeWorkerAvailability() === true, 'probeWorkerAvailability() returned false');
+      return 'new Worker(url, { type: "module" }) succeeded';
+    });
+
+    await check('PLY converts in the Worker', async () => {
+      const source = toArrayBuffer(buildGaussianSplatPly(SPLATS));
+      // Calling the worker entry point directly means a pass cannot be the
+      // inline fallback quietly standing in.
+      const result = await importGaussianSplatAssetInWorker(source, { fileName: 'smoke.ply' });
+      assert(result.splatCount === 2, `splatCount ${result.splatCount}`);
+      assert(inspectGaussianSplatGlb(result.glb).valid, 'GLB failed inspection');
+      return `${result.splatCount} splats, ${result.glb.byteLength} bytes`;
+    });
+
+    await check('source buffer is transferred, not copied', async () => {
+      const source = toArrayBuffer(buildGaussianSplatPly(SPLATS));
+      const before = source.byteLength;
+      await importGaussianSplatAssetInWorker(source, { fileName: 'smoke.ply' });
+      assert(before > 0, 'fixture was empty');
+      assert(source.byteLength === 0, `source still has ${source.byteLength} bytes, expected detached`);
+      return `detached (${before} bytes handed over)`;
+    });
+
+    await check('gzip SPZ inflates inside the Worker (DecompressionStream)', async () => {
+      const gzipped = await gzipBytes(buildSpzPayload(SPLATS, { version: 2 }));
+      const result = await importGaussianSplatAssetInWorker(toArrayBuffer(gzipped), { fileName: 'smoke.spz' });
+      assert(result.sourceFormat === 'spz', `sourceFormat ${result.sourceFormat}`);
+      assert(result.splatCount === 2, `splatCount ${result.splatCount}`);
+      return `${result.splatCount} splats from ${gzipped.byteLength} gzipped bytes`;
+    });
+
+    await check('SH degree 3 survives the Worker boundary', async () => {
+      const shRest = Array.from({ length: 45 }, (_, i) => i / 100);
+      const source = toArrayBuffer(buildGaussianSplatPly([{ ...SPLATS[0], shRest }], { shDegree: 3 }));
+      const result = await importGaussianSplatAssetInWorker(source, { fileName: 'sh3.ply' });
+      assert(result.shDegree === 3, `shDegree ${result.shDegree}`);
+      return `SH degree ${result.shDegree}`;
+    });
+
+    await check('full File drop path produces a GLB File', async () => {
+      const file = new File([buildGaussianSplatPly(SPLATS)], 'capture.ply');
+      const result = await convertGaussianSplatFileToGlb(file);
+      assert(result.file instanceof File, 'result.file is not a File');
+      assert(result.file.name === 'capture.glb', `name ${result.file.name}`);
+      const glb = new Uint8Array(await result.file.arrayBuffer());
+      assert(inspectGaussianSplatGlb(glb).valid, 'GLB failed inspection');
+      return `${result.file.name}, ${result.splatCount} splats, ${result.file.size} bytes`;
+    });
+
+    await check('a bad file reports its variant through the Worker', async () => {
+      const bad = new File([new TextEncoder().encode([
+        'ply', 'format ascii 1.0', 'element vertex 1',
+        'property float x', 'property float y', 'property float z',
+        'end_header', '0 0 0', '',
+      ].join('\n'))], 'cloud.ply');
+
+      let caught = null;
+      try {
+        await convertGaussianSplatFileToGlb(bad);
+      } catch (error) {
+        caught = error;
+      }
+      assert(caught, 'conversion unexpectedly succeeded');
+      assert(caught.name === 'UnsupportedPlyVariantError', `error class ${caught.name}`);
+      assert(caught.variant === 'not-gaussian-splat', `variant ${caught.variant}`);
+      return `${caught.name} (${caught.variant})`;
+    });
+
+    const failed = results.filter((entry) => !entry.ok);
+    const summary = document.querySelector('#summary');
+    summary.textContent = failed.length === 0
+      ? `ALL ${results.length} CHECKS PASSED`
+      : `${failed.length} of ${results.length} CHECKS FAILED`;
+    summary.className = failed.length === 0 ? 'pass' : 'fail';
+
+    window.__workerSmoke = { results, failed: failed.length, done: true };
+  </script>
+</body>
+</html>

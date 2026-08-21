@@ -319,6 +319,34 @@ detachされているため、`rereadSource()` でFileから読み直す。
 事前にコピーを取らないのは、めったに起きないfallbackのために
 毎回sourceのメモリを2倍にしないため。
 
+実ブラウザでの確認:
+
+```bash
+npm run test:e2e:scene-sync-3dgs-worker
+```
+
+`html/scenesync/experiments/3dgs-worker-smoke.html` をChromiumで開き、以下を確認する。
+このページはthree.jsに依存しないため、CDN importmapなしで動く。
+
+| check | 確認内容 |
+| --- | --- |
+| Worker constructible | `new Worker(url, { type: 'module' })` がCSP下で構築できる |
+| PLY converts in the Worker | Worker経路のみで変換が完了する（fallbackでは通らない呼び方をしている） |
+| source is transferred | 呼び出し後にsource ArrayBufferが**detachされている**（コピーではなくtransfer） |
+| gzip SPZ inflates | Worker内で `DecompressionStream` が動く |
+| SH degree 3 survives | 高次SHがpostMessage境界を越える |
+| full File drop path | `File` → 変換 → GLB `File` |
+| bad file reports variant | `UnsupportedPlyVariantError` と `variant` がWorker境界を越えて復元される |
+
+Node側のテストはWorker clientをstubで、worker moduleを `self` shimで検証しているが、
+実際のmodule Worker構築・transfer・structuredCloneはこのsmokeでしか確認できない。
+
+事前インストール済みChromiumを使う場合:
+
+```bash
+PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome npm run test:e2e:scene-sync-3dgs-worker
+```
+
 変換失敗の切り分け:
 
 - **ファイル側の問題**（`UnsupportedPlyVariantError` など）→ inline retryしない。同じ結果になるため
@@ -338,8 +366,7 @@ detachされているため、`rereadSource()` でFileから読み直す。
 - GPU描画での確認（`WebGPURenderer`、Three.js正式リリース待ち、#526 / #527）。
   ローダーまでは `scripts/verify-against-threejs-gaussian-splat.mjs` で検証済み
 - 大容量アセットのasset cache / blob経路（#528）
-- 実ブラウザでのWorker動作確認。Node上ではWorker clientとworker moduleを
-  それぞれstub / `self` shim で検証しているが、実際の `new Worker(url, { type: 'module' })`
-  経路とCSPの挙動は未確認
+- 本番デプロイ環境のCSPでの確認。smokeはローカルの静的サーバー（CSPヘッダなし）で
+  実行しているため、本番/stagingが `worker-src` を絞っている場合はinline fallbackに落ちる
 - degree 3のSHを落として取り込むオプション（データ量が1/4以下になり、
   Three.js標準実装は現状SH0しか描画しないため実用上の情報欠落は小さい）
