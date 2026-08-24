@@ -558,7 +558,15 @@ export async function tryOpenSceneSyncExportFile(file, context = {}) {
     ? await loadSingleHtmlExportFromBlob(file)
     : await loadExportPackageFromBlob(file);
   if (!result.valid) {
+    // A readable container that simply is not a Scene Sync Export belongs to
+    // whoever comes next in the drop chain — a zipped Gaussian Splat capture,
+    // say. Claiming it here would end the drop with a misleading message.
+    // Anything that *looks* like an export but is broken stays ours to report.
     if (isSingleHtml && result.reason === 'not-single-html-export') return { handled: false };
+    if (isZip && result.reason === 'missing-scene-json') {
+      return { handled: false, reason: result.reason };
+    }
+
     const label = isSingleHtml ? 'このHTMLはScene Sync Single HTML Exportではありません' : 'このZIPはScene Sync Exportではありません';
     showToast?.(label);
     return { handled: true, error: result.reason, kind: isSingleHtml ? 'single-html-local' : 'zip-local' };

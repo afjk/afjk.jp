@@ -17,6 +17,21 @@ const BUNDLE_URL = new URL(
   import.meta.url,
 );
 
+/**
+ * Marks a rejection that came back *from* a running Worker — a conversion
+ * verdict or a cancellation — as opposed to the Worker failing to run at all.
+ */
+const WORKER_REPLIED = Symbol('gaussian-splat-worker-replied');
+
+function markWorkerReplied(error) {
+  try {
+    error[WORKER_REPLIED] = true;
+  } catch {
+    // A frozen error still surfaces correctly; it just loses the retry hint.
+  }
+  return error;
+}
+
 /** Cached so a blocked or unsupported Worker is only probed once per session. */
 let workerAvailability = null;
 
@@ -117,7 +132,8 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
     };
 
     function onAbort() {
-      finish(reject, new Error('Gaussian Splatの変換を中止しました'));
+      // Cancelling is a decision, not a malfunction: never retry it inline.
+      finish(reject, markWorkerReplied(new Error('Gaussian Splatの変換を中止しました')));
     }
 
     worker.addEventListener('message', (event) => {
@@ -133,7 +149,9 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
           sourceFormat: data.sourceFormat,
         });
       } else {
-        finish(reject, reviveImportError(data.error));
+        // The Worker ran and reached a verdict: this file cannot be converted.
+        // Converting it again on the main thread would only reproduce it.
+        finish(reject, markWorkerReplied(reviveImportError(data.error)));
       }
     });
 
@@ -149,11 +167,17 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
 }
 
 /**
- * True when the failure is the file's fault rather than the Worker's, in which
- * case retrying inline would only reproduce it.
+ * True when the Worker never got to answer, so the failure is the Worker's
+ * rather than the file's.
+ *
+ * Only these are worth retrying on the main thread — and only these justify
+ * giving up on the Worker for the session. A conversion that failed *inside* a
+ * working Worker (a truncated SPZ, a corrupt archive, a PLY that is not a
+ * splat) would fail identically inline, and treating it as a Worker problem
+ * would demote every later import to the main thread over one bad file.
  */
-export function isContentError(error) {
-  return error?.name === 'UnsupportedSplatInputError';
+export function isWorkerInfrastructureFailure(error) {
+  return !error?.[WORKER_REPLIED];
 }
 
 /** Give up on the Worker for the rest of the session. */
@@ -183,9 +207,9 @@ export async function importGaussianSplatAssetPreferringWorker(arrayBuffer, opti
   try {
     return await importGaussianSplatAssetInWorker(arrayBuffer, importOptions);
   } catch (error) {
-    if (isContentError(error) || !rereadSource) throw error;
+    if (!isWorkerInfrastructureFailure(error) || !rereadSource) throw error;
 
-    console.warn('[gaussian-splat] Worker conversion failed, retrying inline:', error);
+    console.warn('[gaussian-splat] Worker unusable, converting inline instead:', error);
     disableWorker();
     return importGaussianSplatAssetInline(await rereadSource(), importOptions);
   }

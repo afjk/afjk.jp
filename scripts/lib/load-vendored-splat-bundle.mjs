@@ -35,8 +35,14 @@ export async function vendoredBundlePath() {
 
 let installed = false;
 
-/** Give the bundle the two browser facilities it needs, once per process. */
-function installBrowserShims() {
+/**
+ * Give the bundle the two browser facilities it needs, once per process.
+ *
+ * Exported so tests that reach the bundle indirectly — through the editor's
+ * inline fallback, say — can prepare the environment without importing it
+ * themselves.
+ */
+export function installBrowserShims() {
   if (installed) return;
   installed = true;
 

@@ -43,7 +43,7 @@ export function describeGaussianSplatImportError(error) {
       case 'not-gaussian-splat':
         return 'このファイルはGaussian Splatではないようです（通常の点群かメッシュ）。3DGSの学習結果を書き出したファイルを使用してください。';
       case 'no-splat-in-archive':
-        return 'このzipにGaussian Splatのデータが見つかりませんでした。meta.lcc2 やチャンクを含むフォルダごと圧縮したものをドロップしてください。';
+        return `${error.message} LCC2は meta.lcc2 とチャンクを含むフォルダごと圧縮したものをドロップしてください。`;
       case 'empty':
         return 'splatが1つも含まれていないファイルです。';
       case 'unsupported-ply-encoding':

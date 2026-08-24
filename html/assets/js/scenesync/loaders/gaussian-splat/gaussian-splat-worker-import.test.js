@@ -5,7 +5,7 @@ import {
   disableWorker,
   importGaussianSplatAssetInWorker,
   importGaussianSplatAssetPreferringWorker,
-  isContentError,
+  isWorkerInfrastructureFailure,
   isWorkerSupported,
   probeWorkerAvailability,
   resetWorkerAvailability,
@@ -198,7 +198,7 @@ test('preferring-worker converts inline when no Worker exists', async () => {
   assert.equal(result.sourceFormat, 'ply');
 });
 
-test('preferring-worker does not retry inline for a content error', async () => {
+test('preferring-worker does not retry inline for a conversion error', async () => {
   let workerCalls = 0;
   installFakeWorker((message) => {
     workerCalls += 1;
@@ -258,9 +258,10 @@ test('preferring-worker stops using the worker after an infrastructure failure',
   removeFakeWorker();
 });
 
-test('isContentError separates file problems from worker problems', () => {
-  assert.equal(isContentError(new UnsupportedSplatInputError('x', 'not-gaussian-splat')), true);
-  assert.equal(isContentError(new Error('worker exploded')), false);
+test('only a Worker that never answered counts as infrastructure failure', () => {
+  // Nothing tagged it, so it never came back from a running Worker.
+  assert.equal(isWorkerInfrastructureFailure(new Error('worker exploded')), true);
+  assert.equal(isWorkerInfrastructureFailure(undefined), true);
 });
 
 test('disableWorker forces the inline path', async () => {
@@ -272,5 +273,51 @@ test('disableWorker forces the inline path', async () => {
   const result = await importGaussianSplatAssetPreferringWorker(plyBuffer());
 
   assert.equal(result.splatCount, 1, 'should have converted inline, not via the worker');
+  removeFakeWorker();
+});
+
+test('a plain conversion error from the Worker does not demote the session', async () => {
+  // splat-transform throws ordinary Errors for a truncated or corrupt capture.
+  // Treating those as Worker trouble would convert the file a second time on
+  // the main thread and send every later import there too.
+  let workerCalls = 0;
+  installFakeWorker((message) => {
+    workerCalls += 1;
+    return {
+      id: message.id,
+      ok: false,
+      error: { name: 'Error', message: 'readSpz: file size 120 does not match header', variant: null },
+    };
+  });
+
+  let rereads = 0;
+  const convert = () => importGaussianSplatAssetPreferringWorker(plyBuffer(), {
+    rereadSource: async () => { rereads += 1; return plyBuffer(); },
+  });
+
+  await assert.rejects(convert, /does not match header/);
+  assert.equal(rereads, 0, 'a file the Worker already rejected must not be re-converted inline');
+
+  // The next, healthy import must still get a Worker.
+  await assert.rejects(convert, /does not match header/);
+  assert.equal(workerCalls, 2, 'one bad file must not disable the Worker for the session');
+
+  removeFakeWorker();
+});
+
+test('aborting does not fall back to a main thread conversion', async () => {
+  installFakeWorker(() => undefined); // never replies
+  const controller = new AbortController();
+
+  let rereads = 0;
+  const pending = importGaussianSplatAssetPreferringWorker(plyBuffer(), {
+    signal: controller.signal,
+    rereadSource: async () => { rereads += 1; return plyBuffer(); },
+  });
+  controller.abort();
+
+  await assert.rejects(() => pending, /中止しました/);
+  assert.equal(rereads, 0, 'a cancelled import must not restart on the main thread');
+
   removeFakeWorker();
 });

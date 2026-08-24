@@ -158,7 +158,7 @@ test('describeGaussianSplatImportError explains each variant', () => {
   );
 
   assert.match(message('not-gaussian-splat'), /Gaussian Splatではない/);
-  assert.match(message('no-splat-in-archive'), /zip/);
+  assert.match(message('no-splat-in-archive'), /LCC2/);
   assert.match(message('empty'), /splatが1つも/);
   assert.match(message('invalid-glb'), /KHR_gaussian_splatting/);
   assert.match(message('aborted'), /中止/);

@@ -59,6 +59,26 @@ export function configureWebPWasmUrl(url) {
   WebPCodec.wasmUrl = url;
 }
 
+/** The highest spherical harmonic degree KHR_gaussian_splatting defines. */
+export const MAX_SH_DEGREE = 3;
+
+/**
+ * Reject a nonsensical SH cap instead of silently keeping every band.
+ *
+ * Trimming only runs when the cap is below what the file has, so an
+ * out-of-range value would otherwise read as "keep everything" — the caller
+ * would get the opposite of a size reduction with no indication why.
+ */
+function resolveMaxShDegree(value) {
+  if (value === undefined) return null;
+  if (!Number.isInteger(value) || value < 0 || value > MAX_SH_DEGREE) {
+    throw new RangeError(
+      `maxShDegree must be an integer between 0 and ${MAX_SH_DEGREE}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
 function throwIfAborted(signal) {
   if (signal?.aborted) {
     throw new UnsupportedSplatInputError('Gaussian Splatの変換を中止しました', 'aborted');
@@ -94,8 +114,11 @@ export function resolveArchiveEntry(entries) {
     if (match) return { filename: match, inputFormat };
   }
 
+  // A ZIP reaches the splat importer only after the Scene Sync Export importer
+  // has declined it, so this is the last word on the drop and has to name both
+  // possibilities.
   throw new UnsupportedSplatInputError(
-    'このアーカイブにGaussian Splatのデータが見つかりませんでした。'
+    'このZIPはScene Sync Exportでも、Gaussian Splatのアーカイブでもありませんでした。'
     + `含まれているファイル: ${paths.slice(0, 8).join(', ') || '(なし)'}`,
     'no-splat-in-archive',
   );
@@ -186,6 +209,8 @@ export async function convertGaussianSplatToGlb(input, options = {}) {
     signal = null,
   } = options;
 
+  const shCap = resolveMaxShDegree(maxShDegree);
+
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const detected = detectSplatContainer(bytes, fileName);
 
@@ -237,10 +262,10 @@ export async function convertGaussianSplatToGlb(input, options = {}) {
 
     // Trimming SH is lossy, so it only ever happens when asked for. Reducing to
     // the degree the file already has would be a no-op pass over every splat.
-    if (Number.isInteger(maxShDegree) && maxShDegree < sourceShDegree) {
+    if (shCap !== null && shCap < sourceShDegree) {
       source = await processSourceBridged(
         source,
-        [{ kind: 'filterBands', value: maxShDegree }],
+        [{ kind: 'filterBands', value: shCap }],
         pool,
         {},
       );

@@ -417,3 +417,21 @@ test('a bare LCC manifest says to zip the folder instead', async () => {
       && /zip/.test(error.message),
   );
 });
+
+test('maxShDegree outside 0..3 is rejected rather than ignored', async () => {
+  for (const bad of [-1, 4, 99, 1.5, '2', null, NaN]) {
+    await assert.rejects(
+      convertGaussianSplatToGlb(plyBytes(), { fileName: 'a.ply', maxShDegree: bad }),
+      RangeError,
+      `should reject ${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+test('an omitted maxShDegree keeps every band', async () => {
+  const result = await convertGaussianSplatToGlb(plyBytes(), {
+    fileName: 'a.ply',
+    maxShDegree: undefined,
+  });
+  assert.equal(result.shDegree, 1);
+});

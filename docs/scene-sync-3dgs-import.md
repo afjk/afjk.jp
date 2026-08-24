@@ -49,9 +49,14 @@ zip内のエントリからフォーマットを判定する（浅い階層優�
 
 `meta.lcc2` → `meta.lcc` → `lod-meta.json` → `meta.json` → 単体の `.ply` / `.spz` / `.sog` / `.splat` / `.ksplat`
 
-`DragDropManager` はzipをまずScene Sync Export importerに渡すため、
-SceneSyncのExport zipは従来どおりそちらが処理する。処理されなかったzipだけが
-Gaussian Splat経路に落ちてくる。
+`DragDropManager` はzipをまずScene Sync Export importerに渡す。そのため
+`tryOpenSceneSyncExportFile()` は、**中に `scene.json` が無いzip**（=Scene Sync Export
+ではないzip）については `{ handled: false }` を返して次のImporterへ譲る。
+これが無いとcapture zipは「このZIPはScene Sync Exportではありません」で終わってしまい、
+Gaussian Splat判定まで到達しない。
+
+`scene.json` はあるが壊れているzip（`invalid-scene-json` / `invalid-scene-document`）は
+Scene Sync Exportのつもりの入力なので、従来どおりExport importerが引き受けて報告する。
 
 ### PLYのエンコーディング
 
@@ -229,10 +234,13 @@ node scripts/convert-gaussian-splat.mjs capture.ply --flip-up
 | `not-gaussian-splat` | 読めるがposition / geometric / colorのlayerが揃っていない（通常の点群など） |
 | `unsupported-ply-encoding` | PLYが `ascii` / `binary_big_endian` |
 | `incomplete-lcc` | `meta.lcc2` / `meta.lcc` 単体（チャンクが無い） |
-| `no-splat-in-archive` | zipに認識できるsplatが無い |
+| `no-splat-in-archive` | zipに認識できるsplatが無い（Scene Sync Exportでもない） |
 | `empty` | splat数が0 |
 | `invalid-glb` | KHR拡張が無い、必須attributeが欠けているGLB |
 | `aborted` | AbortSignalによる中止 |
+
+`maxShDegree` に `0..3` 以外を渡した場合は `RangeError`。範囲外の値は
+「削減しない」と区別が付かず、サイズが減らない理由が分からなくなるため、入口で弾く。
 
 破損・切り詰めファイルはsplat-transform側がsize不一致で例外にするので、そのまま伝える。
 
@@ -257,6 +265,7 @@ splat-transformの内部ではないため。
 | `gaussian-splat-import.worker.test.js` | Workerメッセージ契約、transfer、エラーのserialize |
 | `gaussian-splat-worker-import.test.js` | Worker probe、fallback判断、abort |
 | `gaussian-splat-file-import.test.js` | File → GLB File、命名、サイズ上限、エラー文言 |
+| `components/drag-drop-gaussian-splat.test.js` | **`DragDropManager.handleFile()` を通したD&D経路**。zipがExport importerとGaussian Splat importerのどちらに渡るか |
 | `vendored-bundle.test.js` | **コミット済みbundle**が4形式を変換でき、外部参照を持たないこと |
 
 主要な検証項目:
@@ -425,8 +434,19 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome npm run test:e2e:scene-sync-3dgs-
 
 変換失敗の切り分け:
 
-- **ファイル側の問題**（`UnsupportedSplatInputError`）→ inline retryしない。同じ結果になるため
-- **Worker側の問題**（module読み込み失敗、CSP）→ inline retryし、以降そのセッションではWorkerを使わない
+判定基準は**エラーの型ではなく、Workerが返事をしたかどうか**。
+
+| 失敗 | inline retry | Worker無効化 |
+| --- | --- | --- |
+| Workerが `{ok:false}` を返した（変換エラー全般） | しない | しない |
+| AbortSignalによる中止 | しない | しない |
+| `new Worker()` が例外（CSPなど） | する | する |
+| Workerの `error` イベント（module読み込み失敗など） | する | する |
+
+splat-transformは破損zipやtruncated SPZに**普通の `Error`** を投げる。これを
+「Worker側の問題」と誤認すると、同じファイルをmain threadでもう一度変換したうえ、
+そのセッションの以降の巨大SOGまで全部main threadに落ちてEditorが固まる。
+Workerから正常に返ってきた失敗は、型に関係なく変換の結論として扱う。
 
 ### SH degreeの削減（`maxShDegree`）
 
