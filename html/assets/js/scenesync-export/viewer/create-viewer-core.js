@@ -4,6 +4,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { registerSceneSyncGLTFLoaderExtensions } from '../../scenesync/loaders/gltf-loader-config.js';
 import {
+  createGaussianSplatSortScheduler,
   disposeObject3DResources,
   prepareGaussianSplatRoot,
 } from '../../scenesync/loaders/gaussian-splat-runtime.js';
@@ -235,6 +236,7 @@ export async function createViewerCore({
   const animationRuntimes = [];
   let gaussianObjects = 0;
   let gaussianSplatCount = 0;
+  const gaussianSplatSortScheduler = createGaussianSplatSortScheduler();
 
   // Ambient + directional lights as fallback
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -648,6 +650,16 @@ export async function createViewerCore({
         splatCount: gaussianSplatCount,
         objectCount: objectMap.size,
       };
+    },
+
+    updateGaussianSplatSorts(camera, now = performance.now()) {
+      return gaussianSplatSortScheduler.update({
+        root: scene,
+        renderer,
+        camera,
+        now,
+        continuous: renderer.xr?.isPresenting === true,
+      });
     },
 
     playObjectAudioPlaybackTargets() {

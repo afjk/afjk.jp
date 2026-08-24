@@ -339,6 +339,7 @@ async function main() {
     }
     viewerCore.update();
     controls.update();
+    viewerCore.updateGaussianSplatSorts(camera, now);
     renderer.render(scene, camera);
     globalThis.__sceneSyncViewerDiagnostics.rendered = true;
   });

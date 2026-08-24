@@ -3,7 +3,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { normalizeGlbForSceneSync } from './glb-normalizer.js';
 import { registerSceneSyncGLTFLoaderExtensions } from './gltf-loader-config.js';
-import { prepareGaussianSplatRoot } from './gaussian-splat-runtime.js';
+import {
+  prepareGaussianSplatRoot,
+  shouldAutoScaleSceneSyncGlb,
+} from './gaussian-splat-runtime.js';
 import { SCENE_SYNC_DRACO_DECODER_PATH } from '../../scenesync-export/viewer/three-runtime.js';
 
 function toVector3(position) {
@@ -64,12 +67,15 @@ export class GLBFileLoader {
     const size = box.getSize(new THREE.Vector3());
     const maxDimension = Math.max(size.x, size.y, size.z);
 
-    if (maxDimension > this.maxDimension) {
+    const autoScale = shouldAutoScaleSceneSyncGlb(gaussianDiagnostics);
+    if (autoScale && maxDimension > this.maxDimension) {
       wrapper.scale.setScalar(this.maxDimension / maxDimension);
       wrapper.updateMatrixWorld(true);
     }
 
-    const adjustedBox = new THREE.Box3().setFromObject(wrapper);
+    const adjustedBox = wrapper.scale.x === 1 && wrapper.scale.y === 1 && wrapper.scale.z === 1
+      ? box
+      : new THREE.Box3().setFromObject(wrapper);
     const groundOffset = -adjustedBox.min.y;
     const targetPosition = toVector3(position) || new THREE.Vector3();
     targetPosition.y += groundOffset;
@@ -121,6 +127,7 @@ export class GLBFileLoader {
         hasGaussianSplat: gaussianDiagnostics.hasGaussianSplat,
         gaussianSplatCount: gaussianDiagnostics.splatCount,
         gaussianSplatObjects: gaussianDiagnostics.gaussianObjects,
+        gaussianSplatNaturalScale: gaussianDiagnostics.hasGaussianSplat,
       },
     };
 
