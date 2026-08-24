@@ -299,9 +299,50 @@ Editor の補助メニューとして **Tools > Scene Sync > Support** を利用
 
 透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が任意の MonoBehaviour callback に依存している場合、その callback の実行結果までは自動推測できません。AnimationCurve として表現されている blend shape / material / transform などが自動 bake の対象です。
 
+## Gaussian Splat（KHR_gaussian_splatting GLB）
+
+SceneSync の 3DGS 交換形式は `KHR_gaussian_splatting` を含む GLB です。Unity 側に
+`.sog` / `.spz` / `.lcc2` などの parser は持たず、SceneSync Web が正規化した GLB を
+そのまま受け取ります。
+
+### Editor で配置する
+
+`GameObject > Scene Sync > Import Gaussian Splat GLB...` から GLB を選ぶと、
+`SceneSyncGaussianSplatSource` を持つ GameObject がシーンに追加されます。
+`[ExecuteAlways]` なので、シーンを開いた時点で Scene View に表示されます。Play モードへ
+入る必要はありません。position / rotation / scale / active は通常の GameObject と同じです。
+
+GLB の渡し方は2通りです。
+
+| フィールド | 用途 |
+| --- | --- |
+| `Glb Asset` (`TextAsset`) | プロジェクト内に置く場合。拡張子を `.glb.bytes` にしてください。`.glb` のままだと glTFast の importer が処理して `KHR_gaussian_splatting` が落ちます |
+| `Glb Path` (`string`) | プロジェクト外を直接指す場合。絶対パス、または `StreamingAssets` からの相対パス |
+
+### Runtime
+
+SceneSync 経由で受け取った GLB は、既存の GLB 同期・asset cache 経路のまま扱われます。
+`KHR_gaussian_splatting` を検出した場合だけ Gaussian Splat 経路へ分岐し、transform /
+visibility / delete などは通常 GLB と同じように同期されます。
+
+### Renderer backend
+
+描画は差し替え可能な backend に委ねています。未登録の場合は、依存ゼロの点群プレビュー
+（`MeshTopology.Points`）で表示します。**プレビューは配置とスケール確認のためのもので、
+最終的な描画品質ではありません。**
+
+```csharp
+SceneSyncGaussianSplatBackend.Register(new MySplatBackend());
+```
+
+backend は `ISceneSyncGaussianSplatBackend` を実装し、座標を glTFast と同じ規則
+（X 反転）で Unity 空間へ変換して返します。詳細は
+[3DGS エンジン統合](../../docs/scene-sync-3dgs-engine-integration.md) を参照してください。
+
 ## 技術仕様
 
 - [Scene Sync Spec](../../docs/scene-sync-spec.md)
 - [Unity オーサリングモデル](../../docs/scene-sync-unity-authoring.md)
 - [座標系と visualBasis](../../docs/scene-sync-coordinate-system.md)
 - [Asset / Blob / Cache](../../docs/scene-sync-assets-and-cache.md)
+- [3DGS エンジン統合](../../docs/scene-sync-3dgs-engine-integration.md)

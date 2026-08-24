@@ -127,3 +127,26 @@ Loomlet リポジトリから取り込む。
 ## `html/assets/hdri/`
 
 Poly Haven の HDRI（CC0）。
+
+## Unity / Godot の Gaussian Splat renderer
+
+**現時点では同梱していない。**
+
+Unity 版 / Godot 版 SceneSync は `KHR_gaussian_splatting` GLB を検出して
+差し替え可能な backend へ渡す口だけを持ち、renderer 本体には依存していない
+（backend 未登録時は依存ゼロの点群プレビューへ落ちる）。詳細は
+`docs/scene-sync-3dgs-engine-integration.md`。
+
+採用候補と、実際に bundle / package へ含める段階で必要になる notice:
+
+| 候補 | ライセンス | 備考 |
+| --- | --- | --- |
+| `UnitySplats` | MIT | 同梱依存（gsplat-unity / PlayCanvas Engine 由来 / UnityGaussianSplatting 由来 / GPUSorting / Spark / Niantic SPZ / ZstdSharp / Unity.WebP）も MIT、libwebp は BSD-3-Clause |
+| [`godot-gsplat`](https://github.com/shiena/godot-gsplat) | MIT | 依存する godot-rust / gdext は MPL-2.0（file-level copyleft） |
+
+同梱時に行うこと:
+
+- copyright / license notice を保持し、この文書へ節を追加する
+- godot-rust は fork / 改変せず upstream をそのまま利用する。
+  やむを得ず MPL 対象ファイルを改変して配布する場合はソース提供義務を満たす
+- GPL / AGPL 等の強い copyleft が混入していないか再確認する

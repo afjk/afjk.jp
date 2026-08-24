@@ -3240,6 +3240,98 @@ namespace Afjk.SceneSync
             return fallback;
         }
 
+        /// <summary>
+        /// KHR_gaussian_splatting GLB を Gaussian Splat バックエンドで読み込み、
+        /// 通常 GLB と同じ Scene Sync オブジェクトとして配置する。
+        /// 読み込めなかった場合は null を返す（呼び出し側が fallback primitive へ落とす）。
+        /// </summary>
+        private GameObject TryCreateGaussianSplatObject(
+            string objectId,
+            string name,
+            byte[] glbBytes,
+            SceneSyncGaussianSplatGlbInfo splatInfo,
+            string meshPath,
+            string assetId,
+            string visualBasis,
+            string assetJson,
+            string metadataJson,
+            float[] position,
+            float[] rotation,
+            float[] scale,
+            bool? visible,
+            string physicsJson)
+        {
+            Debug.Log(
+                "[SceneSync] KHR_gaussian_splatting detected: objectId=" + objectId
+                + ", meshPath=" + meshPath
+                + ", " + splatInfo);
+
+            if (splatInfo.HasRegularMeshPrimitive)
+            {
+                Debug.LogWarning(
+                    "[SceneSync] Mixed mesh / Gaussian Splat GLB; only the splat primitives are rendered: objectId="
+                    + objectId);
+            }
+
+            var visual = SceneSyncGaussianSplatBackend.CreateVisual(glbBytes, splatInfo);
+            if (!visual.Ok)
+            {
+                Debug.LogWarning(
+                    "[SceneSync] Gaussian Splat import failed: objectId=" + objectId
+                    + ", meshPath=" + meshPath
+                    + ", reason=" + visual.Reason);
+                return null;
+            }
+
+            var placeholder = _managedObjects[objectId];
+            var placeholderInstanceId = placeholder.GetInstanceID();
+            var placeholderGraphJson = GetObjectLoomGraphJson(placeholder);
+            var effectivePhysicsJson = physicsJson ?? GetObjectPhysicsJson(placeholder);
+            if (!string.IsNullOrWhiteSpace(placeholderGraphJson))
+                _pendingObjectLoomGraphs[objectId] = placeholderGraphJson;
+
+            var go = new GameObject(name);
+            ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
+            SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+            if (effectivePhysicsJson != null)
+                ApplyObjectPhysicsMetadata(go, effectivePhysicsJson);
+            ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
+            if (visible.HasValue) go.SetActive(visible.Value);
+            go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+
+            // 通常 GLB と同じ ImportedGlbRoot 構造にそろえる。Gaussian Splat バックエンドも
+            // glTFast と同じ規則で Unity 空間へ変換して返す約束なので、補正も同じでよい。
+            var importedGlbRoot = new GameObject("ImportedGlbRoot");
+            importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
+            importedGlbRoot.transform.localPosition = Vector3.zero;
+            importedGlbRoot.transform.localRotation = visualBasis != "unity"
+                ? Quaternion.Euler(0f, 180f, 0f)
+                : Quaternion.identity;
+            importedGlbRoot.transform.localScale = Vector3.one;
+
+            visual.Visual.transform.SetParent(importedGlbRoot.transform, worldPositionStays: false);
+
+            // プレースホルダーのマッピングを新オブジェクトに移動
+            _instanceToObjectId.Remove(placeholderInstanceId);
+            _instanceToObjectId[go.GetInstanceID()] = objectId;
+            _managedObjects[objectId] = go;
+            EnsureLocalObjectEpoch(objectId);
+
+            ApplyTransform(go, position, rotation, scale);
+            ApplyPendingObjectLoomGraph(objectId, go);
+
+            Destroy(placeholder);
+
+            Debug.Log(
+                "[SceneSync] Imported Gaussian Splat: name=" + name
+                + ", objectId=" + objectId
+                + ", meshPath=" + meshPath
+                + ", source=" + visual.Source
+                + ", backend=" + visual.BackendName
+                + ", points=" + visual.PointCount);
+            return go;
+        }
+
         private async System.Threading.Tasks.Task DownloadAndCreateObject(
             string objectId, string name, string meshPath,
             float[] position, float[] rotation, float[] scale, string assetId = null, string visualBasis = null,
@@ -3328,6 +3420,35 @@ namespace Afjk.SceneSync
                 if (!string.IsNullOrEmpty(meshPath))
                     _meshPathCache[meshPath] = glbBytes;
                 StorePersistentCachedGlb(glbBytes, assetId, meshPath);
+            }
+
+            // Scene Sync の 3DGS 交換形式は KHR_gaussian_splatting GLB。
+            // glTFast はこの拡張を知らないため、Gaussian Splat primitive を含む GLB は
+            // 専用バックエンドへ振り分ける。通常 GLB は従来どおり glTFast へ。
+            SceneSyncGaussianSplatGlbInfo gaussianSplatInfo;
+            if (SceneSyncGaussianSplatBackend.IsGaussianSplatGlb(glbBytes, out gaussianSplatInfo))
+            {
+                if (!_managedObjects.ContainsKey(objectId))
+                {
+                    // ダウンロード中にオブジェクトが消えた場合。何もしないのが正しい。
+                    Debug.LogWarning(
+                        "[SceneSync] Gaussian Splat GLB arrived for an object that is no longer managed: objectId="
+                        + objectId);
+                    return;
+                }
+
+                var splatObject = TryCreateGaussianSplatObject(
+                    objectId, name, glbBytes, gaussianSplatInfo, meshPath, assetId, visualBasis,
+                    assetJson, metadataJson, position, rotation, scale, visible, physicsJson);
+                if (splatObject == null)
+                {
+                    splatObject = ReplaceWithFallbackPrimitive(
+                        objectId, name, meshPath, position, rotation, scale, assetId, assetJson,
+                        metadataJson, visible, physicsJson);
+                }
+
+                OnObjectAdded?.Invoke(objectId, splatObject);
+                return;
             }
 
             try
@@ -4289,6 +4410,50 @@ namespace Afjk.SceneSync
             var meshPath = null as string;
             if (_meshPaths.TryGetValue(objectId, out var mp))
                 meshPath = mp;
+
+            // Gaussian Splat GLB は glTFast を通さず専用バックエンドで復元する。
+            SceneSyncGaussianSplatGlbInfo gaussianSplatInfo;
+            if (SceneSyncGaussianSplatBackend.IsGaussianSplatGlb(glbBytes, out gaussianSplatInfo))
+            {
+                var visual = SceneSyncGaussianSplatBackend.CreateVisual(glbBytes, gaussianSplatInfo);
+                if (!visual.Ok)
+                {
+                    Debug.LogWarning("[ExpiredGlbRecovery] Gaussian Splat import failed: " + visual.Reason);
+                    return;
+                }
+
+                var recoveredGraphJson = GetObjectLoomGraphJson(go);
+                if (!string.IsNullOrWhiteSpace(recoveredGraphJson))
+                    _pendingObjectLoomGraphs[objectId] = recoveredGraphJson;
+
+                ForgetObject(objectId, go);
+                Destroy(go);
+
+                var splatGo = new GameObject(name);
+                ConfigureRemoteTemporaryIdentity(splatGo, objectId, meshPath, assetId);
+                splatGo.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+
+                var splatRoot = new GameObject("ImportedGlbRoot");
+                splatRoot.transform.SetParent(splatGo.transform, worldPositionStays: false);
+                splatRoot.transform.localPosition = Vector3.zero;
+                splatRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                splatRoot.transform.localScale = Vector3.one;
+                visual.Visual.transform.SetParent(splatRoot.transform, worldPositionStays: false);
+
+                _instanceToObjectId[splatGo.GetInstanceID()] = objectId;
+                _managedObjects[objectId] = splatGo;
+                EnsureLocalObjectEpoch(objectId);
+
+                ApplyTransform(splatGo, position, rotation, scale);
+                ApplyPendingObjectLoomGraph(objectId, splatGo);
+
+                Debug.Log(
+                    "[ExpiredGlbRecovery] Recovered Gaussian Splat: objectId=" + objectId
+                    + ", source=" + visual.Source
+                    + ", points=" + visual.PointCount);
+                OnObjectAdded?.Invoke(objectId, splatGo);
+                return;
+            }
 
             // Reuse the existing load logic but with bytes instead of download
             var tempPath = System.IO.Path.Combine(Application.temporaryCachePath, objectId + ".glb");

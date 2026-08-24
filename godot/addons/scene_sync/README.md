@@ -121,6 +121,42 @@ The addon follows the current Unity SceneSync wire shape for scene objects:
 - preserves `scene-state.loomGraphs` and `scene-graph-set` / `scene-graph-clear` updates when relaying scene state
 - evaluates Loomlet object and scene behavior graphs through the same C# `Loomlet.Runtime` core used by Unity, with a Godot `Node3D` adapter for Scene Sync sink nodes
 
+## Gaussian Splats (KHR_gaussian_splatting GLB)
+
+SceneSync exchanges 3D Gaussian Splats as GLB files carrying the `KHR_gaussian_splatting`
+extension. The addon does not parse `.sog` / `.spz` / `.lcc2` and friends; SceneSync Web
+normalizes those formats and the addon consumes the resulting GLB.
+
+`SceneSyncGltfHelper.import_glb()` detects the extension and routes such GLBs away from
+`GLTFDocument`, which cannot interpret them.
+
+### Editor placement
+
+Use `Project > Tools > Scene Sync: Gaussian Splat GLB を読み込む...` to add a
+`SceneSyncGaussianSplatNode3D` to the edited scene (undoable), or add the node from the
+`Add Node` dialog and set `glb_path`. The node is a `@tool` node, so it renders in the 3D
+viewport as soon as the scene is opened — running the project is not required. Transform and
+visibility behave like any other `Node3D`; the visual child is rebuilt from `glb_path`
+instead of being saved into the `.tscn`.
+
+When the GLB lives inside `res://`, set its import type to **Keep File (exported as is)**.
+Godot's own glTF importer cannot interpret `KHR_gaussian_splatting`.
+
+### Renderer backend
+
+Actual splat rendering is delegated to a pluggable backend:
+
+```gdscript
+SceneSyncGaussianSplatBackend.register_backend(MySplatBackend.new())
+```
+
+A backend is any object exposing `get_backend_name()`, `can_render(info)` and
+`create_splat_node(data, info)`. When no backend is registered the addon falls back to a
+dependency-free point-cloud preview built from `POSITION` and `COLOR_0` (or SH0 + opacity).
+**The preview is for placement and scale, not final rendering quality.**
+
+See [docs/scene-sync-3dgs-engine-integration.md](../../../docs/scene-sync-3dgs-engine-integration.md).
+
 ## Spec
 
 See [docs/scene-sync-spec.md](../../../docs/scene-sync-spec.md) for the wire protocol and cross-client behavior.
