@@ -149,7 +149,19 @@ function createNoCorsPublisher(targetAppUrl, targetOrigin, sceneDocument, triang
       res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html>
         <link rel="scene-sync-export" href="./scene.json"><div id="viewer-ui"></div>
         <script>globalThis.__SCENE_SYNC_HANDOFF_TARGET_URL__ = ${JSON.stringify(targetAppUrl)};<\/script>
-        <script type="module">import { mountUrlHandoff } from '${new URL('/assets/js/scenesync/handoff/source.js', targetOrigin).href}'; mountUrlHandoff({ sourceUrl: location.href }); globalThis.__URL_HANDOFF_READY__ = true;<\/script>`);
+        <script type="module">
+          import { mountUrlHandoff } from '${new URL('/assets/js/scenesync/handoff/source.js', targetOrigin).href}';
+          globalThis.__URL_HANDOFF_MESSAGES__ = [];
+          globalThis.addEventListener('message', (event) => {
+            globalThis.__URL_HANDOFF_MESSAGES__.push({
+              type: event.data?.type || null,
+              origin: event.origin,
+              sourceMatchesPopup: event.source === globalThis.__URL_HANDOFF_CONTROLLER__?.getPopup?.(),
+            });
+          });
+          globalThis.__URL_HANDOFF_CONTROLLER__ = mountUrlHandoff({ sourceUrl: location.href });
+          globalThis.__URL_HANDOFF_READY__ = true;
+        <\/script>`);
       return;
     }
     if (url.pathname === '/world/scene.json') {
@@ -559,7 +571,16 @@ try {
     await noCorsSource.waitForFunction(() => document.getElementById('scene-sync-handoff-status')?.textContent === 'Opened in Scene Sync.', null, { timeout: 30_000 });
   } catch (error) {
     const status = await noCorsSource.locator('#scene-sync-handoff-status').textContent().catch(() => 'unavailable');
-    throw new Error(`${error.message}\nno-ACAO status=${status}\npopup=${noCorsPopup.url()}\ndiagnostics=${noCorsDiagnostics.join('\n')}\nrequests=${requestLog.join('\n')}`);
+    const sourceState = await noCorsSource.evaluate(() => ({
+      controller: globalThis.__URL_HANDOFF_CONTROLLER__?.getState?.() || null,
+      messages: globalThis.__URL_HANDOFF_MESSAGES__ || [],
+    })).catch(() => null);
+    const popupState = await noCorsPopup.evaluate(() => ({
+      openerPresent: Boolean(globalThis.opener),
+      openerClosed: globalThis.opener?.closed ?? null,
+      toast: document.querySelector('.toast, #toast')?.textContent || null,
+    })).catch(() => null);
+    throw new Error(`${error.message}\nno-ACAO status=${status}\nsourceState=${JSON.stringify(sourceState)}\npopupState=${JSON.stringify(popupState)}\npopup=${noCorsPopup.url()}\ndiagnostics=${noCorsDiagnostics.join('\n')}\nrequests=${requestLog.join('\n')}`);
   }
   await Promise.race([noCorsAddDone, new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for no-ACAO carrier broadcast')), 10_000))]);
   const noCorsObject = await noCorsPopup.evaluate(async () => {
