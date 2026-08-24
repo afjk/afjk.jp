@@ -64,7 +64,9 @@ try {
   const consoleErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    if (message.type() === 'error' || /WebGL: INVALID_OPERATION/iu.test(message.text())) {
+      consoleErrors.push(message.text());
+    }
   });
 
   await page.goto(url, { waitUntil: 'domcontentloaded' });

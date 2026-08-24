@@ -323,6 +323,7 @@ async function assertExportFixture(exportRoot, copied) {
 function relevantConsoleErrors(consoleMessages) {
   return consoleMessages.filter((entry) => {
     const text = String(entry.text || '');
+    if (/WebGL: INVALID_OPERATION/iu.test(text)) return true;
     if (entry.type === 'warning' && /\b(Rapier|scene-physics|WebAssembly|wasm)\b/iu.test(text)) return true;
     if (entry.type !== 'error') return false;
     if (/GL Driver Message .*ReadPixels/.test(entry.text)) return false;

@@ -87,11 +87,17 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const pageErrors = [];
   const consoleErrors = [];
+  const invalidOperations = [];
   const requestUrls = [];
+  let phase = 'startup';
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => {
-    if (message.type() !== 'error') return;
     const text = message.text();
+    if (/WebGL: INVALID_OPERATION/iu.test(text)) {
+      if (invalidOperations.length < 20) invalidOperations.push(`${phase}: ${text}`);
+      return;
+    }
+    if (message.type() !== 'error') return;
     if (/WebSocket|presence\/|favicon/iu.test(text)) return;
     consoleErrors.push(text);
   });
@@ -101,7 +107,7 @@ try {
   await page.waitForFunction(() => globalThis.__sceneSyncDebug?.renderer?.(), null, {
     timeout: 30000,
   });
-
+  phase = 'sog-import';
   const imported = await page.evaluate(async (bytes) => {
     const file = new File([Uint8Array.from(bytes)], 'ring-gaussian-splats.sog');
     const model = await globalThis.__sceneSyncDebug.dragDropManager.handleFile(file, {
@@ -127,7 +133,9 @@ try {
   assert(snapshot.gaussian?.gaussianObjects === 1, 'Editor Gaussian object count changed');
   assert(snapshot.gaussian?.splatCount === 16, 'Editor did not preserve every SOG splat');
   assert(snapshot.gaussian?.selectionProxy === true, 'Editor did not create a Gaussian bounds selection proxy');
+  await page.waitForTimeout(500);
 
+  phase = 'draco-import';
   const dracoObjectId = await page.evaluate(async (bytes) => {
     const file = new File([Uint8Array.from(bytes)], 'draco-triangle.glb');
     const model = await globalThis.__sceneSyncDebug.dragDropManager.handleFile(file, {
@@ -144,7 +152,9 @@ try {
     globalThis.__sceneSyncDebug.objects.get(objectId)
   ), dracoObjectId);
   assert(dracoSnapshot && dracoSnapshot.gaussian === null, 'Editor normal Draco GLB regressed');
+  await page.waitForTimeout(500);
 
+  phase = 'sh3-import';
   const shResult = await page.evaluate(async (bytes) => {
     const file = new File([Uint8Array.from(bytes)], 'degree-3.ply');
     const model = await globalThis.__sceneSyncDebug.dragDropManager.handleFile(file, {
@@ -162,7 +172,9 @@ try {
   assert(shResult.objectId, 'Editor PLY drop did not create an object');
   assert(shResult.shDegree === 3 && shResult.hasSh1 && shResult.hasSh2,
     'Editor discarded or broke the continuous SH1-SH3 attribute set');
+  await page.waitForTimeout(500);
 
+  phase = 'selection';
   const screenPoint = await page.evaluate((objectId) => (
     globalThis.__sceneSyncDebug.objects.screenPoint(objectId)
   ), imported.objectId);
@@ -179,6 +191,7 @@ try {
   ), imported.objectId);
   assert(selected.transformControlsAttached === true, 'TransformControls did not attach to the Gaussian wrapper');
 
+  phase = 'transform';
   const transformed = await page.evaluate(async (objectId) => {
     const { managedObjects } = await import('/assets/js/scenesync/scene.js');
     const object = managedObjects.get(objectId);
@@ -201,11 +214,13 @@ try {
   assert(transformed.visible === false, 'Gaussian wrapper visibility did not update');
   assert(Array.isArray(transformed.splatMatrixWorld), 'Gaussian child did not inherit wrapper transform');
 
+  phase = 'delete';
   await page.evaluate(() => globalThis.__sceneSyncDebug.deleteSelected());
   await page.waitForFunction((objectId) => (
     !globalThis.__sceneSyncDebug.objects.list().includes(objectId)
   ), imported.objectId, { timeout: 10000 });
 
+  phase = 'undo';
   await page.evaluate(() => globalThis.__sceneSyncDebug.undo());
   await page.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug.objects.get(objectId)?.gaussian?.hasGaussianSplat === true
@@ -216,12 +231,14 @@ try {
   assert(restored.gaussian?.splatCount === 16, 'Undo did not restore the Gaussian Splat');
   assert(restored.gaussian?.selectionProxy === true, 'Undo did not restore the selection proxy');
 
+  phase = 'redo';
   await page.evaluate(() => globalThis.__sceneSyncDebug.redo());
   await page.waitForFunction((objectId) => (
     !globalThis.__sceneSyncDebug.objects.list().includes(objectId)
   ), imported.objectId, { timeout: 10000 });
 
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
+  assert(invalidOperations.length === 0, `WebGL draw errors: ${invalidOperations.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
   console.log(JSON.stringify({
     status: 'passed',

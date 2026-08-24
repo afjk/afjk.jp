@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { registerSceneSyncGLTFLoaderExtensions } from '../../scenesync/loaders/gltf-loader-config.js';
 import {
   disposeObject3DResources,
@@ -254,8 +254,8 @@ export async function createViewerCore({
   let envLoaded = false;
   if (sceneDoc.skybox?.asset?.path) {
     try {
-      const rgbeLoader = new RGBELoader();
-      const texture = await rgbeLoader.loadAsync(resolver.resolveAsset(sceneDoc.skybox.asset));
+      const hdrLoader = new HDRLoader();
+      const texture = await hdrLoader.loadAsync(resolver.resolveAsset(sceneDoc.skybox.asset));
       texture.mapping = THREE.EquirectangularReflectionMapping;
       const envMap = pmremGenerator.fromEquirectangular(texture).texture;
       scene.environment = envMap;

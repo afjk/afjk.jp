@@ -299,6 +299,7 @@ try {
   }));
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(!consoleErrors.some((message) => message.includes('Rapier initialization failed')), `Rapier failed to initialize: ${consoleErrors.join('\n')}`);
+  assert(!consoleErrors.some((message) => /WebGL: INVALID_OPERATION/iu.test(message)), `WebGL draw failed: ${consoleErrors.join('\n')}`);
   assert(state.format === 'single-html-v1', 'Single HTML format marker was not preserved');
   assert(state.hasAssets && state.hasSceneDocument, 'Embedded resolver payload was not initialized');
   assert(state.canvasWidth > 0, 'Viewer canvas was not initialized');

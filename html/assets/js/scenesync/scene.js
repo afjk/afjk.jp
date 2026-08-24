@@ -2098,43 +2098,17 @@ function removeLockOverlay(objectId) {
 
 // objectId → { group, placeholder }
 const loadingOverlays = new Map();
+const loadingOverlayPool = [];
 const recoveryOverlays = new Map();
 const failedOverlays = new Map();
 const temporaryImagePreviews = new Map();
 
 function createLoadingLabel(text) {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
   canvas.width = 512;
   canvas.height = 128;
-
-  ctx.clearRect(0, 0, 512, 128);
-
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-  roundRect(ctx, 4, 4, 504, 120, 16);
-  ctx.fill();
-
-  ctx.font = 'bold 30px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#88ccff';
-  ctx.fillText('読み込み中…', 256, 38);
-
-  ctx.font = '24px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  const maxWidth = 480;
-  let label = text;
-  if (ctx.measureText(label).width > maxWidth) {
-    while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
-      label = label.slice(0, -1);
-    }
-    label = label + '…';
-  }
-  ctx.fillText(label, 256, 86);
-
+  const ctx = canvas.getContext('2d');
   const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
@@ -2143,6 +2117,33 @@ function createLoadingLabel(text) {
   const sprite = new THREE.Sprite(mat);
   sprite.scale.set(3, 0.75, 1);
   sprite.raycast = () => {};
+  sprite.userData.setLoadingText = (nextText) => {
+    ctx.clearRect(0, 0, 512, 128);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    roundRect(ctx, 4, 4, 504, 120, 16);
+    ctx.fill();
+
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#88ccff';
+    ctx.fillText('読み込み中…', 256, 38);
+
+    ctx.font = '24px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    const maxWidth = 480;
+    let label = nextText;
+    if (ctx.measureText(label).width > maxWidth) {
+      while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
+        label = label.slice(0, -1);
+      }
+      label = label + '…';
+    }
+    ctx.fillText(label, 256, 86);
+    texture.needsUpdate = true;
+  };
+  sprite.userData.setLoadingText(text);
   return sprite;
 }
 
@@ -2246,21 +2247,28 @@ function createFailedPlaceholder() {
 function addLoadingOverlay(objectId, name, info) {
   removeLoadingOverlay(objectId);
 
-  const group = new THREE.Group();
-  group.userData._isLoadingOverlay = true;
-  group.raycast = () => {};
+  const entry = loadingOverlayPool.pop() || (() => {
+    const group = new THREE.Group();
+    group.userData._isLoadingOverlay = true;
+    group.raycast = () => {};
 
-  const placeholder = createLoadingPlaceholder();
-  group.add(placeholder);
+    const placeholder = createLoadingPlaceholder();
+    group.add(placeholder);
 
-  const label = createLoadingLabel(name || objectId);
-  label.position.set(0, 1.1, 0);
-  group.add(label);
+    const label = createLoadingLabel(name || objectId);
+    label.position.set(0, 1.1, 0);
+    group.add(label);
+    return { group, placeholder, label };
+  })();
+  const { group, label } = entry;
+  label.userData.setLoadingText?.(name || objectId);
+  group.position.set(0, 0, 0);
+  group.visible = true;
 
   if (info?.position) group.position.fromArray(info.position);
 
   scene.add(group);
-  loadingOverlays.set(objectId, { group, placeholder });
+  loadingOverlays.set(objectId, entry);
 }
 
 function removeLoadingOverlay(objectId) {
@@ -2269,15 +2277,13 @@ function removeLoadingOverlay(objectId) {
 
   const { group } = entry;
   scene.remove(group);
-  group.traverse(child => {
-    if (child.geometry) child.geometry.dispose();
-    if (child.material) {
-      if (child.material.map) child.material.map.dispose();
-      child.material.dispose();
-    }
-  });
-
+  group.visible = false;
   loadingOverlays.delete(objectId);
+  // The pinned WebGPURenderer WebGL backend corrupts its VAO cache if a
+  // rendered transient overlay is disposed while switching between Gaussian
+  // and conventional GLB pipelines. Pool the complete overlay instead. The
+  // pool is bounded by peak concurrent loads and its GPU resources are reused.
+  loadingOverlayPool.push(entry);
 }
 
 function addRecoveringOverlay(objectId, info) {
