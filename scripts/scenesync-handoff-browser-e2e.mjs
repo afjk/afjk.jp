@@ -535,6 +535,8 @@ try {
   assert.equal(targetState.objects[1].asset?.type, 'mesh');
   assert.equal(observedAdds.get('handoff-e2e-image')?.asset?.path, undefined);
   assert.equal(observedAdds.get('handoff-e2e-glb')?.asset?.source, 'carrier');
+  await popup.close();
+  await page.close();
   const urlSource = await browser.newPage({ viewport: { width: 900, height: 700 } });
   await urlSource.goto(`${targetOrigin}/published/index.html`, { waitUntil: 'domcontentloaded' });
   await urlSource.waitForFunction(() => globalThis.__URL_HANDOFF_READY__ === true);
@@ -555,6 +557,8 @@ try {
   assert.equal(urlAsset?.path, undefined);
   assert.equal(observedAdds.get('url-handoff-image')?.asset?.path, undefined);
   assert.equal(tokenUploads.length, 0, 'successful top-level opener handoff must not upload a token');
+  await urlPopup.close();
+  await urlSource.close();
   // This publisher deliberately sends no ACAO header.  Browser direct fetch
   // fails opaquely; the test-only injected server transport performs the
   // inspect/materialize path and streams the triangle GLB into a carrier blob.
@@ -612,16 +616,17 @@ try {
   assert.equal(requestLog.some((entry) => entry.includes('/presence/scene-sync/import-jobs')), true);
   assert.equal(requestLog.some((entry) => entry.includes('/materialize')), true);
   assert.equal(requestLog.some((entry) => entry.includes('/presence/blob/')), true);
+  await noCorsPopup.close();
+  await noCorsSource.close();
 
   // Opener-free embedded transfer: a same-origin sandbox wrapper reports the
   // child navigation externally but returns undefined, as hosted AI viewers
   // commonly do. The real target is then opened from that confirmation URL.
-  const browserContext = page.context();
-  await browserContext.addCookies([{
-    name: 'handoff-e2e-cookie', value: 'must-not-upload', domain: '127.0.0.1', path: '/',
-  }]);
   const tokenDiagnostics = [];
   const embeddedTokenWrapper = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  await embeddedTokenWrapper.context().addCookies([{
+    name: 'handoff-e2e-cookie', value: 'must-not-upload', domain: '127.0.0.1', path: '/',
+  }]);
   embeddedTokenWrapper.on('console', (message) => tokenDiagnostics.push(`embedded-wrapper:${message.type()}:${message.text()}`));
   embeddedTokenWrapper.on('pageerror', (error) => tokenDiagnostics.push(`embedded-wrapper-pageerror:${error.message}`));
   await embeddedTokenWrapper.goto(`${targetOrigin}/published/embedded-wrapper.html`, { waitUntil: 'domcontentloaded' });
@@ -689,6 +694,8 @@ try {
     body: JSON.stringify({ token: binding.handoffToken, sessionId: binding.handoffSession, requestId: binding.handoffRequest }),
   })).status, embeddedToken);
   assert.equal(replayStatus, 202, 'claimed token must not be claimable a second time');
+  await embeddedTokenTarget.close();
+  await embeddedTokenWrapper.close();
 
   // Claude artifacts commonly disallow the target origin in connect-src. A
   // compact embedded export must still open as a fragment-only handoff, with
@@ -740,6 +747,8 @@ try {
   assert.equal(inlineTargetState.meshCount > 0 && inlineTargetState.vertices === 3 && !inlineTargetState.boxGeometry, true, 'inline CSP handoff must import the real triangle mesh');
   assert.equal([...inlineTargetUrls, ...requestLog].some((value) => value.includes('sceneSyncHandoffInline')), false, 'inline payload leaked into a request URL');
   assert.equal(inlineCspDiagnostics.some((entry) => /connect-src|Refused to connect/u.test(entry)), false, 'inline handoff must not attempt a CSP-blocked upload');
+  await inlineTarget.close();
+  await inlineCspWrapper.close();
 
   // A static viewer in the same wrapper must stage only its published URL.
   // The no-ACAO publisher makes the target exercise the existing direct
@@ -783,6 +792,8 @@ try {
   });
   assert.equal(tokenNoCorsObject.asset?.source, 'carrier');
   assert.equal(tokenNoCorsObject.meshCount > 0 && tokenNoCorsObject.vertices === 3 && !tokenNoCorsObject.boxGeometry, true, 'static token server-pull must import the real GLB');
+  await urlTokenTarget.close();
+  await urlTokenWrapper.close();
 
   // Token-looking fragments are always scrubbed, but malformed, extra, and
   // duplicate forms must never start a claim. They also must clear a valid
@@ -834,6 +845,8 @@ try {
   await legacyPopup.waitForLoadState('domcontentloaded');
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.equal(tokenClaims.length, claimsBeforeInvalidFragments, 'legacy opener query must consume stale bootstrap without claiming');
+  await legacyPopup.close();
+  await legacySource.close();
   const allowedPopupWarning = /GL Driver Message|unknown input adapter/u;
   const allowedSandboxWrapperWarning = /^(?:embedded-wrapper|url-wrapper):warning:An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing\.$/u;
   const unexpectedDiagnostics = [
