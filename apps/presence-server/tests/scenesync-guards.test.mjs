@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import WebSocket from 'ws';
 
-import { hasValidGlbMagic, validateUpload } from '../src/scenesync/upload-guards.mjs';
+import {
+  hasValidGlbMagic,
+  hasValidGzipMagic,
+  validateUpload,
+} from '../src/scenesync/upload-guards.mjs';
 import { createPerActorRateLimiter } from '../src/scenesync/rate-limit.mjs';
 import { validateSceneSyncPayload } from '../src/scenesync/message-schema.mjs';
 import { createSceneSyncLogger } from '../src/scenesync/logger.mjs';
@@ -73,6 +78,33 @@ describe('Scene Sync guard helpers', () => {
 
   it('GLB magic check rejects invalid header', () => {
     assert.equal(hasValidGlbMagic(Buffer.from('bad!test')), false);
+  });
+
+  it('accepts only gzip-magic .glb.gz carrier uploads for application/gzip', () => {
+    const valid = validateUpload({
+      size: 8,
+      mimeType: 'application/gzip',
+      filename: 'capture.glb.gz',
+      buffer: Buffer.from([0x1f, 0x8b, 0x08, 0x00]),
+      maxUploadBytes: 64,
+    });
+    assert.equal(valid.ok, true);
+    assert.equal(hasValidGzipMagic(Buffer.from([0x1f, 0x8b])), true);
+
+    for (const [filename, buffer] of [
+      ['capture.gz', Buffer.from([0x1f, 0x8b])],
+      ['capture.glb.gz', Buffer.from('not gzip')],
+    ]) {
+      const invalid = validateUpload({
+        size: buffer.length,
+        mimeType: 'application/gzip',
+        filename,
+        buffer,
+        maxUploadBytes: 64,
+      });
+      assert.equal(invalid.ok, false);
+      assert.equal(invalid.code, 'invalid_glb_gzip');
+    }
   });
 
   it('upload size limit rejects oversized file', () => {
@@ -689,6 +721,21 @@ describe('Scene Sync server guards', () => {
       body: Buffer.from('glTFpayload'),
     });
     assert.equal(response.status, 201);
+  });
+
+  it('stores and serves a gzip GLB carrier without changing its bytes', async () => {
+    const body = gzipSync(Buffer.from('glTFpayload'));
+    const upload = await fetch(`${baseUrl}/blob/carrier.glb.gz`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/gzip', 'User-Agent': 'guard-gzip-good-test' },
+      body,
+    });
+    assert.equal(upload.status, 201);
+
+    const download = await fetch(`${baseUrl}/blob/carrier.glb.gz`);
+    assert.equal(download.status, 200);
+    assert.equal(download.headers.get('content-type'), 'application/gzip');
+    assert.deepEqual(Buffer.from(await download.arrayBuffer()), body);
   });
 
   it('rejects per-actor excessive uploads with 429', async () => {

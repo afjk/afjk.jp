@@ -118,3 +118,35 @@ test('exports provided scene metadata', () => {
   assert.deepEqual(doc.tags, ['unity-chan', 'music', 'scene-sync']);
   assert.equal(doc.author, 'afjk');
 });
+
+test('preserves temporary carrier encoding metadata until export collection', () => {
+  const managedObjects = new Map([
+    ['splat', {
+      name: 'Capture',
+      visible: true,
+      position: vec([0, 0, 0]),
+      quaternion: vec([0, 0, 0, 1]),
+      scale: vec([1, 1, 1]),
+      userData: {
+        name: 'Capture',
+        meshPath: 'carrier-gzip',
+        asset: {
+          type: 'mesh',
+          source: 'carrier',
+          assetId: 'sha256-capture',
+          meshPath: 'carrier-gzip',
+          size: 225736504,
+          carrierEncoding: 'gzip',
+          carrierSize: 66581444,
+          mime: 'model/gltf-binary',
+          originalName: 'capture.glb',
+        },
+      },
+    }],
+  ]);
+
+  const doc = createSceneDocumentFromSceneSyncState({ managedObjects });
+  assert.equal(doc.objects[0].asset.size, 225736504);
+  assert.equal(doc.objects[0].asset.carrierEncoding, 'gzip');
+  assert.equal(doc.objects[0].asset.carrierSize, 66581444);
+});

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { uploadLocalMeshAsset } from './mesh-upload.js';
+import { decompressGlbFromCarrier } from './carrier-compression.js';
 
 test('mesh upload and asset preparation do not wait for a pending IndexedDB write', async () => {
   const events = [];
@@ -85,4 +86,41 @@ test('upload failure still exposes prepared metadata for local snapshot recovery
 
   assert.equal(prepared.assetId, 'sha256-offline');
   assert.equal(prepared.meshPath, 'mesh-offline');
+});
+
+test('large Gaussian uploads use a lossless gzip carrier while the cache keeps raw GLB', async () => {
+  const bytes = new Uint8Array(64 * 1024);
+  bytes.set([0x67, 0x6c, 0x54, 0x46]);
+  bytes.fill(9, 4);
+  let cachedBlob = null;
+  let uploadBody = null;
+  let uploadType = null;
+
+  const result = await uploadLocalMeshAsset({
+    arrayBuffer: bytes.buffer,
+    name: 'capture.glb',
+    meshPath: 'mesh-gzip',
+    blobBase: 'https://scene.test/blob',
+    carrierCompression: 'gzip',
+    carrierCompressionMinBytes: 0,
+    computeAssetId: async () => 'sha256-gzip',
+    putCachedAsset: ({ blob }) => { cachedBlob = blob; },
+    fetchImpl: async (_url, options) => {
+      uploadBody = options.body;
+      uploadType = options.headers['Content-Type'];
+      return { ok: true, status: 201 };
+    },
+  });
+
+  assert.equal(result.asset.carrierEncoding, 'gzip');
+  assert.ok(result.asset.carrierSize < result.asset.size);
+  assert.equal(uploadType, 'application/gzip');
+  assert.equal(cachedBlob.type, 'model/gltf-binary');
+  assert.equal(cachedBlob.size, bytes.byteLength);
+
+  const restored = await decompressGlbFromCarrier(uploadBody, {
+    encoding: result.asset.carrierEncoding,
+    expectedSize: result.asset.size,
+  });
+  assert.deepEqual(new Uint8Array(await restored.arrayBuffer()), bytes);
 });

@@ -110,6 +110,37 @@ test('WebGL Gaussian CPU sorting is bounded while WebGPU and XR keep native sort
   assert.equal(gaussian.autoSort, true, 'WebGPU sorting must stay on Three.js compute');
 });
 
+test('WebGL Gaussian sorting skips hidden hierarchies and objects outside the camera frustum', () => {
+  let sorts = 0;
+  const parent = { visible: true, parent: null };
+  const gaussian = {
+    isGaussianSplat: true,
+    visible: true,
+    parent,
+    inView: false,
+    updateSort() { sorts += 1; },
+  };
+  const scheduler = createGaussianSplatSortScheduler({
+    minIntervalMs: 250,
+    isObjectInView: (object) => object.inView,
+  });
+  const options = {
+    root: traversable([gaussian]),
+    renderer: { backend: { isWebGLBackend: true } },
+    camera: {},
+    now: 0,
+  };
+
+  assert.equal(scheduler.update(options).skippedObjects, 1);
+  assert.equal(sorts, 0);
+
+  gaussian.inView = true;
+  assert.equal(scheduler.update({ ...options, now: 10 }).sortCalls, 1);
+  parent.visible = false;
+  assert.equal(scheduler.update({ ...options, now: 300 }).skippedObjects, 1);
+  assert.equal(sorts, 1);
+});
+
 test('resource disposal covers Gaussian source geometry without private fields', () => {
   const disposed = [];
   const texture = { isTexture: true, dispose: () => disposed.push('texture') };

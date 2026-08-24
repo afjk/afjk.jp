@@ -62,7 +62,38 @@ export function shouldAutoScaleSceneSyncGlb(diagnostics) {
   return diagnostics?.hasGaussianSplat !== true;
 }
 
-export function createGaussianSplatSortScheduler({ minIntervalMs = 250 } = {}) {
+function isHierarchyVisible(object) {
+  for (let current = object; current; current = current.parent) {
+    if (current.visible === false) return false;
+  }
+  return true;
+}
+
+export function createGaussianSplatFrustumTest(THREE) {
+  if (!THREE?.Frustum || !THREE?.Matrix4 || !THREE?.Sphere) return () => true;
+
+  const frustum = new THREE.Frustum();
+  const projectionScreenMatrix = new THREE.Matrix4();
+  const worldSphere = new THREE.Sphere();
+
+  return (object, camera) => {
+    if (!object?.boundingSphere || !camera?.projectionMatrix || !camera?.matrixWorldInverse) {
+      return true;
+    }
+
+    camera.updateMatrixWorld?.();
+    object.updateWorldMatrix?.(true, false);
+    projectionScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(projectionScreenMatrix);
+    worldSphere.copy(object.boundingSphere).applyMatrix4(object.matrixWorld);
+    return frustum.intersectsSphere(worldSphere);
+  };
+}
+
+export function createGaussianSplatSortScheduler({
+  minIntervalMs = 250,
+  isObjectInView = null,
+} = {}) {
   const initialized = new WeakSet();
   let lastSortAt = Number.NEGATIVE_INFINITY;
 
@@ -73,6 +104,7 @@ export function createGaussianSplatSortScheduler({ minIntervalMs = 250 } = {}) {
       const intervalElapsed = now - lastSortAt >= minIntervalMs;
       let gaussianObjects = 0;
       let sortCalls = 0;
+      let skippedObjects = 0;
 
       root?.traverse?.((object) => {
         if (object?.isGaussianSplat !== true) return;
@@ -83,7 +115,11 @@ export function createGaussianSplatSortScheduler({ minIntervalMs = 250 } = {}) {
         // the CPU. During OrbitControls damping that can run on many adjacent
         // frames. Use its public manual sort API at a bounded cadence, while
         // keeping Three.js native auto sorting for WebGPU and WebXR.
-        if (useNativeAutoSort || object.visible === false || !camera) return;
+        if (useNativeAutoSort || !camera) return;
+        if (!isHierarchyVisible(object) || isObjectInView?.(object, camera) === false) {
+          skippedObjects += 1;
+          return;
+        }
         if (!initialized.has(object) || intervalElapsed) {
           object.updateSort?.(renderer, camera);
           initialized.add(object);
@@ -99,6 +135,7 @@ export function createGaussianSplatSortScheduler({ minIntervalMs = 250 } = {}) {
         mode: useNativeAutoSort ? 'native' : 'throttled-webgl',
         gaussianObjects,
         sortCalls,
+        skippedObjects,
       };
     },
   };

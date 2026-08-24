@@ -29,6 +29,7 @@ import {
 } from './loaders/gltf-loader-config.js';
 import {
   createGaussianSplatSortScheduler,
+  createGaussianSplatFrustumTest,
   disposeObject3DResources,
   prepareGaussianSplatRoot,
 } from './loaders/gaussian-splat-runtime.js';
@@ -79,6 +80,10 @@ import { createAudioSourceController } from './audio/audio-source-controller.js'
 import { computeAssetId } from './assets/asset-id.js';
 import { createSceneAssetCache } from './assets/asset-cache.js';
 import { uploadLocalMeshAsset } from './assets/mesh-upload.js';
+import {
+  decompressGlbFromCarrier,
+  DEFAULT_GAUSSIAN_CARRIER_COMPRESSION_MIN_BYTES,
+} from './assets/carrier-compression.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 import { fetchMeshBlobWithRetry } from './assets/mesh-blob-fetch.js';
@@ -139,7 +144,9 @@ const {
   renderer,
   pmremGenerator,
 } = threeApp;
-const gaussianSplatSortScheduler = createGaussianSplatSortScheduler();
+const gaussianSplatSortScheduler = createGaussianSplatSortScheduler({
+  isObjectInView: createGaussianSplatFrustumTest(THREE),
+});
 const dom = getSceneSyncDom();
 applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
@@ -9452,9 +9459,26 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       }
 
       let blob = null;
+      let carrierBytes = null;
       try {
         const result = await fetchMeshBlobWithRetry(url, { objectId, meshPath, signal: options.signal });
-        blob = result.blob;
+        carrierBytes = result.blob.size;
+        const decodeStartedAt = performance.now();
+        blob = await decompressGlbFromCarrier(result.blob, {
+          encoding: info.asset?.carrierEncoding || null,
+          expectedSize: info.asset?.size ?? null,
+          signal: options.signal,
+        });
+        if (info.asset?.carrierEncoding) {
+          console.info('[SceneSync] Decoded compressed mesh carrier', {
+            objectId,
+            meshPath,
+            encoding: info.asset.carrierEncoding,
+            carrierBytes,
+            rawBytes: blob.size,
+            decodeMs: Math.round(performance.now() - decodeStartedAt),
+          });
+        }
       } catch (fetchErr) {
         if (options.strictLoad) throw fetchErr;
         const status = Number(fetchErr?.status || 0);
@@ -9476,7 +9500,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           meshPath,
           existing,
           assetId: incomingAssetId,
-          expectedSize: fetchErr?.expectedSize || null,
+          expectedSize: info.asset?.size || fetchErr?.expectedSize || null,
           options,
           reason: status === 404 ? 'http-404' : 'fetch-failed',
         });
@@ -9503,6 +9527,8 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         objectId,
         meshPath,
         sizeBytes: blob.size,
+        carrierBytes,
+        carrierEncoding: info.asset?.carrierEncoding || null,
         source: 'network',
       });
 
@@ -11234,7 +11260,18 @@ function generateRandomPath() {
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}, options = {}) {
-  const meshPath = generateRandomPath();
+  const hasGaussianSplat = model.userData?.scenesync?.hasGaussianSplat === true;
+  const useCompressedCarrier = hasGaussianSplat
+    && arrayBuffer.byteLength >= DEFAULT_GAUSSIAN_CARRIER_COMPRESSION_MIN_BYTES
+    && typeof globalThis.CompressionStream === 'function';
+  const meshPath = `${generateRandomPath()}${useCompressedCarrier ? '.glb.gz' : ''}`;
+  const carrierStartedAt = performance.now();
+
+  function formatSyncBytes(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return '不明';
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   try {
     let uploaded;
@@ -11246,6 +11283,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
         blobBase: BLOB_BASE,
         computeAssetId,
         putCachedAsset: (record) => assetCache.putAsset(record),
+        carrierCompression: useCompressedCarrier ? 'gzip' : null,
         signal: options.signal,
         onAssetPrepared: (asset) => {
           model.userData.assetId = asset.assetId;
@@ -11257,6 +11295,25 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
         },
         onCacheError: (cacheErr, context) => {
           console.warn(`[SceneSync] Failed during ${context.phase}:`, cacheErr);
+        },
+        onCompressionError: (compressionErr, context) => {
+          console.warn(`[SceneSync] Failed during ${context.phase}; uploading the original GLB:`, compressionErr);
+        },
+        onProgress: (progress) => {
+          console.info('[SceneSync] mesh carrier progress', {
+            objectId,
+            ...progress,
+            elapsedMs: Math.round(performance.now() - carrierStartedAt),
+          });
+          if (!hasGaussianSplat) return;
+          if (progress.phase === 'compressing') {
+            showToast(`Gaussian Splatの同期データを圧縮中… (${formatSyncBytes(progress.rawBytes)})`);
+          } else if (progress.phase === 'uploading') {
+            const detail = progress.carrierEncoding
+              ? `${formatSyncBytes(progress.carrierBytes)} / 元 ${formatSyncBytes(progress.rawBytes)}`
+              : formatSyncBytes(progress.rawBytes);
+            showToast(`Gaussian Splatを同期中… (${detail})`);
+          }
         },
       });
     } catch (err) {
