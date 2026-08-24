@@ -64,6 +64,7 @@ export function getSceneSyncDom() {
     btnMove: document.getElementById('btn-move'),
     btnRotate: document.getElementById('btn-rotate'),
     btnScale: document.getElementById('btn-scale'),
+    btnFocus: document.getElementById('btn-focus'),
     btnCopy: document.getElementById('btn-copy'),
     btnDelete: document.getElementById('btn-delete'),
     btnDeselect: document.getElementById('btn-deselect'),

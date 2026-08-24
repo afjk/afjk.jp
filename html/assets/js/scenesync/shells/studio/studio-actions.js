@@ -22,6 +22,9 @@ export function createStudioActions(core) {
     deselect() {
       core?.commands?.deselect?.();
     },
+    focusSelected() {
+      return core?.commands?.focusSelected?.();
+    },
     setInputRoutingMode(mode) {
       core?.commands?.setInputRoutingMode?.(mode);
     },

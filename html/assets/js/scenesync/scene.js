@@ -5087,9 +5087,9 @@ function updateHistoryButtonState() {
 
 // ── キーボードショートカット ──────────────────────────────
 
-// キーボードショートカットの DOM 配線は mouse-input-adapter へ移管。
+// キーボードショートカットの DOM 配線は editor-keyboard-adapter へ移管。
 // 意図は core.input（shouldIgnoreShortcut/copySelection/pasteToggle/handleEscape）
-// と core.commands（undo/redo/setTransformMode/deleteSelected）が担う。
+// と core.commands（undo/redo/setTransformMode/focusSelected/deleteSelected）が担う。
 
 // ── リサイズ ─────────────────────────────────────────────
 
@@ -8180,15 +8180,17 @@ function getCameraPose() {
   };
 }
 
-function focusCameraOnObject(objectId) {
-  const obj = managedObjects.get(objectId);
-  if (!obj) {
-    return { ok: false, error: `object not found: ${objectId}` };
+function frameCameraToBounds(box) {
+  if (!box || box.isEmpty()) {
+    return { ok: false, error: 'object bounds are empty' };
   }
 
-  const box = new THREE.Box3().setFromObject(obj);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
+  if (![center.x, center.y, center.z, size.x, size.y, size.z].every(Number.isFinite)) {
+    return { ok: false, error: 'object bounds are invalid' };
+  }
+
   const radius = Math.max(size.x, size.y, size.z, 1);
   const direction = camera.position.clone().sub(orbit.target);
   if (direction.lengthSq() < 1e-6) {
@@ -8203,10 +8205,41 @@ function focusCameraOnObject(objectId) {
 
   return {
     ok: true,
-    objectId,
     target: center.toArray(),
     camera: getCameraPose(),
   };
+}
+
+function focusCameraOnObject(objectId) {
+  const obj = managedObjects.get(objectId);
+  if (!obj) {
+    return { ok: false, error: `object not found: ${objectId}` };
+  }
+
+  return {
+    ...frameCameraToBounds(new THREE.Box3().setFromObject(obj)),
+    objectId,
+  };
+}
+
+function focusCameraOnSelection() {
+  // View framing is a local desktop/mobile editor action. Do not disturb the
+  // XR camera pose, and never broadcast this camera-only operation.
+  if (renderer.xr.isPresenting || selectedObjectIds.size === 0) return false;
+
+  const selectionBounds = new THREE.Box3();
+  let objects = 0;
+  for (const objectId of selectedObjectIds) {
+    const obj = managedObjects.get(objectId);
+    if (!obj) continue;
+    const objectBounds = new THREE.Box3().setFromObject(obj);
+    if (objectBounds.isEmpty()) continue;
+    selectionBounds.union(objectBounds);
+    objects += 1;
+  }
+
+  if (objects === 0) return false;
+  return frameCameraToBounds(selectionBounds).ok;
 }
 
 function blobToDataUrl(blob) {
@@ -15851,6 +15884,7 @@ mountSceneSyncShellFromDom({
       if (presenceState.historyManager.canRedo()) performRedo();
     },
     deleteSelected: deleteSelectedObjects,
+    focusSelected: focusCameraOnSelection,
     exportScene: triggerExport,
     openHelp: openHelpDialog,
     startAiLink: () => {

@@ -16,6 +16,7 @@ export function createEditorChrome(core) {
     btnMove: document.getElementById('btn-move'),
     btnRotate: document.getElementById('btn-rotate'),
     btnScale: document.getElementById('btn-scale'),
+    btnFocus: document.getElementById('btn-focus'),
     btnCopy: document.getElementById('btn-copy'),
     btnDelete: document.getElementById('btn-delete'),
     btnUndo: document.getElementById('btn-undo'),
@@ -43,6 +44,7 @@ export function createEditorChrome(core) {
     if (els.btnMove) els.btnMove.disabled = count === 0;
     if (els.btnRotate) els.btnRotate.disabled = count === 0;
     if (els.btnScale) els.btnScale.disabled = count === 0;
+    if (els.btnFocus) els.btnFocus.disabled = count === 0;
     if (els.btnCopy) els.btnCopy.disabled = count !== 1;
     if (els.btnDelete) els.btnDelete.disabled = count === 0;
 
