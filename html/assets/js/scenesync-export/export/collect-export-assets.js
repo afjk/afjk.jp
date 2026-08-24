@@ -1,3 +1,5 @@
+import { decompressGlbFromCarrier } from '../../scenesync/assets/carrier-compression.js';
+
 function sanitizeFilename(name) {
   return (name || 'asset')
     .replace(/[^a-zA-Z0-9_\-.]/g, '-')
@@ -83,6 +85,28 @@ async function tryGetCachedAssetBuffer({ assetCache, assetId, meshPath }) {
     console.warn('[Export] Failed to read cached asset blob:', err);
     return { found: false, hasError: true };
   }
+}
+
+async function decodeFetchedMeshCarrier(buffer, asset) {
+  if (!buffer || !asset?.carrierEncoding) return buffer;
+
+  const decoded = await decompressGlbFromCarrier(
+    new Blob([buffer], { type: 'application/gzip' }),
+    {
+      encoding: asset.carrierEncoding,
+      expectedSize: asset.size ?? null,
+    },
+  );
+  return decoded.arrayBuffer();
+}
+
+function withoutCarrierTransport(asset) {
+  const {
+    carrierEncoding: _carrierEncoding,
+    carrierSize: _carrierSize,
+    ...portableAsset
+  } = asset || {};
+  return portableAsset;
 }
 
 export async function collectExportAssets({
@@ -269,14 +293,28 @@ export async function collectExportAssets({
       fetchSource = 'url';
     }
 
-    const blobBuffer = await tryFetch(fetchUrl);
+    let blobBuffer = await tryFetch(fetchUrl);
+    if (blobBuffer && fetchSource === 'blob' && obj.asset.carrierEncoding) {
+      try {
+        blobBuffer = await decodeFetchedMeshCarrier(blobBuffer, obj.asset);
+      } catch (error) {
+        console.warn('[Export] Failed to decode compressed mesh carrier:', error);
+        blobBuffer = null;
+      }
+    }
 
     if (blobBuffer) {
       files[zipPath] = blobBuffer;
       assetManifest.push({ id: obj.id, kind: 'mesh', path: zipPath, status: 'included', source: fetchSource || 'unknown' });
       updatedObjects.push(await withCollectedAudioSources({
         ...obj,
-        asset: { ...obj.asset, path: zipPath, url: undefined, meshPath: undefined, assetId: undefined },
+        asset: {
+          ...withoutCarrierTransport(obj.asset),
+          path: zipPath,
+          url: undefined,
+          meshPath: undefined,
+          assetId: undefined,
+        },
       }));
     } else {
       // Try IndexedDB cache as fallback
@@ -293,7 +331,12 @@ export async function collectExportAssets({
         });
         updatedObjects.push(await withCollectedAudioSources({
           ...obj,
-          asset: { ...obj.asset, path: zipPath, meshPath: undefined, assetId: undefined },
+          asset: {
+            ...withoutCarrierTransport(obj.asset),
+            path: zipPath,
+            meshPath: undefined,
+            assetId: undefined,
+          },
         }));
       } else {
         missingAssets.push({
@@ -306,7 +349,12 @@ export async function collectExportAssets({
         });
         updatedObjects.push(await withCollectedAudioSources({
           ...obj,
-          asset: { ...obj.asset, path: null, meshPath: undefined, assetId: undefined },
+          asset: {
+            ...withoutCarrierTransport(obj.asset),
+            path: null,
+            meshPath: undefined,
+            assetId: undefined,
+          },
         }));
       }
     }

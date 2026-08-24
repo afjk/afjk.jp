@@ -5,6 +5,7 @@ import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { registerSceneSyncGLTFLoaderExtensions } from '../../scenesync/loaders/gltf-loader-config.js';
 import {
   createGaussianSplatSortScheduler,
+  createGaussianSplatFrustumTest,
   disposeObject3DResources,
   prepareGaussianSplatRoot,
 } from '../../scenesync/loaders/gaussian-splat-runtime.js';
@@ -236,7 +237,9 @@ export async function createViewerCore({
   const animationRuntimes = [];
   let gaussianObjects = 0;
   let gaussianSplatCount = 0;
-  const gaussianSplatSortScheduler = createGaussianSplatSortScheduler();
+  const gaussianSplatSortScheduler = createGaussianSplatSortScheduler({
+    isObjectInView: createGaussianSplatFrustumTest(THREE),
+  });
 
   // Ambient + directional lights as fallback
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);

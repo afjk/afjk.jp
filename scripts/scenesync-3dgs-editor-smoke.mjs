@@ -5,13 +5,24 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDracoTriangleGlb } from './lib/scenesync-e2e-fixtures.mjs';
 import { buildGaussianSplatPly } from '../html/assets/js/scenesync/loaders/gaussian-splat/test-fixtures.mjs';
+import { DEFAULT_GAUSSIAN_CARRIER_COMPRESSION_MIN_BYTES } from '../html/assets/js/scenesync/assets/carrier-compression.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const htmlRoot = path.join(repoRoot, 'html');
-const sogFixturePath = path.join(
-  htmlRoot,
-  'scenesync/experiments/fixtures/ring-gaussian-splats.sog',
-);
+const sogFixturePath = process.env.SCENESYNC_3DGS_SOG_FIXTURE
+  ? path.resolve(repoRoot, process.env.SCENESYNC_3DGS_SOG_FIXTURE)
+  : path.join(htmlRoot, 'scenesync/experiments/fixtures/ring-gaussian-splats.sog');
+const expectedSplatCount = Number(process.env.SCENESYNC_3DGS_EXPECTED_SPLATS || 16);
+const gaussianLoadTimeoutMs = Number(process.env.SCENESYNC_3DGS_LOAD_TIMEOUT_MS || 30000);
+const transportOnly = process.env.SCENESYNC_3DGS_TRANSPORT_ONLY === '1';
+const sogFixtureName = path.basename(sogFixturePath);
+const configuredDropPosition = String(process.env.SCENESYNC_3DGS_DROP_POSITION || '')
+  .split(',')
+  .map(Number);
+const sogDropPosition = configuredDropPosition.length === 3
+  && configuredDropPosition.every(Number.isFinite)
+  ? configuredDropPosition
+  : [0, 0, 0];
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= path.join(repoRoot, '.playwright-browsers');
 process.env.GPT_SESSION_SECRET ||= 'scene-sync-3dgs-editor-smoke-secret';
 process.env.LINK_TOKEN_SECRET ||= 'scene-sync-3dgs-editor-smoke-link-secret';
@@ -38,6 +49,15 @@ function createStaticServer() {
   return new Promise((resolve, reject) => {
     const server = createServer(async (request, response) => {
       const url = new URL(request.url || '/', 'http://localhost');
+      if (url.pathname === '/__scene-sync-3dgs-fixture.sog') {
+        const body = await readFile(sogFixturePath);
+        response.writeHead(200, {
+          'content-type': 'application/zip',
+          'content-length': body.byteLength,
+        });
+        response.end(body);
+        return;
+      }
       if (url.pathname.startsWith('/presence/blob/')) {
         const id = url.pathname.slice('/presence/blob/'.length);
         if (request.method === 'POST') {
@@ -117,7 +137,6 @@ await listenServer(presenceServer);
 const roomId = `gaussian-${Date.now().toString(36)}`;
 const presenceUrl = `${serverUrl(presenceServer, 'ws')}/ws`;
 const url = `${serverUrl(server)}/scenesync/?dev=1&room=${roomId}&presence=${encodeURIComponent(presenceUrl)}`;
-const sogBytes = await readFile(sogFixturePath);
 const dracoBytes = createDracoTriangleGlb();
 const degree3PlyBytes = buildGaussianSplatPly([{
   position: [0, 0, 0],
@@ -147,6 +166,7 @@ const widePlyBytes = buildGaussianSplatPly([
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
+  e2eFlow: {
   const sourceContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const targetContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await sourceContext.addInitScript(() => {
@@ -201,16 +221,20 @@ try {
       && globalThis.__sceneSyncDebug.presence().peers.length === 1
   ), null, { timeout: 30000 });
   phase = 'sog-import';
-  const imported = await page.evaluate(async (bytes) => {
-    const file = new File([Uint8Array.from(bytes)], 'ring-gaussian-splats.sog');
+  const importStartedAt = Date.now();
+  const imported = await page.evaluate(async ({ fileName, dropPosition }) => {
+    const response = await fetch('/__scene-sync-3dgs-fixture.sog');
+    if (!response.ok) throw new Error(`fixture fetch failed: ${response.status}`);
+    const file = new File([await response.arrayBuffer()], fileName);
     const model = await globalThis.__sceneSyncDebug.dragDropManager.handleFile(file, {
-      position: [0, 0, 0],
+      position: dropPosition,
     });
     return {
       objectId: model?.userData?.objectId || null,
       importedFrom: model?.userData?.importedFrom || null,
     };
-  }, Array.from(sogBytes));
+  }, { fileName: sogFixtureName, dropPosition: sogDropPosition });
+  const sourceReadyMs = Date.now() - importStartedAt;
 
   assert(imported.objectId, 'Editor SOG drop did not create an object');
   assert(imported.importedFrom?.sourceFormat === 'sog', 'Editor did not use the SOG normalization path');
@@ -224,23 +248,55 @@ try {
   assert(renderer.xrEnabled === true, 'Editor WebXR integration was not enabled');
   assert(snapshot.gaussian?.hasGaussianSplat === true, 'Editor GLB path did not create GaussianSplat');
   assert(snapshot.gaussian?.gaussianObjects === 1, 'Editor Gaussian object count changed');
-  assert(snapshot.gaussian?.splatCount === 16, 'Editor did not preserve every SOG splat');
+  assert(snapshot.gaussian?.splatCount === expectedSplatCount, 'Editor did not preserve every SOG splat');
   assert(snapshot.gaussian?.selectionProxy === true, 'Editor did not create a Gaussian bounds selection proxy');
   assert(snapshot.asset?.assetId, 'Editor did not attach a persistent assetId to the SOG GLB');
   assert(snapshot.asset?.meshPath, 'Editor did not attach a shared meshPath to the SOG GLB');
+  const expectsCompressedCarrier = snapshot.asset?.size >= DEFAULT_GAUSSIAN_CARRIER_COMPRESSION_MIN_BYTES;
+  if (expectsCompressedCarrier) {
+    assert(snapshot.asset?.carrierEncoding === 'gzip', 'Large Gaussian carrier was not gzip encoded');
+    assert(snapshot.asset?.carrierSize < snapshot.asset?.size,
+      'Large Gaussian carrier did not reduce the transferred byte size');
+  }
 
   phase = 'presence-sync';
   await targetPage.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
-  ), imported.objectId, { timeout: 30000 });
+  ), imported.objectId, { timeout: gaussianLoadTimeoutMs });
+  const targetReadyMs = Date.now() - importStartedAt;
   const targetSnapshot = await targetPage.evaluate((objectId) => (
     globalThis.__sceneSyncDebug.objects.get(objectId)
   ), imported.objectId);
-  assert(targetSnapshot.gaussian?.splatCount === 16,
+  assert(targetSnapshot.gaussian?.splatCount === expectedSplatCount,
     'A second player did not receive the SOG-derived Gaussian Splat');
+  assert(targetSnapshot.asset?.carrierEncoding === snapshot.asset?.carrierEncoding,
+    'A second player did not receive the mesh carrier encoding');
+  assert(targetSnapshot.asset?.carrierSize === snapshot.asset?.carrierSize,
+    'A second player did not receive the mesh carrier byte size');
+  const targetCachedBytes = await targetPage.evaluate(async ({ assetId, timeoutMs }) => {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('scene-sync-assets');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const record = await new Promise((resolve, reject) => {
+        const request = db.transaction(['assets'], 'readonly').objectStore('assets').get(assetId);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+      });
+      db.close();
+      if (record?.blob) return record.blob.size;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return null;
+  }, { assetId: snapshot.asset.assetId, timeoutMs: gaussianLoadTimeoutMs });
+  assert(targetCachedBytes === snapshot.asset.size,
+    'A second player did not cache the decoded canonical GLB');
 
   phase = 'snapshot-persistence';
-  const persisted = await page.evaluate(async ({ roomId: expectedRoomId, objectId, assetId }) => {
+  const persisted = await page.evaluate(async ({ roomId: expectedRoomId, objectId, assetId, timeoutMs }) => {
     const openDb = (name) => new Promise((resolve, reject) => {
       const request = indexedDB.open(name);
       request.onsuccess = () => resolve(request.result);
@@ -251,7 +307,7 @@ try {
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => reject(request.error);
     });
-    const deadline = performance.now() + 30000;
+    const deadline = performance.now() + timeoutMs;
     while (performance.now() < deadline) {
       const [snapshotDb, assetDb] = await Promise.all([
         openDb('scene-sync-room-snapshots'),
@@ -274,7 +330,12 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return null;
-  }, { roomId, objectId: imported.objectId, assetId: snapshot.asset.assetId });
+  }, {
+    roomId,
+    objectId: imported.objectId,
+    assetId: snapshot.asset.assetId,
+    timeoutMs: gaussianLoadTimeoutMs,
+  });
   assert(persisted?.snapshotMeshPath === snapshot.asset.meshPath,
     'Room snapshot did not persist the uploaded Gaussian asset reference');
   assert(persisted.cachedBytes > 0, 'Converted Gaussian GLB was not cached for reload');
@@ -297,12 +358,38 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
-  ), imported.objectId, { timeout: 30000 });
+  ), imported.objectId, { timeout: gaussianLoadTimeoutMs });
   const reloadedSnapshot = await page.evaluate((objectId) => (
     globalThis.__sceneSyncDebug.objects.get(objectId)
   ), imported.objectId);
   assert(reloadedSnapshot.asset?.assetId === snapshot.asset.assetId,
     'Reloaded Gaussian object lost its persistent asset identity');
+  assert(reloadedSnapshot.asset?.carrierEncoding === snapshot.asset?.carrierEncoding,
+    'Reloaded Gaussian object lost its mesh carrier encoding');
+
+  if (transportOnly) {
+    assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
+    assert(invalidOperations.length === 0, `WebGL draw errors: ${invalidOperations.join('\n')}`);
+    assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
+    console.log(JSON.stringify({
+      status: 'passed',
+      transportOnly: true,
+      fixture: sogFixtureName,
+      dropPosition: sogDropPosition,
+      objectId: imported.objectId,
+      sourceReadyMs,
+      targetReadyMs,
+      rawGlbBytes: snapshot.asset?.size || null,
+      carrierBytes: snapshot.asset?.carrierSize || snapshot.asset?.size || null,
+      carrierEncoding: snapshot.asset?.carrierEncoding || null,
+      gaussian: snapshot.gaussian,
+      playerSynchronized: true,
+      snapshotPersisted: true,
+      reloadedFromAssetCache: true,
+      targetCachedRawGlb: true,
+    }, null, 2));
+    break e2eFlow;
+  }
 
   phase = 'draco-import';
   const dracoObjectId = await page.evaluate(async (bytes) => {
@@ -393,11 +480,11 @@ try {
   await page.evaluate(() => globalThis.__sceneSyncDebug.undo());
   await page.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug.objects.get(objectId)?.gaussian?.hasGaussianSplat === true
-  ), imported.objectId, { timeout: 30000 });
+  ), imported.objectId, { timeout: gaussianLoadTimeoutMs });
   const restored = await page.evaluate((objectId) => (
     globalThis.__sceneSyncDebug.objects.get(objectId)
   ), imported.objectId);
-  assert(restored.gaussian?.splatCount === 16, 'Undo did not restore the Gaussian Splat');
+  assert(restored.gaussian?.splatCount === expectedSplatCount, 'Undo did not restore the Gaussian Splat');
   assert(restored.gaussian?.selectionProxy === true, 'Undo did not restore the selection proxy');
 
   phase = 'redo';
@@ -427,10 +514,18 @@ try {
     renderer,
     objectId: imported.objectId,
     sourceFormat: imported.importedFrom.sourceFormat,
+    fixture: sogFixtureName,
+    dropPosition: sogDropPosition,
+    sourceReadyMs,
+    targetReadyMs,
+    rawGlbBytes: snapshot.asset?.size || null,
+    carrierBytes: snapshot.asset?.carrierSize || snapshot.asset?.size || null,
+    carrierEncoding: snapshot.asset?.carrierEncoding || null,
     gaussian: snapshot.gaussian,
     playerSynchronized: true,
     snapshotPersisted: true,
     reloadedFromAssetCache: true,
+    targetCachedRawGlb: true,
     authoredGaussianScalePreserved: true,
     selected: true,
     transformControlsAttached: selected.transformControlsAttached,
@@ -442,6 +537,7 @@ try {
     dracoLoaded: true,
     shDegree3Preserved: true,
   }, null, 2));
+  }
 } finally {
   await browser?.close();
   await presenceServer.stop?.();

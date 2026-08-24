@@ -226,6 +226,16 @@ function buildAssetEntry(obj) {
     originalName: asset.originalName || null,
   };
 
+  if (Number.isFinite(Number(asset.size)) && Number(asset.size) >= 0) {
+    entry.size = Number(asset.size);
+  }
+  if (asset.carrierEncoding) {
+    entry.carrierEncoding = String(asset.carrierEncoding);
+  }
+  if (Number.isFinite(Number(asset.carrierSize)) && Number(asset.carrierSize) >= 0) {
+    entry.carrierSize = Number(asset.carrierSize);
+  }
+
   copyStringField(entry, asset, 'url');
   return entry;
 }
