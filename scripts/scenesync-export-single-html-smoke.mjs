@@ -2,16 +2,21 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { chromium } from 'playwright';
-
 import {
   SINGLE_HTML_HANDOFF_SOURCES,
   VIEWER_SOURCES,
 } from '../html/assets/js/scenesync-export/export/build-export-package.js';
 import { buildSingleHtmlDocument } from '../html/assets/js/scenesync-export/export/single-html-format.js';
+import { createDracoTriangleGlb } from './lib/scenesync-e2e-fixtures.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const gaussianFixturePath = path.join(
+  repoRoot,
+  'html/scenesync/experiments/fixtures/ring-gaussian-splats.glb',
+);
+const hdriFixturePath = path.join(repoRoot, 'html/assets/hdri/studio.hdr');
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= path.join(repoRoot, '.playwright-browsers');
+const { chromium } = await import('playwright');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -85,6 +90,13 @@ function createToneWav() {
   return wav;
 }
 
+function createTinyWebm() {
+  return Uint8Array.from(Buffer.from(
+    'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwH/////////EU2bdKtNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHLTbuMU6uEElTDZ1OsggEY7AEAAAAAAABoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmpSrXsYMPQkBNgIxMYXZmNjIuMy4xMDBXQYxMYXZmNjIuMy4xMDAWVK5ryK4BAAAAAAAAP9eBAXPFiAeNfLrYrNMlnIEAIrWcg3VuZIiBAIaFVl9WUDmDgQEj44OEAmJaAOCQsIEQuoEQmoECVbCEVbmBARJUw2fbc3OfY8CAZ8iZRaOHRU5DT0RFUkSHjExhdmY2Mi4zLjEwMHNztmPAi2PFiAeNfLrYrNMlZ8ilRaOHRU5DT0RFUkSHmExhdmM2Mi4xMS4xMDAgbGlidnB4LXZwOR9DtnVArueBAKOrgQAAgIJJg0IAAPAA9gA4JBwYSgAAMGAAABC///cdr////1/f////8irAAKOTgQAoAIYAQJKcAFAAAANgAABCQKOTgQBQAIYAQJKcAE7gAANgAABCQKOTgQB4AIYAQJKcAFAAAANgAABCQKOTgQCgAIYAQJKcAE1AAANgAABCQKOTgQDIAIYAQJKcAFAAAANgAABCQKOTgQDwAIYAQJKcAE7gAANgAABCQA==',
+    'base64',
+  ));
+}
+
 function addSingleHtmlTestInstrumentation(viewerFiles) {
   const viewerEntry = viewerFiles['viewer/viewer.js'];
   assert(typeof viewerEntry === 'string', 'Viewer entry source is unavailable for test instrumentation');
@@ -139,7 +151,24 @@ const sceneDocument = {
       id: 'mesh', position: [2, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
       asset: { type: 'mesh', path: 'assets/triangle.glb' },
     },
+    {
+      id: 'gaussian', position: [0, 1, 0], rotation: [0, 0, 0, 1], scale: [2, 2, 2],
+      asset: { type: 'mesh', path: 'assets/ring-gaussian-splats.glb' },
+    },
+    {
+      id: 'text', position: [0, 2.5, -1], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'text', source: 'inline', text: 'SceneSync WebGPU', color: '#ffffff' },
+    },
+    {
+      id: 'video', position: [-2, 2, -1], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'video', path: 'assets/tiny.webm' },
+    },
+    {
+      id: 'draco', position: [2, 2, -1], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+      asset: { type: 'mesh', path: 'assets/draco-triangle.glb' },
+    },
   ],
+  skybox: { asset: { path: 'assets/studio.hdr' } },
   bgm: { asset: { path: 'assets/tone.wav' }, loop: true, volume: 0 },
   physics: { enabled: true, duration: 2, worldOptions: { gravity: -9.81 } },
   behaviors: { scene: { nodes: [], edges: [] } },
@@ -158,6 +187,10 @@ try {
     files: {
       'assets/pixel.png': Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL8WQAAAABJRU5ErkJggg==', 'base64')),
       'assets/triangle.glb': createTriangleGlb(),
+      'assets/ring-gaussian-splats.glb': await readFile(gaussianFixturePath),
+      'assets/studio.hdr': await readFile(hdriFixturePath),
+      'assets/tiny.webm': createTinyWebm(),
+      'assets/draco-triangle.glb': createDracoTriangleGlb(),
       'assets/tone.wav': createToneWav(),
     },
     viewerFiles,
@@ -184,6 +217,10 @@ try {
   await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
+  await page.waitForFunction(() => (
+    globalThis.__sceneSyncViewerDiagnostics?.rendered === true
+    && globalThis.__sceneSyncViewerDiagnostics?.gaussianObjects >= 1
+  ), null, { timeout: 20000 });
   assert(await page.locator('#scene-sync-handoff').isHidden(), 'Open in Scene Sync must start collapsed');
   await page.locator('#scene-sync-handoff-toggle').click();
   await page.locator('#scene-sync-handoff-room').fill(' Smoke Room! ');
@@ -224,7 +261,18 @@ try {
     format: document.querySelector('meta[name="scene-sync-export-format"]')?.content,
     hasAssets: Boolean(window.__SCENE_SYNC_SINGLE_HTML_ASSET_URLS__),
     hasSceneDocument: Boolean(window.__SCENE_SYNC_SINGLE_HTML_SCENE_DOCUMENT__),
+    gaussian: globalThis.__sceneSyncViewerDiagnostics || null,
     canvasWidth: document.getElementById('viewer-canvas')?.width || 0,
+    videoTextures: (() => {
+      let count = 0;
+      globalThis.__SCENE_SYNC_SINGLE_HTML_TEST_SCENE__?.traverse((object) => {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          if (material?.map?.isVideoTexture) count += 1;
+        }
+      });
+      return count;
+    })(),
     loading: document.getElementById('loading-overlay')?.textContent,
     fileWarningVisible: !document.getElementById('file-protocol-warning')?.classList.contains('hidden'),
     missingNoticeVisible: !document.getElementById('missing-notice')?.classList.contains('hidden'),
@@ -251,9 +299,23 @@ try {
   }));
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(!consoleErrors.some((message) => message.includes('Rapier initialization failed')), `Rapier failed to initialize: ${consoleErrors.join('\n')}`);
+  assert(!consoleErrors.some((message) => /WebGL: INVALID_OPERATION/iu.test(message)), `WebGL draw failed: ${consoleErrors.join('\n')}`);
   assert(state.format === 'single-html-v1', 'Single HTML format marker was not preserved');
   assert(state.hasAssets && state.hasSceneDocument, 'Embedded resolver payload was not initialized');
   assert(state.canvasWidth > 0, 'Viewer canvas was not initialized');
+  assert(state.gaussian?.renderer === 'WebGPURenderer', 'Single HTML viewer did not use WebGPURenderer');
+  assert(state.gaussian?.backend === 'webgl', 'Single HTML viewer default backend was not WebGL');
+  assert(state.gaussian?.xrEnabled === true, 'Single HTML viewer WebXR integration was not enabled');
+  assert(state.gaussian?.gaussianObjects >= 1, 'Single HTML viewer did not create a GaussianSplat');
+  assert(state.gaussian?.splatCount === 16, 'Single HTML viewer did not preserve all fixture splats');
+  assert(state.gaussian?.objectCount === 8, 'Single HTML did not load Gaussian, Draco, media, text, and primitive objects together');
+  assert(state.gaussian?.rendered === true, 'Single HTML viewer did not render a GaussianSplat frame');
+  assert(state.gaussian?.environmentLoaded === true, 'Single HTML HDRI/PMREM environment did not load');
+  assert(state.videoTextures >= 1, 'Single HTML VideoTexture object did not initialize');
+  assert(requestUrls.some((requestUrl) => (
+    requestUrl.includes('cbba126004263d0c32d3d6d05a4fe218d261fa47')
+    && /draco_decoder(?:\.wasm|\.js)$/u.test(requestUrl)
+  )), 'Single HTML did not use the pinned Three.js Draco decoder');
   assert(!state.fileWarningVisible, 'Single HTML should not show the Static ZIP file:// warning');
   assert(!state.missingNoticeVisible, 'Embedded image or GLB was reported missing');
   assert(state.playerRate === 'true' && state.playerTime !== '00:00.00', 'Playback controls did not update the embedded scene clock');
@@ -298,7 +360,7 @@ try {
   assert(state.bgmAudio?.readyState >= 2 && state.bgmAudio.error === null && state.bgmAudio.paused === false, 'Embedded audio did not become playable after a user action');
   assert(state.dynamicBodyY < initialDynamicBodyY - 0.05, 'Rapier did not move the dynamic body under gravity');
   assert(!requestUrls.some((url) => url.startsWith('file:') && url !== pathToFileURL(htmlPath).href), `Unexpected sibling file request: ${requestUrls.join(', ')}`);
-  assert(!requestUrls.some((url) => /rapier_wasm3d_bg\.wasm|assets\/(?:pixel\.png|triangle\.glb|tone\.wav)/u.test(url)), `Embedded assets used a sibling request: ${requestUrls.join(', ')}`);
+  assert(!requestUrls.some((url) => /rapier_wasm3d_bg\.wasm|assets\/(?:pixel\.png|triangle\.glb|draco-triangle\.glb|ring-gaussian-splats\.glb|studio\.hdr|tiny\.webm|tone\.wav)/u.test(url)), `Embedded assets used a sibling request: ${requestUrls.join(', ')}`);
   console.log(JSON.stringify({ status: 'passed', ...state, requestUrls }, null, 2));
 } finally {
   await browser?.close();

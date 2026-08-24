@@ -33,6 +33,7 @@ const THREE_STUB = `
   }
   export class Quaternion { toArray() { return [0, 0, 0, 1]; } }
   export class GLTFLoader {}
+  export class GLTFGaussianSplatLoaderExtension {}
   export class DRACOLoader {}
 `;
 

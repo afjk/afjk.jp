@@ -18,7 +18,8 @@
 // `npm install three` is enough. Against an unreleased dev build, point a
 // node_modules/three symlink at a checkout:
 //
-//   git clone --depth 1 https://github.com/mrdoob/three.js /tmp/three.js
+//   git clone https://github.com/mrdoob/three.js /tmp/three.js
+//   git -C /tmp/three.js checkout cbba126004263d0c32d3d6d05a4fe218d261fa47
 //   ln -s /tmp/three.js node_modules/three
 //
 // Exits 0 when everything matches, 1 on a mismatch, and 2 when Three.js has no

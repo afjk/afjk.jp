@@ -1,3 +1,5 @@
+import { SCENE_SYNC_THREE_IMPORTS } from '../viewer/three-runtime.js';
+
 export const SINGLE_HTML_EXPORT_FORMAT = 'single-html-v1';
 export const SINGLE_HTML_EXPORT_VERSION = 1;
 const MODULE_SPECIFIER_PREFIX = 'scene-sync-single-html/';
@@ -413,8 +415,10 @@ function makeRuntimeScript() {
     moduleUrls[path] = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   }
   const imports = {
-    three: 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js',
-    'three/addons/': 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/',
+    three: '${SCENE_SYNC_THREE_IMPORTS.three}',
+    'three/webgpu': '${SCENE_SYNC_THREE_IMPORTS['three/webgpu']}',
+    'three/tsl': '${SCENE_SYNC_THREE_IMPORTS['three/tsl']}',
+    'three/addons/': '${SCENE_SYNC_THREE_IMPORTS['three/addons/']}',
     '@dimforge/rapier3d-deterministic-compat': moduleUrls['viewer/rapier/rapier.js'],
   };
   for (const [path, url] of Object.entries(moduleUrls)) {

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,11 +9,17 @@ import {
   generateExportIndexHtml,
 } from '../html/assets/js/scenesync-export/export/build-export-package.js';
 import { generateManifest } from '../html/assets/js/scenesync-export/export/export-manifest.js';
+import { createDracoTriangleGlb } from './lib/scenesync-e2e-fixtures.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), '..');
 const htmlRoot = path.join(repoRoot, 'html');
 const browserPath = path.join(repoRoot, '.playwright-browsers');
+const gaussianFixturePath = path.join(
+  htmlRoot,
+  'scenesync/experiments/fixtures/ring-gaussian-splats.glb',
+);
+const hdriFixturePath = path.join(htmlRoot, 'assets/hdri/studio.hdr');
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= browserPath;
 
@@ -201,6 +207,30 @@ function createSmokeSceneDocument() {
           friction: 0.5,
         },
       },
+      {
+        id: 'smoke-gaussian-splat',
+        name: 'Smoke Gaussian Splat',
+        position: [1.4, 1, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [2, 2, 2],
+        visible: true,
+        asset: {
+          type: 'mesh',
+          path: 'assets/ring-gaussian-splats.glb',
+        },
+      },
+      {
+        id: 'smoke-draco-mesh',
+        name: 'Smoke Draco Mesh',
+        position: [-1.4, 1, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        visible: true,
+        asset: {
+          type: 'mesh',
+          path: 'assets/draco-triangle.glb',
+        },
+      },
     ],
     physics: {
       version: 1,
@@ -216,7 +246,7 @@ function createSmokeSceneDocument() {
         timestep: 1 / 60,
       },
     },
-    skybox: null,
+    skybox: { asset: { path: 'assets/studio.hdr' } },
     bgm: null,
   };
 }
@@ -250,6 +280,10 @@ async function createExportFixture() {
   const exportRoot = await mkdtemp(path.join(tmpdir(), 'scenesync-static-viewer-smoke-'));
   await writeFile(path.join(exportRoot, 'index.html'), generateExportIndexHtml(), 'utf8');
   await writeJson(path.join(exportRoot, 'scene.json'), createSmokeSceneDocument());
+  await mkdir(path.join(exportRoot, 'assets'), { recursive: true });
+  await copyFile(gaussianFixturePath, path.join(exportRoot, 'assets/ring-gaussian-splats.glb'));
+  await copyFile(hdriFixturePath, path.join(exportRoot, 'assets/studio.hdr'));
+  await writeFile(path.join(exportRoot, 'assets/draco-triangle.glb'), createDracoTriangleGlb());
   await writeJson(path.join(exportRoot, 'manifest.json'), generateManifest({
     assetManifest: [],
     missingAssets: [],
@@ -289,6 +323,7 @@ async function assertExportFixture(exportRoot, copied) {
 function relevantConsoleErrors(consoleMessages) {
   return consoleMessages.filter((entry) => {
     const text = String(entry.text || '');
+    if (/WebGL: INVALID_OPERATION/iu.test(text)) return true;
     if (entry.type === 'warning' && /\b(Rapier|scene-physics|WebAssembly|wasm)\b/iu.test(text)) return true;
     if (entry.type !== 'error') return false;
     if (/GL Driver Message .*ReadPixels/.test(entry.text)) return false;
@@ -369,6 +404,7 @@ async function runViewerSmoke(exportRoot) {
     pageErrors: [],
     requestFailures: [],
     httpErrors: [],
+    browserRequests: [],
     canvas: null,
   };
 
@@ -395,6 +431,7 @@ async function runViewerSmoke(exportRoot) {
         failure: request.failure()?.errorText || 'unknown',
       });
     });
+    page.on('request', (request) => result.browserRequests.push(request.url()));
     page.on('response', (response) => {
       if (response.status() >= 400) {
         result.httpErrors.push({
@@ -410,6 +447,10 @@ async function runViewerSmoke(exportRoot) {
       document.getElementById('loading-overlay')?.classList.contains('hidden') === true
     ), null, { timeout: 20000 });
     await page.waitForSelector('[data-player-play-pause]', { state: 'attached', timeout: 10000 });
+    await page.waitForFunction(() => (
+      globalThis.__sceneSyncViewerDiagnostics?.rendered === true
+      && globalThis.__sceneSyncViewerDiagnostics?.gaussianObjects >= 1
+    ), null, { timeout: 20000 });
     await page.waitForTimeout(1200);
     await waitForRenderedScenePixels(page);
 
@@ -430,6 +471,7 @@ async function runViewerSmoke(exportRoot) {
       handoffOpenDisabled: document.querySelector('#scene-sync-handoff button')?.disabled,
       handoffSourceUrl: location.href,
       pixelSamples: window.__sceneSyncStaticViewerSmokePixels || [],
+      gaussian: globalThis.__sceneSyncViewerDiagnostics || null,
       };
     });
 
@@ -441,12 +483,30 @@ async function runViewerSmoke(exportRoot) {
     assert(result.canvas.handoffDockedInControls, 'Open in Scene Sync did not dock into the viewer control stack');
     assert(result.canvas.handoffOpenDisabled === false, 'Top-level static handoff must remain enabled');
     assert(result.canvas.handoffSourceUrl === result.url, 'Static viewer handoff did not use its published page URL');
+    assert(result.canvas.gaussian?.renderer === 'WebGPURenderer', 'Static viewer did not use WebGPURenderer');
+    assert(result.canvas.gaussian?.backend === 'webgl', 'Static viewer default backend was not WebGL');
+    assert(result.canvas.gaussian?.xrEnabled === true, 'Static viewer WebXR integration was not enabled');
+    assert(result.canvas.gaussian?.gaussianObjects >= 1, 'Static viewer did not create a GaussianSplat');
+    assert(result.canvas.gaussian?.splatCount === 16, 'Static viewer did not preserve all fixture splats');
+    assert(result.canvas.gaussian?.objectCount === 4, 'Static viewer did not load Gaussian, Draco, and primitive meshes together');
+    assert(result.canvas.gaussian?.rendered === true, 'Static viewer did not render a GaussianSplat frame');
+    assert(result.canvas.gaussian?.environmentLoaded === true, 'Static viewer HDRI/PMREM environment did not load');
     assert(result.httpErrors.length === 0, `HTTP errors while loading viewer: ${JSON.stringify(result.httpErrors, null, 2)}`);
     assert(result.requestFailures.length === 0, `Request failures while loading viewer: ${JSON.stringify(result.requestFailures, null, 2)}`);
     assert(result.pageErrors.length === 0, `Page errors while loading viewer: ${result.pageErrors.join('\n')}`);
     assertRequested(result.requestLog, /^\/viewer\/viewer\.js$/u, 'Viewer entry module');
     assertRequested(result.requestLog, /^\/viewer\/rapier\/rapier\.js$/u, 'Rapier JS runtime');
     assertRequested(result.requestLog, /^\/scenesync\/runtime\/event-timeline\.js$/u, 'Scene event timeline runtime');
+    assertRequested(result.requestLog, /^\/assets\/ring-gaussian-splats\.glb$/u, 'Gaussian Splat GLB');
+    assertRequested(result.requestLog, /^\/assets\/studio\.hdr$/u, 'HDRI environment');
+    assertRequested(result.requestLog, /^\/assets\/draco-triangle\.glb$/u, 'Draco GLB');
+    assert(
+      result.browserRequests.some((requestUrl) => (
+        requestUrl.includes('cbba126004263d0c32d3d6d05a4fe218d261fa47')
+        && /draco_decoder(?:\.wasm|\.js)$/u.test(requestUrl)
+      )),
+      'Static viewer did not use the pinned Three.js Draco decoder',
+    );
 
     const consoleErrors = relevantConsoleErrors(result.console);
     assert(consoleErrors.length === 0, `Console errors while loading viewer: ${JSON.stringify(consoleErrors, null, 2)}`);

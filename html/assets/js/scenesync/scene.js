@@ -24,6 +24,13 @@ import { consumeTokenBootstrap } from './handoff/token-bootstrap.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
+import {
+  registerSceneSyncGLTFLoaderExtensions,
+} from './loaders/gltf-loader-config.js';
+import {
+  disposeObject3DResources,
+  prepareGaussianSplatRoot,
+} from './loaders/gaussian-splat-runtime.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
 import { createImageCanvasForScene } from './loaders/image-optimizer.js';
 import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
@@ -123,7 +130,7 @@ const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
-const threeApp = createThreeApp();
+const threeApp = await createThreeApp();
 const {
   scene,
   camera,
@@ -133,9 +140,12 @@ const {
 const dom = getSceneSyncDom();
 applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
-  dracoPath: '/draco/',
   maxDimension: 10,
 });
+const configureEditorGLTFLoader = (loader) => {
+  loader.setDRACOLoader(glbLoader.dracoLoader);
+  return registerSceneSyncGLTFLoaderExtensions(loader);
+};
 
 const onBeforeBroadcast = (operation, meta) => {
   if (operation.kind === 'scene-env' && meta.beforeEnvId) {
@@ -2088,52 +2098,61 @@ function removeLockOverlay(objectId) {
 
 // objectId → { group, placeholder }
 const loadingOverlays = new Map();
+const loadingOverlayPool = [];
 const recoveryOverlays = new Map();
 const failedOverlays = new Map();
 const temporaryImagePreviews = new Map();
 
 function createLoadingLabel(text) {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
   canvas.width = 512;
   canvas.height = 128;
-
-  ctx.clearRect(0, 0, 512, 128);
-
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-  roundRect(ctx, 4, 4, 504, 120, 16);
-  ctx.fill();
-
-  ctx.font = 'bold 30px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#88ccff';
-  ctx.fillText('読み込み中…', 256, 38);
-
-  ctx.font = '24px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  const maxWidth = 480;
-  let label = text;
-  if (ctx.measureText(label).width > maxWidth) {
-    while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
-      label = label.slice(0, -1);
-    }
-    label = label + '…';
-  }
-  ctx.fillText(label, 256, 86);
-
+  const ctx = canvas.getContext('2d');
   const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-
-  const mat = new THREE.SpriteMaterial({
+  const mat = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
     depthTest: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
   });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(3, 0.75, 1);
-  sprite.raycast = () => {};
-  return sprite;
+  // Sprite's internal indexed quad triggers an unbound-attribute VAO path in
+  // the pinned WebGL backend on SwiftShader. An explicit non-indexed plane
+  // preserves the billboard UI without relying on that backend special case.
+  const labelMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1).toNonIndexed(),
+    mat,
+  );
+  labelMesh.scale.set(3, 0.75, 1);
+  labelMesh.raycast = () => {};
+  labelMesh.userData.setLoadingText = (nextText) => {
+    ctx.clearRect(0, 0, 512, 128);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    roundRect(ctx, 4, 4, 504, 120, 16);
+    ctx.fill();
+
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#88ccff';
+    ctx.fillText('読み込み中…', 256, 38);
+
+    ctx.font = '24px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    const maxWidth = 480;
+    let label = nextText;
+    if (ctx.measureText(label).width > maxWidth) {
+      while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
+        label = label.slice(0, -1);
+      }
+      label = label + '…';
+    }
+    ctx.fillText(label, 256, 86);
+    texture.needsUpdate = true;
+  };
+  labelMesh.userData.setLoadingText(text);
+  return labelMesh;
 }
 
 function createObjectNameLabel(text) {
@@ -2236,21 +2255,28 @@ function createFailedPlaceholder() {
 function addLoadingOverlay(objectId, name, info) {
   removeLoadingOverlay(objectId);
 
-  const group = new THREE.Group();
-  group.userData._isLoadingOverlay = true;
-  group.raycast = () => {};
+  const entry = loadingOverlayPool.pop() || (() => {
+    const group = new THREE.Group();
+    group.userData._isLoadingOverlay = true;
+    group.raycast = () => {};
 
-  const placeholder = createLoadingPlaceholder();
-  group.add(placeholder);
+    const placeholder = createLoadingPlaceholder();
+    group.add(placeholder);
 
-  const label = createLoadingLabel(name || objectId);
-  label.position.set(0, 1.1, 0);
-  group.add(label);
+    const label = createLoadingLabel(name || objectId);
+    label.position.set(0, 1.1, 0);
+    group.add(label);
+    return { group, placeholder, label };
+  })();
+  const { group, label } = entry;
+  label.userData.setLoadingText?.(name || objectId);
+  group.position.set(0, 0, 0);
+  group.visible = true;
 
   if (info?.position) group.position.fromArray(info.position);
 
   scene.add(group);
-  loadingOverlays.set(objectId, { group, placeholder });
+  loadingOverlays.set(objectId, entry);
 }
 
 function removeLoadingOverlay(objectId) {
@@ -2259,15 +2285,13 @@ function removeLoadingOverlay(objectId) {
 
   const { group } = entry;
   scene.remove(group);
-  group.traverse(child => {
-    if (child.geometry) child.geometry.dispose();
-    if (child.material) {
-      if (child.material.map) child.material.map.dispose();
-      child.material.dispose();
-    }
-  });
-
+  group.visible = false;
   loadingOverlays.delete(objectId);
+  // The pinned WebGPURenderer WebGL backend corrupts its VAO cache if a
+  // rendered transient overlay is disposed while switching between Gaussian
+  // and conventional GLB pipelines. Pool the complete overlay instead. The
+  // pool is bounded by peak concurrent loads and its GPU resources are reused.
+  loadingOverlayPool.push(entry);
 }
 
 function addRecoveringOverlay(objectId, info) {
@@ -5152,6 +5176,7 @@ renderer.setAnimationLoop((time, frame) => {
     if (entry.placeholder) {
       entry.placeholder.rotation.y += 0.02;
     }
+    entry.label?.quaternion.copy(camera.quaternion);
   }
 
   updateRecoveringOverlaysAnimation();
@@ -5400,6 +5425,7 @@ updateHistoryButtonState();
 
 const remoteAvatarManager = createRemoteAvatarManager({
   scene,
+  camera,
   localPeerId: () => presenceState.id,
   avatarTimeoutMs: AVATAR_TIMEOUT_MS,
 });
@@ -8594,6 +8620,8 @@ function createSceneUrlImportContext(options = {}) {
       }),
     THREE,
     GLTFLoader,
+    configureGLTFLoader: configureEditorGLTFLoader,
+    prepareGlTFRoot: prepareGaussianSplatRoot,
     targetKind,
     replaceSkyboxSphereFromBlob,
     /**
@@ -9559,7 +9587,12 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           replaceManagedObject(objectId, model, info);
           cleanupPreviewForLoadedObject(options);
 
-          try {
+          // The object is already committed and renderable at this point.
+          // IndexedDB is a best-effort acceleration layer, and some browser
+          // storage implementations can leave a request pending while several
+          // Scene Sync tabs share the database. Do not hold strict handoff
+          // completion (and its opener ACK) behind that optional write.
+          void (async () => {
             let assetId = incomingAssetId;
             if (!assetId) {
               assetId = await computeAssetId(blob);
@@ -9577,9 +9610,9 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             if (!info.asset?.assetId) {
               await assetCache.rememberMeshPathAlias(assetId, meshPath);
             }
-          } catch (cacheErr) {
+          })().catch((cacheErr) => {
             console.warn('[SceneSync] Failed to cache mesh:', cacheErr);
-          }
+          });
 
           markCrashProbe('glb-scene-attach-success', { objectId });
           clearCrashProbe('glb-object-ready');
@@ -10382,7 +10415,14 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
     ? Promise.resolve({ model: prebuilt })
     : (async () => {
         const { loadGlbFromUrl } = await import('./loaders/url-importers/glb.js');
-        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader, signal: options.signal, maxBytes: 128 * 1024 * 1024 });
+        return await loadGlbFromUrl(glbUrl, {
+          THREE,
+          GLTFLoader,
+          signal: options.signal,
+          maxBytes: 128 * 1024 * 1024,
+          configureLoader: configureEditorGLTFLoader,
+          prepareRoot: prepareGaussianSplatRoot,
+        });
       })();
 
   return promise.then(({ model }) => {
@@ -10395,16 +10435,7 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
 
     // disposable: GLB はテクスチャや material を内包するため scene graph を traverse して dispose
     model.userData.disposable = () => {
-      model.traverse((child) => {
-        if (child.isMesh) {
-          child.geometry?.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => disposeMaterial(m));
-          } else if (child.material) {
-            disposeMaterial(child.material);
-          }
-        }
-      });
+      disposeObject3DResources(model);
     };
 
     if (existing) {
@@ -11042,7 +11073,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       source: 'cache',
     });
 
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const gltf = await configureEditorGLTFLoader(new GLTFLoader()).loadAsync(url);
     markCrashProbe('glb-load-success', {
       objectId,
       meshPath: options.meshPath,
@@ -11063,6 +11094,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
 
     const wrapper = new THREE.Group();
     wrapper.add(gltf.scene);
+    const gaussianDiagnostics = prepareGaussianSplatRoot(wrapper, THREE);
     wrapper.updateMatrixWorld(true);
 
     const box = new THREE.Box3().setFromObject(wrapper);
@@ -11107,6 +11139,9 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       ...wrapper.userData.scenesync,
       animations,
       animationState,
+      hasGaussianSplat: gaussianDiagnostics.hasGaussianSplat,
+      gaussianSplatCount: gaussianDiagnostics.splatCount,
+      gaussianSplatObjects: gaussianDiagnostics.gaussianObjects,
     };
 
     if (info?.runtime) {
@@ -11134,6 +11169,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
 
     if (obj) {
       if (transformCtrl.object === obj) transformCtrl.detach();
+      obj.userData?.disposable?.();
       scene.remove(obj);
     }
     scene.add(wrapper);
@@ -12140,6 +12176,15 @@ if (isDevUiEnabled()) {
       visible: object.visible !== false,
       asset: cloneJsonSafe(object.userData?.asset || null),
       physics: getObjectPhysicsForSerialize(object),
+      gaussian: object.userData?.scenesync?.hasGaussianSplat
+        ? {
+            hasGaussianSplat: true,
+            gaussianObjects: object.userData.scenesync.gaussianSplatObjects || 0,
+            splatCount: object.userData.scenesync.gaussianSplatCount || 0,
+            selectionProxy: Boolean(object.getObjectByProperty?.('isGaussianSplatSelectionProxy', true)),
+          }
+        : null,
+      transformControlsAttached: transformCtrl.object === object,
     };
   }
 
@@ -12216,6 +12261,15 @@ if (isDevUiEnabled()) {
       get: getDebugObjectSnapshot,
       screenPoint: getDebugObjectScreenPoint,
     },
+    renderer: () => ({
+      renderer: renderer.isWebGPURenderer === true ? 'WebGPURenderer' : renderer.type,
+      backend: renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu',
+      xrEnabled: renderer.xr.enabled === true,
+    }),
+    selectAt: (clientX, clientY) => sceneInputIntent.selectAt(clientX, clientY),
+    deleteSelected: () => deleteSelectedObjects(),
+    undo: () => performUndo(),
+    redo: () => performRedo(),
     loomlet: {
       state: () => loomIntegration.exportState(),
       debug: () => loomIntegration.debugState?.() || { graphs: loomIntegration.exportState() },

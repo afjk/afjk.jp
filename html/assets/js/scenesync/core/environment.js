@@ -1,4 +1,4 @@
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 
 export function createEnvironmentManager(ctx) {
   const {
@@ -14,7 +14,7 @@ export function createEnvironmentManager(ctx) {
   let currentEnvMap = null;
 
   const envSelect = dom?.envSelect || document.getElementById('env-select');
-  const loader = new RGBELoader();
+  const loader = new HDRLoader();
 
   function updateEnvSelector() {
     if (envSelect) {

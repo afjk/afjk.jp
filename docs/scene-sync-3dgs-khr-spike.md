@@ -11,7 +11,7 @@ SceneSyncの3DGS対応は、**Three.js標準のGaussian Splatting実装を第一
 
 Three.js PR #33950 は2026-08-16時点ですでに `dev` へマージ済みで、以下がThree.js addonsとして追加されている。
 
-- `GaussianSplatMesh`
+- `GaussianSplat`
 - `GLTFGaussianSplatLoaderExtension`
 - `SPZLoader`
 - `SPLATLoader`
@@ -26,11 +26,12 @@ Sparkは、将来Three.js標準実装では不足するLOD / streaming / 大規�
 対象PR:
 
 - https://github.com/mrdoob/three.js/pull/33950
-- merge commit: `07abea59aa700eed861f23ede39eaf3d892c93a4`
+- SceneSync runtime pin: `cbba126004263d0c32d3d6d05a4fe218d261fa47`
 
 PRは `dev` にマージ済み。
 2026-08-16時点の最新正式リリースはr185で、PR #33950はr185リリース後にマージされている。
-したがって、このSpikeではmerge commitを固定して検証し、SceneSync本番ではこの変更を含む正式リリースへ更新してから採用する。
+したがって、Issue #527 では `dev` の可動参照ではなく上記commitを固定して採用する。
+r186正式リリース後はnpm CDNの正式版へ置き換える。
 
 Three.js標準実装では、KHR GLBは次のように読み込める。
 
@@ -41,12 +42,12 @@ const gltf = await loader.loadAsync('scene.glb');
 scene.add(gltf.scene);
 ```
 
-`GLTFGaussianSplatLoaderExtension` がKHR accessorを読み、`position / covariance / color` の `BufferGeometry` へ変換し、`GaussianSplatMesh` を生成する。
+`GLTFGaussianSplatLoaderExtension` がKHR accessorを読み、`position / covariance / color` の `BufferGeometry` へ変換し、`GaussianSplat` を生成する。
 SceneSync側でKHR accessorやSH0変換を独自実装する必要はない。
 
 ## Renderer
 
-`GaussianSplatMesh` はThree.jsの `WebGPURenderer` を使用する。
+`GaussianSplat` はThree.jsの `WebGPURenderer` を使用する。
 WebGPUだけでなく `WebGPURenderer({ forceWebGL: true })` によるWebGL backendもサポートされる。
 従来の `WebGLRenderer` では利用しない。
 
@@ -137,19 +138,19 @@ GLTFGaussianSplatLoaderExtension
 BufferGeometry
 (position / covariance / color)
         ↓
-GaussianSplatMesh
+GaussianSplat
         ↓
 WebGPURenderer
 (WebGPU / WebGL fallback)
 ```
 
-SpikeではThree.js PR #33950のmerge commitをCDN経由で固定している。
+SceneSyncではThree.js commit `cbba126004263d0c32d3d6d05a4fe218d261fa47` をjsDelivr GitHub CDN経由で固定している。
 正式リリースに入った後はrelease versionへ置き換える。
 
-WebGL fallbackを強制する場合:
+既定はWebGL backend。WebGPU backendを明示する場合:
 
 ```text
-3dgs-three-native-smoke.html?forceWebGL=1
+3dgs-three-native-smoke.html?webgpu=1
 ```
 
 ## テスト
@@ -161,9 +162,32 @@ npm run test:3dgs-khr
 Nodeテストでは、fixtureがThree.js `GLTFGaussianSplatLoaderExtension` の入力条件を満たすことを確認する。
 描画そのものはbrowser smokeで確認する。
 
-## SceneSync本番統合時の回帰確認
+## Issue #527 本番統合
 
-Three.jsを現在のr170からGaussian Splattingを含む正式版へ更新し、WebGPURendererへ移行する場合は少なくとも次を確認する。
+2026-08-24時点で次の3経路が同じruntime pinとloader extensionを使う。
+
+- SceneSync Editor
+- Static ZIP Export Viewer
+- Single HTML Export Viewer
+
+renderer classはすべて `WebGPURenderer`。既定backendはWebXR互換性を優先して
+`forceWebGL: true` とし、`?webgpu=1` の場合だけWebGPU backendを選ぶ。
+Three.js、addons、`three/webgpu`、`three/tsl`、Draco decoderは同じcommitに固定する。
+Exportは従来どおり `cdnDependent: true` で、Three.jsを埋め込まない。
+
+回帰確認:
+
+```bash
+npm run test:e2e:scene-sync-3dgs-renderer
+npm run test:e2e:scene-sync-3dgs-renderer -- --webgpu
+npm run test:e2e:scene-sync-3dgs-editor
+npm run test:e2e:scene-sync-export-static-viewer
+npm run test:e2e:scene-sync-export-single-html
+```
+
+## #527で確認した回帰項目
+
+固定commitの `WebGPURenderer` への移行に合わせ、次をunit testとbrowser E2Eで確認した。
 
 - 通常GLB / Draco GLB
 - Image / Video object
@@ -184,10 +208,8 @@ Three.jsを現在のr170からGaussian Splattingを含む正式版へ更新し�
 3. SceneSync独自の3DGS renderer / accessor変換は原則作らない
 4. SceneSyncの標準交換形式は `GLB + KHR_gaussian_splatting`
 
-## Issue #526の残作業
+## #527後の残作業
 
-- 実ブラウザで `3dgs-three-native-smoke.html` を開き、fixtureがGaussianとして描画されることを確認する
-- WebGPUとWebGL fallbackの両方を確認する
-- Gaussian Splattingを含むThree.js正式リリースへ更新した際の既存SceneSync回帰確認を行う
-
-Smokeが通れば、Issue #527ではThree.js標準loaderをSceneSync Web Editorの既存GLBロード経路へ登録する方針で進める。
+- 実Insta360データを使ったstagingでの視覚比較
+- Quest等の実機で `immersive-vr` / `immersive-ar` sessionを開始する確認
+- Three.js r186正式リリース後、固定GitHub commitをnpm CDNの正式版へ置き換える

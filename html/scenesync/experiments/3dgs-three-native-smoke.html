@@ -12,10 +12,10 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://rawcdn.githack.com/mrdoob/three.js/07abea59aa700eed861f23ede39eaf3d892c93a4/build/three.webgpu.js",
-      "three/webgpu": "https://rawcdn.githack.com/mrdoob/three.js/07abea59aa700eed861f23ede39eaf3d892c93a4/build/three.webgpu.js",
-      "three/tsl": "https://rawcdn.githack.com/mrdoob/three.js/07abea59aa700eed861f23ede39eaf3d892c93a4/build/three.tsl.js",
-      "three/addons/": "https://rawcdn.githack.com/mrdoob/three.js/07abea59aa700eed861f23ede39eaf3d892c93a4/examples/jsm/"
+      "three": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/build/three.webgpu.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/build/three.webgpu.js",
+      "three/tsl": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/build/three.tsl.js",
+      "three/addons/": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/examples/jsm/"
     }
   }
   </script>
@@ -36,7 +36,7 @@
     camera.position.set(0, 0.25, 2.5);
 
     const params = new URLSearchParams(location.search);
-    const forceWebGL = params.get('forceWebGL') === '1' || !navigator.gpu;
+    const forceWebGL = params.get('webgpu') !== '1';
 
     // `minimal` is the hand-built 8 splat fixture; `ring` is a 16 splat scene
     // with degree 1 SH produced by the SceneSync PLY importer, so it also
@@ -46,7 +46,7 @@
       ring: './fixtures/ring-gaussian-splats.glb',
     };
     const fixtureName = FIXTURES[params.get('fixture')] ? params.get('fixture') : 'minimal';
-    const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL });
+    const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
@@ -59,30 +59,59 @@
     const loader = new GLTFLoader();
     loader.register((parser) => new GLTFGaussianSplatLoaderExtension(parser));
 
+    const normalMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.15, 0.15),
+      new THREE.MeshStandardMaterial({ color: 0x44aaff }),
+    );
+    normalMesh.position.set(-0.8, -0.5, 0);
+    scene.add(normalMesh);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 2));
+
     try {
       const gltf = await loader.loadAsync(FIXTURES[fixtureName]);
       const splats = [];
       gltf.scene.traverse((object) => {
-        if (object.isGaussianSplatMesh) splats.push(object);
+        if (object.isGaussianSplat) splats.push(object);
       });
 
-      if (splats.length === 0) throw new Error('GaussianSplatMesh was not created');
+      if (splats.length === 0) throw new Error('GaussianSplat was not created');
       scene.add(gltf.scene);
 
       const splatCount = splats.reduce((sum, mesh) => {
         return sum + (mesh.splatGeometry?.getAttribute('position')?.count || 0);
       }, 0);
 
+      const backend = renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu';
+      window.__gaussianSplatSmoke = {
+        done: true,
+        backend,
+        renderer: 'WebGPURenderer',
+        gaussianObjects: splats.length,
+        splatCount,
+        normalMeshes: 1,
+        rendered: false,
+        fixture: fixtureName,
+      };
       status.textContent = [
         'KHR_gaussian_splatting GLB → Three.js native loader: OK',
         `fixture: ${fixtureName}`,
-        `GaussianSplatMesh: ${splats.length}`,
+        `GaussianSplat: ${splats.length}`,
         `splats: ${splatCount}`,
-        `backend: ${forceWebGL ? 'WebGL fallback' : 'WebGPU'}`,
-        'Three.js PR #33950 merge commit',
+        `backend: ${backend}`,
+        'Three.js @ cbba126004263d0c32d3d6d05a4fe218d261fa47',
       ].join('\n');
     } catch (error) {
       console.error(error);
+      window.__gaussianSplatSmoke = {
+        done: true,
+        backend: renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu',
+        renderer: 'WebGPURenderer',
+        gaussianObjects: 0,
+        splatCount: 0,
+        normalMeshes: 1,
+        rendered: false,
+        error: error?.message || String(error),
+      };
       status.textContent = `Three.js native KHR smoke: FAILED\n${error?.message || error}`;
     }
 
@@ -95,6 +124,9 @@
     renderer.setAnimationLoop(() => {
       controls.update();
       renderer.render(scene, camera);
+      if (window.__gaussianSplatSmoke?.gaussianObjects > 0) {
+        window.__gaussianSplatSmoke.rendered = true;
+      }
     });
   </script>
 </body>

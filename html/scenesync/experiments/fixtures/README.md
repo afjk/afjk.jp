@@ -57,10 +57,10 @@ node scripts/convert-gaussian-splat.mjs ring-gaussian-splats.lcc2.zip out.glb
 
 ## 描画確認
 
-`../3dgs-three-native-smoke.html` が `GLTFLoader.register()` + `GLTFGaussianSplatLoaderExtension` でGLBを読み込み、`GaussianSplatMesh` として描画する。
+`../3dgs-three-native-smoke.html` が `GLTFLoader.register()` + `GLTFGaussianSplatLoaderExtension` でGLBを読み込み、`GaussianSplat` として描画する。
 
 ```text
 3dgs-three-native-smoke.html                  # minimal（既定）
 3dgs-three-native-smoke.html?fixture=ring     # degree 1 SH を含む変換結果
-3dgs-three-native-smoke.html?forceWebGL=1     # WebGL fallback
+3dgs-three-native-smoke.html?webgpu=1         # WebGPU backend（既定はWebGL backend）
 ```

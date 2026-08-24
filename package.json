@@ -23,6 +23,8 @@
     "test:scene-sync-export-import": "node --test html/assets/js/scenesync/importers/scene-sync-export/*.test.js html/assets/js/scenesync/handoff/*.test.js html/assets/js/scenesync-export/export/*.test.js html/assets/js/scenesync-export/viewer/*.test.js",
     "test:e2e:install-browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "test:e2e:scene-sync-3dgs-worker": "node scripts/scenesync-3dgs-worker-smoke.mjs",
+    "test:e2e:scene-sync-3dgs-renderer": "node scripts/scenesync-3dgs-renderer-smoke.mjs",
+    "test:e2e:scene-sync-3dgs-editor": "node scripts/scenesync-3dgs-editor-smoke.mjs",
     "test:e2e:scene-sync-export-static-viewer": "node scripts/scenesync-export-static-viewer-smoke.mjs",
     "test:e2e:scene-sync-export-single-html": "node scripts/scenesync-export-single-html-smoke.mjs",
     "test:e2e:scene-sync-export-import": "node scripts/scenesync-export-import-browser-e2e.mjs",

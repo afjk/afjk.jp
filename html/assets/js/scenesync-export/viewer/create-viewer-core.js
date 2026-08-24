@@ -1,7 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
+import { registerSceneSyncGLTFLoaderExtensions } from '../../scenesync/loaders/gltf-loader-config.js';
+import {
+  disposeObject3DResources,
+  prepareGaussianSplatRoot,
+} from '../../scenesync/loaders/gaussian-splat-runtime.js';
 import { isValidSceneDocument } from './scene-document.js';
 import { createStaticAssetResolver } from './static-asset-resolver.js';
 import { createExportBehaviorRuntime } from './export-behavior-runtime.js';
@@ -19,8 +24,7 @@ import {
   createViewerSceneClock,
 } from './viewer-scene-clock.js';
 import { createSceneSyncScheduleContext } from '../../scenesync/runtime/schedule-context.js';
-
-const DRACO_DECODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/';
+import { SCENE_SYNC_DRACO_DECODER_PATH } from './three-runtime.js';
 
 const TEXT_LAYOUT_DEFAULTS = Object.freeze({
   width: 2.4,
@@ -229,6 +233,8 @@ export async function createViewerCore({
   const objectMap = new Map();
   const animationSamples = new Map();
   const animationRuntimes = [];
+  let gaussianObjects = 0;
+  let gaussianSplatCount = 0;
 
   // Ambient + directional lights as fallback
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -239,16 +245,17 @@ export async function createViewerCore({
 
   // GLB loader with Draco
   const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+  dracoLoader.setDecoderPath(SCENE_SYNC_DRACO_DECODER_PATH);
   const gltfLoader = new GLTFLoader();
   gltfLoader.setDRACOLoader(dracoLoader);
+  registerSceneSyncGLTFLoaderExtensions(gltfLoader);
 
   // Load environment (HDRI)
   let envLoaded = false;
   if (sceneDoc.skybox?.asset?.path) {
     try {
-      const rgbeLoader = new RGBELoader();
-      const texture = await rgbeLoader.loadAsync(resolver.resolveAsset(sceneDoc.skybox.asset));
+      const hdrLoader = new HDRLoader();
+      const texture = await hdrLoader.loadAsync(resolver.resolveAsset(sceneDoc.skybox.asset));
       texture.mapping = THREE.EquirectangularReflectionMapping;
       const envMap = pmremGenerator.fromEquirectangular(texture).texture;
       scene.environment = envMap;
@@ -398,6 +405,11 @@ export async function createViewerCore({
 
         const wrapper = new THREE.Group();
         wrapper.add(gltf.scene);
+        const gaussianDiagnostics = prepareGaussianSplatRoot(wrapper, THREE, {
+          selectionProxy: false,
+        });
+        gaussianObjects += gaussianDiagnostics.gaussianObjects;
+        gaussianSplatCount += gaussianDiagnostics.splatCount;
         applyTransform(wrapper, entry);
         scene.add(wrapper);
         registerViewerObject(objectMap, entry, wrapper);
@@ -630,6 +642,14 @@ export async function createViewerCore({
       return objectAudioController.isAudioUnlocked();
     },
 
+    getGaussianSplatDiagnostics() {
+      return {
+        gaussianObjects,
+        splatCount: gaussianSplatCount,
+        objectCount: objectMap.size,
+      };
+    },
+
     playObjectAudioPlaybackTargets() {
       return objectAudioController.playPlaybackTargets(sceneClock.getState(), performance.now());
     },
@@ -640,6 +660,9 @@ export async function createViewerCore({
 
     dispose() {
       dracoLoader.dispose();
+      for (const object of new Set(objectMap.values())) {
+        disposeObject3DResources(object);
+      }
       bgmAudio?.pause();
       objectAudioController.dispose();
       loomletPlugin.dispose();
