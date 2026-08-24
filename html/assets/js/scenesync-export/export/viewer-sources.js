@@ -5,6 +5,9 @@ function stripSourceMappingUrl(source) {
 export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/static-viewer-entry.js', dest: 'viewer/viewer.js' },
   { src: '/assets/js/scenesync-export/viewer/create-viewer-core.js', dest: 'viewer/create-viewer-core.js', transform: (source) => source.replaceAll('../../scenesync/', '../scenesync/') },
+  { src: '/assets/js/scenesync-export/viewer/three-runtime.js', dest: 'viewer/three-runtime.js' },
+  { src: '/assets/js/scenesync/loaders/gltf-loader-config.js', dest: 'scenesync/loaders/gltf-loader-config.js' },
+  { src: '/assets/js/scenesync/loaders/gaussian-splat-runtime.js', dest: 'scenesync/loaders/gaussian-splat-runtime.js' },
   { src: '/assets/js/scenesync-export/viewer/export-behavior-runtime.js', dest: 'viewer/export-behavior-runtime.js' },
   { src: '/assets/js/scenesync-export/viewer/object-audio-controller.js', dest: 'viewer/object-audio-controller.js' },
   { src: '/assets/js/scenesync-export/viewer/static-asset-resolver.js', dest: 'viewer/static-asset-resolver.js' },

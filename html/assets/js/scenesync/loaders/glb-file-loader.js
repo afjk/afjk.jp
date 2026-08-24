@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { normalizeGlbForSceneSync } from './glb-normalizer.js';
+import { registerSceneSyncGLTFLoaderExtensions } from './gltf-loader-config.js';
+import { prepareGaussianSplatRoot } from './gaussian-splat-runtime.js';
+import { SCENE_SYNC_DRACO_DECODER_PATH } from '../../scenesync-export/viewer/three-runtime.js';
 
 function toVector3(position) {
   if (!position) return null;
@@ -15,7 +18,7 @@ function toVector3(position) {
 export class GLBFileLoader {
   constructor(options = {}) {
     this.maxDimension = options.maxDimension ?? 10;
-    this.dracoPath = options.dracoPath ?? '/draco/';
+    this.dracoPath = options.dracoPath ?? SCENE_SYNC_DRACO_DECODER_PATH;
     this.dracoLoader = null;
     this.gltfLoader = this._createGLTFLoader();
   }
@@ -27,7 +30,7 @@ export class GLBFileLoader {
 
     const gltfLoader = new GLTFLoader();
     gltfLoader.setDRACOLoader(dracoLoader);
-    return gltfLoader;
+    return registerSceneSyncGLTFLoaderExtensions(gltfLoader);
   }
 
   _load(url) {
@@ -53,6 +56,8 @@ export class GLBFileLoader {
     }
 
     wrapper.add(gltf.scene);
+
+    const gaussianDiagnostics = prepareGaussianSplatRoot(wrapper, THREE);
 
     wrapper.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(wrapper);
@@ -113,6 +118,9 @@ export class GLBFileLoader {
         glbMetadata: metadata,
         animations,
         animationState,
+        hasGaussianSplat: gaussianDiagnostics.hasGaussianSplat,
+        gaussianSplatCount: gaussianDiagnostics.splatCount,
+        gaussianSplatObjects: gaussianDiagnostics.gaussianObjects,
       },
     };
 

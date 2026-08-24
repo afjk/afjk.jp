@@ -7,6 +7,7 @@ import {
 } from './export-thumbnail.js';
 import { prepareSceneSyncExport } from './export-preparation.js';
 import { VIEWER_SOURCES } from './viewer-sources.js';
+import { SCENE_SYNC_THREE_IMPORTS } from '../viewer/three-runtime.js';
 
 export { VIEWER_SOURCES, SINGLE_HTML_HANDOFF_SOURCES, fetchExportViewerSources } from './viewer-sources.js';
 const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
@@ -19,8 +20,10 @@ const INDEX_HTML_TEMPLATE = `<!DOCTYPE html>
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "three": "${SCENE_SYNC_THREE_IMPORTS.three}",
+      "three/webgpu": "${SCENE_SYNC_THREE_IMPORTS['three/webgpu']}",
+      "three/tsl": "${SCENE_SYNC_THREE_IMPORTS['three/tsl']}",
+      "three/addons/": "${SCENE_SYNC_THREE_IMPORTS['three/addons/']}",
       "@dimforge/rapier3d-deterministic-compat": "./viewer/rapier/rapier.js"
     }
   }

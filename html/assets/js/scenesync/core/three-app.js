@@ -1,10 +1,11 @@
 import * as THREE from 'three';
+import { createSceneSyncRendererOptions } from '../../scenesync-export/viewer/three-runtime.js';
 
 const GRID_SIZE = 20;
 const GRID_DIVISIONS = 20;
 const PLACEMENT_FLOOR_SIZE = 100;
 
-export function createThreeApp() {
+export async function createThreeApp() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x222222);
 
@@ -19,10 +20,11 @@ export function createThreeApp() {
   // WebXR 中は three.js が左目カメラに layer 1、右目カメラに layer 2 を割り当てる。
   camera.layers.enable(1);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  const renderer = new THREE.WebGPURenderer(createSceneSyncRendererOptions({ antialias: true }));
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
+  await renderer.init();
 
   renderer.xr.enabled = true;
   try {

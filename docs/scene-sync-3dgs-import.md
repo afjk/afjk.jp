@@ -296,12 +296,14 @@ PLYとSPZは `test-fixtures.mjs` の**SceneSync自前のencoder**が書く。spl
 splat-transformが書き、three.jsが読むので、SceneSyncは入力と期待値を出すだけになる。
 
 ```bash
-git clone --depth 1 https://github.com/mrdoob/three.js /tmp/three.js
+git clone https://github.com/mrdoob/three.js /tmp/three.js
+git -C /tmp/three.js checkout cbba126004263d0c32d3d6d05a4fe218d261fa47
 ln -s /tmp/three.js node_modules/three
 npm run verify:3dgs-threejs
 ```
 
-Three.js `dev`（r186dev、GS実装入り）に対して実行した結果:
+SceneSync runtimeと同じThree.js commit
+`cbba126004263d0c32d3d6d05a4fe218d261fa47` に対して実行した結果:
 
 | case | 入力 | SH degree | 結果 |
 | --- | --- | ---: | --- |
@@ -491,8 +493,8 @@ adapterを1枚挟んだので、splat-transformのprocess actionを増やすだ�
 
 ## 残課題
 
-- GPU描画での確認（`WebGPURenderer`、Three.js正式リリース待ち、#526 / #527）。
-  ローダーまでは `npm run verify:3dgs-threejs` で検証済み
+- 実Insta360データを使ったstaging / Quest実機での視覚・WebXR確認。
+  repo fixtureによるEditor / Static ZIP / Single HTMLのGPU描画回帰は#527で追加済み
 - 大容量アセットのasset cache / blob経路（#528）
 - 本番デプロイ環境のCSPでの確認。smokeはローカルの静的サーバー（CSPヘッダなし）で
   実行しているため、本番/stagingが `worker-src` を絞っている場合はinline fallbackに落ちる

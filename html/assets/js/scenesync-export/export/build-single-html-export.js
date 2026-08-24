@@ -5,6 +5,7 @@ import {
   SINGLE_HTML_EXPORT_FORMAT,
   SINGLE_HTML_EXPORT_VERSION,
 } from './single-html-format.js';
+import { SCENE_SYNC_THREE_RUNTIME_LABEL } from '../viewer/three-runtime.js';
 
 function formatTimestamp(date = new Date()) {
   const pad = (number) => String(number).padStart(2, '0');
@@ -36,7 +37,7 @@ export function createSingleHtmlManifest({ assetManifest, missingAssets, metadat
       entry: 'self',
       cdnDependent: true,
       cdnDependencies: [
-        'three@0.170.0',
+        SCENE_SYNC_THREE_RUNTIME_LABEL,
         'three/examples addons and Draco decoder',
       ],
     },

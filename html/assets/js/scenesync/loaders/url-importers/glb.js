@@ -7,7 +7,13 @@ import { normalizeGlbForSceneSync } from '../glb-normalizer.js';
  * @param {object} opts - { THREE, GLTFLoader, timeoutMs = 30000 }
  * @returns {Promise<{ model: THREE.Group, sizeBytes: number, contentType: string, normalization: object }>}
  */
-export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000 } = {}) {
+export async function loadGlbFromUrl(url, {
+  THREE,
+  GLTFLoader,
+  timeoutMs = 30000,
+  configureLoader = null,
+  prepareRoot = null,
+} = {}) {
   if (!THREE || !GLTFLoader) {
     throw new Error('THREE および GLTFLoader は必須です');
   }
@@ -76,6 +82,7 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
   let gltf;
   try {
     const loader = new GLTFLoader();
+    configureLoader?.(loader);
     gltf = await new Promise((resolve, reject) => {
       loader.parse(parseBuffer, '', resolve, reject);
     });
@@ -93,6 +100,7 @@ export async function loadGlbFromUrl(url, { THREE, GLTFLoader, timeoutMs = 30000
     animations,
     animationState,
   };
+  prepareRoot?.(gltf.scene, THREE);
 
   // 変換後の ArrayBuffer を保持（upload/broadcast 用）
   if (normalization.changed) {
@@ -122,6 +130,8 @@ export async function importGlbUrl(url, ctx) {
     const { model, animations, normalization } = await loadGlbFromUrl(url, {
       THREE: ctx.THREE,
       GLTFLoader: ctx.GLTFLoader,
+      configureLoader: ctx.configureGLTFLoader,
+      prepareRoot: ctx.prepareGlTFRoot,
     });
 
     const objectId = ctx.generateObjectId('glb');

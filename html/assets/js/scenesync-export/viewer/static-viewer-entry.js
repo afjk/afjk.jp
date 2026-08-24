@@ -3,6 +3,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createViewerCore } from './create-viewer-core.js';
 import { createPlayerTransportPanel } from './player-transport.js';
 import { mountUrlHandoff } from '../scenesync/handoff/source.js';
+import {
+  createSceneSyncRendererOptions,
+  getSceneSyncRendererBackend,
+} from './three-runtime.js';
 
 // Resolve scene.json relative to the document root, not the script location
 const BASE_URL = new URL('./', document.baseURI).href;
@@ -141,10 +145,15 @@ async function main() {
 
   // Build Three.js app
   const canvas = document.getElementById('viewer-canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  const renderer = new THREE.WebGPURenderer(createSceneSyncRendererOptions({
+    canvas,
+    antialias: true,
+    alpha: true,
+  }));
   renderer.setClearAlpha(1);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  await renderer.init();
   renderer.xr.enabled = true;
   renderer.domElement.tabIndex = 0;
 
@@ -187,6 +196,22 @@ async function main() {
   }
 
   loadingOverlay?.classList.add('hidden');
+
+  const gaussianDiagnostics = viewerCore.getGaussianSplatDiagnostics?.() || {
+    gaussianObjects: 0,
+    splatCount: 0,
+  };
+  globalThis.__sceneSyncViewerDiagnostics = {
+    done: true,
+    renderer: 'WebGPURenderer',
+    backend: getSceneSyncRendererBackend(renderer),
+    xrEnabled: renderer.xr.enabled === true,
+    gaussianObjects: gaussianDiagnostics.gaussianObjects,
+    splatCount: gaussianDiagnostics.splatCount,
+    objectCount: gaussianDiagnostics.objectCount,
+    environmentLoaded: Boolean(scene.environment),
+    rendered: false,
+  };
 
   if (missingAssets.length > 0) {
     if (missingNotice) {
@@ -315,6 +340,7 @@ async function main() {
     viewerCore.update();
     controls.update();
     renderer.render(scene, camera);
+    globalThis.__sceneSyncViewerDiagnostics.rendered = true;
   });
 }
 

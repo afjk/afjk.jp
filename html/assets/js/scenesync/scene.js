@@ -24,6 +24,13 @@ import { consumeTokenBootstrap } from './handoff/token-bootstrap.js';
 import { ClipboardImportManager } from './components/clipboard-import-manager.js';
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
+import {
+  registerSceneSyncGLTFLoaderExtensions,
+} from './loaders/gltf-loader-config.js';
+import {
+  disposeObject3DResources,
+  prepareGaussianSplatRoot,
+} from './loaders/gaussian-splat-runtime.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
 import { createImageCanvasForScene } from './loaders/image-optimizer.js';
 import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
@@ -123,7 +130,7 @@ const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
 // ── Three.js 基本セットアップ ────────────────────────────
 
-const threeApp = createThreeApp();
+const threeApp = await createThreeApp();
 const {
   scene,
   camera,
@@ -133,9 +140,12 @@ const {
 const dom = getSceneSyncDom();
 applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
-  dracoPath: '/draco/',
   maxDimension: 10,
 });
+const configureEditorGLTFLoader = (loader) => {
+  loader.setDRACOLoader(glbLoader.dracoLoader);
+  return registerSceneSyncGLTFLoaderExtensions(loader);
+};
 
 const onBeforeBroadcast = (operation, meta) => {
   if (operation.kind === 'scene-env' && meta.beforeEnvId) {
@@ -8594,6 +8604,8 @@ function createSceneUrlImportContext(options = {}) {
       }),
     THREE,
     GLTFLoader,
+    configureGLTFLoader: configureEditorGLTFLoader,
+    prepareGlTFRoot: prepareGaussianSplatRoot,
     targetKind,
     replaceSkyboxSphereFromBlob,
     /**
@@ -10382,7 +10394,14 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
     ? Promise.resolve({ model: prebuilt })
     : (async () => {
         const { loadGlbFromUrl } = await import('./loaders/url-importers/glb.js');
-        return await loadGlbFromUrl(glbUrl, { THREE, GLTFLoader, signal: options.signal, maxBytes: 128 * 1024 * 1024 });
+        return await loadGlbFromUrl(glbUrl, {
+          THREE,
+          GLTFLoader,
+          signal: options.signal,
+          maxBytes: 128 * 1024 * 1024,
+          configureLoader: configureEditorGLTFLoader,
+          prepareRoot: prepareGaussianSplatRoot,
+        });
       })();
 
   return promise.then(({ model }) => {
@@ -10395,16 +10414,7 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
 
     // disposable: GLB はテクスチャや material を内包するため scene graph を traverse して dispose
     model.userData.disposable = () => {
-      model.traverse((child) => {
-        if (child.isMesh) {
-          child.geometry?.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => disposeMaterial(m));
-          } else if (child.material) {
-            disposeMaterial(child.material);
-          }
-        }
-      });
+      disposeObject3DResources(model);
     };
 
     if (existing) {
@@ -11042,7 +11052,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       source: 'cache',
     });
 
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const gltf = await configureEditorGLTFLoader(new GLTFLoader()).loadAsync(url);
     markCrashProbe('glb-load-success', {
       objectId,
       meshPath: options.meshPath,
@@ -11063,6 +11073,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
 
     const wrapper = new THREE.Group();
     wrapper.add(gltf.scene);
+    const gaussianDiagnostics = prepareGaussianSplatRoot(wrapper, THREE);
     wrapper.updateMatrixWorld(true);
 
     const box = new THREE.Box3().setFromObject(wrapper);
@@ -11107,6 +11118,9 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       ...wrapper.userData.scenesync,
       animations,
       animationState,
+      hasGaussianSplat: gaussianDiagnostics.hasGaussianSplat,
+      gaussianSplatCount: gaussianDiagnostics.splatCount,
+      gaussianSplatObjects: gaussianDiagnostics.gaussianObjects,
     };
 
     if (info?.runtime) {
@@ -11134,6 +11148,7 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
 
     if (obj) {
       if (transformCtrl.object === obj) transformCtrl.detach();
+      obj.userData?.disposable?.();
       scene.remove(obj);
     }
     scene.add(wrapper);
@@ -12140,6 +12155,15 @@ if (isDevUiEnabled()) {
       visible: object.visible !== false,
       asset: cloneJsonSafe(object.userData?.asset || null),
       physics: getObjectPhysicsForSerialize(object),
+      gaussian: object.userData?.scenesync?.hasGaussianSplat
+        ? {
+            hasGaussianSplat: true,
+            gaussianObjects: object.userData.scenesync.gaussianSplatObjects || 0,
+            splatCount: object.userData.scenesync.gaussianSplatCount || 0,
+            selectionProxy: Boolean(object.getObjectByProperty?.('isGaussianSplatSelectionProxy', true)),
+          }
+        : null,
+      transformControlsAttached: transformCtrl.object === object,
     };
   }
 
@@ -12216,6 +12240,15 @@ if (isDevUiEnabled()) {
       get: getDebugObjectSnapshot,
       screenPoint: getDebugObjectScreenPoint,
     },
+    renderer: () => ({
+      renderer: renderer.isWebGPURenderer === true ? 'WebGPURenderer' : renderer.type,
+      backend: renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu',
+      xrEnabled: renderer.xr.enabled === true,
+    }),
+    selectAt: (clientX, clientY) => sceneInputIntent.selectAt(clientX, clientY),
+    deleteSelected: () => deleteSelectedObjects(),
+    undo: () => performUndo(),
+    redo: () => performRedo(),
     loomlet: {
       state: () => loomIntegration.exportState(),
       debug: () => loomIntegration.debugState?.() || { graphs: loomIntegration.exportState() },
