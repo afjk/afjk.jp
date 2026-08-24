@@ -1,4 +1,4 @@
-// Editor keyboard shortcut アダプタ。Cmd/Ctrl+C/V・Undo/Redo・W/E/R・
+// Editor keyboard shortcut アダプタ。Cmd/Ctrl+C/V・Undo/Redo・W/E/R/F・
 // Escape・Delete/Backspace といった「編集系」ショートカットを配線する。
 // 編集を行う shell（editor / studio）のみ mount すること。鑑賞用 shell
 // （viewer / player / minimal）では mount しない＝編集ショートカットを無効化する。
@@ -53,6 +53,13 @@ export function createEditorKeyboardAdapter() {
           case 'w': core.commands?.setTransformMode?.('translate'); break;
           case 'e': core.commands?.setTransformMode?.('rotate'); break;
           case 'r': core.commands?.setTransformMode?.('scale'); break;
+          case 'f': {
+            if (!isMod && !e.altKey && !e.shiftKey && core.commands?.focusSelected?.()) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+            break;
+          }
           case 'escape': { if (input.handleEscape()) e.preventDefault(); break; }
           case 'delete':
           case 'backspace': { e.preventDefault(); core.commands?.deleteSelected?.(); break; }

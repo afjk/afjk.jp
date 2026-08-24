@@ -62,6 +62,15 @@ export function shouldAutoScaleSceneSyncGlb(diagnostics) {
   return diagnostics?.hasGaussianSplat !== true;
 }
 
+export function shouldGroundSceneSyncGlb(diagnostics) {
+  // A Gaussian capture is usually a world-sized scene whose authored origin is
+  // meaningful. Grounding its lowest bound (often a distant outlier) can move
+  // the useful part of the capture tens of metres above the drop point. Keep
+  // the wrapper origin at the requested placement, as SuperSplat does; normal
+  // object-style GLBs retain Scene Sync's existing bottom-on-ground placement.
+  return diagnostics?.hasGaussianSplat !== true;
+}
+
 function isHierarchyVisible(object) {
   for (let current = object; current; current = current.parent) {
     if (current.visible === false) return false;

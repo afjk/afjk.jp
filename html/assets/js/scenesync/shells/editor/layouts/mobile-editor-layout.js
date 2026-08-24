@@ -29,6 +29,7 @@ export function createMobileEditorLayout() {
       const btnMove = document.getElementById('btn-move');
       const btnRotate = document.getElementById('btn-rotate');
       const btnScale = document.getElementById('btn-scale');
+      const btnFocus = document.getElementById('btn-focus');
       const btnCopy = document.getElementById('btn-copy');
       const btnDelete = document.getElementById('btn-delete');
       const btnDeselect = document.getElementById('btn-deselect');
@@ -53,6 +54,7 @@ export function createMobileEditorLayout() {
         addListener(btnMove, 'click', () => actions?.setTransformMode?.('translate')),
         addListener(btnRotate, 'click', () => actions?.setTransformMode?.('rotate')),
         addListener(btnScale, 'click', () => actions?.setTransformMode?.('scale')),
+        addListener(btnFocus, 'click', () => actions?.focusSelected?.()),
         addListener(btnCopy, 'click', () => actions?.duplicateSelected?.()),
         addListener(btnDelete, 'click', () => actions?.deleteSelected?.()),
         addListener(btnDeselect, 'click', () => actions?.deselect?.())

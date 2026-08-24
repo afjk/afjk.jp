@@ -19,6 +19,7 @@ const ICON = {
   move: '<path d="M12 3v18M3 12h18"/><path d="M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/>',
   rotate: '<path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4.2v4.2h-4.2"/>',
   scale: '<path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/>',
+  frame: '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/><circle cx="12" cy="12" r="3"/>',
   duplicate: '<rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5V4.5A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/>',
   trash: '<path d="M3.5 6h17"/><path d="M8.5 6V4.5A1.5 1.5 0 0 1 10 3h4a1.5 1.5 0 0 1 1.5 1.5V6"/><path d="M18.5 6 17.6 19a1.5 1.5 0 0 1-1.5 1.4H7.9A1.5 1.5 0 0 1 6.4 19L5.5 6"/>',
   close: '<path d="M17 7 7 17M7 7l10 10"/>',
@@ -132,6 +133,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     on('[data-studio-duplicate]', () => actions.duplicate());
     on('[data-studio-delete]', () => actions.remove());
     on('[data-studio-deselect]', () => actions.deselect());
+    on('[data-studio-frame]', () => actions.focusSelected());
     on('[data-studio-details]', () => { actions.openInspector(); setMenuOpen(false); });
     on('[data-studio-menu-btn]', () => setMenuOpen(!menuOpen));
     on('[data-studio-export]', () => { actions.exportScene(); setMenuOpen(false); });
@@ -172,6 +174,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
         <div class="studio-card" data-studio-card data-show="false" role="group" aria-label="Selection">
           <div class="studio-card-head">
             <span class="studio-card-name" data-studio-card-name>Object</span>
+            <button class="studio-icon-btn studio-card-x" data-studio-frame type="button" title="Frame Selection (F)" aria-label="Frame Selection">${icon('frame', 18)}</button>
             <button class="studio-icon-btn studio-card-x" data-studio-deselect type="button" title="Deselect" aria-label="Deselect">${icon('close', 18)}</button>
           </div>
           <div class="studio-tools">

@@ -6,6 +6,7 @@ import { registerSceneSyncGLTFLoaderExtensions } from './gltf-loader-config.js';
 import {
   prepareGaussianSplatRoot,
   shouldAutoScaleSceneSyncGlb,
+  shouldGroundSceneSyncGlb,
 } from './gaussian-splat-runtime.js';
 import { SCENE_SYNC_DRACO_DECODER_PATH } from '../../scenesync-export/viewer/three-runtime.js';
 
@@ -73,12 +74,13 @@ export class GLBFileLoader {
       wrapper.updateMatrixWorld(true);
     }
 
-    const adjustedBox = wrapper.scale.x === 1 && wrapper.scale.y === 1 && wrapper.scale.z === 1
-      ? box
-      : new THREE.Box3().setFromObject(wrapper);
-    const groundOffset = -adjustedBox.min.y;
     const targetPosition = toVector3(position) || new THREE.Vector3();
-    targetPosition.y += groundOffset;
+    if (shouldGroundSceneSyncGlb(gaussianDiagnostics)) {
+      const adjustedBox = wrapper.scale.x === 1 && wrapper.scale.y === 1 && wrapper.scale.z === 1
+        ? box
+        : new THREE.Box3().setFromObject(wrapper);
+      targetPosition.y -= adjustedBox.min.y;
+    }
     wrapper.position.copy(targetPosition);
 
     const metadata = {

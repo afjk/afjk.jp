@@ -21,6 +21,9 @@ export function createEditorActions(core) {
     deleteSelected() {
       core?.commands?.deleteSelected?.();
     },
+    focusSelected() {
+      return core?.commands?.focusSelected?.();
+    },
     openSceneInspector() {
       core?.commands?.openSceneInspector?.();
     },

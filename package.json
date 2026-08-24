@@ -6,6 +6,7 @@
   "scripts": {
     "test:audio-source-controller": "node --test html/assets/js/scenesync/audio/audio-source-controller.test.js",
     "test:editing-state": "node --test html/assets/js/scenesync/runtime/editing-state.test.js",
+    "test:editor-input": "node --test html/assets/js/scenesync/shells/editor/inputs/editor-keyboard-adapter.test.js",
     "test:expired-glb-recovery": "node --test html/assets/js/scenesync/assets/expired-glb-recovery.test.js",
     "test:mesh-blob-fetch": "node --test html/assets/js/scenesync/assets/mesh-blob-fetch.test.js",
     "test:mesh-upload": "node --test html/assets/js/scenesync/assets/carrier-compression.test.js html/assets/js/scenesync/assets/mesh-upload.test.js",

@@ -8,6 +8,7 @@ import {
   inspectGaussianSplats,
   prepareGaussianSplatRoot,
   shouldAutoScaleSceneSyncGlb,
+  shouldGroundSceneSyncGlb,
 } from '../gaussian-splat-runtime.js';
 
 function traversable(objects) {
@@ -76,6 +77,12 @@ test('Gaussian captures preserve authored scale while conventional GLBs keep aut
   assert.equal(shouldAutoScaleSceneSyncGlb({ hasGaussianSplat: true }), false);
   assert.equal(shouldAutoScaleSceneSyncGlb({ hasGaussianSplat: false }), true);
   assert.equal(shouldAutoScaleSceneSyncGlb(null), true);
+});
+
+test('Gaussian captures preserve their authored origin while conventional GLBs stay grounded', () => {
+  assert.equal(shouldGroundSceneSyncGlb({ hasGaussianSplat: true }), false);
+  assert.equal(shouldGroundSceneSyncGlb({ hasGaussianSplat: false }), true);
+  assert.equal(shouldGroundSceneSyncGlb(null), true);
 });
 
 test('WebGL Gaussian CPU sorting is bounded while WebGPU and XR keep native sorting', () => {

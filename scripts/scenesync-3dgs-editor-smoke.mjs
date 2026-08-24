@@ -148,14 +148,14 @@ const degree3PlyBytes = buildGaussianSplatPly([{
 }], { shDegree: 3 });
 const widePlyBytes = buildGaussianSplatPly([
   {
-    position: [-25, 0, 0],
+    position: [-25, -20, 0],
     scale: [0.2, 0.2, 0.2],
     rotation: [0, 0, 0, 1],
     opacity: 0.8,
     sh0: [0.2, 0.1, 0],
   },
   {
-    position: [25, 0, 0],
+    position: [25, 30, 0],
     scale: [0.2, 0.2, 0.2],
     rotation: [0, 0, 0, 1],
     opacity: 0.8,
@@ -249,6 +249,8 @@ try {
   assert(snapshot.gaussian?.hasGaussianSplat === true, 'Editor GLB path did not create GaussianSplat');
   assert(snapshot.gaussian?.gaussianObjects === 1, 'Editor Gaussian object count changed');
   assert(snapshot.gaussian?.splatCount === expectedSplatCount, 'Editor did not preserve every SOG splat');
+  assert(JSON.stringify(snapshot.position) === JSON.stringify(sogDropPosition),
+    'Editor moved the Gaussian capture away from its requested drop position');
   assert(snapshot.gaussian?.selectionProxy === true, 'Editor did not create a Gaussian bounds selection proxy');
   assert(snapshot.asset?.assetId, 'Editor did not attach a persistent assetId to the SOG GLB');
   assert(snapshot.asset?.meshPath, 'Editor did not attach a shared meshPath to the SOG GLB');
@@ -504,6 +506,18 @@ try {
   assert(widePly?.gaussian?.splatCount === 2, 'Wide PLY did not load as GaussianSplat');
   assert(JSON.stringify(widePly.scale) === JSON.stringify([1, 1, 1]),
     'Gaussian capture was still auto-shrunk to the conventional GLB size limit');
+  assert(JSON.stringify(widePly.position) === JSON.stringify([0, 0, -100]),
+    'Gaussian capture was moved above its requested placement by bounds grounding');
+
+  phase = 'frame-selection';
+  await page.keyboard.press('f');
+  await page.waitForTimeout(100);
+  const framedPoint = await page.evaluate((objectId) => (
+    globalThis.__sceneSyncDebug.objects.screenPoint(objectId)
+  ), widePly.objectId);
+  assert(framedPoint?.visible === true, 'F did not bring the selected Gaussian into camera depth');
+  assert(Math.abs(framedPoint.ndc[0]) < 0.05 && Math.abs(framedPoint.ndc[1]) < 0.05,
+    'F did not center the selected Gaussian bounds');
 
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(invalidOperations.length === 0, `WebGL draw errors: ${invalidOperations.join('\n')}`);
@@ -527,6 +541,8 @@ try {
     reloadedFromAssetCache: true,
     targetCachedRawGlb: true,
     authoredGaussianScalePreserved: true,
+    authoredGaussianOriginPreserved: true,
+    frameSelectionShortcut: true,
     selected: true,
     transformControlsAttached: selected.transformControlsAttached,
     transformed: true,
