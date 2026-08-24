@@ -484,7 +484,12 @@ try {
     if (!observedAdds.has(objectId)) throw new Error(`Timed out waiting for ${label}`);
   }
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    ...(process.env.SCENE_SYNC_E2E_SWIFTSHADER === '1'
+      ? { args: ['--use-angle=swiftshader'] }
+      : {}),
+  });
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
   const sourceDiagnostics = [];
   page.on('console', (message) => sourceDiagnostics.push(`console:${message.type()}:${message.text()}`));

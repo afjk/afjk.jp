@@ -9587,7 +9587,12 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           replaceManagedObject(objectId, model, info);
           cleanupPreviewForLoadedObject(options);
 
-          try {
+          // The object is already committed and renderable at this point.
+          // IndexedDB is a best-effort acceleration layer, and some browser
+          // storage implementations can leave a request pending while several
+          // Scene Sync tabs share the database. Do not hold strict handoff
+          // completion (and its opener ACK) behind that optional write.
+          void (async () => {
             let assetId = incomingAssetId;
             if (!assetId) {
               assetId = await computeAssetId(blob);
@@ -9605,9 +9610,9 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             if (!info.asset?.assetId) {
               await assetCache.rememberMeshPathAlias(assetId, meshPath);
             }
-          } catch (cacheErr) {
+          })().catch((cacheErr) => {
             console.warn('[SceneSync] Failed to cache mesh:', cacheErr);
-          }
+          });
 
           markCrashProbe('glb-scene-attach-success', { objectId });
           clearCrashProbe('glb-object-ready');
