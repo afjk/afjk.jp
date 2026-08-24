@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   disposeObject3DResources,
+  ensureSceneSyncMeshNormals,
   inspectGaussianSplats,
   prepareGaussianSplatRoot,
 } from '../gaussian-splat-runtime.js';
@@ -15,6 +16,30 @@ function traversable(objects) {
     },
   };
 }
+
+test('lit conventional meshes receive normals when glTF omits NORMAL', () => {
+  let normal = null;
+  let computes = 0;
+  const geometry = {
+    getAttribute(name) {
+      if (name === 'position') return { count: 3 };
+      if (name === 'normal') return normal;
+      return null;
+    },
+    computeVertexNormals() {
+      computes += 1;
+      normal = { count: 3 };
+    },
+  };
+  const root = traversable([
+    { isMesh: true, geometry, material: { isMeshStandardMaterial: true } },
+    { isMesh: true, geometry, material: { isMeshBasicMaterial: true } },
+    { isMesh: true, isGaussianSplat: true, geometry, material: { isMeshStandardMaterial: true } },
+  ]);
+
+  assert.equal(ensureSceneSyncMeshNormals(root), 1);
+  assert.equal(computes, 1);
+});
 
 test('Gaussian diagnostics use isGaussianSplat and preserve the source splat count', () => {
   let boxComputes = 0;

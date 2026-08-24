@@ -2,6 +2,35 @@ function gaussianSplatCount(object) {
   return object?.splatGeometry?.getAttribute?.('position')?.count || 0;
 }
 
+function materialNeedsNormals(material) {
+  return Boolean(
+    material?.isMeshStandardMaterial
+    || material?.isMeshPhysicalMaterial
+    || material?.isMeshLambertMaterial
+    || material?.isMeshPhongMaterial
+    || material?.isMeshToonMaterial
+    || material?.isMeshNormalMaterial
+  );
+}
+
+export function ensureSceneSyncMeshNormals(root) {
+  let generated = 0;
+  root?.traverse?.((object) => {
+    if (!object?.isMesh || object.isGaussianSplat || object.isGaussianSplatSelectionProxy) return;
+    const geometry = object.geometry;
+    if (!geometry?.getAttribute?.('position') || geometry.getAttribute('normal')) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    if (!materials.some(materialNeedsNormals)) return;
+
+    // NORMAL is optional in glTF. The pinned WebGPURenderer WebGL backend can
+    // lose its constant default attribute binding on SwiftShader, so provide
+    // the standard generated normals explicitly for lit conventional meshes.
+    geometry.computeVertexNormals?.();
+    if (geometry.getAttribute('normal')) generated += 1;
+  });
+  return generated;
+}
+
 export function inspectGaussianSplats(root) {
   const objects = [];
   let splatCount = 0;
@@ -92,6 +121,7 @@ export function disposeObject3DResources(root) {
 }
 
 export function prepareGaussianSplatRoot(root, THREE, { selectionProxy = true } = {}) {
+  ensureSceneSyncMeshNormals(root);
   const diagnostics = inspectGaussianSplats(root);
   if (!diagnostics.hasGaussianSplat) return diagnostics;
 
