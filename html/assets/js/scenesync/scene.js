@@ -2109,15 +2109,23 @@ function createLoadingLabel(text) {
   canvas.height = 128;
   const ctx = canvas.getContext('2d');
   const texture = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({
+  const mat = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
     depthTest: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
   });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(3, 0.75, 1);
-  sprite.raycast = () => {};
-  sprite.userData.setLoadingText = (nextText) => {
+  // Sprite's internal indexed quad triggers an unbound-attribute VAO path in
+  // the pinned WebGL backend on SwiftShader. An explicit non-indexed plane
+  // preserves the billboard UI without relying on that backend special case.
+  const labelMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1).toNonIndexed(),
+    mat,
+  );
+  labelMesh.scale.set(3, 0.75, 1);
+  labelMesh.raycast = () => {};
+  labelMesh.userData.setLoadingText = (nextText) => {
     ctx.clearRect(0, 0, 512, 128);
 
     ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
@@ -2143,8 +2151,8 @@ function createLoadingLabel(text) {
     ctx.fillText(label, 256, 86);
     texture.needsUpdate = true;
   };
-  sprite.userData.setLoadingText(text);
-  return sprite;
+  labelMesh.userData.setLoadingText(text);
+  return labelMesh;
 }
 
 function createObjectNameLabel(text) {
@@ -5168,6 +5176,7 @@ renderer.setAnimationLoop((time, frame) => {
     if (entry.placeholder) {
       entry.placeholder.rotation.y += 0.02;
     }
+    entry.label?.quaternion.copy(camera.quaternion);
   }
 
   updateRecoveringOverlaysAnimation();
