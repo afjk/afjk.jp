@@ -61,11 +61,17 @@ jobs:
       - name: Run export, import, and handoff unit suite
         run: npm run test:scene-sync-export-import
 
+      - name: Run Gaussian import and mesh upload unit suite
+        run: npm run test:3dgs-import && npm run test:mesh-upload
+
       - name: Run presence server-pull unit suite
         run: node --test apps/presence-server/tests/server-pull-import.test.mjs
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+
+      - name: Run Editor Gaussian sync and reload smoke
+        run: npm run test:e2e:scene-sync-3dgs-editor
 
       - name: Run static viewer smoke
         run: npm run test:e2e:scene-sync-export-static-viewer

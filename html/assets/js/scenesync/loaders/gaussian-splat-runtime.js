@@ -37,8 +37,11 @@ export function inspectGaussianSplats(root) {
 
   root?.traverse?.((object) => {
     if (object?.isGaussianSplat !== true) return;
-    object.computeBoundingBox?.();
+    // Three.js computeBoundingSphere() also computes the splat-aware box.
+    // Calling both methods would scan every Gaussian twice for the box, which
+    // is noticeable on multi-million-splat captures.
     object.computeBoundingSphere?.();
+    if (object.boundingBox == null) object.computeBoundingBox?.();
     objects.push(object);
     splatCount += gaussianSplatCount(object);
   });
@@ -48,6 +51,56 @@ export function inspectGaussianSplats(root) {
     gaussianObjects: objects.length,
     splatCount,
     objects,
+  };
+}
+
+export function shouldAutoScaleSceneSyncGlb(diagnostics) {
+  // Captured Gaussian scenes use authored coordinates as world-scale spatial
+  // data. Shrinking a large capture to the conventional-GLB 10m limit puts
+  // every splat on screen at once and causes severe transparent overdraw.
+  // Preserve the source scale; wrapper transforms remain fully synchronized.
+  return diagnostics?.hasGaussianSplat !== true;
+}
+
+export function createGaussianSplatSortScheduler({ minIntervalMs = 250 } = {}) {
+  const initialized = new WeakSet();
+  let lastSortAt = Number.NEGATIVE_INFINITY;
+
+  return {
+    update({ root, renderer, camera, now = performance.now(), continuous = false } = {}) {
+      const isWebGL = renderer?.backend?.isWebGLBackend === true;
+      const useNativeAutoSort = !isWebGL || continuous === true;
+      const intervalElapsed = now - lastSortAt >= minIntervalMs;
+      let gaussianObjects = 0;
+      let sortCalls = 0;
+
+      root?.traverse?.((object) => {
+        if (object?.isGaussianSplat !== true) return;
+        gaussianObjects += 1;
+        object.autoSort = useNativeAutoSort;
+
+        // GaussianSplat's WebGL fallback sorts every splat synchronously on
+        // the CPU. During OrbitControls damping that can run on many adjacent
+        // frames. Use its public manual sort API at a bounded cadence, while
+        // keeping Three.js native auto sorting for WebGPU and WebXR.
+        if (useNativeAutoSort || object.visible === false || !camera) return;
+        if (!initialized.has(object) || intervalElapsed) {
+          object.updateSort?.(renderer, camera);
+          initialized.add(object);
+          sortCalls += 1;
+        }
+      });
+
+      if (!useNativeAutoSort && intervalElapsed && gaussianObjects > 0) {
+        lastSortAt = now;
+      }
+
+      return {
+        mode: useNativeAutoSort ? 'native' : 'throttled-webgl',
+        gaussianObjects,
+        sortCalls,
+      };
+    },
   };
 }
 

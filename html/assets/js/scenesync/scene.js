@@ -28,6 +28,7 @@ import {
   registerSceneSyncGLTFLoaderExtensions,
 } from './loaders/gltf-loader-config.js';
 import {
+  createGaussianSplatSortScheduler,
   disposeObject3DResources,
   prepareGaussianSplatRoot,
 } from './loaders/gaussian-splat-runtime.js';
@@ -77,6 +78,7 @@ import {
 import { createAudioSourceController } from './audio/audio-source-controller.js';
 import { computeAssetId } from './assets/asset-id.js';
 import { createSceneAssetCache } from './assets/asset-cache.js';
+import { uploadLocalMeshAsset } from './assets/mesh-upload.js';
 import { createSceneSyncFileTransferAdapter } from './assets/file-transfer-adapter.js';
 import { createExpiredGlbRecovery } from './assets/expired-glb-recovery.js';
 import { fetchMeshBlobWithRetry } from './assets/mesh-blob-fetch.js';
@@ -137,6 +139,7 @@ const {
   renderer,
   pmremGenerator,
 } = threeApp;
+const gaussianSplatSortScheduler = createGaussianSplatSortScheduler();
 const dom = getSceneSyncDom();
 applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
@@ -5220,6 +5223,14 @@ renderer.setAnimationLoop((time, frame) => {
 
   sendAvatarPose(time);
   remoteAvatarManager.updateRemoteAvatars(time);
+
+  gaussianSplatSortScheduler.update({
+    root: scene,
+    renderer,
+    camera,
+    now: time,
+    continuous: xrState.active || renderer.xr.isPresenting,
+  });
 
   renderer.render(scene, camera);
 
@@ -11223,50 +11234,31 @@ function generateRandomPath() {
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}, options = {}) {
-  const uploadBlob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
   const meshPath = generateRandomPath();
-  let actualMeshPath = null;
-  let assetId = null;
 
   try {
+    let uploaded;
     try {
-      assetId = await computeAssetId(arrayBuffer);
-      model.userData.assetId = assetId;
-      await assetCache.putAsset({
-        assetId,
-        meshPath: null,
-        blob: uploadBlob,
-        source: 'local-file',
-      });
-    } catch (cacheErr) {
-      console.warn('[SceneSync] Failed to pre-cache uploaded mesh:', cacheErr);
-    }
-
-    try {
-      const uploadResponse = await fetch(BLOB_BASE + '/' + meshPath, {
-        method: 'POST',
-        headers: { 'Content-Type': 'model/gltf-binary' },
-        body: arrayBuffer,
+      uploaded = await uploadLocalMeshAsset({
+        arrayBuffer,
+        name,
+        meshPath,
+        blobBase: BLOB_BASE,
+        computeAssetId,
+        putCachedAsset: (record) => assetCache.putAsset(record),
         signal: options.signal,
+        onAssetPrepared: (asset) => {
+          model.userData.assetId = asset.assetId;
+          model.userData.asset = { ...asset };
+          model.userData.meshPath = asset.meshPath;
+          // Save a reloadable assetId/meshPath immediately. The upload and
+          // IndexedDB write may both still be running for a large 3DGS GLB.
+          notifySceneStateChanged('object-upload-prepared');
+        },
+        onCacheError: (cacheErr, context) => {
+          console.warn(`[SceneSync] Failed during ${context.phase}:`, cacheErr);
+        },
       });
-      if (!uploadResponse.ok) {
-        let payload = null;
-        try { payload = await uploadResponse.json(); } catch {}
-        throw new Error(payload?.message || 'ファイルの読み込みに失敗しました。');
-      }
-      actualMeshPath = meshPath;
-      model.userData.meshPath = meshPath;
-
-      try {
-        if (!assetId) {
-          assetId = await computeAssetId(arrayBuffer);
-          model.userData.assetId = assetId;
-        }
-        await assetCache.rememberMeshPathAlias(assetId, actualMeshPath);
-        console.log('[SceneSync] Remembered uploaded mesh alias:', { objectId, assetId, meshPath: actualMeshPath });
-      } catch (cacheErr) {
-        console.warn('[SceneSync] Failed to cache uploaded mesh:', cacheErr);
-      }
     } catch (err) {
       console.warn('POST failed:', err);
       showToast('GLB アップロード失敗: ' + err.message);
@@ -11278,20 +11270,16 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
       return;
     }
 
-    // Use canonical asset metadata for creator and broadcast
-    const asset = {
-      type: 'mesh',
-      source: 'carrier',
-      assetId: assetId || null,
-      meshPath: actualMeshPath,
-      size: uploadBlob.size,
-      mime: 'model/gltf-binary',
-      originalName: name || null,
-    };
+    // Use the same canonical asset metadata for creator, snapshot, and peers.
+    const asset = uploaded.asset;
     model.userData.asset = { ...asset };
-    model.userData.meshPath = actualMeshPath;
+    model.userData.meshPath = asset.meshPath;
 
-    console.log('[SceneSync] broadcast scene-add', { objectId, meshPath: actualMeshPath, assetId });
+    console.log('[SceneSync] broadcast scene-add', {
+      objectId,
+      meshPath: asset.meshPath,
+      assetId: asset.assetId,
+    });
 
     const sceneAddPayload = {
       kind: 'scene-add',
@@ -11301,7 +11289,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
       rotation: model.quaternion.toArray(),
       scale: model.scale.toArray(),
       asset: { ...asset },
-      meshPath: actualMeshPath,
+      meshPath: asset.meshPath,
       ...extraFields,
     };
 
