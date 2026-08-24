@@ -1,33 +1,36 @@
 // File-level entry point for dropping Gaussian Splat captures into SceneSync.
 //
-// A dropped .ply / .spz is converted to a KHR_gaussian_splatting GLB and handed
+// A dropped capture is converted to a KHR_gaussian_splatting GLB and handed
 // back as a File, so the caller can push it through the ordinary GLB path:
 // upload, broadcast, asset cache and SceneDocument all stay unchanged.
 //
-// Deliberately free of any three.js import so it can be tested in Node.
+// Nothing here knows anything about the internals of a splat format — the
+// conversion lives in the vendored @playcanvas/splat-transform bundle. This
+// module owns what is SceneSync's own: deciding whether a dropped file is a
+// candidate at all, enforcing the upload ceiling, naming the result, and
+// turning a failure into a sentence worth showing in a toast.
 
 import {
-  UnsupportedPlyVariantError,
-  UnsupportedSpzError,
-} from './import-gaussian-splat.js';
+  UnsupportedSplatInputError,
+  gaussianSplatGlbName,
+  isGaussianSplatFileName,
+} from './splat-format-detect.js';
 import { importGaussianSplatAssetPreferringWorker } from './gaussian-splat-worker-import.js';
 
-const GAUSSIAN_SPLAT_EXTENSIONS = /\.(ply|spz)$/i;
+export { gaussianSplatGlbName };
 
-/** Conversion holds the whole cloud in memory, so warn before it gets painful. */
+/**
+ * Above this, conversion is slow enough that the user deserves a warning first.
+ * The Worker keeps the editor responsive, but the GLB still has to be built in
+ * memory before it can be handed back.
+ */
 export const LARGE_SOURCE_WARNING_BYTES = 64 * 1024 * 1024;
 
 /** Matches the presence server's SCENE_SYNC_MAX_UPLOAD_BYTES default. */
 export const MAX_SOURCE_BYTES = 500 * 1024 * 1024;
 
 export function isGaussianSplatFile(file) {
-  return !!file && GAUSSIAN_SPLAT_EXTENSIONS.test(file.name || '');
-}
-
-/** capture.ply -> capture.glb */
-export function gaussianSplatGlbName(fileName) {
-  const base = String(fileName || '').replace(GAUSSIAN_SPLAT_EXTENSIONS, '');
-  return `${base || 'gaussian-splats'}.glb`;
+  return isGaussianSplatFileName(file?.name);
 }
 
 /**
@@ -35,27 +38,24 @@ export function gaussianSplatGlbName(fileName) {
  * Unrecognized errors keep their own message rather than being flattened.
  */
 export function describeGaussianSplatImportError(error) {
-  if (error instanceof UnsupportedPlyVariantError) {
+  if (error instanceof UnsupportedSplatInputError || error?.name === 'UnsupportedSplatInputError') {
     switch (error.variant) {
       case 'not-gaussian-splat':
-        return 'このPLYはGaussian Splatではないようです（通常の点群かメッシュ）。3DGSの学習結果を書き出したPLYを使用してください。';
-      case 'compressed-chunked':
-        return '圧縮PLY（SuperSplat / PlayCanvas形式）には未対応です。非圧縮のPLYで書き出してください。';
-      case 'list-properties':
-        return 'このPLYはlistプロパティを含むため、Gaussian Splatとして読み込めません。';
-      case 'sparse-f-rest':
-        return 'このPLYはSH係数（f_rest）が不連続なため読み込めません。';
-      case 'no-vertex-element':
-        return 'このPLYにはvertex要素がありません。';
+        return 'このファイルはGaussian Splatではないようです（通常の点群かメッシュ）。3DGSの学習結果を書き出したファイルを使用してください。';
+      case 'no-splat-in-archive':
+        return 'このzipにGaussian Splatのデータが見つかりませんでした。meta.lcc2 やチャンクを含むフォルダごと圧縮したものをドロップしてください。';
+      case 'empty':
+        return 'splatが1つも含まれていないファイルです。';
+      case 'unsupported-ply-encoding':
+      case 'incomplete-lcc':
+        return error.message;
+      case 'invalid-glb':
+        return `KHR_gaussian_splatting GLBとして読み込めませんでした: ${error.message}`;
+      case 'aborted':
+        return 'Gaussian Splatの変換を中止しました。';
       default:
         return error.message;
     }
-  }
-
-  if (error instanceof UnsupportedSpzError) {
-    return error.variant === 'version'
-      ? `未対応のSPZバージョンです（${error.message}）。`
-      : error.message;
   }
 
   return error?.message || 'Gaussian Splatの読み込みに失敗しました';
@@ -64,13 +64,14 @@ export function describeGaussianSplatImportError(error) {
 /**
  * Convert a dropped Gaussian Splat file into a GLB File.
  *
- * @param {File} file dropped .ply or .spz
+ * @param {File} file a dropped capture (.ply/.spz/.sog/.lcc2/.lcc/.splat/.ksplat, or a .zip of one)
  * @param {Object} [options]
  * @param {'none'|'flip-x-180'} [options.upAxisCorrection]
+ * @param {0|1|2|3} [options.maxShDegree]
  * @param {(status: { phase: string, file: File, bytes: number }) => void} [options.onProgress]
  * @param {Function} [options.importer] injection point for tests
  * @param {AbortSignal} [options.signal]
- * @returns {Promise<{ file: File, splatCount: number, shDegree: number, sourceFormat: string, sourceBytes: number }>}
+ * @returns {Promise<{ file: File, splatCount: number, shDegree: number, sourceShDegree: number, sourceFormat: string, sourceBytes: number }>}
  */
 export async function convertGaussianSplatFileToGlb(file, options = {}) {
   const {

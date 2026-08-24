@@ -1,19 +1,27 @@
 // Runs the Gaussian Splat conversion in a Worker, with an inline fallback.
 //
+// Both paths run the same vendored bundle (see
+// scripts/build-gaussian-splat-worker.mjs); it is never part of the editor's
+// own module graph, so a session that never drops a splat capture never
+// downloads it.
+//
 // A Worker is not always available: module workers need browser support, and a
 // restrictive CSP can block worker-src outright. Rather than failing the drop,
-// this falls back to converting on the main thread, which is slower to the
-// point of freezing but still correct.
+// this falls back to converting on the main thread, which is slow to the point
+// of freezing but still correct.
 
-import {
-  importGaussianSplatAsset,
-  reviveImportError,
-} from './import-gaussian-splat.js';
+import { reviveImportError } from './splat-format-detect.js';
 
-const WORKER_URL = new URL('./gaussian-splat-import.worker.js', import.meta.url);
+const BUNDLE_URL = new URL(
+  '../../../../vendor/splat-transform/3.3.0/gaussian-splat-import.worker.js',
+  import.meta.url,
+);
 
 /** Cached so a blocked or unsupported Worker is only probed once per session. */
 let workerAvailability = null;
+
+/** Cached so the inline fallback downloads the bundle at most once. */
+let inlineConverterPromise = null;
 
 export function isWorkerSupported() {
   return typeof Worker === 'function';
@@ -31,7 +39,7 @@ export function probeWorkerAvailability() {
   }
 
   try {
-    const worker = new Worker(WORKER_URL, { type: 'module' });
+    const worker = new Worker(BUNDLE_URL, { type: 'module' });
     worker.terminate();
     workerAvailability = true;
   } catch (error) {
@@ -45,6 +53,31 @@ export function probeWorkerAvailability() {
 /** Test seam: forget a cached probe result. */
 export function resetWorkerAvailability() {
   workerAvailability = null;
+  inlineConverterPromise = null;
+}
+
+/**
+ * Load the converter for the inline path.
+ *
+ * Dynamic rather than static so the multi-megabyte bundle stays out of the
+ * editor's entry chunk; the Worker path never touches this.
+ */
+export function loadInlineConverter() {
+  if (!inlineConverterPromise) {
+    inlineConverterPromise = import(BUNDLE_URL.href)
+      .then((module) => module.convertGaussianSplatToGlb);
+    inlineConverterPromise.catch(() => { inlineConverterPromise = null; });
+  }
+  return inlineConverterPromise;
+}
+
+/**
+ * Convert on the main thread. Correct, but it blocks: only used when a Worker
+ * cannot be created or has already failed.
+ */
+export async function importGaussianSplatAssetInline(arrayBuffer, options = {}) {
+  const convert = await loadInlineConverter();
+  return convert(arrayBuffer, options);
 }
 
 /**
@@ -55,7 +88,7 @@ export function resetWorkerAvailability() {
  * intermediate buffers are released rather than lingering in a pooled worker.
  *
  * @param {ArrayBuffer} arrayBuffer
- * @param {{ fileName?: string, upAxisCorrection?: string, signal?: AbortSignal }} [options]
+ * @param {{ fileName?: string, upAxisCorrection?: string, maxShDegree?: number, signal?: AbortSignal }} [options]
  */
 export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
   const { fileName = '', upAxisCorrection = 'none', maxShDegree, signal = null } = options;
@@ -63,7 +96,7 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
   return new Promise((resolve, reject) => {
     let worker;
     try {
-      worker = new Worker(WORKER_URL, { type: 'module' });
+      worker = new Worker(BUNDLE_URL, { type: 'module' });
     } catch (error) {
       reject(error);
       return;
@@ -76,6 +109,9 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
+      // Terminating is what actually cancels: splat-transform has no cooperative
+      // abort, so the surest way to stop the work and release the chunk pool,
+      // the decoder state and the output buffer is to drop the whole scope.
       worker.terminate();
       fn(value);
     };
@@ -91,7 +127,6 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
       if (data.ok) {
         finish(resolve, {
           glb: data.glb,
-          cloud: null,
           splatCount: data.splatCount,
           shDegree: data.shDegree,
           sourceShDegree: data.sourceShDegree ?? data.shDegree,
@@ -118,7 +153,7 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
  * case retrying inline would only reproduce it.
  */
 export function isContentError(error) {
-  return error?.name === 'UnsupportedPlyVariantError' || error?.name === 'UnsupportedSpzError';
+  return error?.name === 'UnsupportedSplatInputError';
 }
 
 /** Give up on the Worker for the rest of the session. */
@@ -142,7 +177,7 @@ export async function importGaussianSplatAssetPreferringWorker(arrayBuffer, opti
   const { rereadSource = null, ...importOptions } = options;
 
   if (!probeWorkerAvailability()) {
-    return importGaussianSplatAsset(arrayBuffer, importOptions);
+    return importGaussianSplatAssetInline(arrayBuffer, importOptions);
   }
 
   try {
@@ -152,6 +187,6 @@ export async function importGaussianSplatAssetPreferringWorker(arrayBuffer, opti
 
     console.warn('[gaussian-splat] Worker conversion failed, retrying inline:', error);
     disableWorker();
-    return importGaussianSplatAsset(await rereadSource(), importOptions);
+    return importGaussianSplatAssetInline(await rereadSource(), importOptions);
   }
 }

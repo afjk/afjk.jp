@@ -10,7 +10,7 @@ import {
   probeWorkerAvailability,
   resetWorkerAvailability,
 } from './gaussian-splat-worker-import.js';
-import { UnsupportedPlyVariantError } from './import-gaussian-splat.js';
+import { UnsupportedSplatInputError } from './splat-format-detect.js';
 import { buildGaussianSplatPly } from './test-fixtures.mjs';
 
 const SAMPLE = [{
@@ -147,7 +147,7 @@ test('importGaussianSplatAssetInWorker revives the original error class', async 
     id: message.id,
     ok: false,
     error: {
-      name: 'UnsupportedPlyVariantError',
+      name: 'UnsupportedSplatInputError',
       message: 'not a splat',
       variant: 'not-gaussian-splat',
     },
@@ -156,7 +156,7 @@ test('importGaussianSplatAssetInWorker revives the original error class', async 
   await assert.rejects(
     () => importGaussianSplatAssetInWorker(plyBuffer()),
     (error) => {
-      assert.ok(error instanceof UnsupportedPlyVariantError);
+      assert.ok(error instanceof UnsupportedSplatInputError);
       assert.equal(error.variant, 'not-gaussian-splat');
       return true;
     },
@@ -205,7 +205,7 @@ test('preferring-worker does not retry inline for a content error', async () => 
     return {
       id: message.id,
       ok: false,
-      error: { name: 'UnsupportedPlyVariantError', message: 'nope', variant: 'not-gaussian-splat' },
+      error: { name: 'UnsupportedSplatInputError', message: 'nope', variant: 'not-gaussian-splat' },
     };
   });
 
@@ -214,7 +214,7 @@ test('preferring-worker does not retry inline for a content error', async () => 
     () => importGaussianSplatAssetPreferringWorker(plyBuffer(), {
       rereadSource: async () => { rereads += 1; return plyBuffer(); },
     }),
-    (error) => error instanceof UnsupportedPlyVariantError,
+    (error) => error instanceof UnsupportedSplatInputError,
   );
 
   assert.equal(workerCalls, 1);
@@ -259,7 +259,7 @@ test('preferring-worker stops using the worker after an infrastructure failure',
 });
 
 test('isContentError separates file problems from worker problems', () => {
-  assert.equal(isContentError(new UnsupportedPlyVariantError('x', 'not-gaussian-splat')), true);
+  assert.equal(isContentError(new UnsupportedSplatInputError('x', 'not-gaussian-splat')), true);
   assert.equal(isContentError(new Error('worker exploded')), false);
 });
 

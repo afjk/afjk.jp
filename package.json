@@ -33,15 +33,21 @@
     "test:e2e:scene-sync-unity-physics-presence": "node scripts/scenesync-unity-physics-presence-smoke.mjs",
     "test:e2e:scene-sync-rapier-playerui-sample": "node scripts/scenesync-rapier-playerui-sample.mjs --verify",
     "test:e2e:scene-sync-rapier-playerui-browser": "node scripts/scenesync-rapier-playerui-sample.mjs --verify-playerui",
-    "sample:scene-sync-rapier": "node scripts/scenesync-rapier-playerui-sample.mjs --unity"
+    "sample:scene-sync-rapier": "node scripts/scenesync-rapier-playerui-sample.mjs --unity",
+    "build:gaussian-splat-worker": "node scripts/build-gaussian-splat-worker.mjs",
+    "verify:3dgs-threejs": "node scripts/verify-against-threejs-gaussian-splat.mjs",
+    "bench:3dgs-import": "node --expose-gc scripts/benchmark-gaussian-splat-import.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/extensions": "^4.3.0",
     "@gltf-transform/functions": "^4.3.0",
+    "esbuild": "0.25.12",
+    "playcanvas": "2.21.4",
     "playwright": "^1.60.0"
   },
   "dependencies": {
-    "@dimforge/rapier3d-deterministic-compat": "0.19.3"
+    "@dimforge/rapier3d-deterministic-compat": "0.19.3",
+    "@playcanvas/splat-transform": "3.3.0"
   }
 }

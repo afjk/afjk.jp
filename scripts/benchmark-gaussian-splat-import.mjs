@@ -2,23 +2,25 @@
 // Measure conversion time and peak memory for realistic Gaussian Splat captures.
 //
 //   node --expose-gc scripts/benchmark-gaussian-splat-import.mjs
-//   node --expose-gc scripts/benchmark-gaussian-splat-import.mjs --counts 100000,500000 --degrees 0,3
+//   node --expose-gc scripts/benchmark-gaussian-splat-import.mjs --counts 200000,1000000 --degrees 0,3
 //
-// Real captures run from a few hundred thousand to a few million splats, and
-// the whole cloud is held in memory during conversion, so these numbers decide
-// what the importer can accept and whether it needs to leave the main thread.
+// Real captures run from a few hundred thousand to a few million splats. The
+// conversion streams: splat-transform reads a chunk at a time, so the resident
+// working set is set by the chunk size rather than the scene — but the GLB is
+// still assembled whole in memory before SceneSync can hand it to the uploader,
+// so peak memory tracks the output size. These numbers are what decide the
+// upload ceiling and the chunk size the adapter asks for.
 
-import { readGaussianSplatPly } from '../html/assets/js/scenesync/loaders/gaussian-splat/ply-splat-reader.js';
-import { readSpzPayload } from '../html/assets/js/scenesync/loaders/gaussian-splat/spz-splat-reader.js';
-import { writeGaussianSplatGlb } from '../html/assets/js/scenesync/loaders/gaussian-splat/khr-glb-writer.js';
-import { SH_REST_COEFS_BY_DEGREE } from '../html/assets/js/scenesync/loaders/gaussian-splat/splat-cloud.js';
+import { peakRss, resetPeakRss } from './lib/peak-rss.mjs';
+import { convertGaussianSplatToGlb } from '../html/assets/js/scenesync/loaders/gaussian-splat/splat-transform-adapter.js';
 import {
+  SH_REST_COEFS_BY_DEGREE,
   buildGaussianSplatPly,
   buildSpzPayload,
 } from '../html/assets/js/scenesync/loaders/gaussian-splat/test-fixtures.mjs';
 
 function parseArgs(argv) {
-  const options = { counts: [50_000, 200_000, 500_000], degrees: [0, 3], format: 'both' };
+  const options = { counts: [200_000, 500_000, 1_000_000], degrees: [0, 3], format: 'both' };
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--counts') options.counts = argv[++i].split(',').map(Number);
@@ -49,32 +51,7 @@ function buildSplats(count, shDegree) {
   return splats;
 }
 
-function megabytes(bytes) {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function heapUsed() {
-  return process.memoryUsage().heapUsed;
-}
-
-async function measure(label, fn) {
-  globalThis.gc?.();
-  const before = heapUsed();
-  const start = process.hrtime.bigint();
-
-  const result = await fn();
-
-  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-  const peak = process.memoryUsage();
-
-  return {
-    label,
-    elapsedMs,
-    heapDelta: peak.heapUsed - before,
-    rss: peak.rss,
-    result,
-  };
-}
+const megabytes = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 /**
  * Build one source encoding and drop the synthetic splat objects before
@@ -91,38 +68,30 @@ function buildSource(count, shDegree, encode) {
 
 async function runCase(count, shDegree, format) {
   const rows = [];
+  const formats = format === 'both' ? ['ply', 'spz'] : [format];
 
-  if (format === 'ply' || format === 'both') {
-    const source = buildSource(count, shDegree, (s, d) => buildGaussianSplatPly(s, { shDegree: d }));
-    const decode = await measure('ply decode', () => readGaussianSplatPly(source));
-    const write = await measure('glb write', () => writeGaussianSplatGlb(decode.result));
+  for (const sourceFormat of formats) {
+    const source = sourceFormat === 'ply'
+      ? buildSource(count, shDegree, (s, d) => buildGaussianSplatPly(s, { shDegree: d }))
+      // The uncompressed SPZ payload, so the numbers isolate decoding rather
+      // than gzip throughput. The adapter accepts both framings.
+      : buildSource(count, shDegree, (s, d) => buildSpzPayload(s, { version: 2, shDegree: d }));
 
+    globalThis.gc?.();
+    globalThis.gc?.();
+    await resetPeakRss();
+    const start = process.hrtime.bigint();
+
+    const result = await convertGaussianSplatToGlb(source, { fileName: `bench.${sourceFormat}` });
+
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
     rows.push({
-      format: 'ply',
+      format: sourceFormat,
       sourceBytes: source.byteLength,
-      glbBytes: write.result.byteLength,
-      decodeMs: decode.elapsedMs,
-      writeMs: write.elapsedMs,
-      totalMs: decode.elapsedMs + write.elapsedMs,
-      rss: write.rss,
-    });
-  }
-
-  if (format === 'spz' || format === 'both') {
-    // Benchmark the uncompressed payload so the numbers isolate decoding
-    // rather than gzip throughput.
-    const source = buildSource(count, shDegree, (s, d) => buildSpzPayload(s, { version: 2, shDegree: d }));
-    const decode = await measure('spz decode', () => readSpzPayload(source));
-    const write = await measure('glb write', () => writeGaussianSplatGlb(decode.result));
-
-    rows.push({
-      format: 'spz',
-      sourceBytes: source.byteLength,
-      glbBytes: write.result.byteLength,
-      decodeMs: decode.elapsedMs,
-      writeMs: write.elapsedMs,
-      totalMs: decode.elapsedMs + write.elapsedMs,
-      rss: write.rss,
+      glbBytes: result.glb.byteLength,
+      elapsedMs,
+      memory: await peakRss(),
+      splatCount: result.splatCount,
     });
   }
 
@@ -136,18 +105,16 @@ async function main() {
     console.warn('Run with --expose-gc for stable memory numbers.\n');
   }
 
-  console.log('| splats | SH | format | source | GLB | decode | write | total | RSS |');
-  console.log('| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |');
+  console.log('| splats | SH | format | source | GLB | time | RSS growth |');
+  console.log('| ---: | ---: | --- | ---: | ---: | ---: | ---: |');
 
   for (const count of options.counts) {
     for (const shDegree of options.degrees) {
-      const rows = await runCase(count, shDegree, options.format);
-      for (const row of rows) {
+      for (const row of await runCase(count, shDegree, options.format)) {
         console.log(
           `| ${count.toLocaleString()} | ${shDegree} | ${row.format} `
           + `| ${megabytes(row.sourceBytes)} | ${megabytes(row.glbBytes)} `
-          + `| ${row.decodeMs.toFixed(0)} ms | ${row.writeMs.toFixed(0)} ms `
-          + `| ${row.totalMs.toFixed(0)} ms | ${megabytes(row.rss)} |`,
+          + `| ${row.elapsedMs.toFixed(0)} ms | ${megabytes(row.memory.growth)} |`,
         );
       }
       globalThis.gc?.();

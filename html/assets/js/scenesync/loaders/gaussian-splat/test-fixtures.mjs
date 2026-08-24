@@ -4,11 +4,29 @@
 // bytes) so the tests exercise the real activation and dequantization paths
 // rather than a pre-decoded shortcut.
 
-import { SH_REST_COEFS_BY_DEGREE } from './splat-cloud.js';
+/** Number of `f_rest` coefficients per channel, indexed by SH degree. */
+export const SH_REST_COEFS_BY_DEGREE = Object.freeze([0, 3, 8, 15]);
 
-/** Inverse of the logistic activation the PLY reader applies to opacity. */
+/** The degree 0 spherical harmonic basis constant. */
+export const SH_C0 = 0.28209479177387814;
+
+/** Inverse of the logistic activation applied to PLY opacity. */
 export function logit(value) {
   return Math.log(value / (1 - value));
+}
+
+/** Display RGB to a degree 0 SH coefficient triple. */
+export function rgbToSh0(r, g, b) {
+  return [(r - 0.5) / SH_C0, (g - 0.5) / SH_C0, (b - 0.5) / SH_C0];
+}
+
+/** Inverse of {@link rgbToSh0}. */
+export function sh0ToRgb(sh0, offset = 0) {
+  return [
+    sh0[offset] * SH_C0 + 0.5,
+    sh0[offset + 1] * SH_C0 + 0.5,
+    sh0[offset + 2] * SH_C0 + 0.5,
+  ];
 }
 
 /**
@@ -260,4 +278,31 @@ function concat(parts) {
     offset += part.byteLength;
   }
   return out;
+}
+
+/**
+ * A plain binary point-cloud PLY: positions only, no gaussian properties.
+ *
+ * Written in `binary_little_endian` so it gets past the encoding guard and
+ * actually reaches the "this is not a Gaussian Splat" check.
+ *
+ * @param {Array<{ position: number[] }>} points
+ * @returns {Uint8Array}
+ */
+export function buildPointCloudPly(points) {
+  const header = [
+    'ply',
+    'format binary_little_endian 1.0',
+    `element vertex ${points.length}`,
+    'property float x',
+    'property float y',
+    'property float z',
+    'end_header',
+    '',
+  ].join('\n');
+
+  const body = new Float32Array(points.length * 3);
+  points.forEach((point, i) => body.set(point.position, i * 3));
+
+  return concat([new TextEncoder().encode(header), new Uint8Array(body.buffer)]);
 }

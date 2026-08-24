@@ -452,7 +452,7 @@ export class DragDropManager {
   }
 
   async _loadFile(file, position, options = {}) {
-    const { originalFile = null } = options;
+    const { originalFile = null, sourceFormat = null } = options;
     const objectId = `web-${Math.random().toString(36).slice(2, 10)}`;
     // The overlay and the object label show the file the user actually dropped,
     // while everything downstream uses the GLB that gets uploaded.
@@ -473,6 +473,7 @@ export class DragDropManager {
           fileName: originalFile.name,
           fileSize: originalFile.size,
           convertedTo: file.name,
+          ...(sourceFormat ? { sourceFormat } : {}),
         };
       }
 
@@ -489,10 +490,11 @@ export class DragDropManager {
   }
 
   /**
-   * Convert a dropped .ply / .spz into a GLB File.
+   * Convert a dropped Gaussian Splat capture into a GLB File.
    *
-   * Conversion runs on the main thread and a real capture can hold millions of
-   * splats, so the toast goes up first and the work is deferred by a frame to
+   * Conversion normally runs in a Worker, but it falls back to the main thread
+   * where one cannot be created, and a real capture can hold millions of
+   * splats — so the toast goes up first and the work is deferred by a frame to
    * let it paint. Returns null when the file could not be converted; the
    * failure has already been reported to the user by then.
    */
@@ -523,7 +525,7 @@ export class DragDropManager {
         `${result.splatCount.toLocaleString()} splats を読み込み中… (SH degree ${result.shDegree})`,
       );
 
-      return result.file;
+      return { file: result.file, sourceFormat: result.sourceFormat };
     } catch (error) {
       console.warn('[drag-drop] gaussian splat import failed:', error);
       this.showToast?.(describeGaussianSplatImportError(error));
@@ -555,7 +557,10 @@ export class DragDropManager {
     if (isGaussianSplatFile(file)) {
       const converted = await this._convertGaussianSplatFile(file);
       if (!converted) return null;
-      return this._loadFile(converted, normalized.position, { originalFile: file });
+      return this._loadFile(converted.file, normalized.position, {
+        originalFile: file,
+        sourceFormat: converted.sourceFormat,
+      });
     }
 
     if (isGlbFile(file)) {

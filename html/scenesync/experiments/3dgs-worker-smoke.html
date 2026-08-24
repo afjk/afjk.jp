@@ -17,7 +17,7 @@
 </head>
 <body>
   <h1>3DGS Worker Smoke</h1>
-  <p>Gaussian Splatの変換がブラウザのWorkerで動くことを確認する。three.js には依存しない。</p>
+  <p>Gaussian Splatの変換が、実ブラウザのmodule Workerで、vendorしたsplat-transform bundleを使って動くことを確認する。three.js には依存しない。</p>
   <table id="results">
     <thead><tr><th>check</th><th>result</th><th>detail</th></tr></thead>
     <tbody></tbody>
@@ -35,6 +35,7 @@
     import { inspectGaussianSplatGlb } from '../../assets/js/scenesync/loaders/khr-gaussian-splatting.js';
     import {
       buildGaussianSplatPly,
+      buildPointCloudPly,
       buildSpzPayload,
       gzipBytes,
     } from '../../assets/js/scenesync/loaders/gaussian-splat/test-fixtures.mjs';
@@ -73,6 +74,12 @@
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     }
 
+    async function fixture(name) {
+      const response = await fetch(`./fixtures/${name}`);
+      assert(response.ok, `fixture ${name} returned ${response.status}`);
+      return response.arrayBuffer();
+    }
+
     await check('Worker is constructible (module type, CSP permitting)', () => {
       assert(typeof Worker === 'function', 'Worker global is missing');
       assert(probeWorkerAvailability() === true, 'probeWorkerAvailability() returned false');
@@ -106,6 +113,28 @@
       return `${result.splatCount} splats from ${gzipped.byteLength} gzipped bytes`;
     });
 
+    await check('SOG decodes in the Worker (webp.wasm loads from the vendor dir)', async () => {
+      const result = await importGaussianSplatAssetInWorker(
+        await fixture('ring-gaussian-splats.sog'),
+        { fileName: 'ring-gaussian-splats.sog' },
+      );
+      assert(result.sourceFormat === 'sog', `sourceFormat ${result.sourceFormat}`);
+      assert(result.splatCount === 16, `splatCount ${result.splatCount}`);
+      assert(inspectGaussianSplatGlb(result.glb).valid, 'GLB failed inspection');
+      return `${result.splatCount} splats, ${result.glb.byteLength} bytes`;
+    });
+
+    await check('a zipped LCC2 octree decodes in the Worker', async () => {
+      const result = await importGaussianSplatAssetInWorker(
+        await fixture('ring-gaussian-splats.lcc2.zip'),
+        { fileName: 'ring-gaussian-splats.lcc2.zip' },
+      );
+      assert(result.sourceFormat === 'lcc2', `sourceFormat ${result.sourceFormat}`);
+      assert(result.splatCount === 16, `splatCount ${result.splatCount}`);
+      assert(inspectGaussianSplatGlb(result.glb).valid, 'GLB failed inspection');
+      return `${result.splatCount} splats, ${result.glb.byteLength} bytes`;
+    });
+
     await check('SH degree 3 survives the Worker boundary', async () => {
       const shRest = Array.from({ length: 45 }, (_, i) => i / 100);
       const source = toArrayBuffer(buildGaussianSplatPly([{ ...SPLATS[0], shRest }], { shDegree: 3 }));
@@ -125,11 +154,7 @@
     });
 
     await check('a bad file reports its variant through the Worker', async () => {
-      const bad = new File([new TextEncoder().encode([
-        'ply', 'format ascii 1.0', 'element vertex 1',
-        'property float x', 'property float y', 'property float z',
-        'end_header', '0 0 0', '',
-      ].join('\n'))], 'cloud.ply');
+      const bad = new File([buildPointCloudPly([{ position: [0, 0, 0] }])], 'cloud.ply');
 
       let caught = null;
       try {
@@ -138,7 +163,7 @@
         caught = error;
       }
       assert(caught, 'conversion unexpectedly succeeded');
-      assert(caught.name === 'UnsupportedPlyVariantError', `error class ${caught.name}`);
+      assert(caught.name === 'UnsupportedSplatInputError', `error class ${caught.name}`);
       assert(caught.variant === 'not-gaussian-splat', `variant ${caught.variant}`);
       return `${caught.name} (${caught.variant})`;
     });

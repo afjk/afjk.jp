@@ -3,10 +3,11 @@
 //
 //   npm run test:e2e:scene-sync-3dgs-worker
 //
-// The Node tests cover the Worker client against a stub and the worker module
-// against a `self` shim, but neither exercises the thing that actually has to
-// work in production: constructing a real module Worker from a served URL,
-// transferring buffers across the boundary, and inflating gzip inside it.
+// The Node tests cover the Worker client against a stub and the conversion
+// against the library directly, but neither exercises what actually has to work
+// in production: constructing a real module Worker over the vendored bundle,
+// transferring buffers across the boundary, inflating gzip inside it, and
+// fetching webp.wasm from the vendor directory to decode SOG.
 //
 // Nothing here loads three.js, so the page runs without the CDN importmap the
 // editor depends on.
@@ -32,6 +33,11 @@ const mimeTypes = new Map([
   ['.css', 'text/css; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
   ['.glb', 'model/gltf-binary'],
+  ['.wasm', 'application/wasm'],
+  ['.zip', 'application/zip'],
+  ['.sog', 'application/zip'],
+  ['.ply', 'application/octet-stream'],
+  ['.spz', 'application/octet-stream'],
 ]);
 
 function assert(condition, message) {

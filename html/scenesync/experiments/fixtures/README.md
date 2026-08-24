@@ -23,17 +23,24 @@ Issue #526 の技術検証用に生成した最小構成の `KHR_gaussian_splatt
 node scripts/generate-minimal-khr-gaussian-splatting.mjs
 ```
 
-## `ring-gaussian-splats.{ply,spz,glb}`
+## `ring-gaussian-splats.{ply,spz,sog,lcc2.zip,glb}`
 
-Issue #531 のImport経路用。同一シーンを3形式で持つ。
+Issue #531 のImport経路用。同一シーンを複数形式で持つ。
 
 - 16 splats / degree 1 SH
 - `.ply`: INRIA形式（`binary_little_endian`、opacity logit / log scale / wxyz quaternion）
 - `.spz`: Niantic SPZ v2（gzip + 量子化）
+- `.sog`: PlayCanvas SOG bundle（WebP + Morton順）
+- `.lcc2.zip`: `meta.lcc2` + 1チャンク（`3dgs/chunk0.sog`）のLCC2 octreeをzipにしたもの
 - `.glb`: 上記PLYを **SceneSync Importerに通して生成した** KHR GLB
 
-PLYとSPZは同じ値を全く異なるエンコードで表現しているため、両者をImportして結果が
-量子化誤差内で一致することが、2つのデコード経路の相互検証になる。
+`.ply` と `.spz` は `test-fixtures.mjs` のSceneSync自前encoderが書いている。
+`@playcanvas/splat-transform` とは独立した実装なので、両方を読み戻して一致することが
+デコード経路の相互検証になる。`.sog` と `.lcc2.zip` はsplat-transformでしか作れないため
+そちらで生成している。
+
+LCC2 fixtureは実機データではなく、`meta.lcc2` のスキーマに沿って
+このリポジトリで組み立てた最小構成。実キャプチャはコミットしない。
 
 再生成:
 
@@ -45,6 +52,7 @@ node scripts/generate-gaussian-splat-import-fixtures.mjs
 
 ```bash
 node scripts/convert-gaussian-splat.mjs ring-gaussian-splats.ply out.glb
+node scripts/convert-gaussian-splat.mjs ring-gaussian-splats.lcc2.zip out.glb
 ```
 
 ## 描画確認

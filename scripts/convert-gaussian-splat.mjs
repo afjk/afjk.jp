@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Convert a Gaussian Splat asset (.ply / .spz) into a KHR_gaussian_splatting GLB.
+// Convert a Gaussian Splat capture into a KHR_gaussian_splatting GLB.
 //
 //   node scripts/convert-gaussian-splat.mjs input.ply [output.glb] [--flip-up]
 //
@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { importGaussianSplatAsset } from '../html/assets/js/scenesync/loaders/gaussian-splat/import-gaussian-splat.js';
+import { convertGaussianSplatToGlb } from '../html/assets/js/scenesync/loaders/gaussian-splat/splat-transform-adapter.js';
 import { inspectGaussianSplatGlb } from '../html/assets/js/scenesync/loaders/khr-gaussian-splatting.js';
 
 function parseArgs(argv) {
@@ -30,7 +30,10 @@ function parseArgs(argv) {
   return { input: positional[0], output: positional[1], upAxisCorrection, maxShDegree };
 }
 
-const USAGE = `Usage: node scripts/convert-gaussian-splat.mjs <input.ply|input.spz> [output.glb] [--flip-up]
+const USAGE = `Usage: node scripts/convert-gaussian-splat.mjs <capture> [output.glb] [--flip-up]
+
+  Accepts .ply, .spz, .sog, .lcc2, .lcc, .splat, .ksplat, and a .zip holding
+  any of those (an LCC2 octree, for instance).
 
   --flip-up            Write a 180 degree rotation about X on the node, for
                        captures authored Y-down. Splat data is never rewritten.
@@ -50,7 +53,7 @@ async function main() {
 
   const inputPath = path.resolve(options.input);
   const outputPath = path.resolve(
-    options.output || inputPath.replace(/\.(ply|spz)$/i, '.glb'),
+    options.output || inputPath.replace(/\.(ply|spz|sog|lcc2|lcc|splat|ksplat|zip)$/i, '.glb'),
   );
 
   if (outputPath === inputPath) {
@@ -60,7 +63,7 @@ async function main() {
   const source = fs.readFileSync(inputPath);
   const bytes = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
 
-  const result = await importGaussianSplatAsset(bytes, {
+  const result = await convertGaussianSplatToGlb(bytes, {
     fileName: path.basename(inputPath),
     upAxisCorrection: options.upAxisCorrection,
     maxShDegree: options.maxShDegree,

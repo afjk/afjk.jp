@@ -3,12 +3,16 @@
 //
 //   node scripts/verify-against-threejs-gaussian-splat.mjs
 //
-// SceneSync writes KHR_gaussian_splatting GLBs from its own reading of the
-// specification. The only way to know that reading is right is to feed the
-// result to the implementation that will consume it, so this converts fixtures
-// through the real importer and loads them with Three.js's
+// SceneSync normalizes every splat capture to a KHR_gaussian_splatting GLB and
+// then treats it as an ordinary GLB. The only way to know that GLB is right is
+// to feed it to the implementation that will consume it, so this converts
+// fixtures through the real importer and loads them with Three.js's
 // GLTFGaussianSplatLoaderExtension, then compares the decoded splats against
 // the values that went in.
+//
+// It is an independent check in the strongest sense available: the file is
+// written by @playcanvas/splat-transform and read by three.js, with SceneSync
+// only supplying the input and the expectations.
 //
 // Requires a Three.js that ships Gaussian Splatting. Once that is a release,
 // `npm install three` is enough. Against an unreleased dev build, point a
@@ -20,14 +24,29 @@
 // Exits 0 when everything matches, 1 on a mismatch, and 2 when Three.js has no
 // Gaussian Splatting support to test against.
 
-import {
-  importGaussianSplatAsset,
-} from '../html/assets/js/scenesync/loaders/gaussian-splat/import-gaussian-splat.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { convertGaussianSplatToGlb } from '../html/assets/js/scenesync/loaders/gaussian-splat/splat-transform-adapter.js';
 import {
   buildGaussianSplatPly,
   buildSpzPayload,
+  rgbToSh0,
 } from '../html/assets/js/scenesync/loaders/gaussian-splat/test-fixtures.mjs';
-import { rgbToSh0 } from '../html/assets/js/scenesync/loaders/gaussian-splat/splat-cloud.js';
+
+const FIXTURE_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../html/scenesync/experiments/fixtures',
+);
+
+const fixture = (name) => new Uint8Array(fs.readFileSync(path.join(FIXTURE_DIR, name)));
+
+/**
+ * glTF is Y-up right-handed while a 3DGS PLY is Y-down, so the conversion flips
+ * x and y. Expectations are written in source coordinates and mapped here.
+ */
+const toGltfPosition = ([x, y, z]) => [-x, -y, z];
 
 const COLORS = [[1.0, 0.25, 0.25], [0.2, 0.8, 0.4], [0.1, 0.3, 0.9]];
 const OPACITIES = [0.9, 0.5, 0.25];
@@ -79,7 +98,7 @@ function expect(label, actual, expected, tolerance) {
 }
 
 async function verifyCase(three, label, source, expectedShDegree, fileName, maxShDegree) {
-  const { glb, splatCount, shDegree } = await importGaussianSplatAsset(source, {
+  const { glb, splatCount, shDegree } = await convertGaussianSplatToGlb(source, {
     fileName,
     maxShDegree,
   });
@@ -114,9 +133,10 @@ async function verifyCase(three, label, source, expectedShDegree, fileName, maxS
     const positionTolerance = label.startsWith('spz') ? 1e-3 : 1e-5;
     const colorTolerance = label.startsWith('spz') ? 8 : 1.5;
 
-    expect(`${label} pos[${i}].x`, position.getX(i), splatDef.position[0], positionTolerance);
-    expect(`${label} pos[${i}].y`, position.getY(i), splatDef.position[1], positionTolerance);
-    expect(`${label} pos[${i}].z`, position.getZ(i), splatDef.position[2], positionTolerance);
+    const [ex, ey, ez] = toGltfPosition(splatDef.position);
+    expect(`${label} pos[${i}].x`, position.getX(i), ex, positionTolerance);
+    expect(`${label} pos[${i}].y`, position.getY(i), ey, positionTolerance);
+    expect(`${label} pos[${i}].z`, position.getZ(i), ez, positionTolerance);
 
     const r = color.getX(i) * 255;
     const g = color.getY(i) * 255;
@@ -131,6 +151,40 @@ async function verifyCase(three, label, source, expectedShDegree, fileName, maxS
     console.log(
       `  splat ${i}: pos(${position.getX(i).toFixed(3)}, ${position.getY(i).toFixed(3)}, ${position.getZ(i).toFixed(3)}) `
       + `rgba(${r.toFixed(0)}, ${g.toFixed(0)}, ${b.toFixed(0)}, ${a.toFixed(0)})`,
+    );
+  }
+}
+
+/**
+ * The formats SceneSync can only produce through splat-transform (SOG, LCC2)
+ * come from the shared ring fixture rather than the hand-built splats above, so
+ * there are no independently known values to compare. What matters for them is
+ * that Three.js recognizes the GLB as a GaussianSplat with the expected shape.
+ */
+async function verifyFixtureLoads(three, label, name, expectedCount, expectedShDegree) {
+  const { glb, splatCount, shDegree } = await convertGaussianSplatToGlb(fixture(name), {
+    fileName: name,
+  });
+
+  const splat = findGaussianSplat(await parseGlb(three, glb));
+  if (!splat) {
+    failures.push(`${label}: Three.js produced no GaussianSplat`);
+    return;
+  }
+
+  console.log(`\n${label}: ${splatCount} splats, SH degree ${shDegree}`);
+  console.log(`  attributes: ${Object.keys(splat.splatGeometry.attributes).join(', ')}`);
+
+  if (splatCount !== expectedCount) {
+    failures.push(`${label}: ${splatCount} splats, expected ${expectedCount}`);
+  }
+  if (shDegree !== expectedShDegree) {
+    failures.push(`${label}: SH degree ${shDegree}, expected ${expectedShDegree}`);
+  }
+  if (splat.splatGeometry.attributes.position.count !== expectedCount) {
+    failures.push(
+      `${label}: Three.js decoded ${splat.splatGeometry.attributes.position.count} splats, `
+      + `expected ${expectedCount}`,
     );
   }
 }
@@ -150,7 +204,8 @@ async function main() {
 
   await verifyCase(three, 'ply-degree-3', buildGaussianSplatPly(SPLATS, { shDegree: 3 }), 3, 'verify.ply');
   await verifyCase(three, 'ply-degree-0', buildGaussianSplatPly(SPLATS, { shDegree: 0 }), 0, 'verify.ply');
-  await verifyCase(three, 'ply-ascii', buildGaussianSplatPly(SPLATS, { shDegree: 1, format: 'ascii' }), 1, 'verify.ply');
+  // ASCII and big-endian PLY are rejected up front rather than verified: see
+  // assertSupportedPlyEncoding in the adapter.
   await verifyCase(three, 'spz-degree-1', buildSpzPayload(SPLATS, { version: 2, shDegree: 1 }), 1, 'verify.spz');
   await verifyCase(three, 'spz-degree-3', buildSpzPayload(SPLATS, { version: 3, shDegree: 3 }), 3, 'verify.spz');
 
@@ -159,6 +214,10 @@ async function main() {
   await verifyCase(three, 'reduced-to-2', degree3Ply, 2, 'verify.ply', 2);
   await verifyCase(three, 'reduced-to-1', degree3Ply, 1, 'verify.ply', 1);
   await verifyCase(three, 'reduced-to-0', degree3Ply, 0, 'verify.ply', 0);
+
+  // Formats only splat-transform can write, from the shared ring fixture.
+  await verifyFixtureLoads(three, 'sog', 'ring-gaussian-splats.sog', 16, 1);
+  await verifyFixtureLoads(three, 'lcc2', 'ring-gaussian-splats.lcc2.zip', 16, 1);
 
   if (failures.length > 0) {
     console.log(`\n${failures.length} mismatch(es):`);
