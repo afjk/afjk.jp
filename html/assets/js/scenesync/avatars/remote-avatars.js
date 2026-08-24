@@ -14,11 +14,14 @@ const AVATAR_PALETTE = [
 export function createRemoteAvatarManager(ctx) {
   const {
     scene,
+    camera,
     localPeerId,
     avatarTimeoutMs,
   } = ctx;
 
   const remoteAvatars = new Map();
+  const cameraWorldQuaternion = new THREE.Quaternion();
+  const parentWorldQuaternion = new THREE.Quaternion();
 
   function colorFromPeerId(peerId) {
     let h = 0;
@@ -28,7 +31,7 @@ export function createRemoteAvatarManager(ctx) {
     return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
   }
 
-  function makeNicknameSprite(text) {
+  function makeNicknameLabel(text) {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 64;
@@ -42,11 +45,24 @@ export function createRemoteAvatarManager(ctx) {
     ctx2d.fillText(text || '', canvas.width / 2, canvas.height / 2);
     const tex = new THREE.CanvasTexture(canvas);
     tex.needsUpdate = true;
-    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
-    const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(0.4, 0.1, 1);
-    sprite.renderOrder = 999;
-    return sprite;
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    // Sprite's internal indexed quad can leave an enabled attribute without a
+    // bound buffer in the pinned WebGL backend on SwiftShader. Keep the label
+    // as an explicit non-indexed billboard, as with the loading overlay.
+    const label = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1).toNonIndexed(),
+      mat,
+    );
+    label.scale.set(0.4, 0.1, 1);
+    label.renderOrder = 999;
+    label.raycast = () => {};
+    return label;
   }
 
   function disposeMaterial(material) {
@@ -87,9 +103,10 @@ export function createRemoteAvatarManager(ctx) {
       if (nickname && av.nickname !== nickname) {
         av.nickname = nickname;
         av.head.remove(av.label);
+        av.label.geometry?.dispose?.();
         av.label.material.map?.dispose?.();
         av.label.material?.dispose?.();
-        av.label = makeNicknameSprite(nickname);
+        av.label = makeNicknameLabel(nickname);
         av.label.position.set(0, 0.22, 0);
         av.head.add(av.label);
       }
@@ -114,7 +131,7 @@ export function createRemoteAvatarManager(ctx) {
     eyeR.position.set(0.035, 0.02, -0.105);
     head.add(eyeL, eyeR);
 
-    const label = makeNicknameSprite(nickname || peerId.slice(0, 6));
+    const label = makeNicknameLabel(nickname || peerId.slice(0, 6));
     label.position.set(0, 0.22, 0);
     head.add(label);
 
@@ -195,6 +212,7 @@ export function createRemoteAvatarManager(ctx) {
   function updateRemoteAvatars(nowMs) {
     const selfId = localPeerId?.();
     const lerpAlpha = 0.25;
+    camera?.getWorldQuaternion(cameraWorldQuaternion);
 
     for (const [peerId, av] of remoteAvatars) {
       if (selfId && peerId === selfId) {
@@ -210,6 +228,14 @@ export function createRemoteAvatarManager(ctx) {
       if (av.targetHead.set) {
         av.head.position.lerp(av.targetHead.p, lerpAlpha);
         av.head.quaternion.slerp(av.targetHead.q, lerpAlpha);
+      }
+
+      if (camera && av.label) {
+        av.head.getWorldQuaternion(parentWorldQuaternion);
+        av.label.quaternion
+          .copy(parentWorldQuaternion)
+          .invert()
+          .multiply(cameraWorldQuaternion);
       }
 
       av.left.visible = av.leftActive;

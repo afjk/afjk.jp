@@ -5425,6 +5425,7 @@ updateHistoryButtonState();
 
 const remoteAvatarManager = createRemoteAvatarManager({
   scene,
+  camera,
   localPeerId: () => presenceState.id,
   avatarTimeoutMs: AVATAR_TIMEOUT_MS,
 });
