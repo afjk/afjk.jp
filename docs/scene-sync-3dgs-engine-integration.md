@@ -29,7 +29,7 @@ Unity / Godot とも同じ3層で組んである。エンジン差はいちば�
 | --- | --- | --- | --- |
 | 検出 | GLB の JSON chunk を読み、`KHR_gaussian_splatting` を判定 | `SceneSyncGaussianSplatGlb` | `SceneSyncGaussianSplatGlb` |
 | 振り分け | backend があれば渡す。無ければプレビューへ落とす | `SceneSyncGaussianSplatBackend` | `SceneSyncGaussianSplatBackend` |
-| 描画 | 実際の splat 描画 | backend（`UnitySplats` 想定） | backend（`godot-gsplat` 想定） |
+| 描画 | 実際の splat 描画 | `UnitySplats 1.2.0` adapter | pinned `godot-gsplat` adapter |
 
 判定規則は Web 実装 `html/assets/js/scenesync/loaders/khr-gaussian-splatting.js` と
 同じにそろえてある。3実装が同じ GLB について同じ結論を出すことが前提。
@@ -74,6 +74,43 @@ backend 実装側の約束:
 - ノードの破棄で native リソースも解放されるようにする（Unity は `OnDestroy`、
   Godot は `_exit_tree` / `NOTIFICATION_PREDELETE` 等）。SceneSync の delete /
   reconnect / asset reload はノードを破棄することで dispose を行う
+
+## 標準の実 renderer backend
+
+### UnitySplats
+
+SceneSync package は UnitySplats を hard dependency にせず、公開 API を reflection で検出する。
+Unity 6 以降で `Tools > Scene Sync > Install UnitySplats Renderer...` を実行すると、次を
+Git revision 固定で Package Manager へ追加する。
+
+- `Unity.WebP 0.3.22`
+- `UnitySplats 1.2.0` / commit `6c0258189a2b124af1282fa9236fd9b6637f1a1a`
+
+導入後は `GsplatRuntimeLoader.Load(..., GsplatFileFormat.Glb, CompressionMode.Spark,
+SourceCoordinates.Unspecified, null)` を使い、GLB から実 `GsplatAsset` / `GsplatRenderer` を
+生成する。SH degree 0–3 は asset のまま保持する。GameObject の破棄時は renderer の asset
+参照を外してから生成 asset を破棄し、GPU buffer も UnitySplats の public lifecycle で解放する。
+
+### godot-gsplat
+
+Godot は 4.5+ の Mobile または Forward+ renderer を使う。Compatibility renderer では
+実 backend を選ばず点群 preview へ戻す。依存は repository へ vendor せず、次で host 用
+release GDExtension を再現可能に構築する。
+
+```bash
+npm run install:godot-gsplat
+```
+
+upstream は commit `dfc8df4893f0f6e26c847590ff1669fa8404da6d`、Cargo dependency は
+committed lockfile で固定する。Godot RenderingDevice が std430 struct の 16-byte alignment を
+検証するため、84-byte sort push constant に 12-byte tail padding を加える小さな compatibility
+patch も hash 付きで適用する。これが無い場合、Godot 4.6.3 では 940,549 splat を decode
+できても sort dispatch が拒否され、単一楕円に見える。
+
+desktop の自動設定は source 全点を保持したまま active set を 500,000 に制限し、SH3 を
+維持する。XR は upstream の adaptive XR profile を使う。明示的に変更する場合は project
+setting `scene_sync/gaussian_splat/render_profile` に Low=1 / Middle=2 / High=3 / XR=4 を指定する。
+High は全 splat を描画するため、大規模な室内 capture では GPU stall を起こし得る。
 
 ## 点群プレビュー（backend 未登録時）
 
@@ -172,11 +209,13 @@ Web 側の制約と同じく、**同一 mesh 内**での Gaussian primitive と�
 npm run test:3dgs-khr
 
 # Godot
-godot/tests/run_all.sh          # "Gaussian Splat GLB Tests" を含む
+npm run install:godot-gsplat
+SCENESYNC_REQUIRE_GODOT_GSPLAT=1 godot/tests/run_all.sh
 ```
 
 Unity は EditMode テスト `unity/com.afjk.scene-sync/Tests/Editor/SceneSyncGaussianSplatGlbTests.cs`
-（Unity Test Runner から実行）。
+と `SceneSyncUnitySplatsBackendTests.cs`（Unity Test Runner から実行）。実 capture を使う場合は
+`SCENESYNC_GAUSSIAN_GLB_FIXTURE=/absolute/path/to/capture.glb` を設定する。
 
 3実装のテストは同じ期待値を見ている:
 
@@ -190,17 +229,21 @@ Godot と Web は `html/scenesync/experiments/fixtures/` の GLB を共有して
 （エンジンごとに fixture を複製しない）。Unity のテストはパッケージ内で完結させるため、
 同じ構成の GLB をテスト内で組み立てる。
 
+`tmp/1_3DGS2.sog` を repository 外の一時 GLB に変換した実データ確認では、225,736,504 bytes、
+940,549 splat、SH degree 3 を UnitySplats と godot-gsplat の両方で decode した。Godot 4.6.3
+Metal の実画面では 500,000 active splat / SH3 の Gaussian ellipse 描画を確認した。
+
 ## ライセンス方針
 
 採用候補は permissive license を優先する。
 
-### UnitySplats（Unity 候補）
+### UnitySplats
 
 本体 MIT。Third Party Notices 上の主要依存（gsplat-unity / PlayCanvas Engine 由来 /
 UnityGaussianSplatting 由来 / GPUSorting / Spark / Niantic SPZ / ZstdSharp / Unity.WebP は MIT、
 libwebp は BSD-3-Clause）にも GPL / AGPL 系の強い copyleft は確認されていない。
 
-### godot-gsplat（Godot 候補）
+### godot-gsplat
 
 本体 MIT。依存する `godot` crate（godot-rust / gdext）は MPL-2.0。
 MPL-2.0 は file-level copyleft なので、通常の依存利用で Scene-Sync-Godot 全体へ
@@ -213,25 +256,19 @@ copyleft が伝播するものではない。
 
 ### 現状
 
-**この時点では、どちらの renderer も配布物に同梱していない。**
-SceneSync 側は backend の登録口だけを持ち、依存は増やしていない。
-実際に bundle / package へ含める段階で、以下を行う。
-
-- [ ] 同梱するコンポーネントの copyright / license notice を保持する
-- [ ] `THIRD_PARTY_LICENSES.md` へ節を追加する（Unity / Godot それぞれ）
-- [ ] dependency 追加時に GPL / AGPL 等の強い copyleft が混入していないか再確認する
+renderer binary / package は afjk.jp repository には同梱しない。Unity は利用 project の UPM、
+Godot は明示 installer が生成する ignored directory へ入る。どちらも upstream の license /
+Third Party Notices を保持し、固定 version / commit は `THIRD_PARTY_LICENSES.md` に記録する。
 
 ## 残作業
 
-この段階で入っているのは、検出・振り分け・Editor 配置・Runtime 同期・プレビューまで。
-以下は実機とライブラリが必要なため未了。
+実 backend、Editor / Runtime routing、実 capture の decode / desktop 描画までは完了している。
+以下は対象実機が必要なため未了。
 
-- [ ] `UnitySplats` を backend として実装し、Unity Editor / Runtime で実データを描画する
-- [ ] `godot-gsplat` を backend として実装し、Godot Editor / Runtime で実データを描画する
 - [ ] Quest / PICO 等 XR 環境での Stereo 描画確認
 - [ ] 大規模 capture（数百万 splat）でのメモリ / フレームレート確認
 - [ ] 同一 GLB を Web / Unity / Godot で並べた見えの比較
-- [ ] 配布物への Third Party Notices 集約
+- [ ] Godot の Android / Quest 用 GDExtension cross-build と export 検証
 
 ## 対象外
 

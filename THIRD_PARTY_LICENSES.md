@@ -5,6 +5,8 @@
 
 `node_modules/` にしか存在しないビルド/テスト専用の依存（esbuild、Playwright、
 `@gltf-transform/*` など）は配布していないため、ここには含めない。
+末尾の engine renderer 節だけは、利用 project に導入される optional dependency の
+固定情報と notice 保持方針を監査用に記録している。
 
 再生成手順とバージョンの固定については各節を参照。
 
@@ -130,23 +132,24 @@ Poly Haven の HDRI（CC0）。
 
 ## Unity / Godot の Gaussian Splat renderer
 
-**現時点では同梱していない。**
+これらは afjk.jp の Git tree / Web 配布物には同梱しない optional dependency。
+利用 project へ明示的に導入した場合は実 renderer backend が自動登録され、未導入時は
+依存ゼロの点群 preview へ戻る。固定情報と再生成手順は
+`docs/scene-sync-3dgs-engine-integration.md` に記録する。
 
-Unity 版 / Godot 版 SceneSync は `KHR_gaussian_splatting` GLB を検出して
-差し替え可能な backend へ渡す口だけを持ち、renderer 本体には依存していない
-（backend 未登録時は依存ゼロの点群プレビューへ落ちる）。詳細は
-`docs/scene-sync-3dgs-engine-integration.md`。
+| dependency | 固定 version / commit | ライセンス | 導入 |
+| --- | --- | --- | --- |
+| [`UnitySplats`](https://github.com/arloopa/UnitySplats) | 1.2.0 / `6c0258189a2b124af1282fa9236fd9b6637f1a1a` | MIT | Unity menu が UPM Git package として追加 |
+| [`Unity.WebP`](https://github.com/netpyoung/unity.webp) | 0.3.22 | MIT（libwebp は BSD-3-Clause） | UnitySplats と同時に UPM へ追加 |
+| [`godot-gsplat`](https://github.com/shiena/godot-gsplat) | `dfc8df4893f0f6e26c847590ff1669fa8404da6d` | MIT | `npm run install:godot-gsplat` が host GDExtension を生成 |
+| godot-rust / gdext | Cargo.lock で固定 | MPL-2.0 | godot-gsplat の build dependency |
 
-採用候補と、実際に bundle / package へ含める段階で必要になる notice:
+UnitySplats package 内の `LICENSE.md` / `Third Party Notices.md` は UPM が保持する。
+主要な bundled implementation（gsplat-unity / PlayCanvas Engine 由来 /
+UnityGaussianSplatting 由来 / GPUSorting / Spark / Niantic SPZ / ZstdSharp）は MIT、
+libwebp は BSD-3-Clause。
 
-| 候補 | ライセンス | 備考 |
-| --- | --- | --- |
-| `UnitySplats` | MIT | 同梱依存（gsplat-unity / PlayCanvas Engine 由来 / UnityGaussianSplatting 由来 / GPUSorting / Spark / Niantic SPZ / ZstdSharp / Unity.WebP）も MIT、libwebp は BSD-3-Clause |
-| [`godot-gsplat`](https://github.com/shiena/godot-gsplat) | MIT | 依存する godot-rust / gdext は MPL-2.0（file-level copyleft） |
-
-同梱時に行うこと:
-
-- copyright / license notice を保持し、この文書へ節を追加する
-- godot-rust は fork / 改変せず upstream をそのまま利用する。
-  やむを得ず MPL 対象ファイルを改変して配布する場合はソース提供義務を満たす
-- GPL / AGPL 等の強い copyleft が混入していないか再確認する
+godot-gsplat installer は upstream `LICENSE`（Copyright (c) 2026 KOGA Mitsuhiro）を
+生成 addon へコピーする。SceneSync の compatibility patch は godot-gsplat の MIT 対象
+ファイル2点に 12-byte tail padding を加えるもので、patch source と hash を repository に残す。
+godot-rust の MPL-2.0 対象 source は改変しない。

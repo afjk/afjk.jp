@@ -1,0 +1,11 @@
+<linker>
+  <!-- UnitySplats is optional and accessed through its public API by reflection. -->
+  <assembly fullname="Gsplat" ignoreIfMissing="1">
+    <type fullname="Gsplat.GsplatRuntimeLoader" preserve="methods" />
+    <type fullname="Gsplat.GsplatRenderer" preserve="all" />
+    <type fullname="Gsplat.GsplatAsset" preserve="all" />
+    <type fullname="Gsplat.GsplatFileFormat" preserve="all" />
+    <type fullname="Gsplat.CompressionMode" preserve="all" />
+    <type fullname="Gsplat.SourceCoordinates" preserve="all" />
+  </assembly>
+</linker>

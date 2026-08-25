@@ -259,6 +259,24 @@ namespace Afjk.SceneSync.Tests
         }
 
         [Test]
+        public void PreviewDisposesGeneratedMeshAndDefaultMaterial()
+        {
+            var preview = SceneSyncGaussianSplatPreview.Build(BuildMinimalSplatGlb());
+            Assert.That(preview.Ok, Is.True, preview.Reason);
+
+            var mesh = preview.Visual.GetComponent<MeshFilter>().sharedMesh;
+            var material = preview.Visual.GetComponent<MeshRenderer>().sharedMaterial;
+            var hadMaterial = material != null;
+            Assert.That(mesh, Is.Not.Null);
+
+            UnityEngine.Object.DestroyImmediate(preview.Visual);
+
+            Assert.That(mesh == null, Is.True, "generated preview mesh must be destroyed");
+            if (hadMaterial)
+                Assert.That(material == null, Is.True, "generated default material must be destroyed");
+        }
+
+        [Test]
         public void PreviewRefusesNonSplatInput()
         {
             var json = "{\"asset\":{\"version\":\"2.0\"},"
@@ -481,7 +499,7 @@ namespace Afjk.SceneSync.Tests
         /// 3 splat の最小 KHR_gaussian_splatting GLB。
         /// scripts/generate-minimal-khr-gaussian-splatting.mjs と同じ構成。
         /// </summary>
-        private static byte[] BuildMinimalSplatGlb(bool includeColor0 = false)
+        internal static byte[] BuildMinimalSplatGlb(bool includeColor0 = false)
         {
             var positions = new[]
             {

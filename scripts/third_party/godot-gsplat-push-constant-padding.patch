@@ -1,0 +1,20 @@
+diff --git a/src/node/gpu_sort.rs b/src/node/gpu_sort.rs
+--- a/src/node/gpu_sort.rs
++++ b/src/node/gpu_sort.rs
+@@ -623,2 +623,3 @@
+-// Pack the 84-byte std430 push constant: column-major mat4, depth range, and the
+-// bucket/count/tex-width scalars. Matches the layout in the sort compute shaders.
++// Pack the 96-byte std430 push constant: column-major mat4, depth range, and the
++// bucket/count/tex-width scalars. The 12 trailing bytes pad the struct to its
++// 16-byte base alignment, which RenderingDevice validates at dispatch time.
+@@ -638 +639 @@
+-    let mut bytes: Vec<u8> = Vec::with_capacity(84);
++    let mut bytes: Vec<u8> = Vec::with_capacity(96);
+@@ -649,0 +651 @@
++    bytes.resize(96, 0);
+diff --git a/src/node/shaders.rs b/src/node/shaders.rs
+--- a/src/node/shaders.rs
++++ b/src/node/shaders.rs
+@@ -402 +402 @@
+-// All stages declare the same 84-byte push constant (the scan stages only read
++// All stages declare the same 96-byte std430 push constant (the scan stages only read

@@ -7,6 +7,8 @@ var dock: Control
 
 
 func _enter_tree() -> void:
+    SceneSyncGaussianSplatBackend.reset_to_default_backend()
+
     dock = preload("res://addons/scene_sync/scene_sync_dock.tscn").instantiate()
     if dock.has_method("set_editor_interface"):
         dock.call("set_editor_interface", get_editor_interface())

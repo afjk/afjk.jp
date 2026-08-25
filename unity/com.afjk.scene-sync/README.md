@@ -327,9 +327,23 @@ visibility / delete などは通常 GLB と同じように同期されます。
 
 ### Renderer backend
 
-描画は差し替え可能な backend に委ねています。未登録の場合は、依存ゼロの点群プレビュー
-（`MeshTopology.Points`）で表示します。**プレビューは配置とスケール確認のためのもので、
-最終的な描画品質ではありません。**
+Unity 6 以降では `Tools > Scene Sync > Install UnitySplats Renderer...` を実行してください。
+SceneSync が次の Git package を固定 version で追加し、script reload 後に実 renderer を
+自動登録して既存 preview を作り直します。
+
+- `Unity.WebP 0.3.22`
+- `UnitySplats 1.2.0`（commit `6c0258189a2b124af1282fa9236fd9b6637f1a1a`）
+
+実 backend は GLB を UnitySplats の `GsplatRuntimeLoader` へ渡し、実 `GsplatAsset` と
+`GsplatRenderer` を生成します。SH0–SH3、Gaussian ellipse、opacity を保持します。delete / reload
+では生成 asset と GPU resource を renderer の lifecycle に沿って解放します。
+
+UnitySplats は Git package の推移依存として解決できないため consuming project 側へ追加します。
+SceneSync package 自体は hard dependency を持たず、未導入や Unity 2021–2023 では依存ゼロの
+点群 preview（`MeshTopology.Points`）へ戻ります。**preview は配置とスケール確認用で、実 Gaussian
+描画ではありません。**
+
+独自 backend への差し替えも従来どおり可能です。
 
 ```csharp
 SceneSyncGaussianSplatBackend.Register(new MySplatBackend());
