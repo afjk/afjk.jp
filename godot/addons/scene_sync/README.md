@@ -121,6 +121,71 @@ The addon follows the current Unity SceneSync wire shape for scene objects:
 - preserves `scene-state.loomGraphs` and `scene-graph-set` / `scene-graph-clear` updates when relaying scene state
 - evaluates Loomlet object and scene behavior graphs through the same C# `Loomlet.Runtime` core used by Unity, with a Godot `Node3D` adapter for Scene Sync sink nodes
 
+## Gaussian Splats (KHR_gaussian_splatting GLB)
+
+SceneSync exchanges 3D Gaussian Splats as GLB files carrying the `KHR_gaussian_splatting`
+extension. The addon does not parse `.sog` / `.spz` / `.lcc2` and friends; SceneSync Web
+normalizes those formats and the addon consumes the resulting GLB.
+
+`SceneSyncGltfHelper.import_glb()` detects the extension and routes such GLBs away from
+`GLTFDocument`, which cannot interpret them.
+
+### Editor placement
+
+Use `Project > Tools > Scene Sync: Gaussian Splat GLB を読み込む...` to add a
+`SceneSyncGaussianSplatNode3D` to the edited scene (undoable), or add the node from the
+`Add Node` dialog and set `glb_path`. The node is a `@tool` node, so it renders in the 3D
+viewport as soon as the scene is opened — running the project is not required. Transform and
+visibility behave like any other `Node3D`; the visual child is rebuilt from `glb_path`
+instead of being saved into the `.tscn`.
+
+When the GLB lives inside `res://`, set its import type to **Keep File (exported as is)**.
+Godot's own glTF importer cannot interpret `KHR_gaussian_splatting`.
+
+### Renderer backend
+
+Install the pinned actual renderer from the `afjk.jp` repository root:
+
+```bash
+npm run install:godot-gsplat
+```
+
+This builds `godot-gsplat` commit `dfc8df4893f0f6e26c847590ff1669fa8404da6d`
+with the committed Cargo lockfile and installs its addon, descriptor, license, and optimized host
+GDExtension under ignored `godot/addons/godot_gsplat`, `godot/godot_gsplat.gdextension`, and
+`godot/target`. The source and native binary are intentionally not vendored into this repository.
+Run the installer on every desktop target. Android/Quest requires a corresponding cross-built
+upstream GDExtension and remains a separate export validation task.
+
+Use Godot 4.5+ with the **Mobile** or **Forward+** renderer. Compatibility rendering falls back to
+the point preview. The default desktop profile keeps the complete decoded asset, renders an active
+set of at most 500,000 splats, and retains SH degree 3. This prevents an all-in-frame 940k room
+capture from stalling the GPU. An initialized XR interface selects upstream's adaptive XR profile.
+Override the preset with project setting `scene_sync/gaussian_splat/render_profile`:
+
+- `1`: Low (150k / SH0)
+- `2`: Middle (500k / SH1)
+- `3`: High (all splats / SH3; expensive for large captures)
+- `4`: adaptive XR
+
+The pinned upstream currently sends an 84-byte sort push constant for a std430 block whose required
+size is 96 bytes. The installer applies and records a 12-byte tail-padding compatibility patch;
+without it Godot 4.6 rejects the compute dispatch and the cloud can appear as a single ellipse.
+
+The backend registers automatically when the GDExtension is present. Actual splat rendering remains
+pluggable for custom integrations:
+
+```gdscript
+SceneSyncGaussianSplatBackend.register_backend(MySplatBackend.new())
+```
+
+A backend is any object exposing `get_backend_name()`, `can_render(info)` and
+`create_splat_node(data, info)`. When no backend is registered the addon falls back to a
+dependency-free point-cloud preview built from `POSITION` and `COLOR_0` (or SH0 + opacity).
+**The preview is for placement and scale, not final rendering quality.**
+
+See [docs/scene-sync-3dgs-engine-integration.md](../../../docs/scene-sync-3dgs-engine-integration.md).
+
 ## Spec
 
 See [docs/scene-sync-spec.md](../../../docs/scene-sync-spec.md) for the wire protocol and cross-client behavior.

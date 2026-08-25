@@ -5,6 +5,8 @@
 
 `node_modules/` にしか存在しないビルド/テスト専用の依存（esbuild、Playwright、
 `@gltf-transform/*` など）は配布していないため、ここには含めない。
+末尾の engine renderer 節だけは、利用 project に導入される optional dependency の
+固定情報と notice 保持方針を監査用に記録している。
 
 再生成手順とバージョンの固定については各節を参照。
 
@@ -127,3 +129,27 @@ Loomlet リポジトリから取り込む。
 ## `html/assets/hdri/`
 
 Poly Haven の HDRI（CC0）。
+
+## Unity / Godot の Gaussian Splat renderer
+
+これらは afjk.jp の Git tree / Web 配布物には同梱しない optional dependency。
+利用 project へ明示的に導入した場合は実 renderer backend が自動登録され、未導入時は
+依存ゼロの点群 preview へ戻る。固定情報と再生成手順は
+`docs/scene-sync-3dgs-engine-integration.md` に記録する。
+
+| dependency | 固定 version / commit | ライセンス | 導入 |
+| --- | --- | --- | --- |
+| [`UnitySplats`](https://github.com/arloopa/UnitySplats) | 1.2.0 / `6c0258189a2b124af1282fa9236fd9b6637f1a1a` | MIT | Unity menu が UPM Git package として追加 |
+| [`Unity.WebP`](https://github.com/netpyoung/unity.webp) | 0.3.22 | MIT（libwebp は BSD-3-Clause） | UnitySplats と同時に UPM へ追加 |
+| [`godot-gsplat`](https://github.com/shiena/godot-gsplat) | `dfc8df4893f0f6e26c847590ff1669fa8404da6d` | MIT | `npm run install:godot-gsplat` が host GDExtension を生成 |
+| godot-rust / gdext | Cargo.lock で固定 | MPL-2.0 | godot-gsplat の build dependency |
+
+UnitySplats package 内の `LICENSE.md` / `Third Party Notices.md` は UPM が保持する。
+主要な bundled implementation（gsplat-unity / PlayCanvas Engine 由来 /
+UnityGaussianSplatting 由来 / GPUSorting / Spark / Niantic SPZ / ZstdSharp）は MIT、
+libwebp は BSD-3-Clause。
+
+godot-gsplat installer は upstream `LICENSE`（Copyright (c) 2026 KOGA Mitsuhiro）を
+生成 addon へコピーする。SceneSync の compatibility patch は godot-gsplat の MIT 対象
+ファイル2点に 12-byte tail padding を加えるもので、patch source と hash を repository に残す。
+godot-rust の MPL-2.0 対象 source は改変しない。

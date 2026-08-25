@@ -299,9 +299,64 @@ Editor の補助メニューとして **Tools > Scene Sync > Support** を利用
 
 透明補正は汎用的な名前ヒントだけを使います。表情や状態変化が任意の MonoBehaviour callback に依存している場合、その callback の実行結果までは自動推測できません。AnimationCurve として表現されている blend shape / material / transform などが自動 bake の対象です。
 
+## Gaussian Splat（KHR_gaussian_splatting GLB）
+
+SceneSync の 3DGS 交換形式は `KHR_gaussian_splatting` を含む GLB です。Unity 側に
+`.sog` / `.spz` / `.lcc2` などの parser は持たず、SceneSync Web が正規化した GLB を
+そのまま受け取ります。
+
+### Editor で配置する
+
+`GameObject > Scene Sync > Import Gaussian Splat GLB...` から GLB を選ぶと、
+`SceneSyncGaussianSplatSource` を持つ GameObject がシーンに追加されます。
+`[ExecuteAlways]` なので、シーンを開いた時点で Scene View に表示されます。Play モードへ
+入る必要はありません。position / rotation / scale / active は通常の GameObject と同じです。
+
+GLB の渡し方は2通りです。
+
+| フィールド | 用途 |
+| --- | --- |
+| `Glb Asset` (`TextAsset`) | プロジェクト内に置く場合。拡張子を `.glb.bytes` にしてください。`.glb` のままだと glTFast の importer が処理して `KHR_gaussian_splatting` が落ちます |
+| `Glb Path` (`string`) | プロジェクト外を直接指す場合。絶対パス、または `StreamingAssets` からの相対パス |
+
+### Runtime
+
+SceneSync 経由で受け取った GLB は、既存の GLB 同期・asset cache 経路のまま扱われます。
+`KHR_gaussian_splatting` を検出した場合だけ Gaussian Splat 経路へ分岐し、transform /
+visibility / delete などは通常 GLB と同じように同期されます。
+
+### Renderer backend
+
+Unity 6 以降では `Tools > Scene Sync > Install UnitySplats Renderer...` を実行してください。
+SceneSync が次の Git package を固定 version で追加し、script reload 後に実 renderer を
+自動登録して既存 preview を作り直します。
+
+- `Unity.WebP 0.3.22`
+- `UnitySplats 1.2.0`（commit `6c0258189a2b124af1282fa9236fd9b6637f1a1a`）
+
+実 backend は GLB を UnitySplats の `GsplatRuntimeLoader` へ渡し、実 `GsplatAsset` と
+`GsplatRenderer` を生成します。SH0–SH3、Gaussian ellipse、opacity を保持します。delete / reload
+では生成 asset と GPU resource を renderer の lifecycle に沿って解放します。
+
+UnitySplats は Git package の推移依存として解決できないため consuming project 側へ追加します。
+SceneSync package 自体は hard dependency を持たず、未導入や Unity 2021–2023 では依存ゼロの
+点群 preview（`MeshTopology.Points`）へ戻ります。**preview は配置とスケール確認用で、実 Gaussian
+描画ではありません。**
+
+独自 backend への差し替えも従来どおり可能です。
+
+```csharp
+SceneSyncGaussianSplatBackend.Register(new MySplatBackend());
+```
+
+backend は `ISceneSyncGaussianSplatBackend` を実装し、座標を glTFast と同じ規則
+（X 反転）で Unity 空間へ変換して返します。詳細は
+[3DGS エンジン統合](../../docs/scene-sync-3dgs-engine-integration.md) を参照してください。
+
 ## 技術仕様
 
 - [Scene Sync Spec](../../docs/scene-sync-spec.md)
 - [Unity オーサリングモデル](../../docs/scene-sync-unity-authoring.md)
 - [座標系と visualBasis](../../docs/scene-sync-coordinate-system.md)
 - [Asset / Blob / Cache](../../docs/scene-sync-assets-and-cache.md)
+- [3DGS エンジン統合](../../docs/scene-sync-3dgs-engine-integration.md)

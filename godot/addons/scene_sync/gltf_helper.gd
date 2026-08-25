@@ -8,6 +8,65 @@ static func import_glb(data: PackedByteArray) -> Node3D:
         printerr("[SceneSync] import_glb: data is empty")
         return null
 
+    # SceneSync の 3DGS 交換形式は KHR_gaussian_splatting GLB。
+    # Godot 標準の GLTFDocument はこの拡張を知らないため、Gaussian Splat primitive を
+    # 含む GLB は専用バックエンドへ振り分ける。通常 GLB は従来どおり。
+    var splat_info := SceneSyncGaussianSplatGlb.inspect(data)
+    if bool(splat_info.get("hasGaussianSplatting", false)):
+        return _import_gaussian_splat_glb(data, splat_info)
+
+    return _import_mesh_glb(data)
+
+
+## KHR_gaussian_splatting GLB を Gaussian Splat バックエンドで読み込む。
+## 通常 mesh と混在している GLB では、mesh 側も従来経路で読み込んで同じ親にぶら下げる。
+static func _import_gaussian_splat_glb(data: PackedByteArray, info: Dictionary) -> Node3D:
+    print("[SceneSync] import_glb: KHR_gaussian_splatting detected (%s)" % SceneSyncGaussianSplatGlb.describe(info))
+
+    var visual := SceneSyncGaussianSplatBackend.create_visual(data, info)
+    if not bool(visual.get("ok", false)):
+        printerr(
+            "[SceneSync] import_glb: Gaussian Splat import failed: %s"
+            % String(visual.get("reason", "unknown"))
+        )
+        return null
+
+    var container := Node3D.new()
+    container.name = "ImportedGlb"
+    container.set_meta(SceneSyncGaussianSplatBackend.SPLAT_NODE_META, true)
+    container.set_meta(SceneSyncGaussianSplatBackend.SPLAT_SOURCE_META, String(visual.get("source", "")))
+
+    if bool(info.get("hasRegularMeshPrimitive", false)):
+        # 同一 GLB に通常 mesh が同居している場合。GLTFDocument が splat primitive で
+        # 失敗する可能性があるため、失敗しても splat 側は残す。
+        var mesh_container := _import_mesh_glb(data)
+        if mesh_container != null:
+            if mesh_container.has_meta(SceneSyncAnimationPolicy.CLIP_ORDER_META):
+                container.set_meta(
+                    SceneSyncAnimationPolicy.CLIP_ORDER_META,
+                    mesh_container.get_meta(SceneSyncAnimationPolicy.CLIP_ORDER_META)
+                )
+            var mesh_scene := mesh_container.get_child(0) if mesh_container.get_child_count() > 0 else null
+            if mesh_scene != null:
+                mesh_container.remove_child(mesh_scene)
+                container.add_child(mesh_scene)
+            mesh_container.free()
+        else:
+            push_warning("[SceneSync] import_glb: mixed GLB mesh import failed; rendering Gaussian Splats only")
+
+    container.add_child(visual["node"])
+    print(
+        "[SceneSync] import_glb: Gaussian Splat visual ready (source=%s, backend=%s, points=%d)"
+        % [
+            String(visual.get("source", "")),
+            String(visual.get("backendName", "")),
+            int(visual.get("pointCount", 0)),
+        ]
+    )
+    return container
+
+
+static func _import_mesh_glb(data: PackedByteArray) -> Node3D:
     var doc := GLTFDocument.new()
     var state := GLTFState.new()
 
