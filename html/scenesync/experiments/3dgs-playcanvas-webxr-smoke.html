@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SceneSync 3DGS PlayCanvas WebXR Stereo Smoke</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c12; color: #fff; font-family: system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #panel { position: fixed; top: 12px; left: 12px; z-index: 2; width: min(430px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); }
+    #status { margin: 0 0 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; }
+    #actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { appearance: none; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; padding: 8px 12px; background: #17253d; color: #fff; font: inherit; cursor: pointer; }
+    button:disabled { cursor: default; opacity: .45; }
+    #enter-vr { background: #154f8c; }
+    #drop-note { position: fixed; right: 12px; bottom: 12px; z-index: 2; max-width: min(520px, calc(100vw - 24px)); margin: 0; padding: 8px 10px; border-radius: 7px; background: rgba(4,8,16,.72); font-size: 12px; }
+    body.dragging::after { content: 'KHR GLB / SOG / PLYをドロップ'; position: fixed; inset: 16px; z-index: 5; display: grid; place-items: center; border: 3px dashed #5bbcff; border-radius: 18px; background: rgba(9,30,55,.8); font-size: clamp(20px, 4vw, 42px); }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "playcanvas": "https://cdn.jsdelivr.net/npm/playcanvas@2.21.4/build/playcanvas.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="application-canvas"></canvas>
+  <section id="panel">
+    <pre id="status">PlayCanvas KHR_gaussian_splatting WebXR stereo smoke
+loading…</pre>
+    <div id="actions">
+      <button id="enter-vr" type="button" disabled>VRを開始</button>
+      <button id="choose-file" type="button">GLB / SOG / PLYを開く</button>
+      <input id="file-input" type="file" accept=".glb,.sog,.ply" hidden>
+    </div>
+  </section>
+  <p id="drop-note">Quest確認: 青・橙・緑の箱とGaussianの双方に左右眼parallaxがあることを確認してください。</p>
+
+  <script type="module">
+    import {
+      Application,
+      Asset,
+      Color,
+      Entity,
+      FILLMODE_NONE,
+      GSPLAT_RENDERER_RASTER_CPU_SORT,
+      RESOLUTION_AUTO,
+      StandardMaterial,
+      Vec3,
+      XREYE_LEFT,
+      XREYE_RIGHT,
+      XRSPACE_LOCALFLOOR,
+      XRTYPE_VR,
+    } from 'playcanvas';
+
+    const PLAYCANVAS_VERSION = '2.21.4';
+    const DEFAULT_FIXTURE = './fixtures/ring-gaussian-splats.glb';
+    const status = document.querySelector('#status');
+    const canvas = document.querySelector('#application-canvas');
+    const enterVrButton = document.querySelector('#enter-vr');
+    const chooseFileButton = document.querySelector('#choose-file');
+    const fileInput = document.querySelector('#file-input');
+
+    const diagnostics = globalThis.__playCanvasGaussianXrSmoke = {
+      done: false,
+      rendered: false,
+      engine: 'PlayCanvas',
+      engineVersion: PLAYCANVAS_VERSION,
+      renderer: 'GSPLAT_RENDERER_RASTER_CPU_SORT',
+      currentRenderer: null,
+      format: 'KHR_gaussian_splatting GLB',
+      source: null,
+      gaussianObjects: 0,
+      splatCount: 0,
+      normalObjects: 3,
+      xrAvailable: false,
+      xrActive: false,
+      xrViews: 0,
+      eyes: [],
+      eyeSeparationMeters: null,
+      viewMatrixMaxDelta: null,
+      stereoCameraMatricesDistinct: false,
+      xrSamples: 0,
+      error: null,
+    };
+
+    const app = new Application(canvas, {
+      graphicsDeviceOptions: {
+        antialias: false,
+        alpha: false,
+        powerPreference: 'high-performance',
+      },
+    });
+    app.setCanvasFillMode(FILLMODE_NONE);
+    app.setCanvasResolution(RESOLUTION_AUTO);
+    app.graphicsDevice.maxPixelRatio = Math.min(devicePixelRatio, 1.5);
+    app.scene.ambientLight = new Color(0.45, 0.45, 0.5);
+    app.scene.gsplat.renderer = GSPLAT_RENDERER_RASTER_CPU_SORT;
+    app.scene.gsplat.radialSorting = true;
+
+    const rig = new Entity('xr-rig');
+    rig.setLocalPosition(0, 0, 2.8);
+    app.root.addChild(rig);
+
+    const cameraEntity = new Entity('xr-camera');
+    cameraEntity.addComponent('camera', {
+      clearColor: new Color(0.035, 0.05, 0.08),
+      fov: 62,
+      nearClip: 0.01,
+      farClip: 1000,
+    });
+    cameraEntity.setLocalPosition(0, 1.35, 0);
+    cameraEntity.lookAt(new Vec3(0, 0.1, 0));
+    rig.addChild(cameraEntity);
+    const camera = cameraEntity.camera;
+
+    const light = new Entity('key-light');
+    light.addComponent('light', { type: 'directional', intensity: 1.4 });
+    light.setLocalEulerAngles(45, 35, 0);
+    app.root.addChild(light);
+
+    function markerMaterial(color) {
+      const material = new StandardMaterial();
+      material.diffuse.copy(color);
+      material.emissive.copy(color).mulScalar(0.12);
+      material.update();
+      return material;
+    }
+
+    const depthMarkers = [
+      { name: 'near-blue', color: new Color(0.08, 0.55, 1), position: [1.15, 0.35, 0.75], scale: [0.25, 0.7, 0.25] },
+      { name: 'middle-orange', color: new Color(1, 0.38, 0.08), position: [1.15, 0.2, -0.45], scale: [0.35, 0.4, 0.35] },
+      { name: 'far-green', color: new Color(0.18, 0.9, 0.42), position: [1.15, 0.15, -1.8], scale: [0.45, 0.3, 0.45] },
+    ];
+    for (const marker of depthMarkers) {
+      const entity = new Entity(marker.name);
+      entity.addComponent('render', { type: 'box', material: markerMaterial(marker.color) });
+      entity.setLocalPosition(...marker.position);
+      entity.setLocalScale(...marker.scale);
+      app.root.addChild(entity);
+    }
+
+    const floor = new Entity('depth-floor');
+    const floorMaterial = new StandardMaterial();
+    floorMaterial.diffuse.set(0.1, 0.13, 0.18);
+    floorMaterial.update();
+    floor.addComponent('render', { type: 'box', material: floorMaterial });
+    floor.setLocalPosition(0, -0.58, -1.3);
+    floor.setLocalScale(5, 0.03, 6);
+    app.root.addChild(floor);
+
+    function formatNumber(value, digits = 4) {
+      return Number.isFinite(value) ? value.toFixed(digits) : '—';
+    }
+
+    function updateStatus() {
+      status.textContent = [
+        diagnostics.error
+          ? `FAILED: ${diagnostics.error}`
+          : diagnostics.done
+            ? 'KHR_gaussian_splatting GLB → PlayCanvas GSplat: OK'
+            : 'PlayCanvas KHR_gaussian_splatting WebXR stereo smoke\nloading…',
+        `source: ${diagnostics.source || '—'}`,
+        `GSplat components: ${diagnostics.gaussianObjects}`,
+        `splats: ${diagnostics.splatCount || '—'}`,
+        `renderer: ${diagnostics.currentRenderer || 'raster CPU sort requested'} / WebGL2`,
+        `WebXR: ${diagnostics.xrActive ? 'active' : diagnostics.xrAvailable ? 'available' : 'unavailable'}`,
+        `XR views: ${diagnostics.xrViews} [${diagnostics.eyes.join(', ')}]`,
+        `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
+        `view matrix max delta: ${formatNumber(diagnostics.viewMatrixMaxDelta, 6)}`,
+        `stereo camera matrices: ${diagnostics.stereoCameraMatricesDistinct ? 'distinct' : 'not measured'}`,
+        `PlayCanvas ${PLAYCANVAS_VERSION}`,
+      ].join('\n');
+    }
+
+    function collectGsplatComponents(root) {
+      const components = [];
+      const visit = (entity) => {
+        if (entity.gsplat) components.push(entity.gsplat);
+        for (const child of entity.children) visit(child);
+      };
+      visit(root);
+      return components;
+    }
+
+    function splatCountOf(component) {
+      const resource = component?.asset?.resource || component?.resource;
+      const declared = resource?.gsplatData?.numSplats ?? resource?.numSplats;
+      if (Number.isFinite(declared)) return declared;
+      return resource?.centers ? Math.floor(resource.centers.length / 3) : 0;
+    }
+
+    function loadAsset(asset) {
+      return new Promise((resolve, reject) => {
+        asset.once('error', (error) => reject(error instanceof Error ? error : new Error(String(error))));
+        asset.ready(() => resolve(asset));
+        app.assets.add(asset);
+        app.assets.load(asset);
+      });
+    }
+
+    let active = null;
+    function releaseActive() {
+      if (!active) return;
+      active.root.destroy();
+      app.assets.remove(active.asset);
+      active.asset.off();
+      if (active.asset.loaded) active.asset.unload();
+      if (active.objectUrl) URL.revokeObjectURL(active.objectUrl);
+      active = null;
+    }
+
+    async function attachSource({ url, filename, objectUrl = null }) {
+      diagnostics.done = false;
+      diagnostics.rendered = false;
+      diagnostics.error = null;
+      diagnostics.source = filename;
+      diagnostics.gaussianObjects = 0;
+      diagnostics.splatCount = 0;
+      updateStatus();
+
+      const isGlb = filename.toLowerCase().endsWith('.glb');
+      const asset = new Asset(filename, isGlb ? 'container' : 'gsplat', { url, filename });
+      try {
+        await loadAsset(asset);
+        const root = isGlb
+          ? asset.resource.instantiateRenderEntity()
+          : new Entity(`gsplat:${filename}`);
+        if (!isGlb) root.addComponent('gsplat', { asset, unified: true });
+
+        const components = collectGsplatComponents(root);
+        if (components.length === 0) throw new Error('PlayCanvas did not create a GSplat component');
+
+        releaseActive();
+        app.root.addChild(root);
+        active = { root, asset, objectUrl };
+        diagnostics.format = isGlb ? 'KHR_gaussian_splatting GLB' : filename.split('.').pop().toUpperCase();
+        diagnostics.gaussianObjects = components.length;
+        diagnostics.splatCount = components.reduce((sum, component) => sum + splatCountOf(component), 0);
+        diagnostics.done = true;
+        updateStatus();
+      } catch (error) {
+        app.assets.remove(asset);
+        asset.off();
+        if (asset.loaded) asset.unload();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        diagnostics.done = true;
+        diagnostics.error = error?.message || String(error);
+        updateStatus();
+        console.error(error);
+      }
+    }
+
+    function openFile(file) {
+      if (!file || !/\.(?:glb|sog|ply)$/iu.test(file.name)) {
+        diagnostics.error = 'KHR GLB / SOG / PLYファイルを選択してください';
+        updateStatus();
+        return;
+      }
+      const objectUrl = URL.createObjectURL(file);
+      attachSource({ url: objectUrl, filename: file.name, objectUrl });
+    }
+
+    chooseFileButton.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      openFile(fileInput.files?.[0]);
+      fileInput.value = '';
+    });
+
+    let dragDepth = 0;
+    addEventListener('dragenter', (event) => {
+      if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+      event.preventDefault();
+      dragDepth += 1;
+      document.body.classList.add('dragging');
+    });
+    addEventListener('dragover', (event) => event.preventDefault());
+    addEventListener('dragleave', (event) => {
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) document.body.classList.remove('dragging');
+    });
+    addEventListener('drop', (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      document.body.classList.remove('dragging');
+      openFile(event.dataTransfer?.files?.[0]);
+    });
+
+    const xr = app.xr;
+    function setXrAvailable(available) {
+      diagnostics.xrAvailable = available;
+      enterVrButton.disabled = !available || !diagnostics.done || Boolean(diagnostics.error);
+      updateStatus();
+    }
+    xr.on(`available:${XRTYPE_VR}`, setXrAvailable);
+    xr.on('start', () => {
+      xr.fixedFoveation = 0.55;
+      diagnostics.xrActive = true;
+      enterVrButton.textContent = 'VR実行中';
+      updateStatus();
+    });
+    xr.on('end', () => {
+      diagnostics.xrActive = false;
+      enterVrButton.textContent = 'VRを開始';
+      updateStatus();
+    });
+    xr.on('error', (error) => {
+      diagnostics.error = error?.message || String(error);
+      updateStatus();
+    });
+    xr.on('update', () => {
+      const views = xr.views?.list || [];
+      for (const view of views) view.updateTransforms(rig.getWorldTransform());
+      const left = views.find((view) => view.eye === XREYE_LEFT);
+      const right = views.find((view) => view.eye === XREYE_RIGHT);
+      diagnostics.xrViews = views.length;
+      diagnostics.eyes = views.map((view) => view.eye);
+      diagnostics.xrSamples += 1;
+
+      if (left && right) {
+        const leftPosition = left.positionData;
+        const rightPosition = right.positionData;
+        diagnostics.eyeSeparationMeters = Math.hypot(
+          rightPosition[0] - leftPosition[0],
+          rightPosition[1] - leftPosition[1],
+          rightPosition[2] - leftPosition[2],
+        );
+        const leftMatrix = left.viewOffMat.data;
+        const rightMatrix = right.viewOffMat.data;
+        let maxDelta = 0;
+        for (let i = 0; i < 16; i += 1) {
+          maxDelta = Math.max(maxDelta, Math.abs(leftMatrix[i] - rightMatrix[i]));
+        }
+        diagnostics.viewMatrixMaxDelta = maxDelta;
+        diagnostics.stereoCameraMatricesDistinct =
+          diagnostics.eyeSeparationMeters > 0.001 && maxDelta > 0.00001;
+      }
+      if (diagnostics.xrSamples < 5 || diagnostics.xrSamples % 60 === 0) updateStatus();
+    });
+
+    enterVrButton.addEventListener('click', () => {
+      if (!xr.isAvailable(XRTYPE_VR) || !diagnostics.done || diagnostics.error) return;
+      xr.start(camera, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
+        framebufferScaleFactor: 0.78,
+        optionalFeatures: ['hand-tracking'],
+        callback: (error) => {
+          if (!error) return;
+          diagnostics.error = error.message;
+          updateStatus();
+        },
+      });
+    });
+
+    function resize() {
+      app.resizeCanvas();
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    app.on('frameend', () => {
+      if (diagnostics.done && !diagnostics.error) diagnostics.rendered = true;
+      diagnostics.currentRenderer = app.scene.gsplat.currentRenderer === GSPLAT_RENDERER_RASTER_CPU_SORT
+        ? 'raster CPU sort'
+        : String(app.scene.gsplat.currentRenderer ?? 'unknown');
+      enterVrButton.disabled = !diagnostics.xrAvailable || !diagnostics.done || Boolean(diagnostics.error);
+    });
+    app.start();
+
+    const params = new URLSearchParams(location.search);
+    const fixture = params.get('fixture') === 'minimal'
+      ? './fixtures/minimal-khr-gaussian-splatting.glb'
+      : DEFAULT_FIXTURE;
+    await attachSource({ url: fixture, filename: fixture.split('/').pop() });
+    setXrAvailable(xr.isAvailable(XRTYPE_VR));
+  </script>
+</body>
+</html>

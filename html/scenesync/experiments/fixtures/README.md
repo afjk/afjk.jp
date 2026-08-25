@@ -64,3 +64,39 @@ node scripts/convert-gaussian-splat.mjs ring-gaussian-splats.lcc2.zip out.glb
 3dgs-three-native-smoke.html?fixture=ring     # degree 1 SH を含む変換結果
 3dgs-three-native-smoke.html?webgpu=1         # WebGPU backend（既定はWebGL backend）
 ```
+
+## WebXR stereo A/B比較
+
+SceneSync本体のrendererを変更せず、同じ`KHR_gaussian_splatting` GLBをQuestで比較する。
+
+- `../3dgs-three-webxr-stereo-smoke.html` は固定中のThree.js commitへ、XR ArrayCamera対応の
+  `mediumpModelViewMatrix`と片眼サイズの`cameraViewport.zw`を実行時にだけ適用する。
+- `../3dgs-playcanvas-webxr-smoke.html` はPlayCanvas 2.21.4の標準container loaderと
+  XR対応の`GSPLAT_RENDERER_RASTER_CPU_SORT`を使う。
+
+```text
+3dgs-three-webxr-stereo-smoke.html?fixture=ring
+3dgs-three-webxr-stereo-smoke.html?fixture=minimal
+3dgs-playcanvas-webxr-smoke.html?fixture=ring
+3dgs-playcanvas-webxr-smoke.html?fixture=minimal
+```
+
+Three.js版へはSceneSync生成の`.glb`を、PlayCanvas版へは`.glb`、元の`.sog`または`.ply`を
+ドロップして差し替えられる。Questでは「VRを開始」後、次を両ページで確認する。
+
+1. Gaussianと右側の青・橙・緑のboxの双方に左右眼parallaxがある。
+2. `XR views`が2、eye separationがおよそ0.05〜0.08 mになる。
+3. `stereo camera matrices`が`distinct`になる。
+
+通常boxだけが立体でGaussianが平面に見える場合は、Three.jsのGaussian shader修正が不十分。
+両方が立体なら候補パッチを上流PRへ進められる。PlayCanvasだけが立体ならrenderer移行の検討材料にする。
+
+機械判定用diagnosticsは`window.__threeGaussianXrStereoSmoke`と
+`window.__playCanvasGaussianXrSmoke`へ出す。
+
+Desktopのload/render smoke:
+
+```bash
+npm run test:e2e:scene-sync-3dgs-three-xr-patch
+npm run test:e2e:scene-sync-3dgs-playcanvas
+```

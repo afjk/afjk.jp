@@ -1,0 +1,111 @@
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const htmlRoot = path.join(repoRoot, 'html');
+process.env.PLAYWRIGHT_BROWSERS_PATH ||= path.join(repoRoot, '.playwright-browsers');
+const { chromium } = await import('playwright');
+
+const mimeByExtension = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.glb', 'model/gltf-binary'],
+]);
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function createStaticServer() {
+  return new Promise((resolve, reject) => {
+    const server = createServer(async (request, response) => {
+      const pathname = decodeURIComponent(new URL(request.url || '/', 'http://localhost').pathname);
+      const filePath = path.resolve(htmlRoot, `.${pathname}`);
+      if (!filePath.startsWith(`${htmlRoot}${path.sep}`)) {
+        response.writeHead(400).end('Bad request');
+        return;
+      }
+      try {
+        const body = await readFile(filePath);
+        response.writeHead(200, {
+          'content-type': mimeByExtension.get(path.extname(filePath)) || 'application/octet-stream',
+          'content-length': body.byteLength,
+        });
+        response.end(body);
+      } catch {
+        response.writeHead(404).end('Not found');
+      }
+    });
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve(server);
+    });
+  });
+}
+
+const server = await createStaticServer();
+const address = server.address();
+const url = `http://127.0.0.1:${address.port}/scenesync/experiments/3dgs-playcanvas-webxr-smoke.html?fixture=ring`;
+
+let browser;
+try {
+  browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 960, height: 720 } });
+  const pageErrors = [];
+  const consoleErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error' || /WebGL: INVALID_OPERATION/iu.test(message.text())) {
+      consoleErrors.push(message.text());
+    }
+  });
+
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => globalThis.__playCanvasGaussianXrSmoke?.done === true, null, {
+    timeout: 30000,
+  });
+  await page.waitForFunction(() => globalThis.__playCanvasGaussianXrSmoke?.rendered === true, null, {
+    timeout: 15000,
+  });
+  const result = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
+
+  assert(!result.error, result.error || 'PlayCanvas Gaussian smoke failed');
+  assert(result.engine === 'PlayCanvas', 'Smoke did not use PlayCanvas');
+  assert(result.engineVersion === '2.21.4', 'PlayCanvas revision changed');
+  assert(result.renderer === 'GSPLAT_RENDERER_RASTER_CPU_SORT', 'XR-capable CPU sort renderer was not selected');
+  assert(result.currentRenderer === 'raster CPU sort', 'PlayCanvas did not activate the requested CPU sort renderer');
+  assert(result.format === 'KHR_gaussian_splatting GLB', 'Smoke did not load the normalized KHR GLB');
+  assert(result.gaussianObjects >= 1, 'PlayCanvas container did not create a GSplat component');
+  assert(result.splatCount === 16, 'ring fixture splat count changed');
+  assert(result.normalObjects === 3, 'normal depth markers were not configured');
+  assert(result.rendered === true, 'PlayCanvas GSplat frame was not rendered');
+  assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
+  assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
+
+  const directImports = [];
+  for (const extension of ['sog', 'ply']) {
+    const filename = `ring-gaussian-splats.${extension}`;
+    const fixture = path.join(htmlRoot, 'scenesync/experiments/fixtures', filename);
+    await page.setInputFiles('#file-input', fixture);
+    await page.waitForFunction((expectedSource) => {
+      const smoke = globalThis.__playCanvasGaussianXrSmoke;
+      return smoke?.done === true && smoke.rendered === true && smoke.source === expectedSource;
+    }, filename, { timeout: 15000 });
+    const imported = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
+    assert(!imported.error, imported.error || `PlayCanvas ${extension.toUpperCase()} import failed`);
+    assert(imported.format === extension.toUpperCase(), `PlayCanvas did not identify ${extension.toUpperCase()}`);
+    assert(imported.gaussianObjects >= 1, `${extension.toUpperCase()} did not create a GSplat component`);
+    assert(imported.splatCount === 16, `${extension.toUpperCase()} fixture splat count changed`);
+    directImports.push({ format: imported.format, splatCount: imported.splatCount });
+  }
+  assert(pageErrors.length === 0, `Page errors after direct imports: ${pageErrors.join('\n')}`);
+  assert(consoleErrors.length === 0, `Console errors after direct imports: ${consoleErrors.join('\n')}`);
+
+  console.log(JSON.stringify({ status: 'passed', url, ...result, directImports }, null, 2));
+} finally {
+  await browser?.close();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}

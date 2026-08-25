@@ -26,6 +26,8 @@
     "test:e2e:install-browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "test:e2e:scene-sync-3dgs-worker": "node scripts/scenesync-3dgs-worker-smoke.mjs",
     "test:e2e:scene-sync-3dgs-renderer": "node scripts/scenesync-3dgs-renderer-smoke.mjs",
+    "test:e2e:scene-sync-3dgs-three-xr-patch": "node scripts/scenesync-3dgs-three-xr-patch-smoke.mjs",
+    "test:e2e:scene-sync-3dgs-playcanvas": "node scripts/scenesync-3dgs-playcanvas-smoke.mjs",
     "test:e2e:scene-sync-3dgs-editor": "node scripts/scenesync-3dgs-editor-smoke.mjs",
     "test:e2e:scene-sync-export-static-viewer": "node scripts/scenesync-export-static-viewer-smoke.mjs",
     "test:e2e:scene-sync-export-single-html": "node scripts/scenesync-export-single-html-smoke.mjs",
