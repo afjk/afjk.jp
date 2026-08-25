@@ -76,12 +76,16 @@ cd "$PROJECT_DIR"
   --check-only --script addons/scene_sync/gaussian_splat_preview.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/gaussian-splat-backend-check.log" \
   --check-only --script addons/scene_sync/gaussian_splat_backend.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/godot-gsplat-backend-check.log" \
+  --check-only --script addons/scene_sync/godot_gsplat_backend.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/gaussian-splat-node-check.log" \
   --check-only --script addons/scene_sync/scene_sync_gaussian_splat_node.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/plugin-check.log" \
   --check-only --script addons/scene_sync/plugin.gd || exit 1
 "$GODOT" --headless --log-file "$TMP_DIR/logs/gaussian-splat-tests-check.log" \
   --check-only --script tests/test_gaussian_splat_glb.gd || exit 1
+"$GODOT" --headless --log-file "$TMP_DIR/logs/godot-gsplat-smoke-check.log" \
+  --check-only --script tests/test_godot_gsplat_backend.gd || exit 1
 echo ""
 
 echo "--- Starting presence-server ---"
@@ -144,6 +148,9 @@ run_test "Wire Asset Visual Tests" \
 
 run_test "Gaussian Splat GLB Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/gaussian-splat.log" -s tests/test_gaussian_splat_glb.gd
+
+run_test "godot-gsplat Real Backend Smoke" \
+  "$GODOT" --headless --log-file "$TMP_DIR/logs/godot-gsplat-smoke.log" -s tests/test_godot_gsplat_backend.gd
 
 run_test "Playback Clock Tests" \
   "$GODOT" --headless --log-file "$TMP_DIR/logs/playback-clock.log" -s tests/test_playback_clock.gd

@@ -74,6 +74,18 @@ namespace Afjk.SceneSync.Editor
             Selection.activeGameObject = go;
 
             Debug.Log("[SceneSync] Gaussian Splat GLB added: " + path + " (" + info + ")", go);
+
+            if (source.VisualSource == SceneSyncGaussianSplatBackend.SourcePreview
+                && !SceneSyncGaussianSplatBackend.IsAvailable
+                && EditorUtility.DisplayDialog(
+                    "Scene Sync",
+                    "The GLB is visible as a point preview because the real Gaussian Splat renderer is not installed.\n\n"
+                    + "Install pinned UnitySplats v1.2.0 now?",
+                    "Install UnitySplats",
+                    "Keep Preview"))
+            {
+                SceneSyncUnitySplatsInstaller.InstallUnitySplats();
+            }
         }
     }
 }

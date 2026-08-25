@@ -107,9 +107,13 @@ namespace Afjk.SceneSync
             var filter = visual.AddComponent<MeshFilter>();
             filter.sharedMesh = mesh;
             var renderer = visual.AddComponent<MeshRenderer>();
-            renderer.sharedMaterial = CreateMaterial();
+            bool ownsMaterial;
+            renderer.sharedMaterial = CreateMaterial(out ownsMaterial);
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
+
+            var resources = visual.AddComponent<SceneSyncGaussianSplatPreviewResources>();
+            resources.Configure(mesh, ownsMaterial ? renderer.sharedMaterial : null);
 
             return new SceneSyncGaussianSplatPreviewResult
             {
@@ -120,8 +124,9 @@ namespace Afjk.SceneSync
             };
         }
 
-        private static Material CreateMaterial()
+        private static Material CreateMaterial(out bool owned)
         {
+            owned = false;
             if (MaterialFactory != null)
             {
                 var custom = MaterialFactory();
@@ -135,6 +140,7 @@ namespace Afjk.SceneSync
                 {
                     var material = new Material(shader);
                     material.name = "SceneSyncGaussianSplatPreview";
+                    owned = true;
                     return material;
                 }
             }
@@ -406,6 +412,45 @@ namespace Afjk.SceneSync
                 Components = 0,
                 Reason = reason,
             };
+        }
+    }
+
+    /// <summary>点群 preview が生成した Mesh / Material をノード破棄時に解放する。</summary>
+    [ExecuteAlways]
+    [DisallowMultipleComponent]
+    public sealed class SceneSyncGaussianSplatPreviewResources : MonoBehaviour
+    {
+        [SerializeField] private Mesh ownedMesh;
+        [SerializeField] private Material ownedMaterial;
+        private bool _released;
+
+        internal void Configure(Mesh mesh, Material material)
+        {
+            ownedMesh = mesh;
+            ownedMaterial = material;
+        }
+
+        private void OnDestroy()
+        {
+            Release();
+        }
+
+        public void Release()
+        {
+            if (_released) return;
+            _released = true;
+
+            DestroySafely(ownedMesh);
+            DestroySafely(ownedMaterial);
+            ownedMesh = null;
+            ownedMaterial = null;
+        }
+
+        private static void DestroySafely(UnityEngine.Object target)
+        {
+            if (target == null) return;
+            if (Application.isPlaying) Destroy(target);
+            else DestroyImmediate(target);
         }
     }
 }
