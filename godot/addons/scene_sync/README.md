@@ -144,7 +144,36 @@ Godot's own glTF importer cannot interpret `KHR_gaussian_splatting`.
 
 ### Renderer backend
 
-Actual splat rendering is delegated to a pluggable backend:
+Install the pinned actual renderer from the `afjk.jp` repository root:
+
+```bash
+npm run install:godot-gsplat
+```
+
+This builds `godot-gsplat` commit `dfc8df4893f0f6e26c847590ff1669fa8404da6d`
+with the committed Cargo lockfile and installs its addon, descriptor, license, and optimized host
+GDExtension under ignored `godot/addons/godot_gsplat`, `godot/godot_gsplat.gdextension`, and
+`godot/target`. The source and native binary are intentionally not vendored into this repository.
+Run the installer on every desktop target. Android/Quest requires a corresponding cross-built
+upstream GDExtension and remains a separate export validation task.
+
+Use Godot 4.5+ with the **Mobile** or **Forward+** renderer. Compatibility rendering falls back to
+the point preview. The default desktop profile keeps the complete decoded asset, renders an active
+set of at most 500,000 splats, and retains SH degree 3. This prevents an all-in-frame 940k room
+capture from stalling the GPU. An initialized XR interface selects upstream's adaptive XR profile.
+Override the preset with project setting `scene_sync/gaussian_splat/render_profile`:
+
+- `1`: Low (150k / SH0)
+- `2`: Middle (500k / SH1)
+- `3`: High (all splats / SH3; expensive for large captures)
+- `4`: adaptive XR
+
+The pinned upstream currently sends an 84-byte sort push constant for a std430 block whose required
+size is 96 bytes. The installer applies and records a 12-byte tail-padding compatibility patch;
+without it Godot 4.6 rejects the compute dispatch and the cloud can appear as a single ellipse.
+
+The backend registers automatically when the GDExtension is present. Actual splat rendering remains
+pluggable for custom integrations:
 
 ```gdscript
 SceneSyncGaussianSplatBackend.register_backend(MySplatBackend.new())

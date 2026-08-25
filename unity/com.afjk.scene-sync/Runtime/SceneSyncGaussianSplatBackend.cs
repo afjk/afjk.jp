@@ -73,20 +73,33 @@ namespace Afjk.SceneSync
         public const string SourcePreview = "preview";
 
         private static ISceneSyncGaussianSplatBackend _backend;
+        private static bool _autoRegistrationEnabled = true;
 
         public static ISceneSyncGaussianSplatBackend Current
         {
-            get { return _backend; }
+            get
+            {
+                EnsureDefaultBackend();
+                return _backend;
+            }
         }
 
         public static bool IsAvailable
         {
-            get { return _backend != null; }
+            get
+            {
+                EnsureDefaultBackend();
+                return _backend != null;
+            }
         }
 
         public static string BackendName
         {
-            get { return _backend == null ? string.Empty : _backend.Name; }
+            get
+            {
+                EnsureDefaultBackend();
+                return _backend == null ? string.Empty : _backend.Name;
+            }
         }
 
         public static void Register(ISceneSyncGaussianSplatBackend backend)
@@ -98,12 +111,40 @@ namespace Afjk.SceneSync
             }
 
             _backend = backend;
+            _autoRegistrationEnabled = true;
             Debug.Log("[SceneSync] Gaussian Splat backend registered: " + backend.Name);
         }
 
-        public static void Unregister()
+        /// <summary>
+        /// 現在の backend を外す。既定では自動検出も止めるため、テストや明示的な
+        /// preview 運用で <see cref="CreateVisual(byte[])"/> が直後に再登録しない。
+        /// </summary>
+        public static void Unregister(bool disableAutoRegistration = true)
         {
             _backend = null;
+            if (disableAutoRegistration) _autoRegistrationEnabled = false;
+        }
+
+        /// <summary>
+        /// 組み込み adapter の自動検出を再び有効にする。
+        /// UnitySplats v1.2.0 が project に入っていれば即座に登録する。
+        /// </summary>
+        public static bool ResetToDefaultBackend()
+        {
+            _backend = null;
+            _autoRegistrationEnabled = true;
+            EnsureDefaultBackend();
+            return _backend != null;
+        }
+
+        /// <summary>利用可能な組み込み adapter を一度だけ自動登録する。</summary>
+        public static void EnsureDefaultBackend()
+        {
+            if (_backend != null || !_autoRegistrationEnabled) return;
+
+            ISceneSyncGaussianSplatBackend backend;
+            if (SceneSyncUnitySplatsBackend.TryCreate(out backend))
+                Register(backend);
         }
 
         /// <summary>GLB が KHR_gaussian_splatting を含むかだけを見る軽量判定。</summary>
@@ -139,6 +180,7 @@ namespace Afjk.SceneSync
             if (!info.Valid)
                 return Failure("invalid-gaussian-splat-glb");
 
+            EnsureDefaultBackend();
             var backend = _backend;
             if (backend != null && backend.CanRender(info))
             {

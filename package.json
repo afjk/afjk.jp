@@ -38,6 +38,7 @@
     "test:e2e:scene-sync-rapier-playerui-sample": "node scripts/scenesync-rapier-playerui-sample.mjs --verify",
     "test:e2e:scene-sync-rapier-playerui-browser": "node scripts/scenesync-rapier-playerui-sample.mjs --verify-playerui",
     "sample:scene-sync-rapier": "node scripts/scenesync-rapier-playerui-sample.mjs --unity",
+    "install:godot-gsplat": "node scripts/install-godot-gsplat.mjs",
     "build:gaussian-splat-worker": "node scripts/build-gaussian-splat-worker.mjs",
     "verify:3dgs-threejs": "node scripts/verify-against-threejs-gaussian-splat.mjs",
     "bench:3dgs-import": "node --expose-gc scripts/benchmark-gaussian-splat-import.mjs"

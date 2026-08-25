@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "godot/**"
+      - "scripts/install-godot-gsplat.mjs"
+      - "scripts/third_party/godot-gsplat-Cargo.lock"
+      - "scripts/third_party/godot-gsplat-push-constant-padding.patch"
       - "apps/presence-server/**"
       - ".github/workflows/ci-godot.yml"
   push:
@@ -11,6 +14,9 @@ on:
       - main
     paths:
       - "godot/**"
+      - "scripts/install-godot-gsplat.mjs"
+      - "scripts/third_party/godot-gsplat-Cargo.lock"
+      - "scripts/third_party/godot-gsplat-push-constant-padding.patch"
       - "apps/presence-server/**"
       - ".github/workflows/ci-godot.yml"
 
@@ -38,8 +44,14 @@ jobs:
         with:
           dotnet-version: 9.0.203
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install presence server dependencies
         run: npm ci --prefix apps/presence-server
+
+      - name: Build pinned godot-gsplat renderer
+        run: node scripts/install-godot-gsplat.mjs --project godot
 
       - name: Install pinned Godot
         env:
@@ -58,6 +70,8 @@ jobs:
           echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
 
       - name: Run Godot suites
+        env:
+          SCENESYNC_REQUIRE_GODOT_GSPLAT: "1"
         run: godot/tests/run_all.sh
 
       - name: Upload test logs

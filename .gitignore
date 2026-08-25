@@ -19,3 +19,9 @@ plans/
 # Runtime/test logs
 logs/
 apps/presence-server/logs/
+
+# Optional locally built godot-gsplat renderer dependency
+godot/addons/godot_gsplat/
+godot/godot_gsplat.gdextension
+godot/godot_gsplat.gdextension.uid
+godot/target/

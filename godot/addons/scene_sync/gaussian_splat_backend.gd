@@ -18,6 +18,7 @@ extends RefCounted
 ## Editor / Runtime のどちらでも同じ経路を通る。
 
 const REQUIRED_METHODS := ["get_backend_name", "can_render", "create_splat_node"]
+const DEFAULT_BACKEND := preload("res://addons/scene_sync/godot_gsplat_backend.gd")
 
 const SOURCE_BACKEND := "backend"
 const SOURCE_PREVIEW := "preview"
@@ -27,6 +28,7 @@ const SPLAT_NODE_META := "scene_sync_gaussian_splat"
 const SPLAT_SOURCE_META := "scene_sync_gaussian_splat_source"
 
 static var _backend: Object = null
+static var _auto_registration_enabled: bool = true
 
 
 ## バックエンドを登録する。必要なメソッドが欠けている場合は false。
@@ -40,17 +42,37 @@ static func register_backend(backend: Object) -> bool:
             )
             return false
     _backend = backend
+    _auto_registration_enabled = true
     print("[SceneSync] Gaussian Splat backend registered: %s" % backend_name())
     return true
 
 
-static func unregister_backend() -> void:
+static func unregister_backend(disable_auto_registration: bool = true) -> void:
     _backend = null
+    if disable_auto_registration:
+        _auto_registration_enabled = false
+
+
+## 自動検出を再度有効化し、godot-gsplat が導入済みなら即時登録する。
+static func reset_to_default_backend() -> bool:
+    _backend = null
+    _auto_registration_enabled = true
+    ensure_default_backend()
+    return _backend != null
+
+
+## 固定 commit の godot-gsplat native class があれば built-in adapter を登録する。
+static func ensure_default_backend() -> void:
+    if _backend != null or not _auto_registration_enabled:
+        return
+    if DEFAULT_BACKEND.is_runtime_available():
+        register_backend(DEFAULT_BACKEND.new())
 
 
 static func get_backend() -> Object:
     if _backend != null and not is_instance_valid(_backend):
         _backend = null
+    ensure_default_backend()
     return _backend
 
 

@@ -4401,6 +4401,7 @@ namespace Afjk.SceneSync
             var pos = go.transform.position;
             var rot = go.transform.rotation;
             var scl = go.transform.localScale;
+            var wasActive = go.activeSelf;
 
             // Save position/rotation/scale
             var position = new float[] { pos.x, pos.y, -pos.z };
@@ -4446,6 +4447,7 @@ namespace Afjk.SceneSync
 
                 ApplyTransform(splatGo, position, rotation, scale);
                 ApplyPendingObjectLoomGraph(objectId, splatGo);
+                splatGo.SetActive(wasActive);
 
                 Debug.Log(
                     "[ExpiredGlbRecovery] Recovered Gaussian Splat: objectId=" + objectId
@@ -4498,6 +4500,7 @@ namespace Afjk.SceneSync
                     PlayImportedAnimations(newGo);
                     ApplyTransform(newGo, position, rotation, scale);
                     ApplyPendingObjectLoomGraph(objectId, newGo);
+                    newGo.SetActive(wasActive);
 
                     OnObjectAdded?.Invoke(objectId, newGo);
                 }
