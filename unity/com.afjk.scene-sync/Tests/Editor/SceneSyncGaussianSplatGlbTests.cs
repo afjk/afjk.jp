@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -9,9 +11,8 @@ namespace Afjk.SceneSync.Tests
     /// <summary>
     /// KHR_gaussian_splatting GLB の検出 / プレビュー / バックエンド振り分けのテスト。
     ///
-    /// 期待値は Web 実装（html/assets/js/scenesync/loaders/khr-gaussian-splatting.test.js）と
-    /// Godot 実装（godot/tests/test_gaussian_splat_glb.gd）にそろえてある。
-    /// fixture の内容は scripts/generate-minimal-khr-gaussian-splatting.mjs と同じ構成。
+    /// required attributes と期待するsemanticsはWeb/Godotのfixtureにそろえつつ、
+    /// Unity内で組み立てるfixtureはテストを軽量にするため3 splatにしている。
     /// </summary>
     public sealed class SceneSyncGaussianSplatGlbTests
     {
@@ -259,6 +260,22 @@ namespace Afjk.SceneSync.Tests
         }
 
         [Test]
+        public void PreviewDecodesOnlyTheBoundedSampleFromALargeAccessor()
+        {
+            var sourceCount = SceneSyncGaussianSplatPreview.MaxPreviewPoints + 1;
+            var preview = SceneSyncGaussianSplatPreview.Build(BuildLargePositionSplatGlb(sourceCount));
+            Assert.That(preview.Ok, Is.True, preview.Reason);
+            Assert.That(preview.PointCount, Is.EqualTo(SceneSyncGaussianSplatPreview.MaxPreviewPoints));
+
+            Track(preview.Visual);
+            var vertices = preview.Visual.GetComponent<MeshFilter>().sharedMesh.vertices;
+            Assert.That(vertices[0].x, Is.EqualTo(0f).Within(1e-4f));
+            Assert.That(vertices[vertices.Length - 1].x,
+                Is.EqualTo(-(sourceCount - 1)).Within(1e-4f),
+                "uniform sampling must retain the accessor endpoint");
+        }
+
+        [Test]
         public void PreviewDisposesGeneratedMeshAndDefaultMaterial()
         {
             var preview = SceneSyncGaussianSplatPreview.Build(BuildMinimalSplatGlb());
@@ -400,6 +417,74 @@ namespace Afjk.SceneSync.Tests
             Assert.That(source.HasVisual, Is.False);
         }
 
+        [Test]
+        public async Task ExpiredGaussianRecoveryPreservesWireStateAndUnityVisualBasis()
+        {
+            const string objectId = "recovered-splat";
+            const string meshPath = "shared/recovered.glb";
+            const string assetId = "sha256:review-fixture";
+            const string graphJson = "{\"version\":\"loomlet.graph.v1\",\"nodes\":[],\"edges\":[]}";
+            const string assetJson = "{\"type\":\"mesh\",\"meshPath\":\"shared/recovered.glb\","
+                + "\"assetId\":\"sha256:review-fixture\",\"visualBasis\":\"unity\"}";
+            const string metadataJson = "{\"tag\":\"preserved\",\"behaviorGraph\":" + graphJson + "}";
+            const string physicsJson = "{\"bodyType\":\"fixed\"}";
+
+            var host = new GameObject("SceneSyncManagerTestHost");
+            Track(host);
+            var manager = host.AddComponent<SceneSyncManager>();
+            manager.AutoConnect = false;
+
+            var temporaryRoot = new GameObject("Test Temporary Root");
+            temporaryRoot.transform.SetParent(host.transform, false);
+            SetPrivateField(manager, "temporaryRoot", temporaryRoot.transform);
+
+            var original = new GameObject("Recovered Gaussian");
+            original.transform.SetParent(temporaryRoot.transform, false);
+            original.SetActive(false);
+            original.AddComponent<SceneSyncIdentity>()
+                .ConfigureRemoteTemporary(objectId, meshPath, assetId);
+            SceneSyncPanelFactory.ConfigureWireMetadata(original, assetJson, metadataJson);
+            original.AddComponent<SceneSyncPhysicsMetadata>().ConfigureObjectPhysics(physicsJson);
+            SceneSyncLoomletBehaviour.SetObjectGraph(original, manager, objectId, graphJson);
+
+            GetPrivateField<Dictionary<string, GameObject>>(manager, "_managedObjects")[objectId] = original;
+            GetPrivateField<Dictionary<string, string>>(manager, "_meshPaths")[objectId] = meshPath;
+            GetPrivateField<HashSet<string>>(manager, "_knownObjectIds").Add(objectId);
+            GetPrivateField<Dictionary<int, string>>(manager, "_instanceToObjectId")
+                [original.GetInstanceID()] = objectId;
+
+            SceneSyncGaussianSplatBackend.Register(new StubBackend());
+            var load = typeof(SceneSyncManager).GetMethod(
+                "LoadGlbFromBytes",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(load, Is.Not.Null);
+            var task = load.Invoke(
+                manager,
+                new object[] { objectId, BuildMinimalSplatGlb(), assetId }) as Task;
+            Assert.That(task, Is.Not.Null);
+            await task;
+
+            var recovered = GetPrivateField<Dictionary<string, GameObject>>(manager, "_managedObjects")[objectId];
+            Assert.That(recovered, Is.Not.SameAs(original));
+            Assert.That(recovered.activeSelf, Is.False, "visibility");
+            Assert.That(recovered.transform.Find("ImportedGlbRoot").localRotation,
+                Is.EqualTo(Quaternion.identity), "visualBasis=unity must not receive the web yaw correction");
+            Assert.That(GetPrivateField<Dictionary<string, string>>(manager, "_meshPaths")[objectId],
+                Is.EqualTo(meshPath));
+            Assert.That(GetPrivateField<HashSet<string>>(manager, "_knownObjectIds"), Does.Contain(objectId));
+
+            var identity = recovered.GetComponent<SceneSyncIdentity>();
+            Assert.That(identity.MeshPath, Is.EqualTo(meshPath));
+            Assert.That(identity.AssetId, Is.EqualTo(assetId));
+            var wire = recovered.GetComponent<SceneSyncWireMetadata>();
+            Assert.That(wire.AssetJson, Is.EqualTo(assetJson));
+            Assert.That(wire.MetadataJson, Is.EqualTo(metadataJson));
+            Assert.That(recovered.GetComponent<SceneSyncPhysicsMetadata>().ObjectPhysicsJson,
+                Is.EqualTo(physicsJson));
+            Assert.That(recovered.GetComponent<SceneSyncLoomletBehaviour>().GraphJson,
+                Is.EqualTo(graphJson));
+        }
+
         // --- helpers ---------------------------------------------------------
 
         private sealed class StubBackend : ISceneSyncGaussianSplatBackend
@@ -430,6 +515,20 @@ namespace Afjk.SceneSync.Tests
         private void Track(GameObject go)
         {
             if (go != null) _spawned.Add(go);
+        }
+
+        private static T GetPrivateField<T>(object target, string name)
+        {
+            var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, name);
+            return (T)field.GetValue(target);
+        }
+
+        private static void SetPrivateField(object target, string name, object value)
+        {
+            var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, name);
+            field.SetValue(target, value);
         }
 
         private static SceneSyncGaussianSplatGlbInfo InspectJson(string json)
@@ -496,8 +595,8 @@ namespace Afjk.SceneSync.Tests
         }
 
         /// <summary>
-        /// 3 splat の最小 KHR_gaussian_splatting GLB。
-        /// scripts/generate-minimal-khr-gaussian-splatting.mjs と同じ構成。
+        /// Web/Godot fixtureと同じrequired attributesを持つ、Unityテスト専用の
+        /// 3 splat KHR_gaussian_splatting GLB。
         /// </summary>
         internal static byte[] BuildMinimalSplatGlb(bool includeColor0 = false)
         {
@@ -611,6 +710,31 @@ namespace Afjk.SceneSync.Tests
                 + "\"bufferViews\":" + bufferViews
                 + ",\"accessors\":" + accessors + "}";
 
+            return BuildGlb(json, bin.ToArray());
+        }
+
+        private static byte[] BuildLargePositionSplatGlb(int count)
+        {
+            var bin = new List<byte>(count * 12);
+            for (var index = 0; index < count; index++)
+            {
+                AppendFloat(bin, index);
+                AppendFloat(bin, 0f);
+                AppendFloat(bin, 0f);
+            }
+
+            var attributes = "{\"POSITION\":0,"
+                + "\"KHR_gaussian_splatting:ROTATION\":0,"
+                + "\"KHR_gaussian_splatting:SCALE\":0,"
+                + "\"KHR_gaussian_splatting:OPACITY\":0,"
+                + "\"KHR_gaussian_splatting:SH_DEGREE_0_COEF_0\":0}";
+            var json = "{\"asset\":{\"version\":\"2.0\"},"
+                + "\"extensionsUsed\":[\"KHR_gaussian_splatting\"],"
+                + "\"meshes\":[{\"primitives\":[" + SplatPrimitiveJson(0, attributes) + "]}],"
+                + "\"buffers\":[{\"byteLength\":" + bin.Count + "}],"
+                + "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":" + bin.Count + "}],"
+                + "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":"
+                + count + ",\"type\":\"VEC3\"}]}";
             return BuildGlb(json, bin.ToArray());
         }
 
