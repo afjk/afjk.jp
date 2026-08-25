@@ -4412,6 +4412,21 @@ namespace Afjk.SceneSync
             if (_meshPaths.TryGetValue(objectId, out var mp))
                 meshPath = mp;
 
+            // Recovery replaces only the visual GameObject. Preserve state that otherwise
+            // exists only on the expiring placeholder/imported object.
+            var existingIdentity = go.GetComponent<SceneSyncIdentity>();
+            if (string.IsNullOrEmpty(meshPath) && existingIdentity != null)
+                meshPath = existingIdentity.MeshPath;
+            if (string.IsNullOrEmpty(assetId) && existingIdentity != null)
+                assetId = existingIdentity.AssetId;
+
+            var wireMetadata = go.GetComponent<SceneSyncWireMetadata>();
+            var assetJson = wireMetadata != null ? wireMetadata.AssetJson : null;
+            var metadataJson = wireMetadata != null ? wireMetadata.MetadataJson : null;
+            var physicsJson = GetObjectPhysicsJson(go);
+            var visualBasis = SceneSyncWireJson.ExtractString(assetJson, "visualBasis");
+            var recoveredGraphJson = GetObjectLoomGraphJson(go);
+
             // Gaussian Splat GLB は glTFast を通さず専用バックエンドで復元する。
             SceneSyncGaussianSplatGlbInfo gaussianSplatInfo;
             if (SceneSyncGaussianSplatBackend.IsGaussianSplatGlb(glbBytes, out gaussianSplatInfo))
@@ -4423,26 +4438,33 @@ namespace Afjk.SceneSync
                     return;
                 }
 
-                var recoveredGraphJson = GetObjectLoomGraphJson(go);
                 if (!string.IsNullOrWhiteSpace(recoveredGraphJson))
                     _pendingObjectLoomGraphs[objectId] = recoveredGraphJson;
-
-                ForgetObject(objectId, go);
-                Destroy(go);
+                PrepareManagedObjectReplacement(go);
+                DestroyReplacementTarget(go);
 
                 var splatGo = new GameObject(name);
                 ConfigureRemoteTemporaryIdentity(splatGo, objectId, meshPath, assetId);
+                SceneSyncPanelFactory.ConfigureWireMetadata(splatGo, assetJson, metadataJson);
+                if (physicsJson != null)
+                    ApplyObjectPhysicsMetadata(splatGo, physicsJson);
+                ApplyMetadataBehaviorGraph(splatGo, objectId, metadataJson);
                 splatGo.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                 var splatRoot = new GameObject("ImportedGlbRoot");
                 splatRoot.transform.SetParent(splatGo.transform, worldPositionStays: false);
                 splatRoot.transform.localPosition = Vector3.zero;
-                splatRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                splatRoot.transform.localRotation = visualBasis != "unity"
+                    ? Quaternion.Euler(0f, 180f, 0f)
+                    : Quaternion.identity;
                 splatRoot.transform.localScale = Vector3.one;
                 visual.Visual.transform.SetParent(splatRoot.transform, worldPositionStays: false);
 
+                if (!string.IsNullOrEmpty(meshPath))
+                    _meshPaths[objectId] = meshPath;
                 _instanceToObjectId[splatGo.GetInstanceID()] = objectId;
                 _managedObjects[objectId] = splatGo;
+                _knownObjectIds.Add(objectId);
                 EnsureLocalObjectEpoch(objectId);
 
                 ApplyTransform(splatGo, position, rotation, scale);
@@ -4474,25 +4496,32 @@ namespace Afjk.SceneSync
 
                 if (success)
                 {
-                    var existingGraphJson = GetObjectLoomGraphJson(go);
-                    if (!string.IsNullOrWhiteSpace(existingGraphJson))
-                        _pendingObjectLoomGraphs[objectId] = existingGraphJson;
-
-                    ForgetObject(objectId, go);
-                    Destroy(go);
+                    if (!string.IsNullOrWhiteSpace(recoveredGraphJson))
+                        _pendingObjectLoomGraphs[objectId] = recoveredGraphJson;
+                    PrepareManagedObjectReplacement(go);
+                    DestroyReplacementTarget(go);
 
                     var newGo = new GameObject(name);
                     ConfigureRemoteTemporaryIdentity(newGo, objectId, meshPath, assetId);
+                    SceneSyncPanelFactory.ConfigureWireMetadata(newGo, assetJson, metadataJson);
+                    if (physicsJson != null)
+                        ApplyObjectPhysicsMetadata(newGo, physicsJson);
+                    ApplyMetadataBehaviorGraph(newGo, objectId, metadataJson);
                     newGo.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                     var importedGlbRoot = new GameObject("ImportedGlbRoot");
                     importedGlbRoot.transform.SetParent(newGo.transform, worldPositionStays: false);
                     importedGlbRoot.transform.localPosition = Vector3.zero;
-                    importedGlbRoot.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    importedGlbRoot.transform.localRotation = visualBasis != "unity"
+                        ? Quaternion.Euler(0f, 180f, 0f)
+                        : Quaternion.identity;
                     importedGlbRoot.transform.localScale = Vector3.one;
 
+                    if (!string.IsNullOrEmpty(meshPath))
+                        _meshPaths[objectId] = meshPath;
                     _instanceToObjectId[newGo.GetInstanceID()] = objectId;
                     _managedObjects[objectId] = newGo;
+                    _knownObjectIds.Add(objectId);
                     EnsureLocalObjectEpoch(objectId);
 
                     await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
@@ -4540,15 +4569,10 @@ namespace Afjk.SceneSync
             _locks.Remove(objectId);
             _sharedObjectEpochTimes.Remove(objectId);
             _localObjectEpochTimes.Remove(objectId);
-            SceneSyncLoomletBehaviour.ClearObjectGraph(go);
 
             if (go != null)
             {
-                _instanceToObjectId.Remove(go.GetInstanceID());
-                foreach (var t in go.GetComponentsInChildren<Transform>(true))
-                {
-                    _instanceToObjectId.Remove(t.gameObject.GetInstanceID());
-                }
+                PrepareManagedObjectReplacement(go);
                 return;
             }
 
@@ -4563,6 +4587,28 @@ namespace Afjk.SceneSync
             {
                 _instanceToObjectId.Remove(key);
             }
+        }
+
+        /// <summary>
+        /// Removes registrations owned by a concrete GameObject while retaining the logical
+        /// Scene Sync object dictionaries. Recovery uses this instead of ForgetObject because
+        /// it replaces a visual for the same objectId rather than removing the object.
+        /// </summary>
+        private void PrepareManagedObjectReplacement(GameObject go)
+        {
+            if (go == null) return;
+
+            SceneSyncLoomletBehaviour.ClearObjectGraph(go);
+            _instanceToObjectId.Remove(go.GetInstanceID());
+            foreach (var t in go.GetComponentsInChildren<Transform>(true))
+                _instanceToObjectId.Remove(t.gameObject.GetInstanceID());
+        }
+
+        private static void DestroyReplacementTarget(UnityEngine.Object target)
+        {
+            if (target == null) return;
+            if (Application.isPlaying) Destroy(target);
+            else DestroyImmediate(target);
         }
 
         private static double ReadTopLevelDouble(string raw, string fieldName, double fallback)

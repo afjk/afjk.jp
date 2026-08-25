@@ -40,6 +40,7 @@ namespace Afjk.SceneSync.Tests
             Assert.That(renderer, Is.Not.Null, "real GsplatRenderer component");
 
             var assetField = rendererType.GetField("GsplatAsset", BindingFlags.Public | BindingFlags.Instance);
+            Assert.That(assetField, Is.Not.Null, "UnitySplats public GsplatAsset field");
             var asset = assetField.GetValue(renderer) as UnityEngine.Object;
             Assert.That(asset, Is.Not.Null, "runtime GsplatAsset");
 
@@ -74,7 +75,10 @@ namespace Afjk.SceneSync.Tests
 
             var rendererType = Type.GetType("Gsplat.GsplatRenderer, Gsplat", true);
             var renderer = visual.Visual.GetComponent(rendererType);
-            var asset = rendererType.GetField("GsplatAsset").GetValue(renderer) as UnityEngine.Object;
+            Assert.That(renderer, Is.Not.Null, "real GsplatRenderer component");
+            var assetField = rendererType.GetField("GsplatAsset", BindingFlags.Public | BindingFlags.Instance);
+            Assert.That(assetField, Is.Not.Null, "UnitySplats public GsplatAsset field");
+            var asset = assetField.GetValue(renderer) as UnityEngine.Object;
             Assert.That(asset, Is.Not.Null);
             Assert.That(Convert.ToUInt32(asset.GetType().GetField("SplatCount").GetValue(asset)),
                 Is.EqualTo((uint)info.SplatCount));

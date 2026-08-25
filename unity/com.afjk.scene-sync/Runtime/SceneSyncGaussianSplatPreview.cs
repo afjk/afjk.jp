@@ -178,61 +178,56 @@ namespace Afjk.SceneSync
                 glb, binOffset, accessors, bufferViews, buffers,
                 primitive, SceneSyncGaussianSplatGlb.OpacityAttribute);
 
-            var stride = Mathf.Max(1, Mathf.CeilToInt(position.Count / (float)MaxPreviewPoints));
+            var remainingPointBudget = MaxPreviewPoints - positions.Count;
+            if (remainingPointBudget <= 0) return null;
+            var sampledCount = Mathf.Min(position.Count, remainingPointBudget);
 
-            for (var index = 0; index < position.Count; index += stride)
+            for (var sampledIndex = 0; sampledIndex < sampledCount; sampledIndex++)
             {
-                var offset = index * position.Components;
+                var index = sampledCount == position.Count
+                    ? sampledIndex
+                    : sampledCount == 1
+                        ? 0
+                        : (int)((long)sampledIndex * (position.Count - 1) / (sampledCount - 1));
                 // glTF は右手系。glTFast と同じ規則で X を反転して Unity 空間へ移す。
                 positions.Add(new Vector3(
-                    -position.Values[offset],
-                    position.Values[offset + 1],
-                    position.Values[offset + 2]));
-                colors.Add(ColorAt(index, color, sh0, opacity));
+                    -ReadComponent(glb, position, index, 0),
+                    ReadComponent(glb, position, index, 1),
+                    ReadComponent(glb, position, index, 2)));
+                colors.Add(ColorAt(glb, index, color, sh0, opacity));
             }
 
             return null;
         }
 
         private static Color ColorAt(
+            byte[] glb,
             int index,
             AccessorData color,
             AccessorData sh0,
             AccessorData opacity)
         {
-            if (color.Ok && color.Components >= 3)
+            if (color.Ok && color.Components >= 3 && index < color.Count)
             {
-                var offset = index * color.Components;
-                if (offset + color.Components <= color.Values.Length)
-                {
-                    return new Color(
-                        color.Values[offset],
-                        color.Values[offset + 1],
-                        color.Values[offset + 2],
-                        color.Components >= 4 ? color.Values[offset + 3] : 1f);
-                }
+                return new Color(
+                    ReadComponent(glb, color, index, 0),
+                    ReadComponent(glb, color, index, 1),
+                    ReadComponent(glb, color, index, 2),
+                    color.Components >= 4 ? ReadComponent(glb, color, index, 3) : 1f);
             }
 
             var result = new Color(0.8f, 0.8f, 0.8f, 1f);
-            if (sh0.Ok && sh0.Components >= 3)
+            if (sh0.Ok && sh0.Components >= 3 && index < sh0.Count)
             {
-                var offset = index * sh0.Components;
-                if (offset + 3 <= sh0.Values.Length)
-                {
-                    result = new Color(
-                        Mathf.Clamp01(0.5f + ShC0 * sh0.Values[offset]),
-                        Mathf.Clamp01(0.5f + ShC0 * sh0.Values[offset + 1]),
-                        Mathf.Clamp01(0.5f + ShC0 * sh0.Values[offset + 2]),
-                        1f);
-                }
+                result = new Color(
+                    Mathf.Clamp01(0.5f + ShC0 * ReadComponent(glb, sh0, index, 0)),
+                    Mathf.Clamp01(0.5f + ShC0 * ReadComponent(glb, sh0, index, 1)),
+                    Mathf.Clamp01(0.5f + ShC0 * ReadComponent(glb, sh0, index, 2)),
+                    1f);
             }
 
-            if (opacity.Ok && opacity.Components >= 1)
-            {
-                var offset = index * opacity.Components;
-                if (offset < opacity.Values.Length)
-                    result.a = Mathf.Clamp01(opacity.Values[offset]);
-            }
+            if (opacity.Ok && opacity.Components >= 1 && index < opacity.Count)
+                result.a = Mathf.Clamp01(ReadComponent(glb, opacity, index, 0));
 
             return result;
         }
@@ -240,14 +235,19 @@ namespace Afjk.SceneSync
         private struct AccessorData
         {
             public bool Ok;
-            public float[] Values;
             public int Count;
             public int Components;
+            public int ComponentType;
+            public int ComponentSize;
+            public int ByteStride;
+            public int Start;
+            public bool Normalized;
             public string Reason;
         }
 
         /// <summary>
-        /// accessor を float 配列として読み出す。
+        /// accessor のレイアウトだけを検証する。要素はプレビューで採用するindexだけを
+        /// ReadComponentから直接decodeし、大規模captureの全要素配列は確保しない。
         /// sparse / 非 GLB buffer / 圧縮 bufferView は未対応（プレビューを諦める）。
         /// </summary>
         private static AccessorData ReadAccessor(
@@ -309,28 +309,26 @@ namespace Afjk.SceneSync
             var required = start + (long)byteStride * (count - 1) + elementSize;
             if (start < 0 || required > glb.Length) return ReadFailure("accessor-out-of-bounds");
 
-            var normalized = SceneSyncGlbJson.GetBool(accessor, "normalized", false);
-            var values = new float[count * components];
-
-            for (var element = 0; element < count; element++)
-            {
-                var elementOffset = start + (long)element * byteStride;
-                for (var component = 0; component < components; component++)
-                {
-                    var offset = (int)(elementOffset + component * componentSize);
-                    values[element * components + component] =
-                        DecodeComponent(glb, offset, componentType, normalized);
-                }
-            }
-
             return new AccessorData
             {
                 Ok = true,
-                Values = values,
                 Count = count,
                 Components = components,
+                ComponentType = componentType,
+                ComponentSize = componentSize,
+                ByteStride = byteStride,
+                Start = (int)start,
+                Normalized = SceneSyncGlbJson.GetBool(accessor, "normalized", false),
                 Reason = string.Empty,
             };
+        }
+
+        private static float ReadComponent(byte[] glb, AccessorData accessor, int index, int component)
+        {
+            var offset = accessor.Start
+                + index * accessor.ByteStride
+                + component * accessor.ComponentSize;
+            return DecodeComponent(glb, offset, accessor.ComponentType, accessor.Normalized);
         }
 
         private static float DecodeComponent(byte[] glb, int offset, int componentType, bool normalized)
@@ -407,7 +405,6 @@ namespace Afjk.SceneSync
             return new AccessorData
             {
                 Ok = false,
-                Values = new float[0],
                 Count = 0,
                 Components = 0,
                 Reason = reason,
