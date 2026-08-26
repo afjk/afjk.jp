@@ -36,6 +36,7 @@ loading…</pre>
     <div id="actions">
       <button id="enter-vr" type="button" disabled>VRを開始</button>
       <button id="choose-file" type="button">KHR GLBを開く</button>
+      <button id="toggle-kernel" type="button">Smooth kernelで再読込</button>
       <input id="file-input" type="file" accept=".glb" hidden>
     </div>
   </section>
@@ -53,9 +54,11 @@ loading…</pre>
     const status = document.querySelector('#status');
     const enterVrButton = document.querySelector('#enter-vr');
     const chooseFileButton = document.querySelector('#choose-file');
+    const toggleKernelButton = document.querySelector('#toggle-kernel');
     const fileInput = document.querySelector('#file-input');
     const params = new URLSearchParams(location.search);
     const forceWebGL = params.get('webgpu') !== '1';
+    const smoothKernel = params.get('kernel') === 'smooth';
     const FIXTURES = {
       minimal: './fixtures/minimal-khr-gaussian-splatting.glb',
       ring: './fixtures/ring-gaussian-splats.glb',
@@ -69,6 +72,7 @@ loading…</pre>
       revision: THREE_REVISION,
       backend: forceWebGL ? 'webgl' : 'webgpu',
       patch: PATCH,
+      kernel: smoothKernel ? 'smooth 2.83 sigma normalized' : 'upstream 2 sigma hard cutoff',
       fixture: fixtureName,
       source: FIXTURES[fixtureName].split('/').pop(),
       gaussianObjects: 0,
@@ -121,6 +125,36 @@ loading…</pre>
         'const offsetNdc = offsetPixels.mul( 2 ).div( cameraViewport.zw )',
         'NDC screen size',
       );
+
+      if (smoothKernel) {
+        // PlayCanvas covers sqrt(8) sigma and normalizes the Gaussian to zero
+        // at the quad edge. The pinned Three.js implementation clips at 2
+        // sigma while alpha is still exp(-2), which leaves a visible contour.
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          'const SPLAT_KERNEL_CUTOFF = 2;',
+          'const SPLAT_KERNEL_CUTOFF = 2.8284271247461903;',
+          'smooth kernel cutoff',
+        );
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          '\t\t- 2, - 2, 0,\n\t\t2, - 2, 0,\n\t\t2, 2, 0,\n\t\t- 2, 2, 0',
+          '\t\t- SPLAT_KERNEL_CUTOFF, - SPLAT_KERNEL_CUTOFF, 0,\n\t\tSPLAT_KERNEL_CUTOFF, - SPLAT_KERNEL_CUTOFF, 0,\n\t\tSPLAT_KERNEL_CUTOFF, SPLAT_KERNEL_CUTOFF, 0,\n\t\t- SPLAT_KERNEL_CUTOFF, SPLAT_KERNEL_CUTOFF, 0',
+          'smooth kernel quad',
+        );
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          'If( r2.greaterThan( 4 )',
+          'If( r2.greaterThan( SPLAT_KERNEL_CUTOFF * SPLAT_KERNEL_CUTOFF )',
+          'smooth kernel discard',
+        );
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          'return vec4( splatColor.rgb, exp( r2.mul( - 0.5 ) ).mul( splatColor.a ) );',
+          "const gaussian = exp( r2.mul( - 0.5 ) ).sub( 0.01831563888873418 ).div( 0.9816843611112658 ).toVar( 'gaussian' );\n\n\t\treturn vec4( splatColor.rgb, gaussian.mul( splatColor.a ) );",
+          'smooth normalized alpha',
+        );
+      }
       gaussianSource = replaceRequired(
         gaussianSource,
         "from '../gpgpu/CountingSort.js'",
@@ -179,6 +213,7 @@ loading…</pre>
         `splats: ${diagnostics.splatCount || '—'}`,
         `backend: ${diagnostics.backend}`,
         `patch: ${diagnostics.patch}`,
+        `kernel: ${diagnostics.kernel}`,
         `WebXR: ${diagnostics.xrActive ? 'active' : diagnostics.xrAvailable ? 'available' : 'unavailable'}`,
         `XR views: ${diagnostics.xrViews}`,
         `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
@@ -298,6 +333,14 @@ loading…</pre>
     }
 
     chooseFileButton.addEventListener('click', () => fileInput.click());
+    toggleKernelButton.textContent = smoothKernel
+      ? 'Upstream kernelで再読込'
+      : 'Smooth kernelで再読込';
+    toggleKernelButton.addEventListener('click', () => {
+      if (smoothKernel) params.delete('kernel');
+      else params.set('kernel', 'smooth');
+      location.search = params.toString();
+    });
     fileInput.addEventListener('change', () => {
       openFile(fileInput.files?.[0]);
       fileInput.value = '';

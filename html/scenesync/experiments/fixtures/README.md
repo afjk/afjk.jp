@@ -77,6 +77,7 @@ SceneSync本体のrendererを変更せず、同じ`KHR_gaussian_splatting` GLB�
 ```text
 3dgs-three-webxr-stereo-smoke.html?fixture=ring
 3dgs-three-webxr-stereo-smoke.html?fixture=minimal
+3dgs-three-webxr-stereo-smoke.html?fixture=ring&kernel=smooth
 3dgs-playcanvas-webxr-smoke.html?fixture=ring
 3dgs-playcanvas-webxr-smoke.html?fixture=minimal
 ```
@@ -90,6 +91,11 @@ Three.js版へはSceneSync生成の`.glb`を、PlayCanvas版へは`.glb`、元�
 
 通常boxだけが立体でGaussianが平面に見える場合は、Three.jsのGaussian shader修正が不十分。
 両方が立体なら候補パッチを上流PRへ進められる。PlayCanvasだけが立体ならrenderer移行の検討材料にする。
+
+Three.js版の`kernel=smooth`はstereo修正とは独立した画質比較。固定commitの2σ cutoff
+（境界alphaは約13.5%）を、PlayCanvas相当の約2.83σと境界alpha 0のnormalized Gaussianへ
+実行時だけ差し替える。PlayCanvasの見た目の差がrenderer全体によるものか、fragment kernelだけで
+再現できるかを切り分ける。
 
 機械判定用diagnosticsは`window.__threeGaussianXrStereoSmoke`と
 `window.__playCanvasGaussianXrSmoke`へ出す。

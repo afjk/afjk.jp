@@ -103,7 +103,27 @@ try {
   assert(pageErrors.length === 0, `Page errors after local GLB reload: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors after local GLB reload: ${consoleErrors.join('\n')}`);
 
-  console.log(JSON.stringify({ status: 'passed', url, ...result, localGlbReloaded: true }, null, 2));
+  const smoothUrl = `${url}&kernel=smooth`;
+  await page.goto(smoothUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => {
+    const smoke = globalThis.__threeGaussianXrStereoSmoke;
+    return smoke?.done === true && smoke.rendered === true;
+  }, null, { timeout: 30000 });
+  const smooth = await page.evaluate(() => globalThis.__threeGaussianXrStereoSmoke);
+  assert(!smooth.error, smooth.error || 'Smooth Three.js Gaussian kernel failed');
+  assert(smooth.kernel === 'smooth 2.83 sigma normalized', 'Smooth kernel was not selected');
+  assert(smooth.gaussianObjects >= 1, 'Smooth kernel did not create a GaussianSplat');
+  assert(smooth.splatCount === 16, 'Smooth kernel fixture splat count changed');
+  assert(pageErrors.length === 0, `Page errors after smooth kernel load: ${pageErrors.join('\n')}`);
+  assert(consoleErrors.length === 0, `Console errors after smooth kernel load: ${consoleErrors.join('\n')}`);
+
+  console.log(JSON.stringify({
+    status: 'passed',
+    url,
+    ...result,
+    localGlbReloaded: true,
+    smoothKernel: { url: smoothUrl, kernel: smooth.kernel, rendered: smooth.rendered },
+  }, null, 2));
 } finally {
   await browser?.close();
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
