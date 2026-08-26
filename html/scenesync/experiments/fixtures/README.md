@@ -104,7 +104,8 @@ immersive VR開始時は初期位置へ戻し、camera controlを停止してWeb
 frame intervalは直近180 frameのCPU側frame間隔で、GPU query時間ではない。XR開始時に計測を
 リセットするため、実データを読み込んでからVRを開始し、少なくとも数秒待って比較する。同一条件の
 renderer比較では両方へ同じKHR GLBを渡す。PlayCanvasのSOG直接読込は、変換後GLBの容量増加も含む
-end-to-end比較として別に記録する。
+end-to-end比較として別に記録する。VR終了後も`last XR interval`に最後のXR計測を残すため、
+immersive sessionを抜けてからstatus panelの数値を記録できる。
 
 通常boxだけが立体でGaussianが平面に見える場合は、Three.jsのGaussian shader修正が不十分。
 両方が立体なら候補パッチを上流PRへ進められる。PlayCanvasだけが立体ならrenderer移行の検討材料にする。

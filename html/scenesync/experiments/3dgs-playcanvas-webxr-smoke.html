@@ -96,6 +96,7 @@ loading…</pre>
       p95FrameTimeMs: null,
       fps: null,
       framesSampled: 0,
+      lastXrTiming: null,
       error: null,
     };
 
@@ -378,6 +379,9 @@ loading…</pre>
         `view matrix max delta: ${formatNumber(diagnostics.viewMatrixMaxDelta, 6)}`,
         `stereo camera matrices: ${diagnostics.stereoCameraMatricesDistinct ? 'distinct' : 'not measured'}`,
         `frame interval (${diagnostics.timingMode}): ${formatNumber(diagnostics.fps, 1)} fps / ${formatNumber(diagnostics.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.p95FrameTimeMs, 2)} ms p95 [${diagnostics.framesSampled}]`,
+        ...(diagnostics.lastXrTiming ? [
+          `last XR interval: ${formatNumber(diagnostics.lastXrTiming.fps, 1)} fps / ${formatNumber(diagnostics.lastXrTiming.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.lastXrTiming.p95FrameTimeMs, 2)} ms p95 [${diagnostics.lastXrTiming.framesSampled}]`,
+        ] : []),
         `PlayCanvas ${PLAYCANVAS_VERSION}`,
       ].join('\n');
     }
@@ -514,12 +518,19 @@ loading…</pre>
     xr.on('start', () => {
       xr.fixedFoveation = 0.55;
       diagnostics.xrActive = true;
+      diagnostics.lastXrTiming = null;
       resetFrameTiming('xr');
       enterVrButton.textContent = 'VR実行中';
       updateStatus();
     });
     xr.on('end', () => {
       diagnostics.xrActive = false;
+      diagnostics.lastXrTiming = diagnostics.framesSampled > 0 ? {
+        fps: diagnostics.fps,
+        frameTimeMs: diagnostics.frameTimeMs,
+        p95FrameTimeMs: diagnostics.p95FrameTimeMs,
+        framesSampled: diagnostics.framesSampled,
+      } : null;
       resetFrameTiming('desktop');
       enterVrButton.textContent = 'VRを開始';
       updateStatus();
