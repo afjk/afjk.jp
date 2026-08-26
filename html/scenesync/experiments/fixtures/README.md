@@ -85,6 +85,17 @@ SceneSync本体のrendererを変更せず、同じ`KHR_gaussian_splatting` GLB�
 Three.js版へはSceneSync生成の`.glb`を、PlayCanvas版へは`.glb`、元の`.sog`または`.ply`を
 ドロップして差し替えられる。Questでは「VRを開始」後、次を両ページで確認する。
 
+PlayCanvas版の非XRカメラ操作:
+
+- ドラッグ: orbit
+- Shift + ドラッグ、または右ドラッグ: pan
+- wheel: zoom
+- W / A / S / D: 水平移動
+- Q / E: 垂直移動
+- 「カメラをリセット」: 初期位置へ戻す
+
+immersive VR開始時は初期位置へ戻し、camera controlを停止してWebXR head trackingへ渡す。
+
 1. Gaussianと右側の青・橙・緑のboxの双方に左右眼parallaxがある。
 2. `XR views`が2、eye separationがおよそ0.05〜0.08 mになる。
 3. `stereo camera matrices`が`distinct`になる。

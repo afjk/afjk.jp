@@ -81,19 +81,68 @@ try {
   assert(result.gaussianObjects >= 1, 'PlayCanvas container did not create a GSplat component');
   assert(result.splatCount === 16, 'ring fixture splat count changed');
   assert(result.normalObjects === 3, 'normal depth markers were not configured');
+  assert(result.cameraControls === 'orbit-pan-zoom-wasd', 'PlayCanvas camera controls are unavailable');
   assert(result.rendered === true, 'PlayCanvas GSplat frame was not rendered');
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
+
+  const initialCameraPosition = result.cameraPosition;
+  await page.mouse.move(720, 420);
+  await page.mouse.down();
+  await page.mouse.move(640, 360, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForFunction((initialPosition) => {
+    const smoke = globalThis.__playCanvasGaussianXrSmoke;
+    return smoke?.cameraInputEvents > 0 && smoke.cameraPosition.some(
+      (value, index) => Math.abs(value - initialPosition[index]) > 0.01,
+    );
+  }, initialCameraPosition, { timeout: 5000 });
+  const movedCamera = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke.cameraPosition);
+  await page.click('#reset-camera');
+  await page.waitForFunction((initialPosition) => (
+    globalThis.__playCanvasGaussianXrSmoke.cameraPosition.every(
+      (value, index) => Math.abs(value - initialPosition[index]) < 0.0001,
+    )
+  ), initialCameraPosition, { timeout: 5000 });
+
+  await page.mouse.move(720, 420);
+  await page.mouse.wheel(0, -300);
+  await page.waitForFunction((initialPosition) => (
+    globalThis.__playCanvasGaussianXrSmoke.cameraPosition.some(
+      (value, index) => Math.abs(value - initialPosition[index]) > 0.01,
+    )
+  ), initialCameraPosition, { timeout: 5000 });
+  const zoomedCamera = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke.cameraPosition);
+  await page.click('#reset-camera');
+
+  await page.keyboard.down('w');
+  await page.waitForTimeout(250);
+  await page.keyboard.up('w');
+  await page.waitForFunction(() => (
+    Math.abs(globalThis.__playCanvasGaussianXrSmoke.cameraTarget[2]) > 0.01
+  ), null, { timeout: 5000 });
+  const keyboardTarget = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke.cameraTarget);
+  await page.click('#reset-camera');
 
   const directImports = [];
   for (const extension of ['sog', 'ply']) {
     const filename = `ring-gaussian-splats.${extension}`;
     const fixture = path.join(htmlRoot, 'scenesync/experiments/fixtures', filename);
     await page.setInputFiles('#file-input', fixture);
-    await page.waitForFunction((expectedSource) => {
-      const smoke = globalThis.__playCanvasGaussianXrSmoke;
-      return smoke?.done === true && smoke.rendered === true && smoke.source === expectedSource;
-    }, filename, { timeout: 15000 });
+    try {
+      await page.waitForFunction((expectedSource) => (
+        globalThis.__playCanvasGaussianXrSmoke?.source === expectedSource
+      ), filename, { timeout: 5000 });
+      await page.waitForFunction(() => {
+        const smoke = globalThis.__playCanvasGaussianXrSmoke;
+        return smoke?.error || (smoke?.done === true && smoke.rendered === true);
+      }, null, { timeout: 30000 });
+    } catch (error) {
+      const stalled = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
+      throw new Error(`${filename} stalled: ${JSON.stringify({ stalled, pageErrors, consoleErrors })}`, {
+        cause: error,
+      });
+    }
     const imported = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
     assert(!imported.error, imported.error || `PlayCanvas ${extension.toUpperCase()} import failed`);
     assert(imported.format === extension.toUpperCase(), `PlayCanvas did not identify ${extension.toUpperCase()}`);
@@ -104,7 +153,16 @@ try {
   assert(pageErrors.length === 0, `Page errors after direct imports: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors after direct imports: ${consoleErrors.join('\n')}`);
 
-  console.log(JSON.stringify({ status: 'passed', url, ...result, directImports }, null, 2));
+  console.log(JSON.stringify({
+    status: 'passed',
+    url,
+    ...result,
+    cameraMoved: movedCamera,
+    cameraZoomed: zoomedCamera,
+    cameraKeyboardTarget: keyboardTarget,
+    cameraReset: true,
+    directImports,
+  }, null, 2));
 } finally {
   await browser?.close();
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

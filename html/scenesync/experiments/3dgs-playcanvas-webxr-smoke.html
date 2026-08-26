@@ -8,7 +8,8 @@
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c12; color: #fff; font-family: system-ui, sans-serif; }
-    canvas { display: block; width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+    canvas.camera-dragging { cursor: grabbing; }
     #panel { position: fixed; top: 12px; left: 12px; z-index: 2; width: min(430px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); }
     #status { margin: 0 0 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; }
     #actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -34,10 +35,11 @@ loading…</pre>
     <div id="actions">
       <button id="enter-vr" type="button" disabled>VRを開始</button>
       <button id="choose-file" type="button">GLB / SOG / PLYを開く</button>
+      <button id="reset-camera" type="button">カメラをリセット</button>
       <input id="file-input" type="file" accept=".glb,.sog,.ply" hidden>
     </div>
   </section>
-  <p id="drop-note">Quest確認: 青・橙・緑の箱とGaussianの双方に左右眼parallaxがあることを確認してください。</p>
+  <p id="drop-note">操作: ドラッグ=回転、Shift/右ドラッグ=移動、wheel=拡縮、WASD/QE=移動。VRではhead trackingを使用します。</p>
 
   <script type="module">
     import {
@@ -62,6 +64,7 @@ loading…</pre>
     const canvas = document.querySelector('#application-canvas');
     const enterVrButton = document.querySelector('#enter-vr');
     const chooseFileButton = document.querySelector('#choose-file');
+    const resetCameraButton = document.querySelector('#reset-camera');
     const fileInput = document.querySelector('#file-input');
 
     const diagnostics = globalThis.__playCanvasGaussianXrSmoke = {
@@ -71,6 +74,10 @@ loading…</pre>
       engineVersion: PLAYCANVAS_VERSION,
       renderer: 'GSPLAT_RENDERER_RASTER_CPU_SORT',
       currentRenderer: null,
+      cameraControls: 'orbit-pan-zoom-wasd',
+      cameraInputEvents: 0,
+      cameraPosition: [0, 1.35, 2.8],
+      cameraTarget: [0, 0.1, 0],
       format: 'KHR_gaussian_splatting GLB',
       source: null,
       gaussianObjects: 0,
@@ -116,6 +123,160 @@ loading…</pre>
     cameraEntity.lookAt(new Vec3(0, 0.1, 0));
     rig.addChild(cameraEntity);
     const camera = cameraEntity.camera;
+
+    const initialCamera = {
+      targetX: 0,
+      targetY: 0.1,
+      targetZ: 0,
+      yaw: 0,
+      pitch: Math.atan2(1.25, 2.8),
+      distance: Math.hypot(1.25, 2.8),
+    };
+    const orbit = {
+      ...initialCamera,
+      currentTargetX: initialCamera.targetX,
+      currentTargetY: initialCamera.targetY,
+      currentTargetZ: initialCamera.targetZ,
+      currentYaw: initialCamera.yaw,
+      currentPitch: initialCamera.pitch,
+      currentDistance: initialCamera.distance,
+    };
+    const pressedKeys = new Set();
+    let cameraDirty = true;
+
+    function resetOrbitCamera(snap = false) {
+      Object.assign(orbit, initialCamera);
+      cameraDirty = true;
+      if (snap) {
+        orbit.currentTargetX = orbit.targetX;
+        orbit.currentTargetY = orbit.targetY;
+        orbit.currentTargetZ = orbit.targetZ;
+        orbit.currentYaw = orbit.yaw;
+        orbit.currentPitch = orbit.pitch;
+        orbit.currentDistance = orbit.distance;
+      }
+    }
+
+    function damp(current, target, deltaTime) {
+      return target + (current - target) * Math.exp(-12 * deltaTime);
+    }
+
+    function updateOrbitCamera(deltaTime, snap = false) {
+      if (diagnostics.xrActive) return;
+
+      const movement = Math.max(0.5, orbit.distance * 0.6) * deltaTime;
+      const forwardX = -Math.sin(orbit.yaw);
+      const forwardZ = -Math.cos(orbit.yaw);
+      const rightX = Math.cos(orbit.yaw);
+      const rightZ = -Math.sin(orbit.yaw);
+      const forward = (pressedKeys.has('w') ? 1 : 0) - (pressedKeys.has('s') ? 1 : 0);
+      const right = (pressedKeys.has('d') ? 1 : 0) - (pressedKeys.has('a') ? 1 : 0);
+      const up = (pressedKeys.has('e') ? 1 : 0) - (pressedKeys.has('q') ? 1 : 0);
+      if (forward !== 0 || right !== 0 || up !== 0) cameraDirty = true;
+      if (!cameraDirty && !snap) return;
+      orbit.targetX += (forwardX * forward + rightX * right) * movement;
+      orbit.targetY += up * movement;
+      orbit.targetZ += (forwardZ * forward + rightZ * right) * movement;
+
+      if (snap) {
+        orbit.currentTargetX = orbit.targetX;
+        orbit.currentTargetY = orbit.targetY;
+        orbit.currentTargetZ = orbit.targetZ;
+        orbit.currentYaw = orbit.yaw;
+        orbit.currentPitch = orbit.pitch;
+        orbit.currentDistance = orbit.distance;
+      } else {
+        orbit.currentTargetX = damp(orbit.currentTargetX, orbit.targetX, deltaTime);
+        orbit.currentTargetY = damp(orbit.currentTargetY, orbit.targetY, deltaTime);
+        orbit.currentTargetZ = damp(orbit.currentTargetZ, orbit.targetZ, deltaTime);
+        orbit.currentYaw = damp(orbit.currentYaw, orbit.yaw, deltaTime);
+        orbit.currentPitch = damp(orbit.currentPitch, orbit.pitch, deltaTime);
+        orbit.currentDistance = damp(orbit.currentDistance, orbit.distance, deltaTime);
+      }
+
+      const cosPitch = Math.cos(orbit.currentPitch);
+      const positionX = orbit.currentTargetX + Math.sin(orbit.currentYaw) * cosPitch * orbit.currentDistance;
+      const positionY = orbit.currentTargetY + Math.sin(orbit.currentPitch) * orbit.currentDistance;
+      const positionZ = orbit.currentTargetZ + Math.cos(orbit.currentYaw) * cosPitch * orbit.currentDistance;
+      cameraEntity.setPosition(positionX, positionY, positionZ);
+      cameraEntity.lookAt(orbit.currentTargetX, orbit.currentTargetY, orbit.currentTargetZ);
+      diagnostics.cameraPosition = [positionX, positionY, positionZ];
+      diagnostics.cameraTarget = [orbit.currentTargetX, orbit.currentTargetY, orbit.currentTargetZ];
+      cameraDirty = forward !== 0 || right !== 0 || up !== 0 || [
+        [orbit.currentTargetX, orbit.targetX],
+        [orbit.currentTargetY, orbit.targetY],
+        [orbit.currentTargetZ, orbit.targetZ],
+        [orbit.currentYaw, orbit.yaw],
+        [orbit.currentPitch, orbit.pitch],
+        [orbit.currentDistance, orbit.distance],
+      ].some(([current, target]) => Math.abs(current - target) > 0.00001);
+    }
+
+    let pointerId = null;
+    let pointerMode = 'orbit';
+    let pointerX = 0;
+    let pointerY = 0;
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    canvas.addEventListener('pointerdown', (event) => {
+      if (diagnostics.xrActive || pointerId !== null) return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      pointerMode = event.button === 2 || event.shiftKey ? 'pan' : 'orbit';
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add('camera-dragging');
+    });
+    canvas.addEventListener('pointermove', (event) => {
+      if (event.pointerId !== pointerId || diagnostics.xrActive) return;
+      const deltaX = event.clientX - pointerX;
+      const deltaY = event.clientY - pointerY;
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      if (pointerMode === 'pan') {
+        const scale = orbit.distance * 0.0015;
+        orbit.targetX -= (Math.cos(orbit.yaw) * deltaX) * scale;
+        orbit.targetY += deltaY * scale;
+        orbit.targetZ += (Math.sin(orbit.yaw) * deltaX) * scale;
+      } else {
+        orbit.yaw -= deltaX * 0.006;
+        orbit.pitch = Math.max(-1.5, Math.min(1.5, orbit.pitch - deltaY * 0.006));
+      }
+      cameraDirty = true;
+      diagnostics.cameraInputEvents += 1;
+    });
+    function endPointer(event) {
+      if (event.pointerId !== pointerId) return;
+      pointerId = null;
+      canvas.classList.remove('camera-dragging');
+    }
+    canvas.addEventListener('pointerup', endPointer);
+    canvas.addEventListener('pointercancel', endPointer);
+    canvas.addEventListener('lostpointercapture', endPointer);
+    canvas.addEventListener('wheel', (event) => {
+      if (diagnostics.xrActive) return;
+      event.preventDefault();
+      orbit.distance = Math.max(0.15, Math.min(100, orbit.distance * Math.exp(event.deltaY * 0.001)));
+      cameraDirty = true;
+      diagnostics.cameraInputEvents += 1;
+    }, { passive: false });
+    addEventListener('keydown', (event) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      const key = event.key.toLowerCase();
+      if (!['w', 'a', 's', 'd', 'q', 'e'].includes(key)) return;
+      pressedKeys.add(key);
+      cameraDirty = true;
+      diagnostics.cameraInputEvents += 1;
+      event.preventDefault();
+    });
+    addEventListener('keyup', (event) => pressedKeys.delete(event.key.toLowerCase()));
+    addEventListener('blur', () => pressedKeys.clear());
+    resetCameraButton.addEventListener('click', () => {
+      resetOrbitCamera(true);
+      updateOrbitCamera(0, true);
+      diagnostics.cameraInputEvents += 1;
+    });
+    updateOrbitCamera(0, true);
 
     const light = new Entity('key-light');
     light.addComponent('light', { type: 'directional', intensity: 1.4 });
@@ -203,14 +364,21 @@ loading…</pre>
     }
 
     let active = null;
-    function releaseActive() {
+    async function releaseActive() {
       if (!active) return;
-      active.root.destroy();
-      app.assets.remove(active.asset);
-      active.asset.off();
-      if (active.asset.loaded) active.asset.unload();
-      if (active.objectUrl) URL.revokeObjectURL(active.objectUrl);
+      const releasing = active;
       active = null;
+
+      // Unified GSplatWorld reconciles layer placements during framerender.
+      // Disable first so the live placement keeps its resource until the
+      // renderer has observed its removal, then dispose it after frameend.
+      releasing.root.enabled = false;
+      await new Promise((resolve) => app.once('frameend', resolve));
+      releasing.root.destroy();
+      app.assets.remove(releasing.asset);
+      releasing.asset.off();
+      if (releasing.asset.loaded) releasing.asset.unload();
+      if (releasing.objectUrl) URL.revokeObjectURL(releasing.objectUrl);
     }
 
     async function attachSource({ url, filename, objectUrl = null }) {
@@ -234,7 +402,7 @@ loading…</pre>
         const components = collectGsplatComponents(root);
         if (components.length === 0) throw new Error('PlayCanvas did not create a GSplat component');
 
-        releaseActive();
+        await releaseActive();
         app.root.addChild(root);
         active = { root, asset, objectUrl };
         diagnostics.format = isGlb ? 'KHR_gaussian_splatting GLB' : filename.split('.').pop().toUpperCase();
@@ -344,6 +512,9 @@ loading…</pre>
 
     enterVrButton.addEventListener('click', () => {
       if (!xr.isAvailable(XRTYPE_VR) || !diagnostics.done || diagnostics.error) return;
+      pressedKeys.clear();
+      resetOrbitCamera(true);
+      updateOrbitCamera(0, true);
       xr.start(camera, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
         framebufferScaleFactor: 0.78,
         optionalFeatures: ['hand-tracking'],
@@ -360,6 +531,8 @@ loading…</pre>
     }
     addEventListener('resize', resize);
     resize();
+
+    app.on('update', (deltaTime) => updateOrbitCamera(deltaTime));
 
     app.on('frameend', () => {
       if (diagnostics.done && !diagnostics.error) diagnostics.rendered = true;
