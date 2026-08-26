@@ -160,11 +160,12 @@ try {
   assert(pageErrors.length === 0, `Page errors after direct imports: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors after direct imports: ${consoleErrors.join('\n')}`);
 
-  let realSogTiming = null;
-  const realSogPath = process.env.SCENE_SYNC_3DGS_PLAYCANVAS_REAL_SOG;
-  if (realSogPath) {
-    const filename = path.basename(realSogPath);
-    await page.setInputFiles('#file-input', path.resolve(realSogPath));
+  let realAssetTiming = null;
+  const realAssetPath = process.env.SCENE_SYNC_3DGS_PLAYCANVAS_REAL_ASSET
+    || process.env.SCENE_SYNC_3DGS_PLAYCANVAS_REAL_SOG;
+  if (realAssetPath) {
+    const filename = path.basename(realAssetPath);
+    await page.setInputFiles('#file-input', path.resolve(realAssetPath));
     await page.waitForFunction((expectedSource) => {
       const smoke = globalThis.__playCanvasGaussianXrSmoke;
       return smoke?.source === expectedSource && smoke.done === true && smoke.rendered === true;
@@ -173,10 +174,11 @@ try {
       globalThis.__playCanvasGaussianXrSmoke?.framesSampled >= 60
     ), null, { timeout: 30000 });
     const measured = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
-    assert(!measured.error, measured.error || 'Real SOG timing load failed');
-    assert(measured.splatCount > 16, 'Real SOG did not replace the ring fixture');
-    realSogTiming = {
+    assert(!measured.error, measured.error || 'Real 3DGS asset timing load failed');
+    assert(measured.splatCount > 16, 'Real 3DGS asset did not replace the ring fixture');
+    realAssetTiming = {
       source: measured.source,
+      format: measured.format,
       splatCount: measured.splatCount,
       fps: measured.fps,
       frameTimeMs: measured.frameTimeMs,
@@ -194,7 +196,7 @@ try {
     cameraKeyboardTarget: keyboardTarget,
     cameraReset: true,
     directImports,
-    realSogTiming,
+    realAssetTiming,
   }, null, 2));
 } finally {
   await browser?.close();

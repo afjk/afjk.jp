@@ -131,7 +131,7 @@ npm run test:e2e:scene-sync-3dgs-playcanvas
 repo外へ出さない実SOGをdesktop smokeでも計測する場合:
 
 ```bash
-SCENE_SYNC_3DGS_PLAYCANVAS_REAL_SOG=tmp/1_3DGS2.sog npm run test:e2e:scene-sync-3dgs-playcanvas
+SCENE_SYNC_3DGS_PLAYCANVAS_REAL_ASSET=tmp/1_3DGS2.sog npm run test:e2e:scene-sync-3dgs-playcanvas
 ```
 
 同じcaptureから一時生成したKHR GLBをThree.js側で計測する場合:
@@ -139,4 +139,5 @@ SCENE_SYNC_3DGS_PLAYCANVAS_REAL_SOG=tmp/1_3DGS2.sog npm run test:e2e:scene-sync-
 ```bash
 node scripts/convert-gaussian-splat.mjs tmp/1_3DGS2.sog /private/tmp/1_3DGS2-khr.glb
 SCENE_SYNC_3DGS_THREE_REAL_GLB=/private/tmp/1_3DGS2-khr.glb npm run test:e2e:scene-sync-3dgs-three-xr-patch
+SCENE_SYNC_3DGS_PLAYCANVAS_REAL_ASSET=/private/tmp/1_3DGS2-khr.glb npm run test:e2e:scene-sync-3dgs-playcanvas
 ```
