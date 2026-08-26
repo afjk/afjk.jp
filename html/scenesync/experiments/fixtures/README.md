@@ -99,9 +99,19 @@ immersive VR開始時は初期位置へ戻し、camera controlを停止してWeb
 1. Gaussianと右側の青・橙・緑のboxの双方に左右眼parallaxがある。
 2. `XR views`が2、eye separationがおよそ0.05〜0.08 mになる。
 3. `stereo camera matrices`が`distinct`になる。
+4. `frame interval (xr)`が表示されるまで待ち、fps / average / p95を記録する。
+
+frame intervalは直近180 frameのCPU側frame間隔で、GPU query時間ではない。XR開始時に計測を
+リセットするため、実データを読み込んでからVRを開始し、少なくとも数秒待って比較する。同一条件の
+renderer比較では両方へ同じKHR GLBを渡す。PlayCanvasのSOG直接読込は、変換後GLBの容量増加も含む
+end-to-end比較として別に記録する。
 
 通常boxだけが立体でGaussianが平面に見える場合は、Three.jsのGaussian shader修正が不十分。
 両方が立体なら候補パッチを上流PRへ進められる。PlayCanvasだけが立体ならrenderer移行の検討材料にする。
+
+Quest 3実機では2026-08-26に両方の立体視を確認済み。ring fixtureの見た目はPlayCanvas版の方が
+個々のellipseを判別しやすかったため、renderer移行の判断は実SOGでのXR frame intervalと安定性を
+追加比較して行う。
 
 Three.js版の`kernel=smooth`はstereo修正とは独立した画質比較。固定commitの2σ cutoff
 （境界alphaは約13.5%）を、PlayCanvas相当の約2.83σと境界alpha 0のnormalized Gaussianへ
@@ -116,4 +126,17 @@ Desktopのload/render smoke:
 ```bash
 npm run test:e2e:scene-sync-3dgs-three-xr-patch
 npm run test:e2e:scene-sync-3dgs-playcanvas
+```
+
+repo外へ出さない実SOGをdesktop smokeでも計測する場合:
+
+```bash
+SCENE_SYNC_3DGS_PLAYCANVAS_REAL_SOG=tmp/1_3DGS2.sog npm run test:e2e:scene-sync-3dgs-playcanvas
+```
+
+同じcaptureから一時生成したKHR GLBをThree.js側で計測する場合:
+
+```bash
+node scripts/convert-gaussian-splat.mjs tmp/1_3DGS2.sog /private/tmp/1_3DGS2-khr.glb
+SCENE_SYNC_3DGS_THREE_REAL_GLB=/private/tmp/1_3DGS2-khr.glb npm run test:e2e:scene-sync-3dgs-three-xr-patch
 ```

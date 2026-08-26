@@ -70,6 +70,9 @@ try {
   await page.waitForFunction(() => globalThis.__threeGaussianXrStereoSmoke?.rendered === true, null, {
     timeout: 15000,
   });
+  await page.waitForFunction(() => globalThis.__threeGaussianXrStereoSmoke?.framesSampled >= 10, null, {
+    timeout: 15000,
+  });
   const result = await page.evaluate(() => globalThis.__threeGaussianXrStereoSmoke);
 
   assert(!result.error, result.error || 'Patched Three.js Gaussian smoke failed');
@@ -87,6 +90,10 @@ try {
   assert(result.splatCount === 16, 'ring fixture splat count changed');
   assert(result.normalObjects === 3, 'normal depth markers were not configured');
   assert(result.rendered === true, 'Patched Three.js Gaussian frame was not rendered');
+  assert(result.timingMode === 'desktop', 'Desktop timing mode was not reported');
+  assert(result.fps > 0, 'Frame rate was not measured');
+  assert(result.frameTimeMs > 0, 'Average frame interval was not measured');
+  assert(result.p95FrameTimeMs > 0, 'P95 frame interval was not measured');
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
 
@@ -102,6 +109,31 @@ try {
   assert(reloaded.splatCount === 16, 'Local KHR GLB splat count changed');
   assert(pageErrors.length === 0, `Page errors after local GLB reload: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors after local GLB reload: ${consoleErrors.join('\n')}`);
+
+  let realGlbTiming = null;
+  const realGlbPath = process.env.SCENE_SYNC_3DGS_THREE_REAL_GLB;
+  if (realGlbPath) {
+    const filename = path.basename(realGlbPath);
+    await page.setInputFiles('#file-input', path.resolve(realGlbPath));
+    await page.waitForFunction((expectedSource) => {
+      const smoke = globalThis.__threeGaussianXrStereoSmoke;
+      return smoke?.source === expectedSource && smoke.done === true && smoke.rendered === true;
+    }, filename, { timeout: 120000 });
+    await page.waitForFunction(() => (
+      globalThis.__threeGaussianXrStereoSmoke?.framesSampled >= 10
+    ), null, { timeout: 120000 });
+    const measured = await page.evaluate(() => globalThis.__threeGaussianXrStereoSmoke);
+    assert(!measured.error, measured.error || 'Real KHR GLB timing load failed');
+    assert(measured.splatCount > 16, 'Real KHR GLB did not replace the ring fixture');
+    realGlbTiming = {
+      source: measured.source,
+      splatCount: measured.splatCount,
+      fps: measured.fps,
+      frameTimeMs: measured.frameTimeMs,
+      p95FrameTimeMs: measured.p95FrameTimeMs,
+      framesSampled: measured.framesSampled,
+    };
+  }
 
   const smoothUrl = `${url}&kernel=smooth`;
   await page.goto(smoothUrl, { waitUntil: 'domcontentloaded' });
@@ -122,6 +154,7 @@ try {
     url,
     ...result,
     localGlbReloaded: true,
+    realGlbTiming,
     smoothKernel: { url: smoothUrl, kernel: smooth.kernel, rendered: smooth.rendered },
   }, null, 2));
 } finally {

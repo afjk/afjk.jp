@@ -70,6 +70,9 @@ try {
   await page.waitForFunction(() => globalThis.__playCanvasGaussianXrSmoke?.rendered === true, null, {
     timeout: 15000,
   });
+  await page.waitForFunction(() => globalThis.__playCanvasGaussianXrSmoke?.framesSampled >= 10, null, {
+    timeout: 15000,
+  });
   const result = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
 
   assert(!result.error, result.error || 'PlayCanvas Gaussian smoke failed');
@@ -83,6 +86,10 @@ try {
   assert(result.normalObjects === 3, 'normal depth markers were not configured');
   assert(result.cameraControls === 'orbit-pan-zoom-wasd', 'PlayCanvas camera controls are unavailable');
   assert(result.rendered === true, 'PlayCanvas GSplat frame was not rendered');
+  assert(result.timingMode === 'desktop', 'Desktop timing mode was not reported');
+  assert(result.fps > 0, 'Frame rate was not measured');
+  assert(result.frameTimeMs > 0, 'Average frame interval was not measured');
+  assert(result.p95FrameTimeMs > 0, 'P95 frame interval was not measured');
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
 
@@ -153,6 +160,31 @@ try {
   assert(pageErrors.length === 0, `Page errors after direct imports: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors after direct imports: ${consoleErrors.join('\n')}`);
 
+  let realSogTiming = null;
+  const realSogPath = process.env.SCENE_SYNC_3DGS_PLAYCANVAS_REAL_SOG;
+  if (realSogPath) {
+    const filename = path.basename(realSogPath);
+    await page.setInputFiles('#file-input', path.resolve(realSogPath));
+    await page.waitForFunction((expectedSource) => {
+      const smoke = globalThis.__playCanvasGaussianXrSmoke;
+      return smoke?.source === expectedSource && smoke.done === true && smoke.rendered === true;
+    }, filename, { timeout: 120000 });
+    await page.waitForFunction(() => (
+      globalThis.__playCanvasGaussianXrSmoke?.framesSampled >= 60
+    ), null, { timeout: 30000 });
+    const measured = await page.evaluate(() => globalThis.__playCanvasGaussianXrSmoke);
+    assert(!measured.error, measured.error || 'Real SOG timing load failed');
+    assert(measured.splatCount > 16, 'Real SOG did not replace the ring fixture');
+    realSogTiming = {
+      source: measured.source,
+      splatCount: measured.splatCount,
+      fps: measured.fps,
+      frameTimeMs: measured.frameTimeMs,
+      p95FrameTimeMs: measured.p95FrameTimeMs,
+      framesSampled: measured.framesSampled,
+    };
+  }
+
   console.log(JSON.stringify({
     status: 'passed',
     url,
@@ -162,6 +194,7 @@ try {
     cameraKeyboardTarget: keyboardTarget,
     cameraReset: true,
     directImports,
+    realSogTiming,
   }, null, 2));
 } finally {
   await browser?.close();

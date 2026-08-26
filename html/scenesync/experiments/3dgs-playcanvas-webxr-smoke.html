@@ -91,6 +91,11 @@ loading…</pre>
       viewMatrixMaxDelta: null,
       stereoCameraMatricesDistinct: false,
       xrSamples: 0,
+      timingMode: 'desktop',
+      frameTimeMs: null,
+      p95FrameTimeMs: null,
+      fps: null,
+      framesSampled: 0,
       error: null,
     };
 
@@ -317,6 +322,45 @@ loading…</pre>
       return Number.isFinite(value) ? value.toFixed(digits) : '—';
     }
 
+    const frameTimes = [];
+    let lastFrameTimestamp = null;
+    let lastTimingPublish = 0;
+
+    function resetFrameTiming(mode) {
+      frameTimes.length = 0;
+      lastFrameTimestamp = null;
+      lastTimingPublish = 0;
+      diagnostics.timingMode = mode;
+      diagnostics.frameTimeMs = null;
+      diagnostics.p95FrameTimeMs = null;
+      diagnostics.fps = null;
+      diagnostics.framesSampled = 0;
+    }
+
+    function sampleFrameTiming(now) {
+      if (lastFrameTimestamp !== null) {
+        const elapsed = now - lastFrameTimestamp;
+        // XR/source transitions reset this window. Ignore background-tab gaps,
+        // but retain arbitrarily slow visible/XR frames in p95.
+        // This is frame interval, not GPU query time.
+        if (elapsed > 0 && (!document.hidden || diagnostics.xrActive)) {
+          frameTimes.push(elapsed);
+          if (frameTimes.length > 180) frameTimes.shift();
+        }
+      }
+      lastFrameTimestamp = now;
+
+      if (frameTimes.length < 10 || now - lastTimingPublish < 500) return false;
+      const sorted = [...frameTimes].sort((a, b) => a - b);
+      const average = frameTimes.reduce((sum, value) => sum + value, 0) / frameTimes.length;
+      diagnostics.frameTimeMs = average;
+      diagnostics.p95FrameTimeMs = sorted[Math.ceil(sorted.length * 0.95) - 1];
+      diagnostics.fps = 1000 / average;
+      diagnostics.framesSampled = frameTimes.length;
+      lastTimingPublish = now;
+      return true;
+    }
+
     function updateStatus() {
       status.textContent = [
         diagnostics.error
@@ -333,6 +377,7 @@ loading…</pre>
         `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
         `view matrix max delta: ${formatNumber(diagnostics.viewMatrixMaxDelta, 6)}`,
         `stereo camera matrices: ${diagnostics.stereoCameraMatricesDistinct ? 'distinct' : 'not measured'}`,
+        `frame interval (${diagnostics.timingMode}): ${formatNumber(diagnostics.fps, 1)} fps / ${formatNumber(diagnostics.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.p95FrameTimeMs, 2)} ms p95 [${diagnostics.framesSampled}]`,
         `PlayCanvas ${PLAYCANVAS_VERSION}`,
       ].join('\n');
     }
@@ -409,6 +454,7 @@ loading…</pre>
         diagnostics.gaussianObjects = components.length;
         diagnostics.splatCount = components.reduce((sum, component) => sum + splatCountOf(component), 0);
         diagnostics.done = true;
+        resetFrameTiming(diagnostics.xrActive ? 'xr' : 'desktop');
         updateStatus();
       } catch (error) {
         app.assets.remove(asset);
@@ -468,11 +514,13 @@ loading…</pre>
     xr.on('start', () => {
       xr.fixedFoveation = 0.55;
       diagnostics.xrActive = true;
+      resetFrameTiming('xr');
       enterVrButton.textContent = 'VR実行中';
       updateStatus();
     });
     xr.on('end', () => {
       diagnostics.xrActive = false;
+      resetFrameTiming('desktop');
       enterVrButton.textContent = 'VRを開始';
       updateStatus();
     });
@@ -535,11 +583,13 @@ loading…</pre>
     app.on('update', (deltaTime) => updateOrbitCamera(deltaTime));
 
     app.on('frameend', () => {
+      const timingChanged = sampleFrameTiming(performance.now());
       if (diagnostics.done && !diagnostics.error) diagnostics.rendered = true;
       diagnostics.currentRenderer = app.scene.gsplat.currentRenderer === GSPLAT_RENDERER_RASTER_CPU_SORT
         ? 'raster CPU sort'
         : String(app.scene.gsplat.currentRenderer ?? 'unknown');
       enterVrButton.disabled = !diagnostics.xrAvailable || !diagnostics.done || Boolean(diagnostics.error);
+      if (timingChanged) updateStatus();
     });
     app.start();
 
