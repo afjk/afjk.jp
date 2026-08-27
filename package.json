@@ -13,6 +13,7 @@
     "test:glb-normalizer": "node --test html/assets/js/scenesync/loaders/glb-normalizer.test.js",
     "test:3dgs-khr": "node --test html/assets/js/scenesync/loaders/khr-gaussian-splatting.test.js",
     "test:3dgs-import": "node --test html/assets/js/scenesync/loaders/gaussian-splat/*.test.js html/assets/js/scenesync/components/drag-drop-gaussian-splat.test.js",
+    "test:3dgs-xr-comparison": "node --test html/scenesync/experiments/3dgs-xr-comparison-config.test.js",
     "test:stereo-media": "node --test html/assets/js/scenesync/loaders/stereo-media.test.js",
     "test:playback-duration": "node --test html/assets/js/scenesync/runtime/playback-duration.test.js",
     "test:physics": "node --test html/assets/js/scenesync/physics/rapier-world.test.js html/assets/js/scenesync/physics/rapier-parity-fixture.test.js html/assets/js/scenesync/scene-physics.test.js html/assets/js/scenesync/history/history-manager.test.js html/assets/js/scenesync/shells/player/player-physics-drag-input.test.js",

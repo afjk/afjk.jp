@@ -12,8 +12,9 @@
     #panel { position: fixed; top: 12px; left: 12px; z-index: 2; width: min(440px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); }
     #status { margin: 0 0 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; }
     #actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    button { appearance: none; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; padding: 8px 12px; background: #17253d; color: #fff; font: inherit; cursor: pointer; }
+    button, select { appearance: none; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; padding: 8px 12px; background: #17253d; color: #fff; font: inherit; cursor: pointer; }
     button:disabled { cursor: default; opacity: .45; }
+    #quality-control { display: flex; align-items: center; gap: 7px; padding-left: 3px; font-size: 12px; }
     #enter-vr { background: #154f8c; }
     #note { position: fixed; right: 12px; bottom: 12px; z-index: 2; max-width: min(560px, calc(100vw - 24px)); margin: 0; padding: 8px 10px; border-radius: 7px; background: rgba(4,8,16,.72); font-size: 12px; }
     body.dragging::after { content: 'KHR_gaussian_splatting GLBをドロップ'; position: fixed; inset: 16px; z-index: 5; display: grid; place-items: center; border: 3px dashed #5bbcff; border-radius: 18px; background: rgba(9,30,55,.8); font-size: clamp(20px, 4vw, 42px); }
@@ -37,15 +38,28 @@ loading…</pre>
       <button id="enter-vr" type="button" disabled>VRを開始</button>
       <button id="choose-file" type="button">KHR GLBを開く</button>
       <button id="toggle-kernel" type="button">Smooth kernelで再読込</button>
+      <label id="quality-control">XR画質
+        <select id="xr-quality">
+          <option value="quality">Quality 1.00 / 0.00</option>
+          <option value="balanced">Balanced 0.85 / 0.30</option>
+          <option value="performance">Performance 0.78 / 0.55</option>
+        </select>
+      </label>
       <input id="file-input" type="file" accept=".glb" hidden>
     </div>
   </section>
-  <p id="note">Quest確認: Gaussianと右側の青・橙・緑のboxの双方に、同じ方向・強さの左右眼parallaxがあることを確認してください。</p>
+  <p id="note">PICO/Quest: 左stick=移動、右stick=30° snap turn。両rendererで同じXR画質presetを選んで比較してください。</p>
 
   <script type="module">
     import * as THREE from 'three/webgpu';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import {
+      XR_LOCOMOTION_SPEED,
+      XR_SNAP_TURN_DEGREES,
+      readXrThumbstick,
+      resolveXrQualityConfig,
+    } from './3dgs-xr-comparison-config.js';
 
     const THREE_REVISION = 'cbba126004263d0c32d3d6d05a4fe218d261fa47';
     const THREE_BASE = `https://cdn.jsdelivr.net/gh/mrdoob/three.js@${THREE_REVISION}/`;
@@ -55,8 +69,10 @@ loading…</pre>
     const enterVrButton = document.querySelector('#enter-vr');
     const chooseFileButton = document.querySelector('#choose-file');
     const toggleKernelButton = document.querySelector('#toggle-kernel');
+    const qualitySelect = document.querySelector('#xr-quality');
     const fileInput = document.querySelector('#file-input');
     const params = new URLSearchParams(location.search);
+    const xrQuality = resolveXrQualityConfig(params);
     const forceWebGL = params.get('webgpu') !== '1';
     const smoothKernel = params.get('kernel') === 'smooth';
     const FIXTURES = {
@@ -78,6 +94,14 @@ loading…</pre>
       gaussianObjects: 0,
       splatCount: 0,
       normalObjects: 3,
+      xrQualityPreset: xrQuality.preset,
+      xrFramebufferScale: xrQuality.framebufferScale,
+      xrFoveation: xrQuality.foveation,
+      xrLocomotion: 'left-stick move / right-stick snap-turn',
+      xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
+      xrInputSources: 0,
+      xrLocomotionMeters: 0,
+      xrSnapTurns: 0,
       xrAvailable: false,
       xrActive: false,
       xrViews: 0,
@@ -259,6 +283,8 @@ loading…</pre>
         `backend: ${diagnostics.backend}`,
         `patch: ${diagnostics.patch}`,
         `kernel: ${diagnostics.kernel}`,
+        `XR quality: ${diagnostics.xrQualityPreset} / scale ${formatNumber(diagnostics.xrFramebufferScale, 2)} / foveation ${formatNumber(diagnostics.xrFoveation, 2)}`,
+        `XR locomotion: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${diagnostics.xrSnapTurns} turns / ${diagnostics.xrInputSources} inputs`,
         `WebXR: ${diagnostics.xrActive ? 'active' : diagnostics.xrAvailable ? 'available' : 'unavailable'}`,
         `XR views: ${diagnostics.xrViews}`,
         `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
@@ -277,6 +303,10 @@ loading…</pre>
     const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.01, 1000);
     camera.position.set(0, 1.35, 2.8);
     camera.lookAt(0, 0.1, 0);
+    const xrRig = new THREE.Group();
+    xrRig.name = 'xr-locomotion-rig';
+    xrRig.add(camera);
+    scene.add(xrRig);
 
     const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
@@ -285,10 +315,54 @@ loading…</pre>
     await renderer.init();
     renderer.xr.enabled = true;
     renderer.xr.setReferenceSpaceType('local-floor');
+    renderer.xr.setFramebufferScaleFactor(xrQuality.framebufferScale);
+    renderer.xr.setFoveation(xrQuality.foveation);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0.1, 0);
     controls.enableDamping = true;
+
+    const xrUp = new THREE.Vector3(0, 1, 0);
+    const xrForward = new THREE.Vector3();
+    const xrRight = new THREE.Vector3();
+    const xrHeadPosition = new THREE.Vector3();
+    const xrRigOffset = new THREE.Vector3();
+    let xrSnapTurnArmed = true;
+
+    function updateXrLocomotion(deltaTime) {
+      const inputSources = Array.from(renderer.xr.getSession()?.inputSources || []);
+      diagnostics.xrInputSources = inputSources.length;
+      const left = inputSources.find((source) => source.handedness === 'left' && source.gamepad)
+        || inputSources.find((source) => source.gamepad);
+      const right = inputSources.find((source) => source.handedness === 'right' && source.gamepad);
+      const xrCamera = renderer.xr.getCamera(camera);
+
+      const move = readXrThumbstick(left?.gamepad);
+      if (move.active && deltaTime > 0) {
+        xrCamera.getWorldDirection(xrForward);
+        xrForward.y = 0;
+        if (xrForward.lengthSq() > 0.000001) {
+          xrForward.normalize();
+          xrRight.crossVectors(xrForward, xrUp).normalize();
+          const distance = XR_LOCOMOTION_SPEED * deltaTime;
+          xrRig.position.addScaledVector(xrRight, move.x * distance);
+          xrRig.position.addScaledVector(xrForward, -move.y * distance);
+          diagnostics.xrLocomotionMeters += Math.hypot(move.x, move.y) * distance;
+        }
+      }
+
+      const turn = readXrThumbstick(right?.gamepad).x;
+      if (Math.abs(turn) < 0.25) xrSnapTurnArmed = true;
+      if (xrSnapTurnArmed && Math.abs(turn) > 0.7) {
+        const angle = -Math.sign(turn) * THREE.MathUtils.degToRad(XR_SNAP_TURN_DEGREES);
+        xrCamera.getWorldPosition(xrHeadPosition);
+        xrRigOffset.copy(xrRig.position).sub(xrHeadPosition).applyAxisAngle(xrUp, angle);
+        xrRig.position.copy(xrHeadPosition).add(xrRigOffset);
+        xrRig.rotateY(angle);
+        diagnostics.xrSnapTurns += 1;
+        xrSnapTurnArmed = false;
+      }
+    }
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 2));
     const markerDefinitions = [
@@ -391,6 +465,11 @@ loading…</pre>
       else params.set('kernel', 'smooth');
       location.search = params.toString();
     });
+    qualitySelect.value = xrQuality.preset;
+    qualitySelect.addEventListener('change', () => {
+      params.set('quality', qualitySelect.value);
+      location.search = params.toString();
+    });
     fileInput.addEventListener('change', () => {
       openFile(fileInput.files?.[0]);
       fileInput.value = '';
@@ -425,9 +504,17 @@ loading…</pre>
     }
     await updateXrAvailability();
 
+    let lastAnimationTimestamp = null;
     renderer.xr.addEventListener('sessionstart', () => {
       diagnostics.xrActive = true;
       diagnostics.lastXrTiming = null;
+      diagnostics.xrInputSources = 0;
+      diagnostics.xrLocomotionMeters = 0;
+      diagnostics.xrSnapTurns = 0;
+      xrRig.position.set(0, 0, 0);
+      xrRig.rotation.set(0, 0, 0);
+      xrSnapTurnArmed = true;
+      lastAnimationTimestamp = null;
       resetFrameTiming('xr');
       enterVrButton.textContent = 'VR実行中';
       updateStatus();
@@ -464,9 +551,15 @@ loading…</pre>
     });
 
     let xrStatusFrames = 0;
-    renderer.setAnimationLoop(() => {
-      const timingChanged = sampleFrameTiming(performance.now());
-      if (!renderer.xr.isPresenting) controls.update();
+    renderer.setAnimationLoop((timestamp) => {
+      const now = Number.isFinite(timestamp) ? timestamp : performance.now();
+      const deltaTime = lastAnimationTimestamp === null
+        ? 0
+        : Math.min(Math.max((now - lastAnimationTimestamp) / 1000, 0), 0.1);
+      lastAnimationTimestamp = now;
+      const timingChanged = sampleFrameTiming(now);
+      if (renderer.xr.isPresenting) updateXrLocomotion(deltaTime);
+      else controls.update();
       renderer.render(scene, camera);
       diagnostics.rendered = diagnostics.done && !diagnostics.error;
 

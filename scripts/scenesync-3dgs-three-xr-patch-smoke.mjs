@@ -89,6 +89,11 @@ try {
   assert(result.gaussianObjects >= 1, 'Patched loader did not create a GaussianSplat');
   assert(result.splatCount === 16, 'ring fixture splat count changed');
   assert(result.normalObjects === 3, 'normal depth markers were not configured');
+  assert(result.xrQualityPreset === 'quality', 'Three.js default XR quality preset changed');
+  assert(result.xrFramebufferScale === 1, 'Three.js default XR framebuffer scale changed');
+  assert(result.xrFoveation === 0, 'Three.js default XR foveation changed');
+  assert(result.xrLocomotionSpeed === 1.5, 'Three.js XR locomotion speed changed');
+  assert(/left-stick/iu.test(result.xrLocomotion), 'Three.js PICO locomotion is unavailable');
   assert(result.rendered === true, 'Patched Three.js Gaussian frame was not rendered');
   assert(result.timingMode === 'desktop', 'Desktop timing mode was not reported');
   assert(result.fps > 0, 'Frame rate was not measured');
@@ -149,6 +154,30 @@ try {
   assert(pageErrors.length === 0, `Page errors after smooth kernel load: ${pageErrors.join('\n')}`);
   assert(consoleErrors.length === 0, `Console errors after smooth kernel load: ${consoleErrors.join('\n')}`);
 
+  const comparisonUrl = `http://127.0.0.1:${address.port}/scenesync/experiments/3dgs-webxr-renderer-comparison.html?fixture=minimal&quality=balanced&kernel=upstream`;
+  await page.goto(comparisonUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => {
+    const comparison = globalThis.__gaussianXrRendererComparison;
+    const playcanvas = document.querySelector('#playcanvas')?.contentWindow?.__playCanvasGaussianXrSmoke;
+    const three = document.querySelector('#three')?.contentWindow?.__threeGaussianXrStereoSmoke;
+    return comparison?.done && playcanvas?.done && playcanvas.rendered && three?.done && three.rendered;
+  }, null, { timeout: 45000 });
+  const comparison = await page.evaluate(() => ({
+    parent: globalThis.__gaussianXrRendererComparison,
+    playcanvas: document.querySelector('#playcanvas').contentWindow.__playCanvasGaussianXrSmoke,
+    three: document.querySelector('#three').contentWindow.__threeGaussianXrStereoSmoke,
+  }));
+  assert(comparison.parent.qualityPreset === 'balanced', 'Comparison page quality selection was lost');
+  assert(comparison.parent.framebufferScale === 0.85, 'Comparison page framebuffer scale changed');
+  assert(comparison.parent.foveation === 0.3, 'Comparison page foveation changed');
+  assert(comparison.playcanvas.xrQualityPreset === 'balanced', 'Comparison did not configure PlayCanvas equally');
+  assert(comparison.three.xrQualityPreset === 'balanced', 'Comparison did not configure Three.js equally');
+  assert(comparison.playcanvas.splatCount === 8, 'Comparison PlayCanvas fixture changed');
+  assert(comparison.three.splatCount === 8, 'Comparison Three.js fixture changed');
+  assert(comparison.three.kernel === 'upstream 2 sigma hard cutoff', 'Comparison Three.js kernel selection was lost');
+  assert(pageErrors.length === 0, `Page errors after comparison load: ${pageErrors.join('\n')}`);
+  assert(consoleErrors.length === 0, `Console errors after comparison load: ${consoleErrors.join('\n')}`);
+
   console.log(JSON.stringify({
     status: 'passed',
     url,
@@ -156,6 +185,12 @@ try {
     localGlbReloaded: true,
     realGlbTiming,
     smoothKernel: { url: smoothUrl, kernel: smooth.kernel, rendered: smooth.rendered },
+    comparison: {
+      url: comparisonUrl,
+      qualityPreset: comparison.parent.qualityPreset,
+      playcanvasSplats: comparison.playcanvas.splatCount,
+      threeSplats: comparison.three.splatCount,
+    },
   }, null, 2));
 } finally {
   await browser?.close();

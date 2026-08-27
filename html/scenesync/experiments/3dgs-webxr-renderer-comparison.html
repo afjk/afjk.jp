@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3DGS WebXR Renderer Comparison</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; background: #080b11; color: #f5f7fb; }
+    body { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+    header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px; border-bottom: 1px solid #2b3442; background: #101722; }
+    h1 { margin: 0; font-size: 17px; }
+    label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    select, a { border: 1px solid #506079; border-radius: 6px; padding: 6px 9px; background: #17253d; color: inherit; font: inherit; }
+    a { text-decoration: none; }
+    #conditions { flex-basis: 100%; margin: 0; color: #bdc8d8; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 0; }
+    section { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; border-right: 1px solid #2b3442; }
+    section:last-child { border-right: 0; }
+    h2 { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 42px; margin: 0; padding: 7px 12px; background: #0e141e; font-size: 14px; }
+    iframe { width: 100%; height: 100%; border: 0; background: #090c12; }
+    @media (max-width: 780px) {
+      body { height: auto; min-height: 100vh; }
+      main { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(620px, 80vh)); }
+      section { border-right: 0; border-bottom: 1px solid #2b3442; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>3DGS WebXR renderer A/B</h1>
+    <label>fixture
+      <select id="fixture">
+        <option value="ring">ring (16 splats)</option>
+        <option value="minimal">minimal</option>
+      </select>
+    </label>
+    <label>XR品質
+      <select id="quality">
+        <option value="quality">Quality (scale 1.00 / foveation 0)</option>
+        <option value="balanced">Balanced (0.85 / 0.30)</option>
+        <option value="performance">Performance (0.78 / 0.55)</option>
+      </select>
+    </label>
+    <label>Three kernel
+      <select id="kernel">
+        <option value="smooth">Smooth 2.83σ</option>
+        <option value="upstream">Upstream 2σ cutoff</option>
+      </select>
+    </label>
+    <p id="conditions"></p>
+  </header>
+  <main>
+    <section>
+      <h2>PlayCanvas 2.21.4 <a id="open-playcanvas" target="_blank" rel="noopener">単独でVR確認</a></h2>
+      <iframe id="playcanvas" title="PlayCanvas renderer" allow="xr-spatial-tracking; fullscreen"></iframe>
+    </section>
+    <section>
+      <h2>patched Three.js <a id="open-three" target="_blank" rel="noopener">単独でVR確認</a></h2>
+      <iframe id="three" title="Three.js renderer" allow="xr-spatial-tracking; fullscreen"></iframe>
+    </section>
+  </main>
+
+  <script type="module">
+    import { resolveXrQualityConfig } from './3dgs-xr-comparison-config.js';
+
+    const params = new URLSearchParams(location.search);
+    const fixtureSelect = document.querySelector('#fixture');
+    const qualitySelect = document.querySelector('#quality');
+    const kernelSelect = document.querySelector('#kernel');
+    const conditions = document.querySelector('#conditions');
+    const playcanvasFrame = document.querySelector('#playcanvas');
+    const threeFrame = document.querySelector('#three');
+    const openPlaycanvas = document.querySelector('#open-playcanvas');
+    const openThree = document.querySelector('#open-three');
+
+    const fixture = params.get('fixture') === 'minimal' ? 'minimal' : 'ring';
+    const quality = resolveXrQualityConfig(params);
+    const kernel = params.get('kernel') === 'upstream' ? 'upstream' : 'smooth';
+    fixtureSelect.value = fixture;
+    qualitySelect.value = quality.preset;
+    kernelSelect.value = kernel;
+
+    function childUrls() {
+      const common = new URLSearchParams({ fixture, quality: quality.preset });
+      const playcanvas = `./3dgs-playcanvas-webxr-smoke.html?${common}`;
+      const threeParams = new URLSearchParams(common);
+      if (kernel === 'smooth') threeParams.set('kernel', 'smooth');
+      const three = `./3dgs-three-webxr-stereo-smoke.html?${threeParams}`;
+      return { playcanvas, three };
+    }
+
+    const urls = childUrls();
+    playcanvasFrame.src = urls.playcanvas;
+    threeFrame.src = urls.three;
+    openPlaycanvas.href = urls.playcanvas;
+    openThree.href = urls.three;
+    conditions.textContent = [
+      `same fixture=${fixture}`,
+      `framebufferScale=${quality.framebufferScale.toFixed(2)}`,
+      `foveation=${quality.foveation.toFixed(2)}`,
+      'antialias=false',
+      'near/far=0.01/1000',
+      'camera FOV=62°',
+      'PICO: left stick move 1.5m/s / right stick 30° snap turn',
+      '正確なXR性能比較は「単独でVR確認」を順番に開いて行う',
+    ].join(' · ');
+
+    const diagnostics = globalThis.__gaussianXrRendererComparison = {
+      done: false,
+      fixture,
+      qualityPreset: quality.preset,
+      framebufferScale: quality.framebufferScale,
+      foveation: quality.foveation,
+      threeKernel: kernel,
+      playcanvasUrl: urls.playcanvas,
+      threeUrl: urls.three,
+      loadedFrames: [],
+    };
+
+    function frameLoaded(name) {
+      diagnostics.loadedFrames.push(name);
+      diagnostics.done = diagnostics.loadedFrames.length === 2;
+    }
+    playcanvasFrame.addEventListener('load', () => frameLoaded('playcanvas'));
+    threeFrame.addEventListener('load', () => frameLoaded('three'));
+
+    function changeSetting(name, value) {
+      params.set(name, value);
+      location.search = params.toString();
+    }
+    fixtureSelect.addEventListener('change', () => changeSetting('fixture', fixtureSelect.value));
+    qualitySelect.addEventListener('change', () => changeSetting('quality', qualitySelect.value));
+    kernelSelect.addEventListener('change', () => changeSetting('kernel', kernelSelect.value));
+  </script>
+</body>
+</html>
