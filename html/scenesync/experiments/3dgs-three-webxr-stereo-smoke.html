@@ -48,7 +48,7 @@ loading…</pre>
       <input id="file-input" type="file" accept=".glb" hidden>
     </div>
   </section>
-  <p id="note">PICO: 左stick=水平移動、右stick=30° snap turn、A=下降、B=上昇。両rendererで同じXR画質presetを選んでください。</p>
+  <p id="note">PICO: 左stick=移動、右stick=旋回、Grip+右stick=移動、A=上昇、B=下降。参照viewerと同じ操作です。</p>
 
   <script type="module">
     import * as THREE from 'three/webgpu';
@@ -56,8 +56,9 @@ loading…</pre>
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import {
       XR_LOCOMOTION_SPEED,
-      XR_SNAP_TURN_DEGREES,
+      XR_TURN_SPEED_DEGREES,
       XR_VERTICAL_LOCOMOTION_SPEED,
+      isXrGamepadButtonPressed,
       readPicoVerticalButtons,
       readXrThumbstick,
       resolveXrQualityConfig,
@@ -99,12 +100,13 @@ loading…</pre>
       xrQualityPreset: xrQuality.preset,
       xrFramebufferScale: xrQuality.framebufferScale,
       xrFoveation: xrQuality.foveation,
-      xrLocomotion: 'left-stick move / right-stick snap / A down / B up',
+      xrLocomotion: 'left-stick move / right-stick smooth turn / grip+right move / A up / B down',
       xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
       xrVerticalLocomotionSpeed: XR_VERTICAL_LOCOMOTION_SPEED,
+      xrTurnSpeedDegrees: XR_TURN_SPEED_DEGREES,
       xrInputSources: 0,
       xrLocomotionMeters: 0,
-      xrSnapTurns: 0,
+      xrTurnDegrees: 0,
       xrAvailable: false,
       xrActive: false,
       xrViews: 0,
@@ -287,7 +289,7 @@ loading…</pre>
         `patch: ${diagnostics.patch}`,
         `kernel: ${diagnostics.kernel}`,
         `XR quality: ${diagnostics.xrQualityPreset} / scale ${formatNumber(diagnostics.xrFramebufferScale, 2)} / foveation ${formatNumber(diagnostics.xrFoveation, 2)}`,
-        `XR locomotion: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${diagnostics.xrSnapTurns} turns / ${diagnostics.xrInputSources} inputs`,
+        `XR locomotion: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${formatNumber(diagnostics.xrTurnDegrees, 1)}° turn / ${diagnostics.xrInputSources} inputs`,
         `WebXR: ${diagnostics.xrActive ? 'active' : diagnostics.xrAvailable ? 'available' : 'unavailable'}`,
         `XR views: ${diagnostics.xrViews}`,
         `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
@@ -328,10 +330,6 @@ loading…</pre>
     const xrUp = new THREE.Vector3(0, 1, 0);
     const xrForward = new THREE.Vector3();
     const xrRight = new THREE.Vector3();
-    const xrHeadPosition = new THREE.Vector3();
-    const xrRigOffset = new THREE.Vector3();
-    let xrSnapTurnArmed = true;
-
     function updateXrLocomotion(deltaTime) {
       const inputSources = Array.from(renderer.xr.getSession()?.inputSources || []);
       diagnostics.xrInputSources = inputSources.length;
@@ -340,17 +338,26 @@ loading…</pre>
       const right = inputSources.find((source) => source.handedness === 'right' && source.gamepad);
       const xrCamera = renderer.xr.getCamera(camera);
 
-      const move = readXrThumbstick(left?.gamepad);
-      if (move.active && deltaTime > 0) {
+      const leftStick = readXrThumbstick(left?.gamepad);
+      const rightStick = readXrThumbstick(right?.gamepad);
+      const gripPressed = isXrGamepadButtonPressed(right?.gamepad, 1);
+      let moveX = leftStick.x + (gripPressed ? rightStick.x : 0);
+      let moveY = leftStick.y + (gripPressed ? rightStick.y : 0);
+      const moveLength = Math.hypot(moveX, moveY);
+      if (moveLength > 1) {
+        moveX /= moveLength;
+        moveY /= moveLength;
+      }
+      if ((moveX !== 0 || moveY !== 0) && deltaTime > 0) {
         xrCamera.getWorldDirection(xrForward);
         xrForward.y = 0;
         if (xrForward.lengthSq() > 0.000001) {
           xrForward.normalize();
           xrRight.crossVectors(xrForward, xrUp).normalize();
           const distance = XR_LOCOMOTION_SPEED * deltaTime;
-          xrRig.position.addScaledVector(xrRight, move.x * distance);
-          xrRig.position.addScaledVector(xrForward, -move.y * distance);
-          diagnostics.xrLocomotionMeters += Math.hypot(move.x, move.y) * distance;
+          xrRig.position.addScaledVector(xrRight, moveX * distance);
+          xrRig.position.addScaledVector(xrForward, -moveY * distance);
+          diagnostics.xrLocomotionMeters += Math.hypot(moveX, moveY) * distance;
         }
       }
 
@@ -361,16 +368,11 @@ loading…</pre>
         diagnostics.xrLocomotionMeters += Math.abs(deltaY);
       }
 
-      const turn = readXrThumbstick(right?.gamepad).x;
-      if (Math.abs(turn) < 0.25) xrSnapTurnArmed = true;
-      if (xrSnapTurnArmed && Math.abs(turn) > 0.7) {
-        const angle = -Math.sign(turn) * THREE.MathUtils.degToRad(XR_SNAP_TURN_DEGREES);
-        xrCamera.getWorldPosition(xrHeadPosition);
-        xrRigOffset.copy(xrRig.position).sub(xrHeadPosition).applyAxisAngle(xrUp, angle);
-        xrRig.position.copy(xrHeadPosition).add(xrRigOffset);
+      if (!gripPressed && rightStick.x !== 0 && deltaTime > 0) {
+        const deltaDegrees = -rightStick.x * XR_TURN_SPEED_DEGREES * deltaTime;
+        const angle = THREE.MathUtils.degToRad(deltaDegrees);
         xrRig.rotateY(angle);
-        diagnostics.xrSnapTurns += 1;
-        xrSnapTurnArmed = false;
+        diagnostics.xrTurnDegrees += Math.abs(deltaDegrees);
       }
     }
 
@@ -520,10 +522,9 @@ loading…</pre>
       diagnostics.lastXrTiming = null;
       diagnostics.xrInputSources = 0;
       diagnostics.xrLocomotionMeters = 0;
-      diagnostics.xrSnapTurns = 0;
+      diagnostics.xrTurnDegrees = 0;
       xrRig.position.set(0, 0, 0);
       xrRig.rotation.set(0, 0, 0);
-      xrSnapTurnArmed = true;
       lastAnimationTimestamp = null;
       resetFrameTiming('xr');
       enterVrButton.textContent = 'VR実行中';

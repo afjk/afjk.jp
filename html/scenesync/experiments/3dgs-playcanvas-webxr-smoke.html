@@ -48,7 +48,7 @@ loading…</pre>
       <input id="file-input" type="file" accept=".glb,.sog,.ply" hidden>
     </div>
   </section>
-  <p id="drop-note">操作: ドラッグ=回転、Shift/右ドラッグ=移動、wheel=拡縮、WASD/QE=移動。PICO VR: 左stick=水平移動、右stick=30°回転、A=下降、B=上昇。</p>
+  <p id="drop-note">PICO VR: 左stick=移動、右stick=旋回、Grip+右stick=移動、A=上昇、B=下降。insta360-sog-xr-viewerと同じ操作です。</p>
 
   <script type="module">
     import {
@@ -68,8 +68,9 @@ loading…</pre>
     } from 'playcanvas';
     import {
       XR_LOCOMOTION_SPEED,
-      XR_SNAP_TURN_DEGREES,
+      XR_TURN_SPEED_DEGREES,
       XR_VERTICAL_LOCOMOTION_SPEED,
+      isXrGamepadButtonPressed,
       playCanvasXrStartScale,
       readPicoVerticalButtons,
       readXrThumbstick,
@@ -122,12 +123,13 @@ loading…</pre>
       xrFramebufferScale: xrQuality.framebufferScale,
       xrEngineStartFramebufferScale: xrStartFramebufferScale,
       xrFoveation: xrQuality.foveation,
-      xrLocomotion: 'left-stick move / right-stick 30deg snap / A down / B up',
+      xrLocomotion: 'left-stick move / right-stick smooth turn / grip+right move / A up / B down',
       xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
       xrVerticalLocomotionSpeed: XR_VERTICAL_LOCOMOTION_SPEED,
+      xrTurnSpeedDegrees: XR_TURN_SPEED_DEGREES,
       xrInputSources: 0,
       xrLocomotionMeters: 0,
-      xrSnapTurns: 0,
+      xrTurnDegrees: 0,
       timingMode: 'desktop',
       frameTimeMs: null,
       p95FrameTimeMs: null,
@@ -416,7 +418,7 @@ loading…</pre>
         `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
         `view matrix max delta: ${formatNumber(diagnostics.viewMatrixMaxDelta, 6)}`,
         `stereo camera matrices: ${diagnostics.stereoCameraMatricesDistinct ? 'distinct' : 'not measured'}`,
-        `PICO controls: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${diagnostics.xrSnapTurns} turns / ${diagnostics.xrInputSources} inputs`,
+        `PICO controls: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${formatNumber(diagnostics.xrTurnDegrees, 1)}° turn / ${diagnostics.xrInputSources} inputs`,
         `frame interval (${diagnostics.timingMode}): ${formatNumber(diagnostics.fps, 1)} fps / ${formatNumber(diagnostics.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.p95FrameTimeMs, 2)} ms p95 [${diagnostics.framesSampled}]`,
         ...(diagnostics.lastXrTiming ? [
           `last XR interval: ${formatNumber(diagnostics.lastXrTiming.fps, 1)} fps / ${formatNumber(diagnostics.lastXrTiming.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.lastXrTiming.p95FrameTimeMs, 2)} ms p95 [${diagnostics.lastXrTiming.framesSampled}]`,
@@ -553,23 +555,11 @@ loading…</pre>
     });
 
     const xr = app.xr;
-    const xrCameraOffset = new Vec3();
-    let snapTurnArmed = true;
-
     function pickXrInputSource(handedness, fallback = false) {
       const inputSources = xr.input?.inputSources || [];
       const exact = inputSources.find((source) => source.handedness === handedness && source.gamepad);
       if (exact || !fallback) return exact || null;
       return inputSources.find((source) => source.gamepad) || null;
-    }
-
-    function snapTurnXrRig(degrees) {
-      xrCameraOffset.copy(cameraEntity.getLocalPosition());
-      rig.translateLocal(xrCameraOffset);
-      rig.rotateLocal(0, degrees, 0);
-      xrCameraOffset.mulScalar(-1);
-      rig.translateLocal(xrCameraOffset);
-      diagnostics.xrSnapTurns += 1;
     }
 
     function updateXrLocomotion(deltaTime) {
@@ -579,7 +569,19 @@ loading…</pre>
 
       const leftSource = pickXrInputSource('left', true);
       const leftStick = readXrThumbstick(leftSource?.gamepad);
-      if (leftStick.active) {
+      const rightSource = pickXrInputSource('right');
+      const rightStick = readXrThumbstick(rightSource?.gamepad);
+      const gripPressed = Boolean(
+        rightSource?.squeezing || isXrGamepadButtonPressed(rightSource?.gamepad, 1)
+      );
+      let moveX = leftStick.x + (gripPressed ? rightStick.x : 0);
+      let moveY = leftStick.y + (gripPressed ? rightStick.y : 0);
+      const moveLength = Math.hypot(moveX, moveY);
+      if (moveLength > 1) {
+        moveX /= moveLength;
+        moveY /= moveLength;
+      }
+      if (moveX !== 0 || moveY !== 0) {
         const forward = cameraEntity.forward;
         const horizontalLength = Math.hypot(forward.x, forward.z);
         if (horizontalLength > 0.0001) {
@@ -587,27 +589,25 @@ loading…</pre>
           const forwardZ = forward.z / horizontalLength;
           const rightX = -forwardZ;
           const rightZ = forwardX;
-          const forwardAmount = -leftStick.y;
+          const forwardAmount = -moveY;
           const distance = XR_LOCOMOTION_SPEED * deltaTime;
-          const deltaX = (rightX * leftStick.x + forwardX * forwardAmount) * distance;
-          const deltaZ = (rightZ * leftStick.x + forwardZ * forwardAmount) * distance;
+          const deltaX = (rightX * moveX + forwardX * forwardAmount) * distance;
+          const deltaZ = (rightZ * moveX + forwardZ * forwardAmount) * distance;
           rig.translate(deltaX, 0, deltaZ);
           diagnostics.xrLocomotionMeters += Math.hypot(deltaX, deltaZ);
         }
       }
 
-      const rightSource = pickXrInputSource('right');
       const vertical = readPicoVerticalButtons(rightSource?.gamepad).direction;
       if (vertical !== 0) {
         const deltaY = vertical * XR_VERTICAL_LOCOMOTION_SPEED * deltaTime;
         rig.translate(0, deltaY, 0);
         diagnostics.xrLocomotionMeters += Math.abs(deltaY);
       }
-      const rightStick = readXrThumbstick(rightSource?.gamepad);
-      if (Math.abs(rightStick.x) < 0.25) snapTurnArmed = true;
-      if (snapTurnArmed && Math.abs(rightStick.x) > 0.7) {
-        snapTurnXrRig(rightStick.x > 0 ? -XR_SNAP_TURN_DEGREES : XR_SNAP_TURN_DEGREES);
-        snapTurnArmed = false;
+      if (!gripPressed && rightStick.x !== 0) {
+        const deltaDegrees = -rightStick.x * XR_TURN_SPEED_DEGREES * deltaTime;
+        rig.rotateLocal(0, deltaDegrees, 0);
+        diagnostics.xrTurnDegrees += Math.abs(deltaDegrees);
       }
     }
 
@@ -622,8 +622,7 @@ loading…</pre>
       diagnostics.xrActive = true;
       diagnostics.xrInputSources = 0;
       diagnostics.xrLocomotionMeters = 0;
-      diagnostics.xrSnapTurns = 0;
-      snapTurnArmed = true;
+      diagnostics.xrTurnDegrees = 0;
       diagnostics.lastXrTiming = null;
       resetFrameTiming('xr');
       enterVrButton.textContent = 'VR実行中';

@@ -106,11 +106,12 @@ PlayCanvas版の非XRカメラ操作:
 immersive VR開始時は初期位置へ戻し、camera controlを停止してWebXR head trackingへ渡す。
 PICO / Questのxr-standard controllerは、両rendererで次のlocomotionに揃える。
 
-- 左スティック: head方向を基準に水平移動（最大1.5 m/s）
-- 右スティック左右: 30° snap turn
-- 右Aボタン: 下降（1.0 m/s）
-- 右Bボタン: 上昇（1.0 m/s）
-- statusの`PICO controls` / `XR locomotion`でinput数、移動距離、turn回数を確認する
+- 左スティック: head方向を基準に水平移動（最大1.8 m/s）
+- 右スティック左右: smooth turn（最大105°/s）
+- Grip + 右スティック: head方向を基準に水平移動
+- 右Aボタン: 上昇（1.2 m/s）
+- 右Bボタン: 下降（1.2 m/s）
+- statusの`PICO controls` / `XR locomotion`でinput数、移動距離、回転角を確認する
 
 1. Gaussianと右側の青・橙・緑のboxの双方に左右眼parallaxがある。
 2. `XR views`が2、eye separationがおよそ0.05〜0.08 mになる。
@@ -134,6 +135,11 @@ Three.js版の`kernel=smooth`はstereo修正とは独立した画質比較。固
 （境界alphaは約13.5%）を、PlayCanvas相当の約2.83σと境界alpha 0のnormalized Gaussianへ
 実行時だけ差し替える。PlayCanvasの見た目の差がrenderer全体によるものか、fragment kernelだけで
 再現できるかを切り分ける。
+
+2026-08-27のPICO実機比較では、同じ`1_3DGS2-khr.glb` / Quality presetでPlayCanvas 18.7 fps、
+Three.js Smooth 24.6 fpsだった。一方、画質はPlayCanvasの方が明瞭で、Three.js Upstreamは劣化が
+大きいため候補から外した。今後の画質・操作基準は`afjk/insta360-sog-xr-viewer`のPlayCanvas実装とし、
+SceneSync本体のrenderer統合は比較smokeとは別trackで扱う。
 
 機械判定用diagnosticsは`window.__threeGaussianXrStereoSmoke`と
 `window.__playCanvasGaussianXrSmoke`へ出す。

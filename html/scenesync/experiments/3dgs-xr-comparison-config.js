@@ -17,9 +17,9 @@ export const XR_QUALITY_PRESETS = Object.freeze({
 });
 
 export const DEFAULT_XR_QUALITY_PRESET = 'quality';
-export const XR_LOCOMOTION_SPEED = 1.5;
-export const XR_VERTICAL_LOCOMOTION_SPEED = 1;
-export const XR_SNAP_TURN_DEGREES = 30;
+export const XR_LOCOMOTION_SPEED = 1.8;
+export const XR_VERTICAL_LOCOMOTION_SPEED = 1.2;
+export const XR_TURN_SPEED_DEGREES = 105;
 export const PICO_A_BUTTON_INDEX = 4;
 export const PICO_B_BUTTON_INDEX = 5;
 
@@ -42,7 +42,7 @@ export function playCanvasXrStartScale(targetScale, devicePixelRatio, maxPixelRa
   return targetScale * safeDevicePixelRatio / safeMaxPixelRatio;
 }
 
-export function readXrThumbstick(gamepad, deadzone = 0.2) {
+export function readXrThumbstick(gamepad, deadzone = 0.16) {
   const axes = gamepad?.axes;
   if (!axes || axes.length < 2) return { x: 0, y: 0, active: false };
 
@@ -52,24 +52,22 @@ export function readXrThumbstick(gamepad, deadzone = 0.2) {
   const offset = axes.length >= 4 ? 2 : axes.length - 2;
   const rawX = Number(axes[offset]) || 0;
   const rawY = Number(axes[offset + 1]) || 0;
-  const magnitude = Math.min(1, Math.hypot(rawX, rawY));
-  if (magnitude <= deadzone) return { x: 0, y: 0, active: false };
+  const x = Math.abs(rawX) < deadzone ? 0 : rawX;
+  const y = Math.abs(rawY) < deadzone ? 0 : rawY;
+  return { x, y, active: x !== 0 || y !== 0 };
+}
 
-  const scaledMagnitude = Math.min(1, (magnitude - deadzone) / (1 - deadzone));
-  const scale = scaledMagnitude / magnitude;
-  return { x: rawX * scale, y: rawY * scale, active: true };
+export function isXrGamepadButtonPressed(gamepad, index) {
+  const button = gamepad?.buttons?.[index];
+  return Boolean(button?.pressed || button?.value > 0.5);
 }
 
 export function readPicoVerticalButtons(gamepad) {
-  const isPressed = (index) => {
-    const button = gamepad?.buttons?.[index];
-    return Boolean(button?.pressed || button?.value > 0.5);
-  };
-  const aPressed = isPressed(PICO_A_BUTTON_INDEX);
-  const bPressed = isPressed(PICO_B_BUTTON_INDEX);
+  const aPressed = isXrGamepadButtonPressed(gamepad, PICO_A_BUTTON_INDEX);
+  const bPressed = isXrGamepadButtonPressed(gamepad, PICO_B_BUTTON_INDEX);
   return {
     aPressed,
     bPressed,
-    direction: (bPressed ? 1 : 0) - (aPressed ? 1 : 0),
+    direction: (aPressed ? 1 : 0) - (bPressed ? 1 : 0),
   };
 }

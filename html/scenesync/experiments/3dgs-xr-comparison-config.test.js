@@ -6,8 +6,9 @@ import {
   PICO_A_BUTTON_INDEX,
   PICO_B_BUTTON_INDEX,
   XR_LOCOMOTION_SPEED,
-  XR_SNAP_TURN_DEGREES,
+  XR_TURN_SPEED_DEGREES,
   XR_VERTICAL_LOCOMOTION_SPEED,
+  isXrGamepadButtonPressed,
   playCanvasXrStartScale,
   readPicoVerticalButtons,
   readXrThumbstick,
@@ -19,24 +20,25 @@ test('XR comparison defaults to identical high-quality settings', () => {
   assert.equal(config.preset, DEFAULT_XR_QUALITY_PRESET);
   assert.equal(config.framebufferScale, 1);
   assert.equal(config.foveation, 0);
-  assert.equal(XR_LOCOMOTION_SPEED, 1.5);
-  assert.equal(XR_VERTICAL_LOCOMOTION_SPEED, 1);
-  assert.equal(XR_SNAP_TURN_DEGREES, 30);
+  assert.equal(XR_LOCOMOTION_SPEED, 1.8);
+  assert.equal(XR_VERTICAL_LOCOMOTION_SPEED, 1.2);
+  assert.equal(XR_TURN_SPEED_DEGREES, 105);
 });
 
-test('PICO right-controller A descends and B ascends', () => {
+test('PICO right-controller A ascends and B descends like insta360-sog-xr-viewer', () => {
   const buttons = Array.from({ length: 6 }, () => ({ pressed: false, value: 0 }));
   buttons[PICO_A_BUTTON_INDEX] = { pressed: true, value: 1 };
   assert.deepEqual(readPicoVerticalButtons({ buttons }), {
     aPressed: true,
     bPressed: false,
-    direction: -1,
+    direction: 1,
   });
   buttons[PICO_A_BUTTON_INDEX] = { pressed: false, value: 0 };
   buttons[PICO_B_BUTTON_INDEX] = { pressed: true, value: 1 };
-  assert.equal(readPicoVerticalButtons({ buttons }).direction, 1);
+  assert.equal(readPicoVerticalButtons({ buttons }).direction, -1);
   buttons[PICO_A_BUTTON_INDEX] = { pressed: true, value: 1 };
   assert.equal(readPicoVerticalButtons({ buttons }).direction, 0);
+  assert.equal(isXrGamepadButtonPressed({ buttons }, PICO_A_BUTTON_INDEX), true);
 });
 
 test('PlayCanvas start scale compensates its internal pixel-ratio normalization', () => {
@@ -56,7 +58,7 @@ test('XR comparison resolves named presets and rejects unknown ones', () => {
   );
 });
 
-test('PICO xr-standard thumbstick axes use axes 2/3 and radial deadzone', () => {
+test('PICO xr-standard thumbstick axes use axes 2/3 and per-axis deadzone', () => {
   assert.deepEqual(readXrThumbstick({ axes: [0.8, 0.8, 0.1, 0.1] }), {
     x: 0,
     y: 0,
