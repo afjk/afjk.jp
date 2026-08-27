@@ -48,7 +48,7 @@ loading…</pre>
       <input id="file-input" type="file" accept=".glb,.sog,.ply" hidden>
     </div>
   </section>
-  <p id="drop-note">操作: ドラッグ=回転、Shift/右ドラッグ=移動、wheel=拡縮、WASD/QE=移動。PICO VR: 左スティック=移動、右スティック左右=30°回転。</p>
+  <p id="drop-note">操作: ドラッグ=回転、Shift/右ドラッグ=移動、wheel=拡縮、WASD/QE=移動。PICO VR: 左stick=水平移動、右stick=30°回転、A=下降、B=上昇。</p>
 
   <script type="module">
     import {
@@ -69,7 +69,9 @@ loading…</pre>
     import {
       XR_LOCOMOTION_SPEED,
       XR_SNAP_TURN_DEGREES,
+      XR_VERTICAL_LOCOMOTION_SPEED,
       playCanvasXrStartScale,
+      readPicoVerticalButtons,
       readXrThumbstick,
       resolveXrQualityConfig,
     } from './3dgs-xr-comparison-config.js';
@@ -120,8 +122,9 @@ loading…</pre>
       xrFramebufferScale: xrQuality.framebufferScale,
       xrEngineStartFramebufferScale: xrStartFramebufferScale,
       xrFoveation: xrQuality.foveation,
-      xrLocomotion: 'left-stick move / right-stick 30deg snap turn',
+      xrLocomotion: 'left-stick move / right-stick 30deg snap / A down / B up',
       xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
+      xrVerticalLocomotionSpeed: XR_VERTICAL_LOCOMOTION_SPEED,
       xrInputSources: 0,
       xrLocomotionMeters: 0,
       xrSnapTurns: 0,
@@ -594,6 +597,12 @@ loading…</pre>
       }
 
       const rightSource = pickXrInputSource('right');
+      const vertical = readPicoVerticalButtons(rightSource?.gamepad).direction;
+      if (vertical !== 0) {
+        const deltaY = vertical * XR_VERTICAL_LOCOMOTION_SPEED * deltaTime;
+        rig.translate(0, deltaY, 0);
+        diagnostics.xrLocomotionMeters += Math.abs(deltaY);
+      }
       const rightStick = readXrThumbstick(rightSource?.gamepad);
       if (Math.abs(rightStick.x) < 0.25) snapTurnArmed = true;
       if (snapTurnArmed && Math.abs(rightStick.x) > 0.7) {

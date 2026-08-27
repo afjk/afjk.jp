@@ -108,6 +108,8 @@ PICO / Questのxr-standard controllerは、両rendererで次のlocomotionに揃�
 
 - 左スティック: head方向を基準に水平移動（最大1.5 m/s）
 - 右スティック左右: 30° snap turn
+- 右Aボタン: 下降（1.0 m/s）
+- 右Bボタン: 上昇（1.0 m/s）
 - statusの`PICO controls` / `XR locomotion`でinput数、移動距離、turn回数を確認する
 
 1. Gaussianと右側の青・橙・緑のboxの双方に左右眼parallaxがある。

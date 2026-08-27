@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_XR_QUALITY_PRESET,
+  PICO_A_BUTTON_INDEX,
+  PICO_B_BUTTON_INDEX,
   XR_LOCOMOTION_SPEED,
   XR_SNAP_TURN_DEGREES,
+  XR_VERTICAL_LOCOMOTION_SPEED,
   playCanvasXrStartScale,
+  readPicoVerticalButtons,
   readXrThumbstick,
   resolveXrQualityConfig,
 } from './3dgs-xr-comparison-config.js';
@@ -16,7 +20,23 @@ test('XR comparison defaults to identical high-quality settings', () => {
   assert.equal(config.framebufferScale, 1);
   assert.equal(config.foveation, 0);
   assert.equal(XR_LOCOMOTION_SPEED, 1.5);
+  assert.equal(XR_VERTICAL_LOCOMOTION_SPEED, 1);
   assert.equal(XR_SNAP_TURN_DEGREES, 30);
+});
+
+test('PICO right-controller A descends and B ascends', () => {
+  const buttons = Array.from({ length: 6 }, () => ({ pressed: false, value: 0 }));
+  buttons[PICO_A_BUTTON_INDEX] = { pressed: true, value: 1 };
+  assert.deepEqual(readPicoVerticalButtons({ buttons }), {
+    aPressed: true,
+    bPressed: false,
+    direction: -1,
+  });
+  buttons[PICO_A_BUTTON_INDEX] = { pressed: false, value: 0 };
+  buttons[PICO_B_BUTTON_INDEX] = { pressed: true, value: 1 };
+  assert.equal(readPicoVerticalButtons({ buttons }).direction, 1);
+  buttons[PICO_A_BUTTON_INDEX] = { pressed: true, value: 1 };
+  assert.equal(readPicoVerticalButtons({ buttons }).direction, 0);
 });
 
 test('PlayCanvas start scale compensates its internal pixel-ratio normalization', () => {

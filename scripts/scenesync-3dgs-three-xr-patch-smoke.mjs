@@ -93,7 +93,9 @@ try {
   assert(result.xrFramebufferScale === 1, 'Three.js default XR framebuffer scale changed');
   assert(result.xrFoveation === 0, 'Three.js default XR foveation changed');
   assert(result.xrLocomotionSpeed === 1.5, 'Three.js XR locomotion speed changed');
+  assert(result.xrVerticalLocomotionSpeed === 1, 'Three.js XR vertical speed changed');
   assert(/left-stick/iu.test(result.xrLocomotion), 'Three.js PICO locomotion is unavailable');
+  assert(/A down \/ B up/iu.test(result.xrLocomotion), 'Three.js PICO vertical locomotion is unavailable');
   assert(result.rendered === true, 'Patched Three.js Gaussian frame was not rendered');
   assert(result.timingMode === 'desktop', 'Desktop timing mode was not reported');
   assert(result.fps > 0, 'Frame rate was not measured');

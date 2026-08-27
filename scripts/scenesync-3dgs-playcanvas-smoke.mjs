@@ -90,7 +90,9 @@ try {
   assert(result.xrEngineStartFramebufferScale > 0, 'PlayCanvas XR start scale was not resolved');
   assert(result.xrFoveation === 0, 'PlayCanvas default XR foveation changed');
   assert(result.xrLocomotionSpeed === 1.5, 'PlayCanvas XR locomotion speed changed');
+  assert(result.xrVerticalLocomotionSpeed === 1, 'PlayCanvas XR vertical speed changed');
   assert(/left-stick/iu.test(result.xrLocomotion), 'PlayCanvas PICO locomotion is unavailable');
+  assert(/A down \/ B up/iu.test(result.xrLocomotion), 'PlayCanvas PICO vertical locomotion is unavailable');
   assert(result.rendered === true, 'PlayCanvas GSplat frame was not rendered');
   assert(result.timingMode === 'desktop', 'Desktop timing mode was not reported');
   assert(result.fps > 0, 'Frame rate was not measured');

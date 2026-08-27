@@ -18,7 +18,10 @@ export const XR_QUALITY_PRESETS = Object.freeze({
 
 export const DEFAULT_XR_QUALITY_PRESET = 'quality';
 export const XR_LOCOMOTION_SPEED = 1.5;
+export const XR_VERTICAL_LOCOMOTION_SPEED = 1;
 export const XR_SNAP_TURN_DEGREES = 30;
+export const PICO_A_BUTTON_INDEX = 4;
+export const PICO_B_BUTTON_INDEX = 5;
 
 export function resolveXrQualityConfig(searchParams) {
   const requested = searchParams.get('quality');
@@ -55,4 +58,18 @@ export function readXrThumbstick(gamepad, deadzone = 0.2) {
   const scaledMagnitude = Math.min(1, (magnitude - deadzone) / (1 - deadzone));
   const scale = scaledMagnitude / magnitude;
   return { x: rawX * scale, y: rawY * scale, active: true };
+}
+
+export function readPicoVerticalButtons(gamepad) {
+  const isPressed = (index) => {
+    const button = gamepad?.buttons?.[index];
+    return Boolean(button?.pressed || button?.value > 0.5);
+  };
+  const aPressed = isPressed(PICO_A_BUTTON_INDEX);
+  const bPressed = isPressed(PICO_B_BUTTON_INDEX);
+  return {
+    aPressed,
+    bPressed,
+    direction: (bPressed ? 1 : 0) - (aPressed ? 1 : 0),
+  };
 }

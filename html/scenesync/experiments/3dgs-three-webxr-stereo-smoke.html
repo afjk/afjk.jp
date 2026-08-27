@@ -48,7 +48,7 @@ loading…</pre>
       <input id="file-input" type="file" accept=".glb" hidden>
     </div>
   </section>
-  <p id="note">PICO/Quest: 左stick=移動、右stick=30° snap turn。両rendererで同じXR画質presetを選んで比較してください。</p>
+  <p id="note">PICO: 左stick=水平移動、右stick=30° snap turn、A=下降、B=上昇。両rendererで同じXR画質presetを選んでください。</p>
 
   <script type="module">
     import * as THREE from 'three/webgpu';
@@ -57,6 +57,8 @@ loading…</pre>
     import {
       XR_LOCOMOTION_SPEED,
       XR_SNAP_TURN_DEGREES,
+      XR_VERTICAL_LOCOMOTION_SPEED,
+      readPicoVerticalButtons,
       readXrThumbstick,
       resolveXrQualityConfig,
     } from './3dgs-xr-comparison-config.js';
@@ -97,8 +99,9 @@ loading…</pre>
       xrQualityPreset: xrQuality.preset,
       xrFramebufferScale: xrQuality.framebufferScale,
       xrFoveation: xrQuality.foveation,
-      xrLocomotion: 'left-stick move / right-stick snap-turn',
+      xrLocomotion: 'left-stick move / right-stick snap / A down / B up',
       xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
+      xrVerticalLocomotionSpeed: XR_VERTICAL_LOCOMOTION_SPEED,
       xrInputSources: 0,
       xrLocomotionMeters: 0,
       xrSnapTurns: 0,
@@ -349,6 +352,13 @@ loading…</pre>
           xrRig.position.addScaledVector(xrForward, -move.y * distance);
           diagnostics.xrLocomotionMeters += Math.hypot(move.x, move.y) * distance;
         }
+      }
+
+      const vertical = readPicoVerticalButtons(right?.gamepad).direction;
+      if (vertical !== 0 && deltaTime > 0) {
+        const deltaY = vertical * XR_VERTICAL_LOCOMOTION_SPEED * deltaTime;
+        xrRig.position.y += deltaY;
+        diagnostics.xrLocomotionMeters += Math.abs(deltaY);
       }
 
       const turn = readXrThumbstick(right?.gamepad).x;
