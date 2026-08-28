@@ -8674,6 +8674,7 @@ function createSceneUrlImportContext(options = {}) {
     GLTFLoader,
     configureGLTFLoader: configureEditorGLTFLoader,
     prepareGlTFRoot: prepareGaussianSplatRoot,
+    importGlbFileAsSceneObject,
     targetKind,
     replaceSkyboxSphereFromBlob,
     /**
@@ -11192,6 +11193,9 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
     wrapper.userData.asset = obj?.userData?.asset
       ? structuredClone(obj.userData.asset)
       : (info?.asset ? structuredClone(info.asset) : null);
+    wrapper.userData.metadata = Object.prototype.hasOwnProperty.call(info || {}, 'metadata')
+      ? cloneJsonSafe(info.metadata)
+      : cloneJsonSafe(obj?.userData?.metadata || null);
     if (options.assetId) wrapper.userData.assetId = options.assetId;
     if (preservedPhysics) {
       wrapper.userData.physics = normalizeObjectPhysics(preservedPhysics);

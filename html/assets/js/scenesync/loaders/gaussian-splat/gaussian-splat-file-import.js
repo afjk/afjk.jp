@@ -66,7 +66,7 @@ export function describeGaussianSplatImportError(error) {
  *
  * @param {File} file a dropped capture (.ply/.spz/.sog/.lcc2/.lcc/.splat/.ksplat, or a .zip of one)
  * @param {Object} [options]
- * @param {'none'|'flip-x-180'} [options.upAxisCorrection]
+ * @param {'none'|'flip-x-180'|'flip-z-180'} [options.upAxisCorrection]
  * @param {0|1|2|3} [options.maxShDegree]
  * @param {(status: { phase: string, file: File, bytes: number }) => void} [options.onProgress]
  * @param {Function} [options.importer] injection point for tests

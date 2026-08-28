@@ -1475,7 +1475,7 @@
       </button>
     </div>
     <div class="row mobile-collapsible-row">
-      <button id="media-url-btn" class="chip" type="button" title="動画・画像URLを追加（VR180 / 3D対応）">
+      <button id="media-url-btn" class="chip" type="button" title="動画・画像・SuperSplat URLを追加（VR180 / 3D対応）">
         <span>🎬</span>
         <span>メディアURL</span>
       </button>
@@ -1553,13 +1553,13 @@
   </div>
   <div id="media-url-dialog" class="pairing-dialog" style="display:none;">
     <div class="pairing-content media-url-content" role="dialog" aria-modal="true" aria-labelledby="media-url-dialog-title">
-      <h3 id="media-url-dialog-title">メディアURLを追加</h3>
-      <p>動画 / 画像の直接 URL を入力してください（CORS 許可が必要）。</p>
+      <h3 id="media-url-dialog-title">URLを追加</h3>
+      <p>動画 / 画像 / GLBの直接URL、またはDownloadableなSuperSplat公開シーンURLを入力してください。</p>
       <input
         id="media-url-input"
         class="media-url-input"
         type="url"
-        placeholder="https://example.com/video_vr180.mp4"
+        placeholder="https://superspl.at/scene/… またはメディアURL"
         autocomplete="off"
         spellcheck="false"
       >
@@ -1893,7 +1893,7 @@
       <div class="mobile-sheet-actions">
         <button id="mobile-add-image-btn" class="chip primary" type="button">画像を追加</button>
         <button id="mobile-add-glb-btn" class="chip" type="button">ファイルを追加</button>
-        <button id="mobile-add-media-url-btn" class="chip" type="button">メディアURLを追加（VR180 / 3D）</button>
+        <button id="mobile-add-media-url-btn" class="chip" type="button">URLを追加（メディア / SuperSplat）</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
         <button id="mobile-room-open-btn" class="chip" type="button">ルーム設定</button>
         <button id="mobile-env-open-btn" class="chip" type="button">背景</button>

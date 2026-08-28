@@ -124,4 +124,6 @@ export function wrapGlbSceneInRotationNode(input, rotation, name = 'UpAxisCorrec
 /** Quaternions for the up-axis corrections SceneSync offers. */
 export const UP_AXIS_ROTATIONS = Object.freeze({
   'flip-x-180': Object.freeze([1, 0, 0, 0]),
+  // SuperSplat's official viewer applies this rotation to every published SOG.
+  'flip-z-180': Object.freeze([0, 0, 1, 0]),
 });

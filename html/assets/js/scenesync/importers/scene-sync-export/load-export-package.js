@@ -1,18 +1,5 @@
 import { isValidSceneDocument } from '../../../scenesync-export/viewer/scene-document.js';
-
-async function ensureJSZip() {
-  if (typeof globalThis.JSZip !== 'undefined') return globalThis.JSZip;
-
-  await new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-    script.onload = resolve;
-    script.onerror = () => reject(new Error('Failed to load JSZip'));
-    document.head.appendChild(script);
-  });
-
-  return globalThis.JSZip;
-}
+import { ensureJSZip } from '../../utils/jszip-loader.js';
 
 // Reads scene.json (and manifest.json, if present) from a Scene Sync Export ZIP Blob.
 export async function loadExportPackageFromBlob(blob) {

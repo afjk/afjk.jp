@@ -3,6 +3,7 @@ import { importVideoUrl } from './video.js';
 import { importImageUrl } from './image.js';
 import { importGlbUrl } from './glb.js';
 import { importTextUrl } from './text.js';
+import { importSuperSplatUrl } from './supersplat.js';
 import { classifyUrl, URL_KIND } from '../url-classifier.js';
 
 /**
@@ -56,6 +57,10 @@ export async function dispatchUrlImport(url, ctx) {
     return await importGlbUrl(classified.url, ctx);
   }
 
+  if (classified.kind === URL_KIND.SUPERSPLAT) {
+    return await importSuperSplatUrl(classified.url, ctx);
+  }
+
   if (classified.kind === URL_KIND.TEXT) {
     return await importTextUrl(classified.url, ctx);
   }
@@ -63,7 +68,7 @@ export async function dispatchUrlImport(url, ctx) {
   if (classified.kind === URL_KIND.WEBPAGE) {
     ctx.showToast({
       type: 'error',
-      message: 'この URL は対応していません（動画/画像の直接 URL のみ対応）',
+      message: 'この URL は対応していません（動画/画像/GLBの直接URL、またはSuperSplat公開シーンに対応）',
     });
     return;
   }

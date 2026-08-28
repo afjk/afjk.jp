@@ -16,6 +16,17 @@ const expectedSplatCount = Number(process.env.SCENESYNC_3DGS_EXPECTED_SPLATS || 
 const gaussianLoadTimeoutMs = Number(process.env.SCENESYNC_3DGS_LOAD_TIMEOUT_MS || 30000);
 const transportOnly = process.env.SCENESYNC_3DGS_TRANSPORT_ONLY === '1';
 const sogFixtureName = path.basename(sogFixturePath);
+const liveSuperSplatSceneUrl = String(process.env.SCENESYNC_3DGS_SUPERSPLAT_URL || '').trim();
+const superSplatSceneUrl = liveSuperSplatSceneUrl
+  || 'https://superspl.at/scene/scenesync-ring';
+const superSplatExpectedCount = Number(
+  process.env.SCENESYNC_3DGS_SUPERSPLAT_EXPECTED_SPLATS
+    || (liveSuperSplatSceneUrl ? Number.NaN : expectedSplatCount),
+);
+const superSplatResolverPattern =
+  'https://insta360-sog-resolver.afjk01.workers.dev/api/supersplat**';
+const superSplatAssetUrl =
+  'https://scenesync-fixture.cloudfront.net/scenesync-ring/v1/ring-gaussian-splats.sog';
 const configuredDropPosition = String(process.env.SCENESYNC_3DGS_DROP_POSITION || '')
   .split(',')
   .map(Number);
@@ -162,6 +173,7 @@ const widePlyBytes = buildGaussianSplatPly([
     sh0: [0, 0.1, 0.2],
   },
 ]);
+const sogFixtureBytes = await readFile(sogFixturePath);
 
 let browser;
 try {
@@ -179,6 +191,33 @@ try {
   });
   const page = await sourceContext.newPage();
   const targetPage = await targetContext.newPage();
+  if (!liveSuperSplatSceneUrl) {
+    await page.route(superSplatResolverPattern, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify({
+          provider: 'supersplat',
+          sceneId: 'scenesync-ring',
+          pageUrl: superSplatSceneUrl,
+          title: 'SceneSync Ring',
+          author: 'SceneSync fixture',
+          downloadable: true,
+          license: { code: 'CC0-1.0', label: 'CC0 1.0' },
+          asset: { format: 'sog', url: superSplatAssetUrl, revision: 'v1' },
+        }),
+      });
+    });
+    await page.route(superSplatAssetUrl, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/octet-stream',
+        headers: { 'access-control-allow-origin': '*' },
+        body: sogFixtureBytes,
+      });
+    });
+  }
   const pageErrors = [];
   const consoleErrors = [];
   const invalidOperations = [];
@@ -280,6 +319,49 @@ try {
     'A second player did not receive the mesh carrier encoding');
   assert(targetSnapshot.asset?.carrierSize === snapshot.asset?.carrierSize,
     'A second player did not receive the mesh carrier byte size');
+
+  phase = 'supersplat-url-import';
+  const superSplatImported = await page.evaluate(async ({ sceneUrl, position }) => {
+    const debug = globalThis.__sceneSyncDebug;
+    const before = new Set(debug.objects.list());
+    await debug.dragDropManager.urlImporter(sceneUrl, { toArray: () => position }, {
+      targetKind: 'scene',
+    });
+    const objectId = debug.objects.list().find((id) => !before.has(id)) || null;
+    const { managedObjects } = await import('/assets/js/scenesync/scene.js');
+    const object = objectId ? managedObjects.get(objectId) : null;
+    return {
+      objectId,
+      importedFrom: object?.userData?.importedFrom || null,
+      metadata: object?.userData?.metadata || null,
+    };
+  }, { sceneUrl: superSplatSceneUrl, position: [2, 0, 0] });
+  assert(superSplatImported.objectId, 'SuperSplat URL did not create an Editor object');
+  assert(superSplatImported.importedFrom?.provider === 'supersplat',
+    'SuperSplat URL did not use the Gaussian conversion path');
+  assert(typeof superSplatImported.metadata?.gaussianSplatSource?.license?.code === 'string',
+    'SuperSplat attribution metadata was not retained');
+  const superSplatSnapshot = await page.evaluate((objectId) => (
+    globalThis.__sceneSyncDebug.objects.get(objectId)
+  ), superSplatImported.objectId);
+  assert(superSplatSnapshot.gaussian?.hasGaussianSplat === true,
+    'SuperSplat URL did not render as GaussianSplat');
+  if (Number.isFinite(superSplatExpectedCount)) {
+    assert(superSplatSnapshot.gaussian?.splatCount === superSplatExpectedCount,
+      'SuperSplat URL did not preserve every SOG splat');
+  }
+  assert(JSON.stringify(superSplatSnapshot.position) === JSON.stringify([2, 0, 0]),
+    'SuperSplat URL ignored its requested placement');
+  await targetPage.waitForFunction((objectId) => (
+    globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
+  ), superSplatImported.objectId, { timeout: gaussianLoadTimeoutMs });
+  const targetSuperSplatMetadata = await targetPage.evaluate(async (objectId) => {
+    const { managedObjects } = await import('/assets/js/scenesync/scene.js');
+    return managedObjects.get(objectId)?.userData?.metadata || null;
+  }, superSplatImported.objectId);
+  assert(targetSuperSplatMetadata?.gaussianSplatSource?.pageUrl === superSplatSceneUrl,
+    'A second player did not receive SuperSplat source metadata');
+
   const targetCachedBytes = await targetPage.evaluate(async ({ assetId, timeoutMs }) => {
     const deadline = performance.now() + timeoutMs;
     while (performance.now() < deadline) {
@@ -373,6 +455,15 @@ try {
     'Reloaded Gaussian object lost its persistent asset identity');
   assert(reloadedSnapshot.asset?.carrierEncoding === snapshot.asset?.carrierEncoding,
     'Reloaded Gaussian object lost its mesh carrier encoding');
+  await page.waitForFunction((objectId) => (
+    globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
+  ), superSplatImported.objectId, { timeout: gaussianLoadTimeoutMs });
+  const reloadedSuperSplatMetadata = await page.evaluate(async (objectId) => {
+    const { managedObjects } = await import('/assets/js/scenesync/scene.js');
+    return managedObjects.get(objectId)?.userData?.metadata || null;
+  }, superSplatImported.objectId);
+  assert(reloadedSuperSplatMetadata?.gaussianSplatSource?.pageUrl === superSplatSceneUrl,
+    'Reloaded SuperSplat object lost its source and license metadata');
 
   if (transportOnly) {
     assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
@@ -394,6 +485,9 @@ try {
       snapshotPersisted: true,
       reloadedFromAssetCache: true,
       targetCachedRawGlb: true,
+      superSplatUrlImported: true,
+      superSplatUrlSynchronized: true,
+      superSplatUrlRestored: true,
     }, null, 2));
     break e2eFlow;
   }
@@ -557,6 +651,9 @@ try {
     redoDeleted: true,
     dracoLoaded: true,
     shDegree3Preserved: true,
+    superSplatUrlImported: true,
+    superSplatUrlSynchronized: true,
+    superSplatUrlRestored: true,
   }, null, 2));
   }
 } finally {
