@@ -83,6 +83,11 @@ try {
   assert(result.gaussianObjects >= 1, 'GLTF loader did not create GaussianSplat');
   assert(result.splatCount === 16, 'ring fixture splat count changed');
   assert(result.normalMeshes === 1, 'normal mesh did not coexist with GaussianSplat');
+  assert(result.initialized === true, 'Shared Scene Sync Gaussian extension was not initialized');
+  assert(
+    result.gaussianSplatPatch === 'xr-stereo-mediumpModelViewMatrix-cameraViewport-smooth-kernel',
+    'Production Gaussian XR stereo/smooth patch changed',
+  );
   assert(result.rendered === true, 'GaussianSplat frame was not rendered');
   if (!requestWebGPU) assert(result.backend === 'webgl', 'default backend must be WebGL');
   if (requestWebGPU) assert(result.backend === 'webgpu', '?webgpu=1 did not select WebGPU');

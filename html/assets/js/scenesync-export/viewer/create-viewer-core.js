@@ -2,7 +2,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
-import { registerSceneSyncGLTFLoaderExtensions } from '../../scenesync/loaders/gltf-loader-config.js';
+import {
+  getSceneSyncGLTFLoaderExtensionDiagnostics,
+  initializeSceneSyncGLTFLoaderExtensions,
+  registerSceneSyncGLTFLoaderExtensions,
+} from '../../scenesync/loaders/gltf-loader-config.js';
 import {
   createGaussianSplatSortScheduler,
   createGaussianSplatFrustumTest,
@@ -230,6 +234,8 @@ export async function createViewerCore({
   if (!isValidSceneDocument(sceneDoc)) {
     throw new Error('Invalid scene document');
   }
+
+  await initializeSceneSyncGLTFLoaderExtensions();
 
   const resolver = createStaticAssetResolver();
   const objectMap = new Map();
@@ -652,6 +658,7 @@ export async function createViewerCore({
         gaussianObjects,
         splatCount: gaussianSplatCount,
         objectCount: objectMap.size,
+        ...getSceneSyncGLTFLoaderExtensionDiagnostics(),
       };
     },
 

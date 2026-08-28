@@ -1,6 +1,26 @@
-import { GLTFGaussianSplatLoaderExtension } from 'three/addons/loaders/GLTFGaussianSplatLoaderExtension.js';
+import {
+  SCENE_SYNC_GAUSSIAN_SPLAT_PATCH,
+  loadSceneSyncGaussianSplatLoaderExtension,
+} from './gaussian-splat-three-patch.js';
+
+let gaussianSplatLoaderExtension = null;
+
+export async function initializeSceneSyncGLTFLoaderExtensions() {
+  gaussianSplatLoaderExtension ||= await loadSceneSyncGaussianSplatLoaderExtension();
+  return gaussianSplatLoaderExtension;
+}
 
 export function registerSceneSyncGLTFLoaderExtensions(loader) {
-  loader.register((parser) => new GLTFGaussianSplatLoaderExtension(parser));
+  if (!gaussianSplatLoaderExtension) {
+    throw new Error('Scene Sync GLTF loader extensions were not initialized');
+  }
+  loader.register((parser) => new gaussianSplatLoaderExtension(parser));
   return loader;
+}
+
+export function getSceneSyncGLTFLoaderExtensionDiagnostics() {
+  return {
+    initialized: typeof gaussianSplatLoaderExtension === 'function',
+    gaussianSplatPatch: SCENE_SYNC_GAUSSIAN_SPLAT_PATCH,
+  };
 }

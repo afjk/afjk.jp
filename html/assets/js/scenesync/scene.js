@@ -25,6 +25,7 @@ import { ClipboardImportManager } from './components/clipboard-import-manager.js
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import {
+  getSceneSyncGLTFLoaderExtensionDiagnostics,
   registerSceneSyncGLTFLoaderExtensions,
 } from './loaders/gltf-loader-config.js';
 import {
@@ -12343,6 +12344,7 @@ if (isDevUiEnabled()) {
       renderer: renderer.isWebGPURenderer === true ? 'WebGPURenderer' : renderer.type,
       backend: renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu',
       xrEnabled: renderer.xr.enabled === true,
+      ...getSceneSyncGLTFLoaderExtensionDiagnostics(),
     }),
     selectAt: (clientX, clientY) => sceneInputIntent.selectAt(clientX, clientY),
     deleteSelected: () => deleteSelectedObjects(),

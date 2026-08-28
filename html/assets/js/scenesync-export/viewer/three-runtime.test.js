@@ -18,6 +18,7 @@ const editorIndexUrl = new URL('../../../../scenesync/index.html', import.meta.u
 const editorGlbLoaderUrl = new URL('../../../../assets/js/scenesync/loaders/glb-file-loader.js', import.meta.url);
 const editorThreeAppUrl = new URL('../../../../assets/js/scenesync/core/three-app.js', import.meta.url);
 const staticViewerEntryUrl = new URL('./static-viewer-entry.js', import.meta.url);
+const gaussianPatchUrl = new URL('../../../../assets/js/scenesync/loaders/gaussian-splat-three-patch.js', import.meta.url);
 
 function parseStaticImportMap(html) {
   const match = String(html).match(/<script type="importmap">\s*([\s\S]*?)\s*<\/script>/u);
@@ -76,6 +77,29 @@ test('Editor and Export Viewer retain WebXR setup after renderer migration', asy
   assert.match(staticViewerEntry, /'immersive-vr'/u);
   assert.match(staticViewerEntry, /'immersive-ar'/u);
   assert.match(staticViewerEntry, /'local-floor'/u);
+});
+
+test('Editor and exports share the pinned Gaussian XR stereo patch', async () => {
+  const [editorThreeApp, gaussianPatch] = await Promise.all([
+    readFile(editorThreeAppUrl, 'utf8'),
+    readFile(gaussianPatchUrl, 'utf8'),
+  ]);
+  const staticIndex = generateExportIndexHtml();
+  const singleHtml = await buildSingleHtmlDocument({
+    sceneDocument: { format: 'scene-sync-export-scene', version: 2, objects: [] },
+    manifest: { format: 'scene-sync-export', version: 1 },
+    files: {},
+    viewerFiles: {
+      'scenesync/loaders/gaussian-splat-three-patch.js': gaussianPatch,
+    },
+  });
+
+  assert.match(editorThreeApp, /initializeSceneSyncGLTFLoaderExtensions/u);
+  assert.match(gaussianPatch, /mediumpModelViewMatrix/u);
+  assert.match(gaussianPatch, /cameraViewport\.zw/u);
+  assert.match(gaussianPatch, /smooth-kernel/u);
+  assert.ok(staticIndex.includes(SCENE_SYNC_THREE_REVISION));
+  assert.ok(singleHtml.includes('xr-stereo-mediumpModelViewMatrix-cameraViewport-smooth-kernel'));
 });
 
 test('renderer backend selection defaults to WebGL and requires ?webgpu=1 for WebGPU', () => {
