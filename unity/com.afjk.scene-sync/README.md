@@ -6,8 +6,8 @@ afjk.jp/pipe の presence-server と blob store を利用して通信します�
 
 ## 対応環境
 
-- Unity 2021.3 以降
-- Editor publish / Runtime import の基本 GLB 処理には `com.unity.cloud.gltfast@6.0.0` を使用
+- Unity 2022.3 以降
+- Editor publish / Runtime import の基本 GLB 処理には `com.unity.cloud.gltfast@6.15.0` を使用
 - Loomlet graph runtime として `com.afjk.loomlet-runtime@0.3.0` に依存
 - Animation 付き GLB export には任意で UnityGLTF を使用
 
@@ -58,7 +58,7 @@ https://github.com/afjk/afjk.jp.git?path=unity/com.afjk.scene-sync#v0.21.0
 }
 ```
 
-Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` と `com.unity.cloud.gltfast@6.0.0` は package dependency として解決されます。解決されない場合は、`upm.afjk.jp` scoped registry と Unity package registry の設定を確認してください。
+Git URL でインストールする場合も、`com.afjk.loomlet-runtime@0.3.0` と `com.unity.cloud.gltfast@6.15.0` は package dependency として解決されます。解決されない場合は、`upm.afjk.jp` scoped registry と Unity package registry の設定を確認してください。
 
 ## Unity Editor で使う
 

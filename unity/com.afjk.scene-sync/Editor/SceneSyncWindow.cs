@@ -3017,11 +3017,14 @@ namespace Afjk.SceneSync.Editor
             }
             else
             {
-                ForgetObject(objectId, go);
                 if (go != null)
                 {
                     Debug.Log("[SceneSync] Remote removed temporary object; destroying local object: " + objectId);
-                    DestroyImmediate(go);
+                    DestroyRemoteImportObject(go);
+                }
+                else
+                {
+                    ForgetObject(objectId);
                 }
             }
         }
@@ -3101,8 +3104,7 @@ namespace Afjk.SceneSync.Editor
                 var pos = go.transform.position;
                 var rot = go.transform.rotation;
                 var scl = go.transform.localScale;
-                ForgetObject(objectId, go);
-                DestroyImmediate(go);
+                DestroyRemoteImportObject(go);
 
                 _ = DownloadAndCreateObject(objectId, name, meshPath,
                     new float[] { pos.x, pos.y, -pos.z },
@@ -3552,6 +3554,8 @@ namespace Afjk.SceneSync.Editor
             var importGeneration = _remoteImportGeneration;
             if (!IsRemoteImportSessionCurrent(importGeneration)) return;
 
+            GameObject pendingImportObject = null;
+
             try
             {
                 if (!string.IsNullOrEmpty(meshPath))
@@ -3585,18 +3589,19 @@ namespace Afjk.SceneSync.Editor
                     {
                         Debug.LogWarning("[SceneSync] Download failed: " + response.StatusCode);
                         if (!IsRemoteImportSessionCurrent(importGeneration)) return;
-                        var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
-                        ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+                        pendingImportObject = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
+                        ConfigureRemoteTemporaryIdentity(pendingImportObject, objectId, meshPath, assetId);
                         if (effectivePhysicsJson != null)
-                            ApplyObjectPhysicsMetadata(fallback, effectivePhysicsJson);
-                        ApplyMetadataBehaviorGraph(fallback, objectId, metadataJson);
-                        if (visible.HasValue) fallback.SetActive(visible.Value);
-                        fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
-                        ApplyTransform(fallback, position, rotation, scale);
-                        _managedObjects[objectId] = fallback;
+                            ApplyObjectPhysicsMetadata(pendingImportObject, effectivePhysicsJson);
+                        ApplyMetadataBehaviorGraph(pendingImportObject, objectId, metadataJson);
+                        if (visible.HasValue) pendingImportObject.SetActive(visible.Value);
+                        pendingImportObject.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+                        ApplyTransform(pendingImportObject, position, rotation, scale);
+                        _managedObjects[objectId] = pendingImportObject;
                         _knownObjectIds.Add(objectId);
-                        _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                        ApplyPendingObjectLoomGraph(objectId, fallback);
+                        _instanceToObjectId[pendingImportObject.GetInstanceID()] = objectId;
+                        ApplyPendingObjectLoomGraph(objectId, pendingImportObject);
+                        pendingImportObject = null;
                         return;
                     }
 
@@ -3606,88 +3611,65 @@ namespace Afjk.SceneSync.Editor
                 }
 
                 if (!IsRemoteImportSessionCurrent(importGeneration)) return;
-                var tempFileName = !string.IsNullOrEmpty(meshPath) ? meshPath : objectId;
-                var tempPath = System.IO.Path.Combine(
-                    Application.temporaryCachePath, tempFileName + ".glb");
-                System.IO.File.WriteAllBytes(tempPath, glbBytes);
-
-                // Editor モード: UninterruptedDeferAgent（DontDestroyOnLoad を使わない）
-                var deferAgent = new GLTFast.UninterruptedDeferAgent();
-                var importSettings = new GLTFast.ImportSettings
-                {
-                    AnimationMethod = GLTFast.AnimationMethod.None,
-                };
-                var gltf = new GLTFast.GltfImport(
-                    downloadProvider: null,
-                    deferAgent: deferAgent);
-                var success = await gltf.Load("file://" + tempPath, importSettings);
+                var shouldApplyUnityImportYawCorrection = visualBasis != "unity";
+                pendingImportObject = await SceneSyncEditorGltfLoader.LoadAsync(
+                    glbBytes,
+                    name,
+                    shouldApplyUnityImportYawCorrection);
                 if (!IsRemoteImportSessionCurrent(importGeneration)) return;
 
-                if (success)
+                if (pendingImportObject != null)
                 {
-                    var go = new GameObject(name);
-                    ConfigureRemoteTemporaryIdentity(go, objectId, meshPath, assetId);
-                    SceneSyncPanelFactory.ConfigureWireMetadata(go, assetJson, metadataJson);
+                    ConfigureRemoteTemporaryIdentity(pendingImportObject, objectId, meshPath, assetId);
+                    SceneSyncPanelFactory.ConfigureWireMetadata(pendingImportObject, assetJson, metadataJson);
                     if (effectivePhysicsJson != null)
-                        ApplyObjectPhysicsMetadata(go, effectivePhysicsJson);
-                    ApplyMetadataBehaviorGraph(go, objectId, metadataJson);
-                    if (visible.HasValue) go.SetActive(visible.Value);
-                    go.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
-                    var importedGlbRoot = new GameObject("ImportedGlbRoot");
-                    importedGlbRoot.transform.SetParent(go.transform, worldPositionStays: false);
-
-                    // Keep the synchronized object transform on the parent and apply the
-                    // same Unity GLB visual correction as Runtime/SceneSyncManager.
-                    importedGlbRoot.transform.localPosition = Vector3.zero;
-                    var shouldApplyUnityImportYawCorrection = visualBasis != "unity";
-                    importedGlbRoot.transform.localRotation = shouldApplyUnityImportYawCorrection
-                        ? Quaternion.Euler(0f, 180f, 0f)
-                        : Quaternion.identity;
-                    importedGlbRoot.transform.localScale = Vector3.one;
+                        ApplyObjectPhysicsMetadata(pendingImportObject, effectivePhysicsJson);
+                    ApplyMetadataBehaviorGraph(pendingImportObject, objectId, metadataJson);
+                    if (visible.HasValue) pendingImportObject.SetActive(visible.Value);
+                    pendingImportObject.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
 
                     Debug.Log(
                         "[SceneSync] GLB visual basis: objectId=" + objectId
                         + ", visualBasis=" + (visualBasis ?? "web")
-                        + ", applyUnityImportYawCorrection=" + shouldApplyUnityImportYawCorrection
-                        + ", importedGlbRoot.localEulerAngles=" + importedGlbRoot.transform.localEulerAngles);
+                        + ", applyUnityImportYawCorrection=" + shouldApplyUnityImportYawCorrection);
 
-                    await gltf.InstantiateMainSceneAsync(importedGlbRoot.transform);
-                    if (!IsRemoteImportSessionCurrent(importGeneration) || go == null)
-                    {
-                        DestroyRemoteImportObject(go);
-                        return;
-                    }
-                    ApplyTransform(go, position, rotation, scale);
-                    _managedObjects[objectId] = go;
+                    ApplyTransform(pendingImportObject, position, rotation, scale);
+                    _managedObjects[objectId] = pendingImportObject;
                     _knownObjectIds.Add(objectId);
-                    _instanceToObjectId[go.GetInstanceID()] = objectId;
-                    ApplyPendingObjectLoomGraph(objectId, go);
+                    _instanceToObjectId[pendingImportObject.GetInstanceID()] = objectId;
+                    ApplyPendingObjectLoomGraph(objectId, pendingImportObject);
+                    pendingImportObject = null;
                     Debug.Log("[SceneSync] Imported mesh: " + name);
                 }
                 else
                 {
                     Debug.LogWarning("[SceneSync] glTF import failed for: " + name);
                     if (!IsRemoteImportSessionCurrent(importGeneration)) return;
-                    var fallback = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
-                    ConfigureRemoteTemporaryIdentity(fallback, objectId, meshPath, assetId);
+                    pendingImportObject = SceneSyncPanelFactory.CreateObjectForAsset(name, assetJson, metadataJson);
+                    ConfigureRemoteTemporaryIdentity(pendingImportObject, objectId, meshPath, assetId);
                     if (effectivePhysicsJson != null)
-                        ApplyObjectPhysicsMetadata(fallback, effectivePhysicsJson);
-                    ApplyMetadataBehaviorGraph(fallback, objectId, metadataJson);
-                    if (visible.HasValue) fallback.SetActive(visible.Value);
-                    fallback.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
-                    ApplyTransform(fallback, position, rotation, scale);
-                    _managedObjects[objectId] = fallback;
+                        ApplyObjectPhysicsMetadata(pendingImportObject, effectivePhysicsJson);
+                    ApplyMetadataBehaviorGraph(pendingImportObject, objectId, metadataJson);
+                    if (visible.HasValue) pendingImportObject.SetActive(visible.Value);
+                    pendingImportObject.transform.SetParent(GetOrCreateTemporaryRoot(), worldPositionStays: false);
+                    ApplyTransform(pendingImportObject, position, rotation, scale);
+                    _managedObjects[objectId] = pendingImportObject;
                     _knownObjectIds.Add(objectId);
-                    _instanceToObjectId[fallback.GetInstanceID()] = objectId;
-                    ApplyPendingObjectLoomGraph(objectId, fallback);
+                    _instanceToObjectId[pendingImportObject.GetInstanceID()] = objectId;
+                    ApplyPendingObjectLoomGraph(objectId, pendingImportObject);
+                    pendingImportObject = null;
                 }
-
-                // 一時ファイル削除
-                try { System.IO.File.Delete(tempPath); } catch { }
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[SceneSync] DownloadAndCreate failed: " + ex.Message);
+            }
+            finally
+            {
+                if (pendingImportObject != null)
+                {
+                    DestroyRemoteImportObject(pendingImportObject);
+                }
             }
         }
 
@@ -3773,6 +3755,7 @@ namespace Afjk.SceneSync.Editor
             if (go == null) return;
 
             ForgetSceneSyncObject(go);
+            SceneSyncEditorGltfLoader.Release(go);
 
             if (Application.isPlaying)
             {

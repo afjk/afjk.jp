@@ -2,7 +2,8 @@
   "name": "com.afjk.scene-sync.Tests.Editor",
   "rootNamespace": "Afjk.SceneSync.Tests",
   "references": [
-    "com.afjk.scene-sync.Runtime"
+    "com.afjk.scene-sync.Runtime",
+    "com.afjk.scene-sync.Editor"
   ],
   "includePlatforms": [
     "Editor"
