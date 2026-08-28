@@ -38,8 +38,9 @@ namespace Afjk.SceneSync
         private Dictionary<string, string> _locks = new Dictionary<string, string>(); // objectId → lockOwnerId
         private string _currentlyLockedObjectId;
         private Dictionary<string, string> _meshPaths = new Dictionary<string, string>(); // objectId → meshPath
-        private bool _sceneReceived = false;
-        private bool _firstPeersReceived = false;
+        private readonly SceneSyncInitialSceneRequestState _initialSceneRequest =
+            new SceneSyncInitialSceneRequestState();
+        private bool _hasPeersSnapshot;
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private double _lastTime;
         private Material _runtimeFallbackImportMaterial;
@@ -394,6 +395,8 @@ namespace Afjk.SceneSync
             _client = new PresenceClientRuntime();
             _client.OnConnected += () =>
             {
+                _initialSceneRequest.Reset();
+                _hasPeersSnapshot = false;
                 _connected = true;
                 _lastAppliedPlaybackClockMode = (SceneSyncPlaybackClockMode)(-1);
                 OnConnected?.Invoke();
@@ -417,8 +420,8 @@ namespace Afjk.SceneSync
                     FallbackFromSharedPlayback(disconnectTime, "disconnect");
                 }
                 _connected = false;
-                _sceneReceived = false;
-                _firstPeersReceived = false;
+                _initialSceneRequest.Reset();
+                _hasPeersSnapshot = false;
                 _sharedSceneClockRevision = 0;
                 _peers = new List<PeerInfo>();
                 OnDisconnected?.Invoke();
@@ -429,18 +432,9 @@ namespace Afjk.SceneSync
                 _peers = peers;
                 OnPeersUpdated?.Invoke(_peers);
 
-                var firstPeersUpdate = !_firstPeersReceived;
-                _firstPeersReceived = true;
+                _hasPeersSnapshot = true;
                 ValidateSharedPlaybackController(Time.realtimeSinceStartup, "controller-disconnected");
-
-                // 初回 peers 受信時にシーンリクエストを送信
-                if (firstPeersUpdate && peers.Count > 0)
-                {
-                    if (!_sceneReceived)
-                    {
-                        _ = RequestSceneFromPeer();
-                    }
-                }
+                RequestSceneFromPeer(Time.realtimeSinceStartup);
             };
             _client.OnHandoffReceived += OnHandoff;
 
@@ -999,6 +993,10 @@ namespace Afjk.SceneSync
             UpdatePlaybackClock(currentTime);
 
             if (!_connected) return;
+
+            if (_initialSceneRequest.PendingPeerId != null
+                && currentTime >= _initialSceneRequest.PendingDeadline)
+                RequestSceneFromPeer(currentTime);
 
             if (!_syncHierarchy) return;
 
@@ -1628,34 +1626,36 @@ namespace Afjk.SceneSync
             }
         }
 
-        private async System.Threading.Tasks.Task RequestSceneFromPeer()
+        private void RequestSceneFromPeer(double currentTime)
         {
-            var peers = _peers;
-            if (peers == null || peers.Count == 0)
-            {
-                _sceneReceived = true;
+            if (_client == null || !_client.IsConnected) return;
+
+            var peerIds = _peers != null
+                ? _peers.Select(peer => peer != null ? peer.id : null)
+                : Enumerable.Empty<string>();
+            if (!_initialSceneRequest.TrySelectPeer(
+                    peerIds,
+                    _client.Id,
+                    currentTime,
+                    SceneSyncInitialSceneRequestState.DefaultTimeoutSeconds,
+                    out var targetPeerId))
                 return;
-            }
 
-            // 自分以外の最初のピアに handoff で送信
-            foreach (var peer in peers)
-            {
-                if (peer.id == _client.Id) continue;
-
-                Debug.Log("[SceneSync] Requesting scene from: " +
-                    (peer.nickname ?? peer.id));
-                await _client.SendHandoff(peer.id,
-                    "{\"kind\":\"scene-request\"}");
-                return;
-            }
-
-            // 自分しかいない
-            _sceneReceived = true;
+            var targetPeer = _peers?.FirstOrDefault(peer => peer != null && peer.id == targetPeerId);
+            Debug.Log("[SceneSync] Requesting scene from: " +
+                (targetPeer?.nickname ?? targetPeerId));
+            _ = _client.SendHandoff(targetPeerId,
+                "{\"kind\":\"scene-request\"}");
         }
 
         private void HandleSceneState(string raw)
         {
-            _sceneReceived = true;
+            if (!_initialSceneRequest.TryMarkSceneReceived())
+            {
+                Debug.Log("[SceneSync] Ignoring additional scene-state");
+                return;
+            }
+
             Debug.Log("[SceneSync] Received scene-state");
 
             ApplyScenePhysicsMetadata(raw);
@@ -1935,7 +1935,7 @@ namespace Afjk.SceneSync
             var leaseValid = _sharedSceneClock.IsLeaseValid(currentTime);
             var peerValid = !string.IsNullOrWhiteSpace(controllerId)
                 && (IsLocalClientId(controllerId)
-                    || !_firstPeersReceived
+                    || !_hasPeersSnapshot
                     || _peers.Any(peer => peer != null
                         && string.Equals(peer.id, controllerId, StringComparison.Ordinal)));
 
@@ -3864,7 +3864,7 @@ namespace Afjk.SceneSync
                 || !_sharedSceneClock.IsLeaseValid(currentTime))
                 return false;
 
-            return !_firstPeersReceived || _peers.Any(peer => peer != null
+            return !_hasPeersSnapshot || _peers.Any(peer => peer != null
                 && string.Equals(peer.id, _sharedSceneClock.ControllerId, StringComparison.Ordinal));
         }
 

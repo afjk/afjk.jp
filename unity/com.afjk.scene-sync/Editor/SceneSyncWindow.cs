@@ -76,8 +76,8 @@ namespace Afjk.SceneSync.Editor
         private string _currentlyLockedObjectId;
         private Dictionary<string, string> _meshPaths = new Dictionary<string, string>(); // objectId → meshPath
         private Dictionary<string, string> _pendingObjectLoomGraphs = new Dictionary<string, string>();
-        private bool _sceneReceived = false;
-        private bool _firstPeersReceived = false;
+        private readonly SceneSyncInitialSceneRequestState _initialSceneRequest =
+            new SceneSyncInitialSceneRequestState();
         private Dictionary<int, string> _instanceToObjectId = new Dictionary<int, string>(); // Unity InstanceID → 元の objectId
         private bool _applyingRemoteTransform;
         private bool _showConnectionSettings = false;
@@ -112,6 +112,7 @@ namespace Afjk.SceneSync.Editor
             _client = new PresenceClient();
             _client.OnConnected += () =>
             {
+                _initialSceneRequest.Reset();
                 _connected = true;
                 SyncRoomToSceneSyncManager();
                 RebindPublishedUnityObjects();
@@ -121,8 +122,7 @@ namespace Afjk.SceneSync.Editor
             {
                 var wasConnected = _connected;
                 _connected = false;
-                _sceneReceived = false;
-                _firstPeersReceived = false;
+                _initialSceneRequest.Reset();
                 if (wasConnected && !_isSceneSwitching && !_isManualDisconnect)
                 {
                     ClearTemporaryObjects();
@@ -133,16 +133,7 @@ namespace Afjk.SceneSync.Editor
             {
                 _peers = peers;
                 Repaint();
-
-                // 初回 peers 受信時にシーンリクエストを送信
-                if (!_firstPeersReceived && peers.Count > 0)
-                {
-                    _firstPeersReceived = true;
-                    if (!_sceneReceived)
-                    {
-                        _ = RequestSceneFromPeer();
-                    }
-                }
+                RequestSceneFromPeer(EditorApplication.timeSinceStartup);
             };
             _client.OnHandoffReceived += OnHandoff;
 
@@ -218,8 +209,7 @@ namespace Afjk.SceneSync.Editor
             _locks.Clear();
             _pendingObjectLoomGraphs.Clear();
             _currentlyLockedObjectId = null;
-            _sceneReceived = false;
-            _firstPeersReceived = false;
+            _initialSceneRequest.Reset();
             _lastSnapshots.Clear();
             _envId = null;
 
@@ -352,6 +342,11 @@ namespace Afjk.SceneSync.Editor
         private void EditorUpdate()
         {
             if (!_connected) return;
+
+            var currentTime = EditorApplication.timeSinceStartup;
+            if (_initialSceneRequest.PendingPeerId != null
+                && currentTime >= _initialSceneRequest.PendingDeadline)
+                RequestSceneFromPeer(currentTime);
 
             // Selection 変更のチェック
             var selection = Selection.activeGameObject;
@@ -1609,8 +1604,7 @@ namespace Afjk.SceneSync.Editor
             _meshPaths.Clear();
             _locks.Clear();
             _currentlyLockedObjectId = null;
-            _sceneReceived = false;
-            _firstPeersReceived = false;
+            _initialSceneRequest.Reset();
             _lastSnapshots.Clear();
 
             Repaint();
@@ -1850,34 +1844,36 @@ namespace Afjk.SceneSync.Editor
             return result;
         }
 
-        private async System.Threading.Tasks.Task RequestSceneFromPeer()
+        private void RequestSceneFromPeer(double currentTime)
         {
-            var peers = _peers;
-            if (peers == null || peers.Count == 0)
-            {
-                _sceneReceived = true;
+            if (_client == null || !_client.IsConnected) return;
+
+            var peerIds = _peers != null
+                ? _peers.Select(peer => peer != null ? peer.id : null)
+                : Enumerable.Empty<string>();
+            if (!_initialSceneRequest.TrySelectPeer(
+                    peerIds,
+                    _client.Id,
+                    currentTime,
+                    SceneSyncInitialSceneRequestState.DefaultTimeoutSeconds,
+                    out var targetPeerId))
                 return;
-            }
 
-            // 自分以外の最初のピアに handoff で送信
-            foreach (var peer in peers)
-            {
-                if (peer.id == _client.Id) continue;
-
-                Debug.Log("[SceneSync] Requesting scene from: " +
-                    (peer.nickname ?? peer.id));
-                await _client.SendHandoff(peer.id,
-                    "{\"kind\":\"scene-request\"}");
-                return;
-            }
-
-            // 自分しかいない
-            _sceneReceived = true;
+            var targetPeer = _peers?.FirstOrDefault(peer => peer != null && peer.id == targetPeerId);
+            Debug.Log("[SceneSync] Requesting scene from: " +
+                (targetPeer?.nickname ?? targetPeerId));
+            _ = _client.SendHandoff(targetPeerId,
+                "{\"kind\":\"scene-request\"}");
         }
 
         private void HandleSceneState(string raw)
         {
-            _sceneReceived = true;
+            if (!_initialSceneRequest.TryMarkSceneReceived())
+            {
+                Debug.Log("[SceneSync] Ignoring additional scene-state");
+                return;
+            }
+
             Debug.Log("[SceneSync] Received scene-state");
 
             ApplyScenePhysicsMetadata(raw);
