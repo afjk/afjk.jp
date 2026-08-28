@@ -54,6 +54,10 @@ test('wrapping parents the scene roots under one rotated node', () => {
   assert.deepEqual(json.nodes[0], { mesh: 0 }, 'the original node is untouched');
 });
 
+test('SuperSplat correction is the official 180 degree Z rotation', () => {
+  assert.deepEqual(UP_AXIS_ROTATIONS['flip-z-180'], [0, 0, 1, 0]);
+});
+
 test('wrapping keeps the binary payload byte for byte', () => {
   const bin = new Uint8Array([1, 2, 3, 4, 5, 6, 7]);
   const wrapped = wrapGlbSceneInRotationNode(sampleGlb({}, bin), [1, 0, 0, 0]);

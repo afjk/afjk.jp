@@ -104,6 +104,14 @@ test('convertGaussianSplatFileToGlb passes upAxisCorrection through', async () =
   assert.deepEqual(root.rotation, [1, 0, 0, 0]);
 });
 
+test('convertGaussianSplatFileToGlb can preserve SuperSplat orientation', async () => {
+  const result = await convert(plyFile(), { upAxisCorrection: 'flip-z-180' });
+
+  const json = parseGlbJson(new Uint8Array(await result.file.arrayBuffer()));
+  const root = json.nodes[json.scenes[json.scene ?? 0].nodes[0]];
+  assert.deepEqual(root.rotation, [0, 0, 1, 0]);
+});
+
 test('convertGaussianSplatFileToGlb passes maxShDegree through', async () => {
   const shRest = Array.from({ length: 45 }, (_, i) => i / 100);
   const file = new File([buildGaussianSplatPly([{ ...SAMPLE[0], shRest }], { shDegree: 3 })], 'a.ply');

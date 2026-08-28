@@ -1,9 +1,12 @@
+import { parseSuperSplatSceneUrl } from './supersplat-share.js';
+
 export const URL_KIND = {
   AUDIO: 'audio',
   VIDEO: 'video',
   VIDEO_HLS: 'video-hls',
   IMAGE: 'image',
   GLB: 'glb',
+  SUPERSPLAT: 'supersplat',
   TEXT: 'text',
   WEBPAGE: 'webpage',
   UNSUPPORTED: 'unsupported',
@@ -84,6 +87,17 @@ export function classifyUrl(urlString) {
 
   const twitterImage = classifyTwitterImageUrl(u);
   if (twitterImage) return twitterImage;
+
+  const superSplat = parseSuperSplatSceneUrl(normalized);
+  if (superSplat) {
+    return {
+      kind: URL_KIND.SUPERSPLAT,
+      url: superSplat.sceneUrl,
+      ext: '',
+      host: u.host,
+      sceneId: superSplat.sceneId,
+    };
+  }
 
   const ext = (u.pathname.split('.').pop() || '').toLowerCase();
   const host = u.host;

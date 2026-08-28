@@ -1,4 +1,5 @@
 import { detectStereoMediaFromName, stereoMediaLabel } from '../loaders/stereo-media.js';
+import { parseSuperSplatSceneUrl } from '../loaders/supersplat-share.js';
 
 /**
  * メディアURL登録ダイアログ。
@@ -16,6 +17,7 @@ export function initMediaUrlDialog({ onSubmit, showToast } = {}) {
   const dialog = document.getElementById('media-url-dialog');
   const input = document.getElementById('media-url-input');
   const formatSelect = document.getElementById('media-url-format');
+  const formatRow = formatSelect?.closest?.('.media-url-format-row');
   const hint = document.getElementById('media-url-hint');
   const addBtn = document.getElementById('media-url-add-btn');
   const cancelBtn = document.getElementById('media-url-cancel-btn');
@@ -32,13 +34,20 @@ export function initMediaUrlDialog({ onSubmit, showToast } = {}) {
 
   function updateHint() {
     if (!hint) return;
+    const url = input.value.trim();
+    const isSuperSplat = Boolean(parseSuperSplatSceneUrl(url));
+    if (formatRow) formatRow.hidden = isSuperSplat;
+    if (isSuperSplat) {
+      hint.textContent = 'SuperSplat: Downloadable設定とライセンスを確認してGaussian Splatとして追加します';
+      return;
+    }
+
     const value = formatSelect.value;
     if (value !== 'auto') {
       const format = parseFormatValue(value);
       hint.textContent = format ? `形式: ${stereoMediaLabel(format)}` : '';
       return;
     }
-    const url = input.value.trim();
     if (!url) {
       hint.textContent = '自動判定: ファイル名の vr180 / sbs / tb 等から推定します';
       return;
