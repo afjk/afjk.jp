@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
-import { registerSceneSyncGLTFLoaderExtensions } from '../../scenesync/loaders/gltf-loader-config.js';
+import {
+  getSceneSyncGLTFLoaderExtensionDiagnostics,
+  registerSceneSyncGLTFLoaderExtensions,
+} from '../../scenesync/loaders/gltf-loader-config.js';
 import {
   createGaussianSplatSortScheduler,
   createGaussianSplatFrustumTest,
@@ -253,7 +256,7 @@ export async function createViewerCore({
   dracoLoader.setDecoderPath(SCENE_SYNC_DRACO_DECODER_PATH);
   const gltfLoader = new GLTFLoader();
   gltfLoader.setDRACOLoader(dracoLoader);
-  registerSceneSyncGLTFLoaderExtensions(gltfLoader);
+  await registerSceneSyncGLTFLoaderExtensions(gltfLoader);
 
   // Load environment (HDRI)
   let envLoaded = false;
@@ -652,6 +655,7 @@ export async function createViewerCore({
         gaussianObjects,
         splatCount: gaussianSplatCount,
         objectCount: objectMap.size,
+        ...getSceneSyncGLTFLoaderExtensionDiagnostics(),
       };
     },
 

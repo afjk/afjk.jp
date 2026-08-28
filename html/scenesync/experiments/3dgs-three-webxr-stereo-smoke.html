@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SceneSync 3DGS Three.js Patched WebXR Stereo Smoke</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c12; color: #fff; font-family: system-ui, sans-serif; }
+    canvas { display: block; }
+    #panel { position: fixed; top: 12px; left: 12px; z-index: 2; width: min(440px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); }
+    #status { margin: 0 0 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; }
+    #actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button, select { appearance: none; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; padding: 8px 12px; background: #17253d; color: #fff; font: inherit; cursor: pointer; }
+    button:disabled { cursor: default; opacity: .45; }
+    #quality-control { display: flex; align-items: center; gap: 7px; padding-left: 3px; font-size: 12px; }
+    #enter-vr { background: #154f8c; }
+    #note { position: fixed; right: 12px; bottom: 12px; z-index: 2; max-width: min(560px, calc(100vw - 24px)); margin: 0; padding: 8px 10px; border-radius: 7px; background: rgba(4,8,16,.72); font-size: 12px; }
+    body.dragging::after { content: 'KHR_gaussian_splatting GLBをドロップ'; position: fixed; inset: 16px; z-index: 5; display: grid; place-items: center; border: 3px dashed #5bbcff; border-radius: 18px; background: rgba(9,30,55,.8); font-size: clamp(20px, 4vw, 42px); }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/build/three.webgpu.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/build/three.webgpu.js",
+      "three/tsl": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/build/three.tsl.js",
+      "three/addons/": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@cbba126004263d0c32d3d6d05a4fe218d261fa47/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <section id="panel">
+    <pre id="status">Three.js patched WebXR stereo smoke
+loading…</pre>
+    <div id="actions">
+      <button id="enter-vr" type="button" disabled>VRを開始</button>
+      <button id="choose-file" type="button">KHR GLBを開く</button>
+      <button id="toggle-kernel" type="button">Smooth kernelで再読込</button>
+      <label id="quality-control">XR画質
+        <select id="xr-quality">
+          <option value="quality">Quality 1.00 / 0.00</option>
+          <option value="balanced">Balanced 0.85 / 0.30</option>
+          <option value="performance">Performance 0.78 / 0.55</option>
+        </select>
+      </label>
+      <input id="file-input" type="file" accept=".glb" hidden>
+    </div>
+  </section>
+  <p id="note">PICO: 左stick=移動、右stick=旋回、Grip+右stick=移動、A=上昇、B=下降。参照viewerと同じ操作です。</p>
+
+  <script type="module">
+    import * as THREE from 'three/webgpu';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import {
+      XR_LOCOMOTION_SPEED,
+      XR_TURN_SPEED_DEGREES,
+      XR_VERTICAL_LOCOMOTION_SPEED,
+      isXrGamepadButtonPressed,
+      readPicoVerticalButtons,
+      readXrThumbstick,
+      resolveXrQualityConfig,
+    } from './3dgs-xr-comparison-config.js';
+
+    const THREE_REVISION = 'cbba126004263d0c32d3d6d05a4fe218d261fa47';
+    const THREE_BASE = `https://cdn.jsdelivr.net/gh/mrdoob/three.js@${THREE_REVISION}/`;
+    const ADDONS_BASE = `${THREE_BASE}examples/jsm/`;
+    const PATCH = 'mediumpModelViewMatrix + cameraViewport.zw';
+    const status = document.querySelector('#status');
+    const enterVrButton = document.querySelector('#enter-vr');
+    const chooseFileButton = document.querySelector('#choose-file');
+    const toggleKernelButton = document.querySelector('#toggle-kernel');
+    const qualitySelect = document.querySelector('#xr-quality');
+    const fileInput = document.querySelector('#file-input');
+    const params = new URLSearchParams(location.search);
+    const xrQuality = resolveXrQualityConfig(params);
+    const forceWebGL = params.get('webgpu') !== '1';
+    const smoothKernel = params.get('kernel') === 'smooth';
+    const FIXTURES = {
+      minimal: './fixtures/minimal-khr-gaussian-splatting.glb',
+      ring: './fixtures/ring-gaussian-splats.glb',
+    };
+    const fixtureName = FIXTURES[params.get('fixture')] ? params.get('fixture') : 'ring';
+
+    const diagnostics = globalThis.__threeGaussianXrStereoSmoke = {
+      done: false,
+      rendered: false,
+      engine: 'Three.js',
+      revision: THREE_REVISION,
+      backend: forceWebGL ? 'webgl' : 'webgpu',
+      patch: PATCH,
+      kernel: smoothKernel ? 'smooth 2.83 sigma normalized' : 'upstream 2 sigma hard cutoff',
+      fixture: fixtureName,
+      source: FIXTURES[fixtureName].split('/').pop(),
+      gaussianObjects: 0,
+      splatCount: 0,
+      normalObjects: 3,
+      xrQualityPreset: xrQuality.preset,
+      xrFramebufferScale: xrQuality.framebufferScale,
+      xrFoveation: xrQuality.foveation,
+      xrLocomotion: 'left-stick move / right-stick smooth turn / grip+right move / A up / B down',
+      xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
+      xrVerticalLocomotionSpeed: XR_VERTICAL_LOCOMOTION_SPEED,
+      xrTurnSpeedDegrees: XR_TURN_SPEED_DEGREES,
+      xrInputSources: 0,
+      xrLocomotionMeters: 0,
+      xrTurnDegrees: 0,
+      xrAvailable: false,
+      xrActive: false,
+      xrViews: 0,
+      eyeSeparationMeters: null,
+      viewMatrixMaxDelta: null,
+      stereoCameraMatricesDistinct: false,
+      timingMode: 'desktop',
+      frameTimeMs: null,
+      p95FrameTimeMs: null,
+      fps: null,
+      framesSampled: 0,
+      lastXrTiming: null,
+      error: null,
+    };
+
+    function replaceRequired(source, search, replacement, label) {
+      if (!source.includes(search)) throw new Error(`Three.js patch target not found: ${label}`);
+      return source.replace(search, replacement);
+    }
+
+    async function importPatchedGaussianExtension() {
+      const gaussianResponse = await fetch(`${ADDONS_BASE}objects/GaussianSplat.js`);
+      if (!gaussianResponse.ok) throw new Error(`GaussianSplat source HTTP ${gaussianResponse.status}`);
+      let gaussianSource = await gaussianResponse.text();
+
+      // XR ArrayCamera stores each eye view in cameraViewMatrix. The upstream
+      // highpModelViewMatrix is one CPU-computed matrix based on the parent
+      // ArrayCamera, so both eyes receive the same view transform.
+      if (!gaussianSource.includes('highpModelViewMatrix')) {
+        throw new Error('Three.js patch target not found: highpModelViewMatrix');
+      }
+      gaussianSource = gaussianSource.replaceAll('highpModelViewMatrix', 'mediumpModelViewMatrix');
+
+      // screenSize is the combined XR framebuffer. cameraViewport.zw is the
+      // current eye viewport and keeps the projected ellipse size correct.
+      gaussianSource = replaceRequired(
+        gaussianSource,
+        '\tscreenSize,\n',
+        '\tcameraViewport,\n',
+        'screenSize import',
+      );
+      gaussianSource = replaceRequired(
+        gaussianSource,
+        'const focal = screenSize.mul( 0.5 )',
+        'const focal = cameraViewport.zw.mul( 0.5 )',
+        'focal screen size',
+      );
+      gaussianSource = replaceRequired(
+        gaussianSource,
+        'const offsetNdc = offsetPixels.mul( 2 ).div( screenSize )',
+        'const offsetNdc = offsetPixels.mul( 2 ).div( cameraViewport.zw )',
+        'NDC screen size',
+      );
+
+      if (smoothKernel) {
+        // PlayCanvas covers sqrt(8) sigma and normalizes the Gaussian to zero
+        // at the quad edge. The pinned Three.js implementation clips at 2
+        // sigma while alpha is still exp(-2), which leaves a visible contour.
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          'const SPLAT_KERNEL_CUTOFF = 2;',
+          'const SPLAT_KERNEL_CUTOFF = 2.8284271247461903;',
+          'smooth kernel cutoff',
+        );
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          '\t\t- 2, - 2, 0,\n\t\t2, - 2, 0,\n\t\t2, 2, 0,\n\t\t- 2, 2, 0',
+          '\t\t- SPLAT_KERNEL_CUTOFF, - SPLAT_KERNEL_CUTOFF, 0,\n\t\tSPLAT_KERNEL_CUTOFF, - SPLAT_KERNEL_CUTOFF, 0,\n\t\tSPLAT_KERNEL_CUTOFF, SPLAT_KERNEL_CUTOFF, 0,\n\t\t- SPLAT_KERNEL_CUTOFF, SPLAT_KERNEL_CUTOFF, 0',
+          'smooth kernel quad',
+        );
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          'If( r2.greaterThan( 4 )',
+          'If( r2.greaterThan( SPLAT_KERNEL_CUTOFF * SPLAT_KERNEL_CUTOFF )',
+          'smooth kernel discard',
+        );
+        gaussianSource = replaceRequired(
+          gaussianSource,
+          'return vec4( splatColor.rgb, exp( r2.mul( - 0.5 ) ).mul( splatColor.a ) );',
+          "const gaussian = exp( r2.mul( - 0.5 ) ).sub( 0.01831563888873418 ).div( 0.9816843611112658 ).toVar( 'gaussian' );\n\n\t\treturn vec4( splatColor.rgb, gaussian.mul( splatColor.a ) );",
+          'smooth normalized alpha',
+        );
+      }
+      gaussianSource = replaceRequired(
+        gaussianSource,
+        "from '../gpgpu/CountingSort.js'",
+        `from '${ADDONS_BASE}gpgpu/CountingSort.js'`,
+        'CountingSort import',
+      );
+      gaussianSource = replaceRequired(
+        gaussianSource,
+        "from '../utils/GaussianSplatUtils.js'",
+        `from '${ADDONS_BASE}utils/GaussianSplatUtils.js'`,
+        'GaussianSplatUtils import',
+      );
+
+      const gaussianUrl = URL.createObjectURL(new Blob([gaussianSource], { type: 'text/javascript' }));
+      try {
+        const extensionResponse = await fetch(`${ADDONS_BASE}loaders/GLTFGaussianSplatLoaderExtension.js`);
+        if (!extensionResponse.ok) throw new Error(`Gaussian loader source HTTP ${extensionResponse.status}`);
+        let extensionSource = await extensionResponse.text();
+        extensionSource = replaceRequired(
+          extensionSource,
+          "from '../objects/GaussianSplat.js'",
+          `from '${gaussianUrl}'`,
+          'GaussianSplat loader import',
+        );
+        extensionSource = replaceRequired(
+          extensionSource,
+          "from '../utils/GaussianSplatUtils.js'",
+          `from '${ADDONS_BASE}utils/GaussianSplatUtils.js'`,
+          'Gaussian loader utils import',
+        );
+
+        const extensionUrl = URL.createObjectURL(new Blob([extensionSource], { type: 'text/javascript' }));
+        try {
+          return (await import(extensionUrl)).GLTFGaussianSplatLoaderExtension;
+        } finally {
+          URL.revokeObjectURL(extensionUrl);
+        }
+      } finally {
+        URL.revokeObjectURL(gaussianUrl);
+      }
+    }
+
+    function formatNumber(value, digits = 4) {
+      return Number.isFinite(value) ? value.toFixed(digits) : '—';
+    }
+
+    const frameTimes = [];
+    let lastFrameTimestamp = null;
+    let lastTimingPublish = 0;
+
+    function resetFrameTiming(mode) {
+      frameTimes.length = 0;
+      lastFrameTimestamp = null;
+      lastTimingPublish = 0;
+      diagnostics.timingMode = mode;
+      diagnostics.frameTimeMs = null;
+      diagnostics.p95FrameTimeMs = null;
+      diagnostics.fps = null;
+      diagnostics.framesSampled = 0;
+    }
+
+    function sampleFrameTiming(now) {
+      if (lastFrameTimestamp !== null) {
+        const elapsed = now - lastFrameTimestamp;
+        // XR/source transitions reset this window. Ignore background-tab gaps,
+        // but retain arbitrarily slow visible/XR frames in p95.
+        // This is frame interval, not GPU query time.
+        if (elapsed > 0 && (!document.hidden || diagnostics.xrActive)) {
+          frameTimes.push(elapsed);
+          if (frameTimes.length > 180) frameTimes.shift();
+        }
+      }
+      lastFrameTimestamp = now;
+
+      if (frameTimes.length < 10 || now - lastTimingPublish < 500) return false;
+      const sorted = [...frameTimes].sort((a, b) => a - b);
+      const average = frameTimes.reduce((sum, value) => sum + value, 0) / frameTimes.length;
+      diagnostics.frameTimeMs = average;
+      diagnostics.p95FrameTimeMs = sorted[Math.ceil(sorted.length * 0.95) - 1];
+      diagnostics.fps = 1000 / average;
+      diagnostics.framesSampled = frameTimes.length;
+      lastTimingPublish = now;
+      return true;
+    }
+
+    function updateStatus() {
+      status.textContent = [
+        diagnostics.error
+          ? `FAILED: ${diagnostics.error}`
+          : diagnostics.done
+            ? 'KHR GLB → patched Three.js GaussianSplat: OK'
+            : 'Three.js patched WebXR stereo smoke\nloading…',
+        `source: ${diagnostics.source}`,
+        `GaussianSplat: ${diagnostics.gaussianObjects}`,
+        `splats: ${diagnostics.splatCount || '—'}`,
+        `backend: ${diagnostics.backend}`,
+        `patch: ${diagnostics.patch}`,
+        `kernel: ${diagnostics.kernel}`,
+        `XR quality: ${diagnostics.xrQualityPreset} / scale ${formatNumber(diagnostics.xrFramebufferScale, 2)} / foveation ${formatNumber(diagnostics.xrFoveation, 2)}`,
+        `XR locomotion: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${formatNumber(diagnostics.xrTurnDegrees, 1)}° turn / ${diagnostics.xrInputSources} inputs`,
+        `WebXR: ${diagnostics.xrActive ? 'active' : diagnostics.xrAvailable ? 'available' : 'unavailable'}`,
+        `XR views: ${diagnostics.xrViews}`,
+        `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
+        `view matrix max delta: ${formatNumber(diagnostics.viewMatrixMaxDelta, 6)}`,
+        `stereo camera matrices: ${diagnostics.stereoCameraMatricesDistinct ? 'distinct' : 'not measured'}`,
+        `frame interval (${diagnostics.timingMode}): ${formatNumber(diagnostics.fps, 1)} fps / ${formatNumber(diagnostics.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.p95FrameTimeMs, 2)} ms p95 [${diagnostics.framesSampled}]`,
+        ...(diagnostics.lastXrTiming ? [
+          `last XR interval: ${formatNumber(diagnostics.lastXrTiming.fps, 1)} fps / ${formatNumber(diagnostics.lastXrTiming.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.lastXrTiming.p95FrameTimeMs, 2)} ms p95 [${diagnostics.lastXrTiming.framesSampled}]`,
+        ] : []),
+        `Three.js @ ${THREE_REVISION}`,
+      ].join('\n');
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x090c12);
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.01, 1000);
+    camera.position.set(0, 1.35, 2.8);
+    camera.lookAt(0, 0.1, 0);
+    const xrRig = new THREE.Group();
+    xrRig.name = 'xr-locomotion-rig';
+    xrRig.add(camera);
+    scene.add(xrRig);
+
+    const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+    await renderer.init();
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local-floor');
+    renderer.xr.setFramebufferScaleFactor(xrQuality.framebufferScale);
+    renderer.xr.setFoveation(xrQuality.foveation);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0.1, 0);
+    controls.enableDamping = true;
+
+    const xrUp = new THREE.Vector3(0, 1, 0);
+    const xrForward = new THREE.Vector3();
+    const xrRight = new THREE.Vector3();
+    function updateXrLocomotion(deltaTime) {
+      const inputSources = Array.from(renderer.xr.getSession()?.inputSources || []);
+      diagnostics.xrInputSources = inputSources.length;
+      const left = inputSources.find((source) => source.handedness === 'left' && source.gamepad)
+        || inputSources.find((source) => source.gamepad);
+      const right = inputSources.find((source) => source.handedness === 'right' && source.gamepad);
+      const xrCamera = renderer.xr.getCamera(camera);
+
+      const leftStick = readXrThumbstick(left?.gamepad);
+      const rightStick = readXrThumbstick(right?.gamepad);
+      const gripPressed = isXrGamepadButtonPressed(right?.gamepad, 1);
+      let moveX = leftStick.x + (gripPressed ? rightStick.x : 0);
+      let moveY = leftStick.y + (gripPressed ? rightStick.y : 0);
+      const moveLength = Math.hypot(moveX, moveY);
+      if (moveLength > 1) {
+        moveX /= moveLength;
+        moveY /= moveLength;
+      }
+      if ((moveX !== 0 || moveY !== 0) && deltaTime > 0) {
+        xrCamera.getWorldDirection(xrForward);
+        xrForward.y = 0;
+        if (xrForward.lengthSq() > 0.000001) {
+          xrForward.normalize();
+          xrRight.crossVectors(xrForward, xrUp).normalize();
+          const distance = XR_LOCOMOTION_SPEED * deltaTime;
+          xrRig.position.addScaledVector(xrRight, moveX * distance);
+          xrRig.position.addScaledVector(xrForward, -moveY * distance);
+          diagnostics.xrLocomotionMeters += Math.hypot(moveX, moveY) * distance;
+        }
+      }
+
+      const vertical = readPicoVerticalButtons(right?.gamepad).direction;
+      if (vertical !== 0 && deltaTime > 0) {
+        const deltaY = vertical * XR_VERTICAL_LOCOMOTION_SPEED * deltaTime;
+        xrRig.position.y += deltaY;
+        diagnostics.xrLocomotionMeters += Math.abs(deltaY);
+      }
+
+      if (!gripPressed && rightStick.x !== 0 && deltaTime > 0) {
+        const deltaDegrees = -rightStick.x * XR_TURN_SPEED_DEGREES * deltaTime;
+        const angle = THREE.MathUtils.degToRad(deltaDegrees);
+        xrRig.rotateY(angle);
+        diagnostics.xrTurnDegrees += Math.abs(deltaDegrees);
+      }
+    }
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 2));
+    const markerDefinitions = [
+      { color: 0x148cff, position: [1.15, 0.35, 0.75], scale: [0.25, 0.7, 0.25] },
+      { color: 0xff6114, position: [1.15, 0.2, -0.45], scale: [0.35, 0.4, 0.35] },
+      { color: 0x2ee66b, position: [1.15, 0.15, -1.8], scale: [0.45, 0.3, 0.45] },
+    ];
+    for (const marker of markerDefinitions) {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(...marker.scale),
+        new THREE.MeshStandardMaterial({ color: marker.color }),
+      );
+      mesh.position.set(...marker.position);
+      scene.add(mesh);
+    }
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(5, 0.03, 6),
+      new THREE.MeshStandardMaterial({ color: 0x1a212e }),
+    );
+    floor.position.set(0, -0.58, -1.3);
+    scene.add(floor);
+
+    let activeRoot = null;
+
+    function disposeRoot(root) {
+      root.traverse((object) => {
+        object.splatGeometry?.dispose?.();
+        object.geometry?.dispose?.();
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) material?.dispose?.();
+      });
+    }
+
+    async function attachSource(loader, url, filename) {
+      diagnostics.done = false;
+      diagnostics.rendered = false;
+      diagnostics.error = null;
+      diagnostics.source = filename;
+      diagnostics.gaussianObjects = 0;
+      diagnostics.splatCount = 0;
+      updateStatus();
+
+      const gltf = await loader.loadAsync(url);
+      const splats = [];
+      gltf.scene.traverse((object) => {
+        if (object.isGaussianSplat) splats.push(object);
+      });
+      if (splats.length === 0) throw new Error('Patched loader did not create GaussianSplat');
+
+      if (activeRoot) {
+        scene.remove(activeRoot);
+        disposeRoot(activeRoot);
+      }
+      scene.add(gltf.scene);
+      activeRoot = gltf.scene;
+      diagnostics.gaussianObjects = splats.length;
+      diagnostics.splatCount = splats.reduce((sum, object) => (
+        sum + (object.splatGeometry?.getAttribute('position')?.count || 0)
+      ), 0);
+      diagnostics.done = true;
+      resetFrameTiming(diagnostics.xrActive ? 'xr' : 'desktop');
+      updateStatus();
+    }
+
+    function reportError(error) {
+      diagnostics.done = true;
+      diagnostics.error = error?.message || String(error);
+      console.error(error);
+      updateStatus();
+    }
+
+    let loader = null;
+    try {
+      const GLTFGaussianSplatLoaderExtension = await importPatchedGaussianExtension();
+      loader = new GLTFLoader();
+      loader.register((parser) => new GLTFGaussianSplatLoaderExtension(parser));
+      await attachSource(loader, FIXTURES[fixtureName], diagnostics.source);
+    } catch (error) {
+      reportError(error);
+    }
+
+    function openFile(file) {
+      if (!loader || !file || !/\.glb$/iu.test(file.name)) {
+        diagnostics.error = 'KHR_gaussian_splatting GLBファイルを選択してください';
+        updateStatus();
+        return;
+      }
+      const objectUrl = URL.createObjectURL(file);
+      attachSource(loader, objectUrl, file.name)
+        .catch(reportError)
+        .finally(() => URL.revokeObjectURL(objectUrl));
+    }
+
+    chooseFileButton.addEventListener('click', () => fileInput.click());
+    toggleKernelButton.textContent = smoothKernel
+      ? 'Upstream kernelで再読込'
+      : 'Smooth kernelで再読込';
+    toggleKernelButton.addEventListener('click', () => {
+      if (smoothKernel) params.delete('kernel');
+      else params.set('kernel', 'smooth');
+      location.search = params.toString();
+    });
+    qualitySelect.value = xrQuality.preset;
+    qualitySelect.addEventListener('change', () => {
+      params.set('quality', qualitySelect.value);
+      location.search = params.toString();
+    });
+    fileInput.addEventListener('change', () => {
+      openFile(fileInput.files?.[0]);
+      fileInput.value = '';
+    });
+
+    let dragDepth = 0;
+    addEventListener('dragenter', (event) => {
+      if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+      event.preventDefault();
+      dragDepth += 1;
+      document.body.classList.add('dragging');
+    });
+    addEventListener('dragover', (event) => event.preventDefault());
+    addEventListener('dragleave', (event) => {
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) document.body.classList.remove('dragging');
+    });
+    addEventListener('drop', (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      document.body.classList.remove('dragging');
+      openFile(event.dataTransfer?.files?.[0]);
+    });
+
+    async function updateXrAvailability() {
+      diagnostics.xrAvailable = Boolean(
+        navigator.xr && await navigator.xr.isSessionSupported('immersive-vr').catch(() => false)
+      );
+      enterVrButton.disabled = !diagnostics.xrAvailable || Boolean(diagnostics.error);
+      updateStatus();
+    }
+    await updateXrAvailability();
+
+    let lastAnimationTimestamp = null;
+    renderer.xr.addEventListener('sessionstart', () => {
+      diagnostics.xrActive = true;
+      diagnostics.lastXrTiming = null;
+      diagnostics.xrInputSources = 0;
+      diagnostics.xrLocomotionMeters = 0;
+      diagnostics.xrTurnDegrees = 0;
+      xrRig.position.set(0, 0, 0);
+      xrRig.rotation.set(0, 0, 0);
+      lastAnimationTimestamp = null;
+      resetFrameTiming('xr');
+      enterVrButton.textContent = 'VR実行中';
+      updateStatus();
+    });
+    renderer.xr.addEventListener('sessionend', () => {
+      diagnostics.xrActive = false;
+      diagnostics.lastXrTiming = diagnostics.framesSampled > 0 ? {
+        fps: diagnostics.fps,
+        frameTimeMs: diagnostics.frameTimeMs,
+        p95FrameTimeMs: diagnostics.p95FrameTimeMs,
+        framesSampled: diagnostics.framesSampled,
+      } : null;
+      resetFrameTiming('desktop');
+      enterVrButton.textContent = 'VRを開始';
+      updateStatus();
+    });
+    enterVrButton.addEventListener('click', async () => {
+      if (!diagnostics.xrAvailable || diagnostics.error) return;
+      try {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+        });
+        await renderer.xr.setSession(session);
+      } catch (error) {
+        diagnostics.error = error?.message || String(error);
+        updateStatus();
+      }
+    });
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    let xrStatusFrames = 0;
+    renderer.setAnimationLoop((timestamp) => {
+      const now = Number.isFinite(timestamp) ? timestamp : performance.now();
+      const deltaTime = lastAnimationTimestamp === null
+        ? 0
+        : Math.min(Math.max((now - lastAnimationTimestamp) / 1000, 0), 0.1);
+      lastAnimationTimestamp = now;
+      const timingChanged = sampleFrameTiming(now);
+      if (renderer.xr.isPresenting) updateXrLocomotion(deltaTime);
+      else controls.update();
+      renderer.render(scene, camera);
+      diagnostics.rendered = diagnostics.done && !diagnostics.error;
+
+      if (renderer.xr.isPresenting) {
+        const views = renderer.xr.getCamera().cameras || [];
+        diagnostics.xrViews = views.length;
+        if (views.length >= 2) {
+          const leftPosition = new THREE.Vector3().setFromMatrixPosition(views[0].matrixWorld);
+          const rightPosition = new THREE.Vector3().setFromMatrixPosition(views[1].matrixWorld);
+          diagnostics.eyeSeparationMeters = leftPosition.distanceTo(rightPosition);
+          const leftMatrix = views[0].matrixWorldInverse.elements;
+          const rightMatrix = views[1].matrixWorldInverse.elements;
+          let maxDelta = 0;
+          for (let i = 0; i < 16; i += 1) {
+            maxDelta = Math.max(maxDelta, Math.abs(leftMatrix[i] - rightMatrix[i]));
+          }
+          diagnostics.viewMatrixMaxDelta = maxDelta;
+          diagnostics.stereoCameraMatricesDistinct =
+            diagnostics.eyeSeparationMeters > 0.001 && maxDelta > 0.00001;
+        }
+        xrStatusFrames += 1;
+        if (xrStatusFrames < 5 || xrStatusFrames % 60 === 0) updateStatus();
+      }
+      if (timingChanged) updateStatus();
+    });
+  </script>
+</body>
+</html>

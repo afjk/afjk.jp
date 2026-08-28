@@ -7,6 +7,7 @@ export const VIEWER_SOURCES = [
   { src: '/assets/js/scenesync-export/viewer/create-viewer-core.js', dest: 'viewer/create-viewer-core.js', transform: (source) => source.replaceAll('../../scenesync/', '../scenesync/') },
   { src: '/assets/js/scenesync-export/viewer/three-runtime.js', dest: 'viewer/three-runtime.js' },
   { src: '/assets/js/scenesync/loaders/gltf-loader-config.js', dest: 'scenesync/loaders/gltf-loader-config.js' },
+  { src: '/assets/js/scenesync/loaders/gaussian-splat-three-patch.js', dest: 'scenesync/loaders/gaussian-splat-three-patch.js', transform: (source) => source.replaceAll('../../scenesync-export/viewer/three-runtime.js', '../../viewer/three-runtime.js') },
   { src: '/assets/js/scenesync/loaders/gaussian-splat-runtime.js', dest: 'scenesync/loaders/gaussian-splat-runtime.js' },
   { src: '/assets/js/scenesync-export/viewer/export-behavior-runtime.js', dest: 'viewer/export-behavior-runtime.js' },
   { src: '/assets/js/scenesync-export/viewer/object-audio-controller.js', dest: 'viewer/object-audio-controller.js' },

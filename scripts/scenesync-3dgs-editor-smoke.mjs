@@ -246,6 +246,11 @@ try {
   assert(renderer.renderer === 'WebGPURenderer', 'Editor did not use WebGPURenderer');
   assert(renderer.backend === 'webgl', 'Editor default backend was not WebGL');
   assert(renderer.xrEnabled === true, 'Editor WebXR integration was not enabled');
+  assert(renderer.initialized === true, 'Editor Gaussian extension was not initialized');
+  assert(
+    renderer.gaussianSplatPatch === 'xr-stereo-mediumpModelViewMatrix-cameraViewport-smooth-kernel',
+    'Editor did not use the production Gaussian XR stereo/smooth patch',
+  );
   assert(snapshot.gaussian?.hasGaussianSplat === true, 'Editor GLB path did not create GaussianSplat');
   assert(snapshot.gaussian?.gaussianObjects === 1, 'Editor Gaussian object count changed');
   assert(snapshot.gaussian?.splatCount === expectedSplatCount, 'Editor did not preserve every SOG splat');

@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SceneSync 3DGS PlayCanvas WebXR Stereo Smoke</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c12; color: #fff; font-family: system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+    canvas.camera-dragging { cursor: grabbing; }
+    #panel { position: fixed; top: 12px; left: 12px; z-index: 2; width: min(430px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(4,8,16,.82); backdrop-filter: blur(8px); }
+    #status { margin: 0 0 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; }
+    #actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button, select { appearance: none; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; padding: 8px 12px; background: #17253d; color: #fff; font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .45; }
+    #enter-vr { background: #154f8c; }
+    #quality-control { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    #drop-note { position: fixed; right: 12px; bottom: 12px; z-index: 2; max-width: min(520px, calc(100vw - 24px)); margin: 0; padding: 8px 10px; border-radius: 7px; background: rgba(4,8,16,.72); font-size: 12px; }
+    body.dragging::after { content: 'KHR GLB / SOG / PLYをドロップ'; position: fixed; inset: 16px; z-index: 5; display: grid; place-items: center; border: 3px dashed #5bbcff; border-radius: 18px; background: rgba(9,30,55,.8); font-size: clamp(20px, 4vw, 42px); }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "playcanvas": "https://cdn.jsdelivr.net/npm/playcanvas@2.21.4/build/playcanvas.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="application-canvas"></canvas>
+  <section id="panel">
+    <pre id="status">PlayCanvas KHR_gaussian_splatting WebXR stereo smoke
+loading…</pre>
+    <div id="actions">
+      <button id="enter-vr" type="button" disabled>VRを開始</button>
+      <button id="choose-file" type="button">GLB / SOG / PLYを開く</button>
+      <button id="reset-camera" type="button">カメラをリセット</button>
+      <label id="quality-control">XR品質
+        <select id="quality">
+          <option value="quality">Quality (1.00 / fov 0)</option>
+          <option value="balanced">Balanced (0.85 / fov .3)</option>
+          <option value="performance">Performance (0.78 / fov .55)</option>
+        </select>
+      </label>
+      <input id="file-input" type="file" accept=".glb,.sog,.ply" hidden>
+    </div>
+  </section>
+  <p id="drop-note">PICO VR: 左stick=移動、右stick=旋回、Grip+右stick=移動、A=上昇、B=下降。insta360-sog-xr-viewerと同じ操作です。</p>
+
+  <script type="module">
+    import {
+      Application,
+      Asset,
+      Color,
+      Entity,
+      FILLMODE_NONE,
+      GSPLAT_RENDERER_RASTER_CPU_SORT,
+      RESOLUTION_AUTO,
+      StandardMaterial,
+      Vec3,
+      XREYE_LEFT,
+      XREYE_RIGHT,
+      XRSPACE_LOCALFLOOR,
+      XRTYPE_VR,
+    } from 'playcanvas';
+    import {
+      XR_LOCOMOTION_SPEED,
+      XR_TURN_SPEED_DEGREES,
+      XR_VERTICAL_LOCOMOTION_SPEED,
+      isXrGamepadButtonPressed,
+      playCanvasXrStartScale,
+      readPicoVerticalButtons,
+      readXrThumbstick,
+      resolveXrQualityConfig,
+    } from './3dgs-xr-comparison-config.js';
+
+    const PLAYCANVAS_VERSION = '2.21.4';
+    const DEFAULT_FIXTURE = './fixtures/ring-gaussian-splats.glb';
+    const params = new URLSearchParams(location.search);
+    const xrQuality = resolveXrQualityConfig(params);
+    const desktopMaxPixelRatio = Math.min(devicePixelRatio, 1.5);
+    const xrStartFramebufferScale = playCanvasXrStartScale(
+      xrQuality.framebufferScale,
+      devicePixelRatio,
+      desktopMaxPixelRatio,
+    );
+    const status = document.querySelector('#status');
+    const canvas = document.querySelector('#application-canvas');
+    const enterVrButton = document.querySelector('#enter-vr');
+    const chooseFileButton = document.querySelector('#choose-file');
+    const resetCameraButton = document.querySelector('#reset-camera');
+    const qualitySelect = document.querySelector('#quality');
+    const fileInput = document.querySelector('#file-input');
+
+    const diagnostics = globalThis.__playCanvasGaussianXrSmoke = {
+      done: false,
+      rendered: false,
+      engine: 'PlayCanvas',
+      engineVersion: PLAYCANVAS_VERSION,
+      renderer: 'GSPLAT_RENDERER_RASTER_CPU_SORT',
+      currentRenderer: null,
+      cameraControls: 'orbit-pan-zoom-wasd',
+      cameraInputEvents: 0,
+      cameraPosition: [0, 1.35, 2.8],
+      cameraTarget: [0, 0.1, 0],
+      format: 'KHR_gaussian_splatting GLB',
+      source: null,
+      gaussianObjects: 0,
+      splatCount: 0,
+      normalObjects: 3,
+      xrAvailable: false,
+      xrActive: false,
+      xrViews: 0,
+      eyes: [],
+      eyeSeparationMeters: null,
+      viewMatrixMaxDelta: null,
+      stereoCameraMatricesDistinct: false,
+      xrSamples: 0,
+      xrQualityPreset: xrQuality.preset,
+      xrFramebufferScale: xrQuality.framebufferScale,
+      xrEngineStartFramebufferScale: xrStartFramebufferScale,
+      xrFoveation: xrQuality.foveation,
+      xrLocomotion: 'left-stick move / right-stick smooth turn / grip+right move / A up / B down',
+      xrLocomotionSpeed: XR_LOCOMOTION_SPEED,
+      xrVerticalLocomotionSpeed: XR_VERTICAL_LOCOMOTION_SPEED,
+      xrTurnSpeedDegrees: XR_TURN_SPEED_DEGREES,
+      xrInputSources: 0,
+      xrLocomotionMeters: 0,
+      xrTurnDegrees: 0,
+      timingMode: 'desktop',
+      frameTimeMs: null,
+      p95FrameTimeMs: null,
+      fps: null,
+      framesSampled: 0,
+      lastXrTiming: null,
+      error: null,
+    };
+
+    const app = new Application(canvas, {
+      graphicsDeviceOptions: {
+        antialias: false,
+        alpha: false,
+        powerPreference: 'high-performance',
+      },
+    });
+    app.setCanvasFillMode(FILLMODE_NONE);
+    app.setCanvasResolution(RESOLUTION_AUTO);
+    app.graphicsDevice.maxPixelRatio = desktopMaxPixelRatio;
+    app.scene.ambientLight = new Color(0.45, 0.45, 0.5);
+    app.scene.gsplat.renderer = GSPLAT_RENDERER_RASTER_CPU_SORT;
+    app.scene.gsplat.radialSorting = true;
+
+    const rig = new Entity('xr-rig');
+    rig.setLocalPosition(0, 0, 2.8);
+    app.root.addChild(rig);
+
+    const cameraEntity = new Entity('xr-camera');
+    cameraEntity.addComponent('camera', {
+      clearColor: new Color(0.035, 0.05, 0.08),
+      fov: 62,
+      nearClip: 0.01,
+      farClip: 1000,
+    });
+    cameraEntity.setLocalPosition(0, 1.35, 0);
+    cameraEntity.lookAt(new Vec3(0, 0.1, 0));
+    rig.addChild(cameraEntity);
+    const camera = cameraEntity.camera;
+
+    const initialCamera = {
+      targetX: 0,
+      targetY: 0.1,
+      targetZ: 0,
+      yaw: 0,
+      pitch: Math.atan2(1.25, 2.8),
+      distance: Math.hypot(1.25, 2.8),
+    };
+    const orbit = {
+      ...initialCamera,
+      currentTargetX: initialCamera.targetX,
+      currentTargetY: initialCamera.targetY,
+      currentTargetZ: initialCamera.targetZ,
+      currentYaw: initialCamera.yaw,
+      currentPitch: initialCamera.pitch,
+      currentDistance: initialCamera.distance,
+    };
+    const pressedKeys = new Set();
+    let cameraDirty = true;
+
+    function resetOrbitCamera(snap = false) {
+      Object.assign(orbit, initialCamera);
+      cameraDirty = true;
+      if (snap) {
+        orbit.currentTargetX = orbit.targetX;
+        orbit.currentTargetY = orbit.targetY;
+        orbit.currentTargetZ = orbit.targetZ;
+        orbit.currentYaw = orbit.yaw;
+        orbit.currentPitch = orbit.pitch;
+        orbit.currentDistance = orbit.distance;
+      }
+    }
+
+    function damp(current, target, deltaTime) {
+      return target + (current - target) * Math.exp(-12 * deltaTime);
+    }
+
+    function updateOrbitCamera(deltaTime, snap = false) {
+      if (diagnostics.xrActive) return;
+
+      const movement = Math.max(0.5, orbit.distance * 0.6) * deltaTime;
+      const forwardX = -Math.sin(orbit.yaw);
+      const forwardZ = -Math.cos(orbit.yaw);
+      const rightX = Math.cos(orbit.yaw);
+      const rightZ = -Math.sin(orbit.yaw);
+      const forward = (pressedKeys.has('w') ? 1 : 0) - (pressedKeys.has('s') ? 1 : 0);
+      const right = (pressedKeys.has('d') ? 1 : 0) - (pressedKeys.has('a') ? 1 : 0);
+      const up = (pressedKeys.has('e') ? 1 : 0) - (pressedKeys.has('q') ? 1 : 0);
+      if (forward !== 0 || right !== 0 || up !== 0) cameraDirty = true;
+      if (!cameraDirty && !snap) return;
+      orbit.targetX += (forwardX * forward + rightX * right) * movement;
+      orbit.targetY += up * movement;
+      orbit.targetZ += (forwardZ * forward + rightZ * right) * movement;
+
+      if (snap) {
+        orbit.currentTargetX = orbit.targetX;
+        orbit.currentTargetY = orbit.targetY;
+        orbit.currentTargetZ = orbit.targetZ;
+        orbit.currentYaw = orbit.yaw;
+        orbit.currentPitch = orbit.pitch;
+        orbit.currentDistance = orbit.distance;
+      } else {
+        orbit.currentTargetX = damp(orbit.currentTargetX, orbit.targetX, deltaTime);
+        orbit.currentTargetY = damp(orbit.currentTargetY, orbit.targetY, deltaTime);
+        orbit.currentTargetZ = damp(orbit.currentTargetZ, orbit.targetZ, deltaTime);
+        orbit.currentYaw = damp(orbit.currentYaw, orbit.yaw, deltaTime);
+        orbit.currentPitch = damp(orbit.currentPitch, orbit.pitch, deltaTime);
+        orbit.currentDistance = damp(orbit.currentDistance, orbit.distance, deltaTime);
+      }
+
+      const cosPitch = Math.cos(orbit.currentPitch);
+      const positionX = orbit.currentTargetX + Math.sin(orbit.currentYaw) * cosPitch * orbit.currentDistance;
+      const positionY = orbit.currentTargetY + Math.sin(orbit.currentPitch) * orbit.currentDistance;
+      const positionZ = orbit.currentTargetZ + Math.cos(orbit.currentYaw) * cosPitch * orbit.currentDistance;
+      cameraEntity.setPosition(positionX, positionY, positionZ);
+      cameraEntity.lookAt(orbit.currentTargetX, orbit.currentTargetY, orbit.currentTargetZ);
+      diagnostics.cameraPosition = [positionX, positionY, positionZ];
+      diagnostics.cameraTarget = [orbit.currentTargetX, orbit.currentTargetY, orbit.currentTargetZ];
+      cameraDirty = forward !== 0 || right !== 0 || up !== 0 || [
+        [orbit.currentTargetX, orbit.targetX],
+        [orbit.currentTargetY, orbit.targetY],
+        [orbit.currentTargetZ, orbit.targetZ],
+        [orbit.currentYaw, orbit.yaw],
+        [orbit.currentPitch, orbit.pitch],
+        [orbit.currentDistance, orbit.distance],
+      ].some(([current, target]) => Math.abs(current - target) > 0.00001);
+    }
+
+    let pointerId = null;
+    let pointerMode = 'orbit';
+    let pointerX = 0;
+    let pointerY = 0;
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    canvas.addEventListener('pointerdown', (event) => {
+      if (diagnostics.xrActive || pointerId !== null) return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      pointerMode = event.button === 2 || event.shiftKey ? 'pan' : 'orbit';
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add('camera-dragging');
+    });
+    canvas.addEventListener('pointermove', (event) => {
+      if (event.pointerId !== pointerId || diagnostics.xrActive) return;
+      const deltaX = event.clientX - pointerX;
+      const deltaY = event.clientY - pointerY;
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      if (pointerMode === 'pan') {
+        const scale = orbit.distance * 0.0015;
+        orbit.targetX -= (Math.cos(orbit.yaw) * deltaX) * scale;
+        orbit.targetY += deltaY * scale;
+        orbit.targetZ += (Math.sin(orbit.yaw) * deltaX) * scale;
+      } else {
+        orbit.yaw -= deltaX * 0.006;
+        orbit.pitch = Math.max(-1.5, Math.min(1.5, orbit.pitch - deltaY * 0.006));
+      }
+      cameraDirty = true;
+      diagnostics.cameraInputEvents += 1;
+    });
+    function endPointer(event) {
+      if (event.pointerId !== pointerId) return;
+      pointerId = null;
+      canvas.classList.remove('camera-dragging');
+    }
+    canvas.addEventListener('pointerup', endPointer);
+    canvas.addEventListener('pointercancel', endPointer);
+    canvas.addEventListener('lostpointercapture', endPointer);
+    canvas.addEventListener('wheel', (event) => {
+      if (diagnostics.xrActive) return;
+      event.preventDefault();
+      orbit.distance = Math.max(0.15, Math.min(100, orbit.distance * Math.exp(event.deltaY * 0.001)));
+      cameraDirty = true;
+      diagnostics.cameraInputEvents += 1;
+    }, { passive: false });
+    addEventListener('keydown', (event) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      const key = event.key.toLowerCase();
+      if (!['w', 'a', 's', 'd', 'q', 'e'].includes(key)) return;
+      pressedKeys.add(key);
+      cameraDirty = true;
+      diagnostics.cameraInputEvents += 1;
+      event.preventDefault();
+    });
+    addEventListener('keyup', (event) => pressedKeys.delete(event.key.toLowerCase()));
+    addEventListener('blur', () => pressedKeys.clear());
+    resetCameraButton.addEventListener('click', () => {
+      resetOrbitCamera(true);
+      updateOrbitCamera(0, true);
+      diagnostics.cameraInputEvents += 1;
+    });
+    updateOrbitCamera(0, true);
+
+    const light = new Entity('key-light');
+    light.addComponent('light', { type: 'directional', intensity: 1.4 });
+    light.setLocalEulerAngles(45, 35, 0);
+    app.root.addChild(light);
+
+    function markerMaterial(color) {
+      const material = new StandardMaterial();
+      material.diffuse.copy(color);
+      material.emissive.copy(color).mulScalar(0.12);
+      material.update();
+      return material;
+    }
+
+    const depthMarkers = [
+      { name: 'near-blue', color: new Color(0.08, 0.55, 1), position: [1.15, 0.35, 0.75], scale: [0.25, 0.7, 0.25] },
+      { name: 'middle-orange', color: new Color(1, 0.38, 0.08), position: [1.15, 0.2, -0.45], scale: [0.35, 0.4, 0.35] },
+      { name: 'far-green', color: new Color(0.18, 0.9, 0.42), position: [1.15, 0.15, -1.8], scale: [0.45, 0.3, 0.45] },
+    ];
+    for (const marker of depthMarkers) {
+      const entity = new Entity(marker.name);
+      entity.addComponent('render', { type: 'box', material: markerMaterial(marker.color) });
+      entity.setLocalPosition(...marker.position);
+      entity.setLocalScale(...marker.scale);
+      app.root.addChild(entity);
+    }
+
+    const floor = new Entity('depth-floor');
+    const floorMaterial = new StandardMaterial();
+    floorMaterial.diffuse.set(0.1, 0.13, 0.18);
+    floorMaterial.update();
+    floor.addComponent('render', { type: 'box', material: floorMaterial });
+    floor.setLocalPosition(0, -0.58, -1.3);
+    floor.setLocalScale(5, 0.03, 6);
+    app.root.addChild(floor);
+
+    function formatNumber(value, digits = 4) {
+      return Number.isFinite(value) ? value.toFixed(digits) : '—';
+    }
+
+    const frameTimes = [];
+    let lastFrameTimestamp = null;
+    let lastTimingPublish = 0;
+
+    function resetFrameTiming(mode) {
+      frameTimes.length = 0;
+      lastFrameTimestamp = null;
+      lastTimingPublish = 0;
+      diagnostics.timingMode = mode;
+      diagnostics.frameTimeMs = null;
+      diagnostics.p95FrameTimeMs = null;
+      diagnostics.fps = null;
+      diagnostics.framesSampled = 0;
+    }
+
+    function sampleFrameTiming(now) {
+      if (lastFrameTimestamp !== null) {
+        const elapsed = now - lastFrameTimestamp;
+        // XR/source transitions reset this window. Ignore background-tab gaps,
+        // but retain arbitrarily slow visible/XR frames in p95.
+        // This is frame interval, not GPU query time.
+        if (elapsed > 0 && (!document.hidden || diagnostics.xrActive)) {
+          frameTimes.push(elapsed);
+          if (frameTimes.length > 180) frameTimes.shift();
+        }
+      }
+      lastFrameTimestamp = now;
+
+      if (frameTimes.length < 10 || now - lastTimingPublish < 500) return false;
+      const sorted = [...frameTimes].sort((a, b) => a - b);
+      const average = frameTimes.reduce((sum, value) => sum + value, 0) / frameTimes.length;
+      diagnostics.frameTimeMs = average;
+      diagnostics.p95FrameTimeMs = sorted[Math.ceil(sorted.length * 0.95) - 1];
+      diagnostics.fps = 1000 / average;
+      diagnostics.framesSampled = frameTimes.length;
+      lastTimingPublish = now;
+      return true;
+    }
+
+    function updateStatus() {
+      status.textContent = [
+        diagnostics.error
+          ? `FAILED: ${diagnostics.error}`
+          : diagnostics.done
+            ? 'KHR_gaussian_splatting GLB → PlayCanvas GSplat: OK'
+            : 'PlayCanvas KHR_gaussian_splatting WebXR stereo smoke\nloading…',
+        `source: ${diagnostics.source || '—'}`,
+        `GSplat components: ${diagnostics.gaussianObjects}`,
+        `splats: ${diagnostics.splatCount || '—'}`,
+        `renderer: ${diagnostics.currentRenderer || 'raster CPU sort requested'} / WebGL2`,
+        `XR quality: ${diagnostics.xrQualityPreset} / framebuffer ${formatNumber(diagnostics.xrFramebufferScale, 2)} / foveation ${formatNumber(diagnostics.xrFoveation, 2)}`,
+        `WebXR: ${diagnostics.xrActive ? 'active' : diagnostics.xrAvailable ? 'available' : 'unavailable'}`,
+        `XR views: ${diagnostics.xrViews} [${diagnostics.eyes.join(', ')}]`,
+        `eye separation: ${formatNumber(diagnostics.eyeSeparationMeters)} m`,
+        `view matrix max delta: ${formatNumber(diagnostics.viewMatrixMaxDelta, 6)}`,
+        `stereo camera matrices: ${diagnostics.stereoCameraMatricesDistinct ? 'distinct' : 'not measured'}`,
+        `PICO controls: ${diagnostics.xrLocomotion} / ${formatNumber(diagnostics.xrLocomotionMeters, 2)} m / ${formatNumber(diagnostics.xrTurnDegrees, 1)}° turn / ${diagnostics.xrInputSources} inputs`,
+        `frame interval (${diagnostics.timingMode}): ${formatNumber(diagnostics.fps, 1)} fps / ${formatNumber(diagnostics.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.p95FrameTimeMs, 2)} ms p95 [${diagnostics.framesSampled}]`,
+        ...(diagnostics.lastXrTiming ? [
+          `last XR interval: ${formatNumber(diagnostics.lastXrTiming.fps, 1)} fps / ${formatNumber(diagnostics.lastXrTiming.frameTimeMs, 2)} ms avg / ${formatNumber(diagnostics.lastXrTiming.p95FrameTimeMs, 2)} ms p95 [${diagnostics.lastXrTiming.framesSampled}]`,
+        ] : []),
+        `PlayCanvas ${PLAYCANVAS_VERSION}`,
+      ].join('\n');
+    }
+
+    function collectGsplatComponents(root) {
+      const components = [];
+      const visit = (entity) => {
+        if (entity.gsplat) components.push(entity.gsplat);
+        for (const child of entity.children) visit(child);
+      };
+      visit(root);
+      return components;
+    }
+
+    function splatCountOf(component) {
+      const resource = component?.asset?.resource || component?.resource;
+      const declared = resource?.gsplatData?.numSplats ?? resource?.numSplats;
+      if (Number.isFinite(declared)) return declared;
+      return resource?.centers ? Math.floor(resource.centers.length / 3) : 0;
+    }
+
+    function loadAsset(asset) {
+      return new Promise((resolve, reject) => {
+        asset.once('error', (error) => reject(error instanceof Error ? error : new Error(String(error))));
+        asset.ready(() => resolve(asset));
+        app.assets.add(asset);
+        app.assets.load(asset);
+      });
+    }
+
+    let active = null;
+    async function releaseActive() {
+      if (!active) return;
+      const releasing = active;
+      active = null;
+
+      // Unified GSplatWorld reconciles layer placements during framerender.
+      // Disable first so the live placement keeps its resource until the
+      // renderer has observed its removal, then dispose it after frameend.
+      releasing.root.enabled = false;
+      await new Promise((resolve) => app.once('frameend', resolve));
+      releasing.root.destroy();
+      app.assets.remove(releasing.asset);
+      releasing.asset.off();
+      if (releasing.asset.loaded) releasing.asset.unload();
+      if (releasing.objectUrl) URL.revokeObjectURL(releasing.objectUrl);
+    }
+
+    async function attachSource({ url, filename, objectUrl = null }) {
+      diagnostics.done = false;
+      diagnostics.rendered = false;
+      diagnostics.error = null;
+      diagnostics.source = filename;
+      diagnostics.gaussianObjects = 0;
+      diagnostics.splatCount = 0;
+      updateStatus();
+
+      const isGlb = filename.toLowerCase().endsWith('.glb');
+      const asset = new Asset(filename, isGlb ? 'container' : 'gsplat', { url, filename });
+      try {
+        await loadAsset(asset);
+        const root = isGlb
+          ? asset.resource.instantiateRenderEntity()
+          : new Entity(`gsplat:${filename}`);
+        if (!isGlb) root.addComponent('gsplat', { asset, unified: true });
+
+        const components = collectGsplatComponents(root);
+        if (components.length === 0) throw new Error('PlayCanvas did not create a GSplat component');
+
+        await releaseActive();
+        app.root.addChild(root);
+        active = { root, asset, objectUrl };
+        diagnostics.format = isGlb ? 'KHR_gaussian_splatting GLB' : filename.split('.').pop().toUpperCase();
+        diagnostics.gaussianObjects = components.length;
+        diagnostics.splatCount = components.reduce((sum, component) => sum + splatCountOf(component), 0);
+        diagnostics.done = true;
+        resetFrameTiming(diagnostics.xrActive ? 'xr' : 'desktop');
+        updateStatus();
+      } catch (error) {
+        app.assets.remove(asset);
+        asset.off();
+        if (asset.loaded) asset.unload();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        diagnostics.done = true;
+        diagnostics.error = error?.message || String(error);
+        updateStatus();
+        console.error(error);
+      }
+    }
+
+    function openFile(file) {
+      if (!file || !/\.(?:glb|sog|ply)$/iu.test(file.name)) {
+        diagnostics.error = 'KHR GLB / SOG / PLYファイルを選択してください';
+        updateStatus();
+        return;
+      }
+      const objectUrl = URL.createObjectURL(file);
+      attachSource({ url: objectUrl, filename: file.name, objectUrl });
+    }
+
+    chooseFileButton.addEventListener('click', () => fileInput.click());
+    qualitySelect.value = xrQuality.preset;
+    qualitySelect.addEventListener('change', () => {
+      params.set('quality', qualitySelect.value);
+      location.search = params.toString();
+    });
+    fileInput.addEventListener('change', () => {
+      openFile(fileInput.files?.[0]);
+      fileInput.value = '';
+    });
+
+    let dragDepth = 0;
+    addEventListener('dragenter', (event) => {
+      if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+      event.preventDefault();
+      dragDepth += 1;
+      document.body.classList.add('dragging');
+    });
+    addEventListener('dragover', (event) => event.preventDefault());
+    addEventListener('dragleave', (event) => {
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) document.body.classList.remove('dragging');
+    });
+    addEventListener('drop', (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      document.body.classList.remove('dragging');
+      openFile(event.dataTransfer?.files?.[0]);
+    });
+
+    const xr = app.xr;
+    function pickXrInputSource(handedness, fallback = false) {
+      const inputSources = xr.input?.inputSources || [];
+      const exact = inputSources.find((source) => source.handedness === handedness && source.gamepad);
+      if (exact || !fallback) return exact || null;
+      return inputSources.find((source) => source.gamepad) || null;
+    }
+
+    function updateXrLocomotion(deltaTime) {
+      if (!diagnostics.xrActive) return;
+      const inputSources = xr.input?.inputSources || [];
+      diagnostics.xrInputSources = inputSources.length;
+
+      const leftSource = pickXrInputSource('left', true);
+      const leftStick = readXrThumbstick(leftSource?.gamepad);
+      const rightSource = pickXrInputSource('right');
+      const rightStick = readXrThumbstick(rightSource?.gamepad);
+      const gripPressed = Boolean(
+        rightSource?.squeezing || isXrGamepadButtonPressed(rightSource?.gamepad, 1)
+      );
+      let moveX = leftStick.x + (gripPressed ? rightStick.x : 0);
+      let moveY = leftStick.y + (gripPressed ? rightStick.y : 0);
+      const moveLength = Math.hypot(moveX, moveY);
+      if (moveLength > 1) {
+        moveX /= moveLength;
+        moveY /= moveLength;
+      }
+      if (moveX !== 0 || moveY !== 0) {
+        const forward = cameraEntity.forward;
+        const horizontalLength = Math.hypot(forward.x, forward.z);
+        if (horizontalLength > 0.0001) {
+          const forwardX = forward.x / horizontalLength;
+          const forwardZ = forward.z / horizontalLength;
+          const rightX = -forwardZ;
+          const rightZ = forwardX;
+          const forwardAmount = -moveY;
+          const distance = XR_LOCOMOTION_SPEED * deltaTime;
+          const deltaX = (rightX * moveX + forwardX * forwardAmount) * distance;
+          const deltaZ = (rightZ * moveX + forwardZ * forwardAmount) * distance;
+          rig.translate(deltaX, 0, deltaZ);
+          diagnostics.xrLocomotionMeters += Math.hypot(deltaX, deltaZ);
+        }
+      }
+
+      const vertical = readPicoVerticalButtons(rightSource?.gamepad).direction;
+      if (vertical !== 0) {
+        const deltaY = vertical * XR_VERTICAL_LOCOMOTION_SPEED * deltaTime;
+        rig.translate(0, deltaY, 0);
+        diagnostics.xrLocomotionMeters += Math.abs(deltaY);
+      }
+      if (!gripPressed && rightStick.x !== 0) {
+        const deltaDegrees = -rightStick.x * XR_TURN_SPEED_DEGREES * deltaTime;
+        rig.rotateLocal(0, deltaDegrees, 0);
+        diagnostics.xrTurnDegrees += Math.abs(deltaDegrees);
+      }
+    }
+
+    function setXrAvailable(available) {
+      diagnostics.xrAvailable = available;
+      enterVrButton.disabled = !available || !diagnostics.done || Boolean(diagnostics.error);
+      updateStatus();
+    }
+    xr.on(`available:${XRTYPE_VR}`, setXrAvailable);
+    xr.on('start', () => {
+      xr.fixedFoveation = xrQuality.foveation;
+      diagnostics.xrActive = true;
+      diagnostics.xrInputSources = 0;
+      diagnostics.xrLocomotionMeters = 0;
+      diagnostics.xrTurnDegrees = 0;
+      diagnostics.lastXrTiming = null;
+      resetFrameTiming('xr');
+      enterVrButton.textContent = 'VR実行中';
+      updateStatus();
+    });
+    xr.on('end', () => {
+      diagnostics.xrActive = false;
+      diagnostics.lastXrTiming = diagnostics.framesSampled > 0 ? {
+        fps: diagnostics.fps,
+        frameTimeMs: diagnostics.frameTimeMs,
+        p95FrameTimeMs: diagnostics.p95FrameTimeMs,
+        framesSampled: diagnostics.framesSampled,
+      } : null;
+      resetFrameTiming('desktop');
+      enterVrButton.textContent = 'VRを開始';
+      updateStatus();
+    });
+    xr.on('error', (error) => {
+      diagnostics.error = error?.message || String(error);
+      updateStatus();
+    });
+    xr.on('update', () => {
+      const views = xr.views?.list || [];
+      for (const view of views) view.updateTransforms(rig.getWorldTransform());
+      const left = views.find((view) => view.eye === XREYE_LEFT);
+      const right = views.find((view) => view.eye === XREYE_RIGHT);
+      diagnostics.xrViews = views.length;
+      diagnostics.eyes = views.map((view) => view.eye);
+      diagnostics.xrSamples += 1;
+
+      if (left && right) {
+        const leftPosition = left.positionData;
+        const rightPosition = right.positionData;
+        diagnostics.eyeSeparationMeters = Math.hypot(
+          rightPosition[0] - leftPosition[0],
+          rightPosition[1] - leftPosition[1],
+          rightPosition[2] - leftPosition[2],
+        );
+        const leftMatrix = left.viewOffMat.data;
+        const rightMatrix = right.viewOffMat.data;
+        let maxDelta = 0;
+        for (let i = 0; i < 16; i += 1) {
+          maxDelta = Math.max(maxDelta, Math.abs(leftMatrix[i] - rightMatrix[i]));
+        }
+        diagnostics.viewMatrixMaxDelta = maxDelta;
+        diagnostics.stereoCameraMatricesDistinct =
+          diagnostics.eyeSeparationMeters > 0.001 && maxDelta > 0.00001;
+      }
+      if (diagnostics.xrSamples < 5 || diagnostics.xrSamples % 60 === 0) updateStatus();
+    });
+
+    enterVrButton.addEventListener('click', () => {
+      if (!xr.isAvailable(XRTYPE_VR) || !diagnostics.done || diagnostics.error) return;
+      pressedKeys.clear();
+      rig.setLocalPosition(0, 0, 2.8);
+      rig.setLocalEulerAngles(0, 0, 0);
+      resetOrbitCamera(true);
+      updateOrbitCamera(0, true);
+      xr.start(camera, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
+        // XrManager applies maxPixelRatio / devicePixelRatio internally.
+        framebufferScaleFactor: xrStartFramebufferScale,
+        optionalFeatures: ['hand-tracking'],
+        callback: (error) => {
+          if (!error) return;
+          diagnostics.error = error.message;
+          updateStatus();
+        },
+      });
+    });
+
+    function resize() {
+      app.resizeCanvas();
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    app.on('update', (deltaTime) => {
+      updateOrbitCamera(deltaTime);
+      updateXrLocomotion(Math.min(deltaTime, 0.1));
+    });
+
+    app.on('frameend', () => {
+      const timingChanged = sampleFrameTiming(performance.now());
+      if (diagnostics.done && !diagnostics.error) diagnostics.rendered = true;
+      diagnostics.currentRenderer = app.scene.gsplat.currentRenderer === GSPLAT_RENDERER_RASTER_CPU_SORT
+        ? 'raster CPU sort'
+        : String(app.scene.gsplat.currentRenderer ?? 'unknown');
+      enterVrButton.disabled = !diagnostics.xrAvailable || !diagnostics.done || Boolean(diagnostics.error);
+      if (timingChanged) updateStatus();
+    });
+    app.start();
+
+    const fixture = params.get('fixture') === 'minimal'
+      ? './fixtures/minimal-khr-gaussian-splatting.glb'
+      : DEFAULT_FIXTURE;
+    await attachSource({ url: fixture, filename: fixture.split('/').pop() });
+    setXrAvailable(xr.isAvailable(XRTYPE_VR));
+  </script>
+</body>
+</html>

@@ -64,3 +64,104 @@ node scripts/convert-gaussian-splat.mjs ring-gaussian-splats.lcc2.zip out.glb
 3dgs-three-native-smoke.html?fixture=ring     # degree 1 SH を含む変換結果
 3dgs-three-native-smoke.html?webgpu=1         # WebGPU backend（既定はWebGL backend）
 ```
+
+## WebXR stereo A/B比較
+
+SceneSync本体のrendererを変更せず、同じ`KHR_gaussian_splatting` GLBをQuestで比較する。
+
+- `../3dgs-webxr-renderer-comparison.html` はfixture、XR framebuffer scale、fixed foveation、
+  camera FOV / clip、PICO locomotion条件を揃えて両rendererを並べる比較ランチャー。
+- `../3dgs-three-webxr-stereo-smoke.html` は固定中のThree.js commitへ、XR ArrayCamera対応の
+  `mediumpModelViewMatrix`と片眼サイズの`cameraViewport.zw`を実行時にだけ適用する。
+- `../3dgs-playcanvas-webxr-smoke.html` はPlayCanvas 2.21.4の標準container loaderと
+  XR対応の`GSPLAT_RENDERER_RASTER_CPU_SORT`を使う。
+
+```text
+3dgs-webxr-renderer-comparison.html?fixture=ring&quality=quality
+3dgs-three-webxr-stereo-smoke.html?fixture=ring
+3dgs-three-webxr-stereo-smoke.html?fixture=minimal
+3dgs-three-webxr-stereo-smoke.html?fixture=ring&kernel=smooth
+3dgs-playcanvas-webxr-smoke.html?fixture=ring
+3dgs-playcanvas-webxr-smoke.html?fixture=minimal
+```
+
+`quality=quality`（既定）は両方ともframebuffer scale 1.00 / foveation 0。`balanced`は
+0.85 / 0.30、`performance`は0.78 / 0.55に揃える。比較ページのiframeは見た目の並列確認用で、
+XR frame intervalを比較するときは各列の「単独でVR確認」を開き、同じpresetで一つずつ計測する。
+PlayCanvasがXR layer作成時に行うpixel-ratio正規化は事前に相殺し、実際のXR framebuffer scaleを
+表示値へ合わせる。
+
+Three.js版へはSceneSync生成の`.glb`を、PlayCanvas版へは`.glb`、元の`.sog`または`.ply`を
+ドロップして差し替えられる。Questでは「VRを開始」後、次を両ページで確認する。
+
+PlayCanvas版の非XRカメラ操作:
+
+- ドラッグ: orbit
+- Shift + ドラッグ、または右ドラッグ: pan
+- wheel: zoom
+- W / A / S / D: 水平移動
+- Q / E: 垂直移動
+- 「カメラをリセット」: 初期位置へ戻す
+
+immersive VR開始時は初期位置へ戻し、camera controlを停止してWebXR head trackingへ渡す。
+PICO / Questのxr-standard controllerは、両rendererで次のlocomotionに揃える。
+
+- 左スティック: head方向を基準に水平移動（最大1.8 m/s）
+- 右スティック左右: smooth turn（最大105°/s）
+- Grip + 右スティック: head方向を基準に水平移動
+- 右Aボタン: 上昇（1.2 m/s）
+- 右Bボタン: 下降（1.2 m/s）
+- statusの`PICO controls` / `XR locomotion`でinput数、移動距離、回転角を確認する
+
+1. Gaussianと右側の青・橙・緑のboxの双方に左右眼parallaxがある。
+2. `XR views`が2、eye separationがおよそ0.05〜0.08 mになる。
+3. `stereo camera matrices`が`distinct`になる。
+4. `frame interval (xr)`が表示されるまで待ち、fps / average / p95を記録する。
+
+frame intervalは直近180 frameのCPU側frame間隔で、GPU query時間ではない。XR開始時に計測を
+リセットするため、実データを読み込んでからVRを開始し、少なくとも数秒待って比較する。同一条件の
+renderer比較では両方へ同じKHR GLBを渡す。PlayCanvasのSOG直接読込は、変換後GLBの容量増加も含む
+end-to-end比較として別に記録する。VR終了後も`last XR interval`に最後のXR計測を残すため、
+immersive sessionを抜けてからstatus panelの数値を記録できる。
+
+通常boxだけが立体でGaussianが平面に見える場合は、Three.jsのGaussian shader修正が不十分。
+両方が立体なら候補パッチを上流PRへ進められる。PlayCanvasだけが立体ならrenderer移行の検討材料にする。
+
+Quest 3実機では2026-08-26に両方の立体視を確認済み。ring fixtureの見た目はPlayCanvas版の方が
+個々のellipseを判別しやすかったため、renderer移行の判断は実SOGでのXR frame intervalと安定性を
+追加比較して行う。
+
+Three.js版の`kernel=smooth`はstereo修正とは独立した画質比較。固定commitの2σ cutoff
+（境界alphaは約13.5%）を、PlayCanvas相当の約2.83σと境界alpha 0のnormalized Gaussianへ
+実行時だけ差し替える。PlayCanvasの見た目の差がrenderer全体によるものか、fragment kernelだけで
+再現できるかを切り分ける。
+
+2026-08-27のPICO実機比較では、同じ`1_3DGS2-khr.glb` / Quality presetでPlayCanvas 18.7 fps、
+Three.js Smooth 24.6 fpsだった。一方、画質はPlayCanvasの方が明瞭で、Three.js Upstreamは劣化が
+大きいため候補から外した。今後の画質・操作基準は`afjk/insta360-sog-xr-viewer`のPlayCanvas実装とし、
+SceneSync本体のrenderer統合は比較smokeとは別trackで扱う。
+
+機械判定用diagnosticsは`window.__threeGaussianXrStereoSmoke`と
+`window.__playCanvasGaussianXrSmoke`へ出す。
+
+Desktopのload/render smoke:
+
+```bash
+npm run test:3dgs-xr-comparison
+npm run test:e2e:scene-sync-3dgs-three-xr-patch
+npm run test:e2e:scene-sync-3dgs-playcanvas
+```
+
+repo外へ出さない実SOGをdesktop smokeでも計測する場合:
+
+```bash
+SCENE_SYNC_3DGS_PLAYCANVAS_REAL_ASSET=tmp/1_3DGS2.sog npm run test:e2e:scene-sync-3dgs-playcanvas
+```
+
+同じcaptureから一時生成したKHR GLBをThree.js側で計測する場合:
+
+```bash
+node scripts/convert-gaussian-splat.mjs tmp/1_3DGS2.sog /private/tmp/1_3DGS2-khr.glb
+SCENE_SYNC_3DGS_THREE_REAL_GLB=/private/tmp/1_3DGS2-khr.glb npm run test:e2e:scene-sync-3dgs-three-xr-patch
+SCENE_SYNC_3DGS_PLAYCANVAS_REAL_ASSET=/private/tmp/1_3DGS2-khr.glb npm run test:e2e:scene-sync-3dgs-playcanvas
+```

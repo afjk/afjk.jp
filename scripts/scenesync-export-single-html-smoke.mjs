@@ -215,7 +215,17 @@ try {
     };
   });
   await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => document.getElementById('loading-overlay')?.classList.contains('hidden'), null, { timeout: 20000 });
+  try {
+    await page.waitForFunction(
+      () => document.getElementById('loading-overlay')?.classList.contains('hidden'),
+      null,
+      { timeout: 20000 },
+    );
+  } catch (error) {
+    const loadingText = await page.locator('#loading-overlay').textContent().catch(() => null);
+    console.error(JSON.stringify({ loadingText, pageErrors, consoleErrors, requestUrls }, null, 2));
+    throw error;
+  }
   await page.waitForFunction(() => document.querySelector('[data-player-play-pause]'), null, { timeout: 10000 });
   await page.waitForFunction(() => (
     globalThis.__sceneSyncViewerDiagnostics?.rendered === true
@@ -308,6 +318,13 @@ try {
   assert(state.gaussian?.xrEnabled === true, 'Single HTML viewer WebXR integration was not enabled');
   assert(state.gaussian?.gaussianObjects >= 1, 'Single HTML viewer did not create a GaussianSplat');
   assert(state.gaussian?.splatCount === 16, 'Single HTML viewer did not preserve all fixture splats');
+  assert(state.gaussian?.initialized === true,
+    'Single HTML Gaussian extension was not initialized');
+  assert(
+    state.gaussian?.gaussianSplatPatch
+      === 'xr-stereo-mediumpModelViewMatrix-cameraViewport-smooth-kernel',
+    'Single HTML did not use the production Gaussian XR stereo/smooth patch',
+  );
   assert(state.gaussian?.objectCount === 8, 'Single HTML did not load Gaussian, Draco, media, text, and primitive objects together');
   assert(state.gaussian?.rendered === true, 'Single HTML viewer did not render a GaussianSplat frame');
   assert(state.gaussian?.environmentLoaded === true, 'Single HTML HDRI/PMREM environment did not load');

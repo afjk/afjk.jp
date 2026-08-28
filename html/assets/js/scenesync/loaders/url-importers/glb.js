@@ -82,7 +82,7 @@ export async function loadGlbFromUrl(url, {
   let gltf;
   try {
     const loader = new GLTFLoader();
-    configureLoader?.(loader);
+    await configureLoader?.(loader);
     gltf = await new Promise((resolve, reject) => {
       loader.parse(parseBuffer, '', resolve, reject);
     });

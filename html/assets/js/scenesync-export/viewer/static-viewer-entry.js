@@ -209,6 +209,8 @@ async function main() {
     gaussianObjects: gaussianDiagnostics.gaussianObjects,
     splatCount: gaussianDiagnostics.splatCount,
     objectCount: gaussianDiagnostics.objectCount,
+    initialized: gaussianDiagnostics.initialized,
+    gaussianSplatPatch: gaussianDiagnostics.gaussianSplatPatch,
     environmentLoaded: Boolean(scene.environment),
     rendered: false,
   };

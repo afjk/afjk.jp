@@ -23,23 +23,28 @@ export class GLBFileLoader {
   constructor(options = {}) {
     this.maxDimension = options.maxDimension ?? 10;
     this.dracoPath = options.dracoPath ?? SCENE_SYNC_DRACO_DECODER_PATH;
-    this.dracoLoader = null;
-    this.gltfLoader = this._createGLTFLoader();
-  }
-
-  _createGLTFLoader() {
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath(this.dracoPath);
     this.dracoLoader = dracoLoader;
-
-    const gltfLoader = new GLTFLoader();
-    gltfLoader.setDRACOLoader(dracoLoader);
-    return registerSceneSyncGLTFLoaderExtensions(gltfLoader);
+    this.gltfLoader = null;
+    this.gltfLoaderPromise = null;
   }
 
-  _load(url) {
+  async _createGLTFLoader() {
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(this.dracoLoader);
+    this.gltfLoader = await registerSceneSyncGLTFLoaderExtensions(gltfLoader);
+    return this.gltfLoader;
+  }
+
+  async _load(url) {
+    this.gltfLoaderPromise ||= this._createGLTFLoader().catch((error) => {
+      this.gltfLoaderPromise = null;
+      throw error;
+    });
+    const gltfLoader = await this.gltfLoaderPromise;
     return new Promise((resolve, reject) => {
-      this.gltfLoader.load(url, resolve, undefined, reject);
+      gltfLoader.load(url, resolve, undefined, reject);
     });
   }
 

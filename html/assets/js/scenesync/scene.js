@@ -25,6 +25,7 @@ import { ClipboardImportManager } from './components/clipboard-import-manager.js
 import { parseLoomletGraphClipboardText } from './components/loomlet-graph-clipboard.js';
 import { GLBFileLoader } from './loaders/glb-file-loader.js';
 import {
+  getSceneSyncGLTFLoaderExtensionDiagnostics,
   registerSceneSyncGLTFLoaderExtensions,
 } from './loaders/gltf-loader-config.js';
 import {
@@ -152,9 +153,9 @@ applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
   maxDimension: 10,
 });
-const configureEditorGLTFLoader = (loader) => {
+const configureEditorGLTFLoader = async (loader) => {
   loader.setDRACOLoader(glbLoader.dracoLoader);
-  return registerSceneSyncGLTFLoaderExtensions(loader);
+  return await registerSceneSyncGLTFLoaderExtensions(loader);
 };
 
 const onBeforeBroadcast = (operation, meta) => {
@@ -11143,7 +11144,8 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       source: 'cache',
     });
 
-    const gltf = await configureEditorGLTFLoader(new GLTFLoader()).loadAsync(url);
+    const configuredLoader = await configureEditorGLTFLoader(new GLTFLoader());
+    const gltf = await configuredLoader.loadAsync(url);
     markCrashProbe('glb-load-success', {
       objectId,
       meshPath: options.meshPath,
@@ -12343,6 +12345,7 @@ if (isDevUiEnabled()) {
       renderer: renderer.isWebGPURenderer === true ? 'WebGPURenderer' : renderer.type,
       backend: renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu',
       xrEnabled: renderer.xr.enabled === true,
+      ...getSceneSyncGLTFLoaderExtensionDiagnostics(),
     }),
     selectAt: (clientX, clientY) => sceneInputIntent.selectAt(clientX, clientY),
     deleteSelected: () => deleteSelectedObjects(),

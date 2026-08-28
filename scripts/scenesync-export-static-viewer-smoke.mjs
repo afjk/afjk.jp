@@ -488,6 +488,13 @@ async function runViewerSmoke(exportRoot) {
     assert(result.canvas.gaussian?.xrEnabled === true, 'Static viewer WebXR integration was not enabled');
     assert(result.canvas.gaussian?.gaussianObjects >= 1, 'Static viewer did not create a GaussianSplat');
     assert(result.canvas.gaussian?.splatCount === 16, 'Static viewer did not preserve all fixture splats');
+    assert(result.canvas.gaussian?.initialized === true,
+      'Static viewer Gaussian extension was not initialized');
+    assert(
+      result.canvas.gaussian?.gaussianSplatPatch
+        === 'xr-stereo-mediumpModelViewMatrix-cameraViewport-smooth-kernel',
+      'Static viewer did not use the production Gaussian XR stereo/smooth patch',
+    );
     assert(result.canvas.gaussian?.objectCount === 4, 'Static viewer did not load Gaussian, Draco, and primitive meshes together');
     assert(result.canvas.gaussian?.rendered === true, 'Static viewer did not render a GaussianSplat frame');
     assert(result.canvas.gaussian?.environmentLoaded === true, 'Static viewer HDRI/PMREM environment did not load');
