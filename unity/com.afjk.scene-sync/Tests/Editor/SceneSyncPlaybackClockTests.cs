@@ -1,4 +1,8 @@
+using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace Afjk.SceneSync.Tests
 {
@@ -174,6 +178,234 @@ namespace Afjk.SceneSync.Tests
         }
 
         [Test]
+        public void EffectiveLocalUsesNativePlaybackUntilLocalTransportIsControlled()
+        {
+            Assert.That(
+                SceneSyncPlaybackClockMath.UsesManagerDrivenPlayback(
+                    SceneSyncPlaybackClockMode.Local,
+                    false),
+                Is.False,
+                "a follow policy alone must not make an effective Local clock manager-driven");
+            Assert.That(
+                SceneSyncPlaybackClockMath.UsesSharedObjectEpoch(SceneSyncPlaybackClockMode.Local),
+                Is.False,
+                "effective Local must not subtract a Room/Unix-domain shared epoch");
+            Assert.That(
+                SceneSyncPlaybackClockMath.UsesManagerDrivenPlayback(
+                    SceneSyncPlaybackClockMode.Local,
+                    true),
+                Is.True,
+                "pause/seek/rate and continuous fallback still require manager sampling");
+            Assert.That(
+                SceneSyncPlaybackClockMath.UsesManagerDrivenPlayback(
+                    SceneSyncPlaybackClockMode.SharedPlaybackFollow,
+                    false),
+                Is.True);
+            Assert.That(
+                SceneSyncPlaybackClockMath.UsesSharedObjectEpoch(
+                    SceneSyncPlaybackClockMode.SharedPlaybackFollow),
+                Is.True);
+        }
+
+        [Test]
+        public void FollowerOnlyWithoutControllerKeepsLegacyAnimationNative()
+        {
+            GameObject managerObject = null;
+            GameObject animatedObject = null;
+            AnimationClip clip = null;
+            try
+            {
+                managerObject = new GameObject("SceneSync Playback Clock Test Manager");
+                var manager = managerObject.AddComponent<SceneSyncManager>();
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.FollowerOnly);
+
+                var sample = manager.GetPlaybackClockSample();
+                Assert.That(sample.Mode, Is.EqualTo(SceneSyncPlaybackClockMode.Local));
+                Assert.That(sample.ManagerDriven, Is.False);
+
+                animatedObject = new GameObject("SceneSync Legacy Animation Test Object");
+                var animation = AddLegacyAnimation(animatedObject, out clip);
+                animation[clip.name].speed = 0f;
+
+                InvokePrivate(manager, "PlayImportedAnimations", animatedObject);
+
+                Assert.That(animation.playAutomatically, Is.True);
+                Assert.That(animation[clip.name].speed, Is.EqualTo(1f));
+            }
+            finally
+            {
+                if (animatedObject != null) Object.DestroyImmediate(animatedObject);
+                if (managerObject != null) Object.DestroyImmediate(managerObject);
+                if (clip != null) Object.DestroyImmediate(clip);
+            }
+        }
+
+        [Test]
+        public void ControlledLocalUsesLocalEpochInsteadOfSharedEpoch()
+        {
+            GameObject managerObject = null;
+            try
+            {
+                managerObject = new GameObject("SceneSync Controlled Local Test Manager");
+                var manager = managerObject.AddComponent<SceneSyncManager>();
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.FollowerOnly);
+                Assert.That(manager.SeekPlaybackClock(5d), Is.True);
+
+                GetPrivateDictionary(manager, "_sharedObjectEpochTimes")["object"] = 1700000000d;
+                GetPrivateDictionary(manager, "_localObjectEpochTimes")["object"] = 3d;
+
+                var sample = manager.GetPlaybackClockSample("object");
+                Assert.That(sample.Mode, Is.EqualTo(SceneSyncPlaybackClockMode.Local));
+                Assert.That(sample.ManagerDriven, Is.True);
+                Assert.That(sample.ObjectAge, Is.EqualTo(2d).Within(0.1d));
+            }
+            finally
+            {
+                if (managerObject != null) Object.DestroyImmediate(managerObject);
+            }
+        }
+
+        [Test]
+        public void ControllerReleaseRebasesSharedObjectAgeIntoContinuousLocalFallback()
+        {
+            GameObject managerObject = null;
+            try
+            {
+                managerObject = new GameObject("SceneSync Continuous Fallback Test Manager");
+                var manager = managerObject.AddComponent<SceneSyncManager>();
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.FollowerOnly);
+
+                IngestSharedController(manager);
+
+                var followed = manager.GetPlaybackClockSample("object");
+                Assert.That(followed.Mode, Is.EqualTo(SceneSyncPlaybackClockMode.SharedPlaybackFollow));
+                Assert.That(followed.ManagerDriven, Is.True);
+                Assert.That(followed.ObjectAge, Is.EqualTo(1d).Within(0.1d));
+
+                InvokePrivate(
+                    manager,
+                    "HandleSceneClock",
+                    "{\"kind\":\"scene-clock\",\"mode\":\"shared-playback\",\"active\":false," +
+                    "\"controller\":null,\"action\":\"controller-release\",\"roomNow\":100," +
+                    "\"sentAt\":100000,\"offset\":-95,\"rate\":1,\"revision\":2}",
+                    "desktop");
+
+                var fallback = manager.GetPlaybackClockSample("object");
+                Assert.That(fallback.Mode, Is.EqualTo(SceneSyncPlaybackClockMode.Local));
+                Assert.That(fallback.ManagerDriven, Is.True);
+                Assert.That(fallback.ObjectAge, Is.EqualTo(followed.ObjectAge).Within(0.1d));
+
+                var oneSecondLater = (double)InvokePrivate(
+                    manager,
+                    "GetObjectPlaybackRuntimeTime",
+                    "object",
+                    fallback.ActiveTime + 1d,
+                    SceneSyncPlaybackClockMode.Local);
+                Assert.That(oneSecondLater, Is.EqualTo(fallback.ObjectAge + 1d).Within(0.1d));
+            }
+            finally
+            {
+                if (managerObject != null) Object.DestroyImmediate(managerObject);
+            }
+        }
+
+        [TestCase("disconnect")]
+        [TestCase("controller-lease-expired")]
+        [TestCase("controller-disconnected")]
+        public void ControllerLossRebasesSharedObjectAgeIntoContinuousLocalFallback(string reason)
+        {
+            GameObject managerObject = null;
+            try
+            {
+                managerObject = new GameObject("SceneSync Controller Loss Test Manager");
+                var manager = managerObject.AddComponent<SceneSyncManager>();
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.FollowerOnly);
+
+                IngestSharedController(manager);
+
+                var followed = manager.GetPlaybackClockSample("object");
+                InvokePrivate(
+                    manager,
+                    "FallbackFromSharedPlayback",
+                    (double)Time.realtimeSinceStartup,
+                    reason);
+
+                var fallback = manager.GetPlaybackClockSample("object");
+                Assert.That(fallback.Mode, Is.EqualTo(SceneSyncPlaybackClockMode.Local));
+                Assert.That(fallback.ManagerDriven, Is.True);
+                Assert.That(fallback.ObjectAge, Is.EqualTo(followed.ObjectAge).Within(0.1d));
+            }
+            finally
+            {
+                if (managerObject != null) Object.DestroyImmediate(managerObject);
+            }
+        }
+
+        [Test]
+        public void InvalidControllerAtColdStartKeepsNativeLocalPlayback()
+        {
+            GameObject managerObject = null;
+            try
+            {
+                managerObject = new GameObject("SceneSync Invalid Controller Test Manager");
+                var manager = managerObject.AddComponent<SceneSyncManager>();
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.FollowerOnly);
+                SetPrivateField(manager, "_hasPeersSnapshot", true);
+
+                IngestSharedController(manager, "missing-peer", 1700000000d);
+
+                var sample = manager.GetPlaybackClockSample("object");
+                Assert.That(sample.Mode, Is.EqualTo(SceneSyncPlaybackClockMode.Local));
+                Assert.That(sample.ManagerDriven, Is.False);
+                Assert.That(sample.ObjectAge, Is.EqualTo(sample.ActiveTime).Within(0.01d));
+            }
+            finally
+            {
+                if (managerObject != null) Object.DestroyImmediate(managerObject);
+            }
+        }
+
+        [Test]
+        public void LeavingManagerDrivenPlaybackRestoresLegacyAnimationSpeed()
+        {
+            GameObject managerObject = null;
+            GameObject animatedObject = null;
+            AnimationClip clip = null;
+            try
+            {
+                managerObject = new GameObject("SceneSync Driver Transition Test Manager");
+                var manager = managerObject.AddComponent<SceneSyncManager>();
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.FollowerOnly);
+
+                animatedObject = new GameObject("SceneSync Driver Transition Animation");
+                animatedObject.AddComponent<SceneSyncIdentity>()
+                    .ConfigureRemoteTemporary("object", "test.glb");
+                var animation = AddLegacyAnimation(animatedObject, out clip);
+                GetPrivateManagedObjects(manager)["object"] = animatedObject;
+
+                IngestSharedController(manager);
+                InvokePrivate(
+                    manager,
+                    "UpdatePlaybackClock",
+                    (double)Time.realtimeSinceStartup);
+                Assert.That(animation[clip.name].speed, Is.EqualTo(0f));
+
+                manager.SetPlaybackClockFollowPolicy(SceneSyncPlaybackClockFollowPolicy.Manual);
+                InvokePrivate(
+                    manager,
+                    "UpdatePlaybackClock",
+                    (double)Time.realtimeSinceStartup);
+                Assert.That(animation[clip.name].speed, Is.EqualTo(1f));
+            }
+            finally
+            {
+                if (animatedObject != null) Object.DestroyImmediate(animatedObject);
+                if (managerObject != null) Object.DestroyImmediate(managerObject);
+                if (clip != null) Object.DestroyImmediate(clip);
+            }
+        }
+
+        [Test]
         public void LegacyMissingActiveUsesControllerPresence()
         {
             Assert.That(SceneSyncPlaybackClockMath.ResolveActive(false, false, false, false), Is.True);
@@ -199,6 +431,74 @@ namespace Afjk.SceneSync.Tests
                     SceneSyncPlaybackClockMode.SharedPlaybackControl,
                     false),
                 Is.True);
+        }
+
+        private static Dictionary<string, double> GetPrivateDictionary(
+            SceneSyncManager manager,
+            string fieldName)
+        {
+            var field = typeof(SceneSyncManager).GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, "missing private field " + fieldName);
+            return (Dictionary<string, double>)field.GetValue(manager);
+        }
+
+        private static Animation AddLegacyAnimation(GameObject target, out AnimationClip clip)
+        {
+            var animation = target.AddComponent<Animation>();
+            clip = new AnimationClip { name = "LegacyMove", legacy = true };
+            clip.SetCurve(
+                "",
+                typeof(Transform),
+                "localPosition.x",
+                AnimationCurve.Linear(0f, 0f, 1f, 1f));
+            animation.AddClip(clip, clip.name);
+            animation.clip = clip;
+            return animation;
+        }
+
+        private static void IngestSharedController(
+            SceneSyncManager manager,
+            string controllerId = "desktop",
+            double sharedEpochTime = 4d)
+        {
+            var epoch = sharedEpochTime.ToString("R", CultureInfo.InvariantCulture);
+            InvokePrivate(
+                manager,
+                "HandleSceneClock",
+                "{\"kind\":\"scene-clock\",\"mode\":\"shared-playback\",\"active\":true," +
+                "\"controller\":{\"id\":\"" + controllerId + "\"},\"source\":\"room\",\"roomNow\":100," +
+                "\"sentAt\":100000,\"offset\":-95,\"rate\":1,\"revision\":1," +
+                "\"objectClocks\":{\"object\":{\"sharedEpochTime\":" + epoch + "}}}",
+                controllerId);
+        }
+
+        private static Dictionary<string, GameObject> GetPrivateManagedObjects(SceneSyncManager manager)
+        {
+            var field = typeof(SceneSyncManager).GetField(
+                "_managedObjects",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, "missing private field _managedObjects");
+            return (Dictionary<string, GameObject>)field.GetValue(manager);
+        }
+
+        private static object InvokePrivate(SceneSyncManager manager, string methodName, params object[] args)
+        {
+            var method = typeof(SceneSyncManager).GetMethod(
+                methodName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null, "missing private method " + methodName);
+            return method.Invoke(manager, args);
+        }
+
+        private static void SetPrivateField(SceneSyncManager manager, string fieldName, object value)
+        {
+            var field = typeof(SceneSyncManager).GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, "missing private field " + fieldName);
+            field.SetValue(manager, value);
         }
     }
 }
