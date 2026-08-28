@@ -71,6 +71,8 @@ namespace Afjk.SceneSync
         private double _localPlaybackRate = 1d;
         private bool _localPlaybackPaused;
         private bool _localPlaybackTransportControlled;
+        private bool _hasUsedSharedPlaybackClock;
+        private bool? _lastManagerDrivenPlaybackClock;
 
         private const double RECOVERY_TIMEOUT_MS = 30000;
         private const double PEER_RETRY_INTERVAL_MS = 4000;
@@ -229,6 +231,11 @@ namespace Afjk.SceneSync
         {
             var currentTime = (double)Time.realtimeSinceStartup;
             var effectiveMode = GetEffectivePlaybackClockMode(currentTime);
+            if (effectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow
+                || effectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                _hasUsedSharedPlaybackClock = true;
+            }
             var activeTime = GetPlaybackClockTime(currentTime, effectiveMode);
             var managerDriven = UsesManagerDrivenPlaybackClock(effectiveMode);
             var objectAge = !string.IsNullOrWhiteSpace(objectId) && managerDriven
@@ -1853,6 +1860,10 @@ namespace Afjk.SceneSync
 
             var previousEffectiveMode = GetEffectivePlaybackClockMode(currentTime);
             var previousDisplayedTime = GetPlaybackClockTime(currentTime, previousEffectiveMode);
+            var previousObjectAges = previousEffectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow
+                || previousEffectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackControl
+                ? CaptureObjectAges(previousDisplayedTime, useSharedEpoch: true)
+                : null;
 
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
             {
@@ -1890,12 +1901,14 @@ namespace Afjk.SceneSync
                 && nextEffectiveMode == SceneSyncPlaybackClockMode.Local
                 && !parsedClockActive)
             {
-                RebaseLocalPlaybackClock(
+                EnterContinuousLocalFallback(
                     SceneSyncPlaybackClockMath.SelectFallbackRebaseTime(
                         parsedClockActive,
                         parsedClockTime,
                         previousDisplayedTime),
-                    currentTime);
+                    currentTime,
+                    previousObjectAges);
+                _hasUsedSharedPlaybackClock = false;
             }
             _lastEffectivePlaybackClockMode = (SceneSyncPlaybackClockMode)(-1);
             NotifyPlaybackClockChanged();
@@ -1948,6 +1961,10 @@ namespace Afjk.SceneSync
             var displayedTime = _sharedSceneClock.Active
                 ? _sharedSceneClock.GetTime(currentTime)
                 : GetLocalPlaybackClockTime(currentTime);
+            var preservePlayback = _hasUsedSharedPlaybackClock;
+            var objectAges = preservePlayback
+                ? CaptureObjectAges(displayedTime, useSharedEpoch: true)
+                : null;
 
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
             {
@@ -1956,9 +1973,13 @@ namespace Afjk.SceneSync
             }
 
             _sharedSceneClock = _sharedSceneClock.Deactivate();
-            RebaseLocalPlaybackClock(displayedTime, currentTime);
+            if (preservePlayback)
+                EnterContinuousLocalFallback(displayedTime, currentTime, objectAges);
+            _hasUsedSharedPlaybackClock = false;
             _lastEffectivePlaybackClockMode = (SceneSyncPlaybackClockMode)(-1);
-            Debug.Log("[SceneSync] Shared Playback switched to continuous Local fallback: " + reason);
+            Debug.Log(preservePlayback
+                ? "[SceneSync] Shared Playback switched to continuous Local fallback: " + reason
+                : "[SceneSync] Invalid unused Shared Playback clock was discarded: " + reason);
             NotifyPlaybackClockChanged();
         }
 
@@ -3662,16 +3683,7 @@ namespace Afjk.SceneSync
 
         private bool UsesSharedObjectEpochClock(SceneSyncPlaybackClockMode effectiveMode)
         {
-            return UsesSharedObjectEpochClock(_playbackClockMode, effectiveMode);
-        }
-
-        private bool UsesSharedObjectEpochClock(
-            SceneSyncPlaybackClockMode requestedMode,
-            SceneSyncPlaybackClockMode effectiveMode)
-        {
-            return effectiveMode != SceneSyncPlaybackClockMode.Local
-                || _playbackClockFollowPolicy != SceneSyncPlaybackClockFollowPolicy.Manual
-                || requestedMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow;
+            return SceneSyncPlaybackClockMath.UsesSharedObjectEpoch(effectiveMode);
         }
 
         private void UpdatePlaybackClock(double currentTime)
@@ -3684,16 +3696,24 @@ namespace Afjk.SceneSync
             ValidateSharedPlaybackController(currentTime, "controller-unavailable");
 
             var effectiveMode = GetEffectivePlaybackClockMode(currentTime);
+            if (effectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow
+                || effectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                _hasUsedSharedPlaybackClock = true;
+            }
+            else
+            {
+                _hasUsedSharedPlaybackClock = false;
+            }
+            var managerDriven = UsesManagerDrivenPlaybackClock(effectiveMode);
+            if (_lastManagerDrivenPlaybackClock == true && !managerDriven)
+            {
+                PlayAllRemoteImportedAnimationsLocally();
+            }
+            _lastManagerDrivenPlaybackClock = managerDriven;
             if (_lastEffectivePlaybackClockMode != effectiveMode)
             {
-                var previousEffectiveMode = _lastEffectivePlaybackClockMode;
                 _lastEffectivePlaybackClockMode = effectiveMode;
-                if (effectiveMode == SceneSyncPlaybackClockMode.Local
-                    && previousEffectiveMode != (SceneSyncPlaybackClockMode)(-1)
-                    && !UsesManagerDrivenPlaybackClock(effectiveMode))
-                {
-                    PlayAllRemoteImportedAnimationsLocally();
-                }
                 NotifyPlaybackClockChanged();
             }
 
@@ -3702,7 +3722,7 @@ namespace Afjk.SceneSync
                 BroadcastSharedPlaybackClockIfNeeded(currentTime);
             }
 
-            if (UsesManagerDrivenPlaybackClock(effectiveMode))
+            if (managerDriven)
             {
                 SampleAllRemoteImportedAnimations(GetPlaybackClockTime(currentTime, effectiveMode), effectiveMode);
             }
@@ -3718,7 +3738,7 @@ namespace Afjk.SceneSync
                 ? GetPlaybackClockTime(currentTime, previousEffectiveMode)
                 : 0d;
             var previousObjectAges = hasPreviousMode
-                ? CaptureObjectAges(previousActiveTime, previousMode, previousEffectiveMode)
+                ? CaptureObjectAges(previousActiveTime, previousEffectiveMode)
                 : null;
             var resetForFreshSharedControl = _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl
                 && previousEffectiveMode != SceneSyncPlaybackClockMode.SharedPlaybackFollow
@@ -3730,15 +3750,6 @@ namespace Afjk.SceneSync
                 && _playbackClockMode != SceneSyncPlaybackClockMode.SharedPlaybackControl)
             {
                 BroadcastSharedPlaybackControlRelease(currentTime);
-            }
-
-            if (hasPreviousMode
-                && previousEffectiveMode != SceneSyncPlaybackClockMode.Local
-                && _playbackClockMode == SceneSyncPlaybackClockMode.Local)
-            {
-                // Keep using the manager clock after a synchronized-domain exit
-                // so Animation/Loomlet preserve the visible ObjectAge.
-                _localPlaybackTransportControlled = true;
             }
 
             if (_playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
@@ -3757,26 +3768,34 @@ namespace Afjk.SceneSync
                     _sharedObjectEpochTimes.Clear();
                 BroadcastSharedPlaybackClock("controller", currentTime);
             }
-            else if (_playbackClockMode == SceneSyncPlaybackClockMode.Local)
-            {
-                if (_playbackClockFollowPolicy == SceneSyncPlaybackClockFollowPolicy.Manual
-                    && !_localPlaybackTransportControlled)
-                {
-                    PlayAllRemoteImportedAnimationsLocally();
-                }
-            }
-
             if (hasPreviousMode && previousObjectAges != null && !resetForFreshSharedControl)
             {
                 var nextEffectiveMode = GetEffectivePlaybackClockMode(_playbackClockMode, currentTime);
+                if (previousEffectiveMode != SceneSyncPlaybackClockMode.Local
+                    && nextEffectiveMode == SceneSyncPlaybackClockMode.Local)
+                {
+                    // Keep using a rebased Local manager clock after leaving a
+                    // synchronized domain so Animation/Loomlet/Rapier remain continuous.
+                    if (previousEffectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow
+                        || previousEffectiveMode == SceneSyncPlaybackClockMode.SharedPlaybackControl)
+                    {
+                        RebaseLocalPlaybackClock(previousActiveTime, currentTime);
+                    }
+                    _localPlaybackTransportControlled = true;
+                }
                 var nextActiveTime = GetPlaybackClockTime(currentTime, nextEffectiveMode);
                 RebaseObjectEpochsPreservingAges(
                     previousObjectAges,
                     nextActiveTime,
-                    _playbackClockMode,
                     nextEffectiveMode);
             }
 
+            var appliedEffectiveMode = GetEffectivePlaybackClockMode(_playbackClockMode, currentTime);
+            if (appliedEffectiveMode != SceneSyncPlaybackClockMode.SharedPlaybackFollow
+                && appliedEffectiveMode != SceneSyncPlaybackClockMode.SharedPlaybackControl)
+            {
+                _hasUsedSharedPlaybackClock = false;
+            }
             _lastEffectivePlaybackClockMode = (SceneSyncPlaybackClockMode)(-1);
             NotifyPlaybackClockChanged();
         }
@@ -3818,10 +3837,15 @@ namespace Afjk.SceneSync
 
         private Dictionary<string, double> CaptureObjectAges(
             double activeTime,
-            SceneSyncPlaybackClockMode requestedMode,
             SceneSyncPlaybackClockMode effectiveMode)
         {
-            var useSharedEpoch = UsesSharedObjectEpochClock(requestedMode, effectiveMode);
+            return CaptureObjectAges(
+                activeTime,
+                UsesSharedObjectEpochClock(effectiveMode));
+        }
+
+        private Dictionary<string, double> CaptureObjectAges(double activeTime, bool useSharedEpoch)
+        {
             var source = useSharedEpoch ? _sharedObjectEpochTimes : _localObjectEpochTimes;
             var objectIds = new HashSet<string>(_managedObjects.Keys);
             objectIds.UnionWith(_sharedObjectEpochTimes.Keys);
@@ -3844,10 +3868,9 @@ namespace Afjk.SceneSync
         private void RebaseObjectEpochsPreservingAges(
             Dictionary<string, double> previousObjectAges,
             double nextActiveTime,
-            SceneSyncPlaybackClockMode requestedMode,
             SceneSyncPlaybackClockMode effectiveMode)
         {
-            var target = UsesSharedObjectEpochClock(requestedMode, effectiveMode)
+            var target = UsesSharedObjectEpochClock(effectiveMode)
                 ? _sharedObjectEpochTimes
                 : _localObjectEpochTimes;
             foreach (var entry in previousObjectAges)
@@ -3870,10 +3893,9 @@ namespace Afjk.SceneSync
 
         private bool UsesManagerDrivenPlaybackClock(SceneSyncPlaybackClockMode effectiveMode)
         {
-            return effectiveMode != SceneSyncPlaybackClockMode.Local
-                || _localPlaybackTransportControlled
-                || _playbackClockFollowPolicy != SceneSyncPlaybackClockFollowPolicy.Manual
-                || _playbackClockMode == SceneSyncPlaybackClockMode.SharedPlaybackFollow;
+            return SceneSyncPlaybackClockMath.UsesManagerDrivenPlayback(
+                effectiveMode,
+                _localPlaybackTransportControlled);
         }
 
         private double GetLocalPlaybackClockTime(double currentTime)
@@ -3890,6 +3912,22 @@ namespace Afjk.SceneSync
             _localPlaybackAnchorMonotonic = currentTime;
             _localPlaybackRate = 1d;
             _localPlaybackPaused = false;
+        }
+
+        private void EnterContinuousLocalFallback(
+            double activeTime,
+            double currentTime,
+            Dictionary<string, double> objectAges)
+        {
+            RebaseLocalPlaybackClock(activeTime, currentTime);
+            _localPlaybackTransportControlled = true;
+            if (objectAges != null)
+            {
+                RebaseObjectEpochsPreservingAges(
+                    objectAges,
+                    GetLocalPlaybackClockTime(currentTime),
+                    SceneSyncPlaybackClockMode.Local);
+            }
         }
 
         private void PlayAllRemoteImportedAnimationsLocally()

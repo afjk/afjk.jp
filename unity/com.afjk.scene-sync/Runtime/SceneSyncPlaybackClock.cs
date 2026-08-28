@@ -239,6 +239,19 @@ namespace Afjk.SceneSync
             return SceneSyncPlaybackClockMode.Local;
         }
 
+        public static bool UsesManagerDrivenPlayback(
+            SceneSyncPlaybackClockMode effectiveMode,
+            bool localTransportControlled)
+        {
+            return effectiveMode != SceneSyncPlaybackClockMode.Local
+                || localTransportControlled;
+        }
+
+        public static bool UsesSharedObjectEpoch(SceneSyncPlaybackClockMode effectiveMode)
+        {
+            return effectiveMode != SceneSyncPlaybackClockMode.Local;
+        }
+
         public static bool ShouldAcceptRevision(int currentRevision, int incomingRevision, bool canonicalSelfEcho)
         {
             return incomingRevision > currentRevision
