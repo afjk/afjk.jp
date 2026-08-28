@@ -4,7 +4,6 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import {
   getSceneSyncGLTFLoaderExtensionDiagnostics,
-  initializeSceneSyncGLTFLoaderExtensions,
   registerSceneSyncGLTFLoaderExtensions,
 } from '../../scenesync/loaders/gltf-loader-config.js';
 import {
@@ -235,8 +234,6 @@ export async function createViewerCore({
     throw new Error('Invalid scene document');
   }
 
-  await initializeSceneSyncGLTFLoaderExtensions();
-
   const resolver = createStaticAssetResolver();
   const objectMap = new Map();
   const animationSamples = new Map();
@@ -259,7 +256,7 @@ export async function createViewerCore({
   dracoLoader.setDecoderPath(SCENE_SYNC_DRACO_DECODER_PATH);
   const gltfLoader = new GLTFLoader();
   gltfLoader.setDRACOLoader(dracoLoader);
-  registerSceneSyncGLTFLoaderExtensions(gltfLoader);
+  await registerSceneSyncGLTFLoaderExtensions(gltfLoader);
 
   // Load environment (HDRI)
   let envLoaded = false;

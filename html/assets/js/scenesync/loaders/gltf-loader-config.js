@@ -10,11 +10,9 @@ export async function initializeSceneSyncGLTFLoaderExtensions() {
   return gaussianSplatLoaderExtension;
 }
 
-export function registerSceneSyncGLTFLoaderExtensions(loader) {
-  if (!gaussianSplatLoaderExtension) {
-    throw new Error('Scene Sync GLTF loader extensions were not initialized');
-  }
-  loader.register((parser) => new gaussianSplatLoaderExtension(parser));
+export async function registerSceneSyncGLTFLoaderExtensions(loader) {
+  const extension = await initializeSceneSyncGLTFLoaderExtensions();
+  loader.register((parser) => new extension(parser));
   return loader;
 }
 

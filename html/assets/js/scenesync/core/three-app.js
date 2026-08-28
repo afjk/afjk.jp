@@ -1,14 +1,11 @@
 import * as THREE from 'three';
 import { createSceneSyncRendererOptions } from '../../scenesync-export/viewer/three-runtime.js';
-import { initializeSceneSyncGLTFLoaderExtensions } from '../loaders/gltf-loader-config.js';
 
 const GRID_SIZE = 20;
 const GRID_DIVISIONS = 20;
 const PLACEMENT_FLOOR_SIZE = 100;
 
 export async function createThreeApp() {
-  await initializeSceneSyncGLTFLoaderExtensions();
-
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x222222);
 

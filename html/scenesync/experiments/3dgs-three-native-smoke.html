@@ -62,7 +62,7 @@
 
     const loader = new GLTFLoader();
     await initializeSceneSyncGLTFLoaderExtensions();
-    registerSceneSyncGLTFLoaderExtensions(loader);
+    await registerSceneSyncGLTFLoaderExtensions(loader);
 
     const normalMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.15, 0.15, 0.15),

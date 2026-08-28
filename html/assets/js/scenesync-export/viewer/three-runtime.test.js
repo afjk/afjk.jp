@@ -17,6 +17,7 @@ import {
 const editorIndexUrl = new URL('../../../../scenesync/index.html', import.meta.url);
 const editorGlbLoaderUrl = new URL('../../../../assets/js/scenesync/loaders/glb-file-loader.js', import.meta.url);
 const editorThreeAppUrl = new URL('../../../../assets/js/scenesync/core/three-app.js', import.meta.url);
+const editorGltfConfigUrl = new URL('../../../../assets/js/scenesync/loaders/gltf-loader-config.js', import.meta.url);
 const staticViewerEntryUrl = new URL('./static-viewer-entry.js', import.meta.url);
 const gaussianPatchUrl = new URL('../../../../assets/js/scenesync/loaders/gaussian-splat-three-patch.js', import.meta.url);
 
@@ -80,8 +81,9 @@ test('Editor and Export Viewer retain WebXR setup after renderer migration', asy
 });
 
 test('Editor and exports share the pinned Gaussian XR stereo patch', async () => {
-  const [editorThreeApp, gaussianPatch] = await Promise.all([
+  const [editorThreeApp, editorGltfConfig, gaussianPatch] = await Promise.all([
     readFile(editorThreeAppUrl, 'utf8'),
+    readFile(editorGltfConfigUrl, 'utf8'),
     readFile(gaussianPatchUrl, 'utf8'),
   ]);
   const staticIndex = generateExportIndexHtml();
@@ -94,7 +96,8 @@ test('Editor and exports share the pinned Gaussian XR stereo patch', async () =>
     },
   });
 
-  assert.match(editorThreeApp, /initializeSceneSyncGLTFLoaderExtensions/u);
+  assert.doesNotMatch(editorThreeApp, /initializeSceneSyncGLTFLoaderExtensions/u);
+  assert.match(editorGltfConfig, /await initializeSceneSyncGLTFLoaderExtensions/u);
   assert.match(gaussianPatch, /mediumpModelViewMatrix/u);
   assert.match(gaussianPatch, /cameraViewport\.zw/u);
   assert.match(gaussianPatch, /smooth-kernel/u);

@@ -153,9 +153,9 @@ applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
   maxDimension: 10,
 });
-const configureEditorGLTFLoader = (loader) => {
+const configureEditorGLTFLoader = async (loader) => {
   loader.setDRACOLoader(glbLoader.dracoLoader);
-  return registerSceneSyncGLTFLoaderExtensions(loader);
+  return await registerSceneSyncGLTFLoaderExtensions(loader);
 };
 
 const onBeforeBroadcast = (operation, meta) => {
@@ -11144,7 +11144,8 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       source: 'cache',
     });
 
-    const gltf = await configureEditorGLTFLoader(new GLTFLoader()).loadAsync(url);
+    const configuredLoader = await configureEditorGLTFLoader(new GLTFLoader());
+    const gltf = await configuredLoader.loadAsync(url);
     markCrashProbe('glb-load-success', {
       objectId,
       meshPath: options.meshPath,
