@@ -129,6 +129,35 @@ test('importGaussianSplatAssetInWorker resolves with the worker result', async (
   removeFakeWorker();
 });
 
+test('importGaussianSplatAssetInWorker sends GLB asset metadata to the worker', async () => {
+  let request = null;
+  installFakeWorker((message) => {
+    request = message;
+    return {
+      id: message.id,
+      ok: true,
+      glb: new Uint8Array([1]),
+      splatCount: 1,
+      shDegree: 0,
+      sourceFormat: 'ply',
+    };
+  });
+
+  await importGaussianSplatAssetInWorker(plyBuffer(), {
+    glbAssetMetadata: {
+      copyright: '"Lion" by Renaud',
+      extras: { scenesync: { gaussianSplatSource: { provider: 'supersplat' } } },
+    },
+  });
+
+  assert.equal(request.glbAssetMetadata.copyright, '"Lion" by Renaud');
+  assert.equal(
+    request.glbAssetMetadata.extras.scenesync.gaussianSplatSource.provider,
+    'supersplat',
+  );
+  removeFakeWorker();
+});
+
 test('importGaussianSplatAssetInWorker terminates the worker when done', async () => {
   const created = installFakeWorker((message) => ({
     id: message.id, ok: true, glb: new Uint8Array([1]), splatCount: 1, shDegree: 0, sourceFormat: 'ply',

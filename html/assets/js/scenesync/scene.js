@@ -8486,7 +8486,10 @@ async function uploadGlbFromUrl(url, params = {}) {
     model.userData.objectId,
     file.name,
     model,
-    arrayBuffer
+    arrayBuffer,
+    model.userData?.metadata
+      ? { metadata: cloneJsonSafe(model.userData.metadata) }
+      : {},
   );
 
   return {
@@ -8527,6 +8530,10 @@ async function importGlbFileAsSceneObject(file, {
   const model = await glbLoader.loadFromFile(file, loadPosition, scene);
   model.userData.objectId = objectId;
   model.userData.name = name || file.name;
+  const embeddedMetadata = cloneJsonSafe(model.userData?.metadata || null);
+  const effectiveMetadata = embeddedMetadata || metadata
+    ? { ...(embeddedMetadata || {}), ...(metadata || {}) }
+    : null;
 
   const info = {
     name: name || file.name,
@@ -8535,7 +8542,7 @@ async function importGlbFileAsSceneObject(file, {
     scale: Array.isArray(scale) ? scale : model.scale.toArray(),
     visible,
   };
-  if (metadata) info.metadata = metadata;
+  if (effectiveMetadata) info.metadata = effectiveMetadata;
   if (animation) info.animation = animation;
   if (audioSources !== undefined) info.audioSources = audioSources;
   if (physics !== undefined) info.physics = physics;
@@ -8584,7 +8591,7 @@ async function importGlbFileAsSceneObject(file, {
 
   await uploadAndBroadcast(objectId, name || file.name, model, arrayBuffer, {
     visible,
-    ...(metadata ? { metadata } : {}),
+    ...(effectiveMetadata ? { metadata: effectiveMetadata } : {}),
     ...(animation ? { animation } : {}),
     ...(audioSources !== undefined ? { audioSources } : {}),
     ...(physics !== undefined ? { physics } : {}),
@@ -12218,12 +12225,14 @@ const dragDropManager = new DragDropManager({
     const arrayBuffer = model.userData.normalizedGlbArrayBuffer
       ? model.userData.normalizedGlbArrayBuffer
       : await file.arrayBuffer();
+    const embeddedObjectMetadata = cloneJsonSafe(model.userData?.metadata || null);
 
     await uploadAndBroadcast(
       model.userData.objectId,
       file.name,
       model,
-      arrayBuffer
+      arrayBuffer,
+      embeddedObjectMetadata ? { metadata: embeddedObjectMetadata } : {},
     );
   },
   imageImporter: imageImporterCallback,

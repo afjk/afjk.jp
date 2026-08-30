@@ -89,6 +89,42 @@ export function packGlb(json, bin) {
   return out;
 }
 
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Add standards-visible copyright text and namespaced Scene Sync extras while
+ * preserving the GLB's geometry and any metadata the source already carried.
+ */
+export function applyGlbAssetMetadata(input, metadata = {}) {
+  const copyright = typeof metadata.copyright === 'string' ? metadata.copyright.trim() : '';
+  const incomingExtras = isRecord(metadata.extras) ? metadata.extras : null;
+  if (!copyright && !incomingExtras) return input;
+
+  const { json, bin } = splitGlb(input);
+  const asset = isRecord(json.asset) ? { ...json.asset } : { version: '2.0' };
+
+  if (copyright) {
+    const previous = typeof asset.copyright === 'string' ? asset.copyright.trim() : '';
+    asset.copyright = previous && previous !== copyright
+      ? `${previous}\n${copyright}`
+      : copyright;
+  }
+
+  if (incomingExtras) {
+    const existingExtras = isRecord(asset.extras) ? asset.extras : {};
+    const extras = { ...existingExtras, ...incomingExtras };
+    if (isRecord(existingExtras.scenesync) && isRecord(incomingExtras.scenesync)) {
+      extras.scenesync = { ...existingExtras.scenesync, ...incomingExtras.scenesync };
+    }
+    asset.extras = extras;
+  }
+
+  json.asset = asset;
+  return packGlb(json, bin);
+}
+
 /**
  * Parent the default scene's roots under a new node carrying `rotation`.
  *

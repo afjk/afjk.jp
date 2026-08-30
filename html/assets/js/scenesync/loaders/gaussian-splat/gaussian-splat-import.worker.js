@@ -50,13 +50,21 @@ function compactForTransfer(glb) {
 }
 
 export async function handleConversionMessage(data, post) {
-  const { id, arrayBuffer, fileName, upAxisCorrection, maxShDegree } = data || {};
+  const {
+    id,
+    arrayBuffer,
+    fileName,
+    upAxisCorrection,
+    maxShDegree,
+    glbAssetMetadata,
+  } = data || {};
 
   try {
     const result = await convertGaussianSplatToGlb(arrayBuffer, {
       fileName,
       upAxisCorrection,
       maxShDegree,
+      glbAssetMetadata,
     });
 
     const glb = compactForTransfer(result.glb);

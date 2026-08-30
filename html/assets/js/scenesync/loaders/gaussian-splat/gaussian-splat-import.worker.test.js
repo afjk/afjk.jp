@@ -86,6 +86,28 @@ test('the worker applies upAxisCorrection', async () => {
   assert.equal(inspectGaussianSplatGlb(data.glb).valid, true);
 });
 
+test('the worker embeds requested GLB asset metadata', async () => {
+  const { data } = await request(plyRequest({
+    id: 'req-metadata',
+    glbAssetMetadata: {
+      copyright: '"Lion" by Renaud',
+      extras: {
+        scenesync: {
+          gaussianSplatSource: { provider: 'supersplat', sceneId: '56155c3f' },
+        },
+      },
+    },
+  }));
+
+  assert.equal(data.ok, true);
+  const json = parseGlbJson(data.glb);
+  assert.equal(json.asset.copyright, '"Lion" by Renaud');
+  assert.equal(
+    json.asset.extras.scenesync.gaussianSplatSource.sceneId,
+    '56155c3f',
+  );
+});
+
 test('the worker applies maxShDegree', async () => {
   const shRest = Array.from({ length: 45 }, (_, i) => i / 100);
   const ply = buildGaussianSplatPly([{ ...SAMPLE[0], shRest }], { shDegree: 3 });

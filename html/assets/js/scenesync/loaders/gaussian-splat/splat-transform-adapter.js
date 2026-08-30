@@ -23,7 +23,11 @@ import {
 } from '@playcanvas/splat-transform';
 
 import { inspectGaussianSplatGlb } from '../khr-gaussian-splatting.js';
-import { UP_AXIS_ROTATIONS, wrapGlbSceneInRotationNode } from './glb-root-transform.js';
+import {
+  UP_AXIS_ROTATIONS,
+  applyGlbAssetMetadata,
+  wrapGlbSceneInRotationNode,
+} from './glb-root-transform.js';
 import {
   SUPPORTED_PLY_ENCODING,
   UnsupportedSplatInputError,
@@ -197,7 +201,8 @@ function lodOptionsFor(inputFormat) {
  * @param {Object} [options]
  * @param {string} [options.fileName] used for format sniffing and error text
  * @param {0|1|2|3} [options.maxShDegree] drop SH bands above this degree
- * @param {'none'|'flip-x-180'} [options.upAxisCorrection]
+ * @param {'none'|'flip-x-180'|'flip-z-180'} [options.upAxisCorrection]
+ * @param {{ copyright?: string|null, extras?: Object }} [options.glbAssetMetadata]
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<{ glb: Uint8Array, splatCount: number, shDegree: number, sourceShDegree: number, sourceFormat: string }>}
  */
@@ -206,6 +211,7 @@ export async function convertGaussianSplatToGlb(input, options = {}) {
     fileName = '',
     maxShDegree,
     upAxisCorrection = 'none',
+    glbAssetMetadata = null,
     signal = null,
   } = options;
 
@@ -215,7 +221,7 @@ export async function convertGaussianSplatToGlb(input, options = {}) {
   const detected = detectSplatContainer(bytes, fileName);
 
   if (detected.container === 'glb') {
-    return passThroughGlb(bytes);
+    return passThroughGlb(bytes, glbAssetMetadata);
   }
 
   if (detected.container === 'unknown') {
@@ -291,6 +297,7 @@ export async function convertGaussianSplatToGlb(input, options = {}) {
 
     const rotation = UP_AXIS_ROTATIONS[upAxisCorrection];
     if (rotation) glb = wrapGlbSceneInRotationNode(glb, rotation);
+    if (glbAssetMetadata) glb = applyGlbAssetMetadata(glb, glbAssetMetadata);
 
     assertUsableKhrGlb(glb);
 
@@ -330,7 +337,7 @@ function assertSupportedPlyEncoding(bytes) {
   );
 }
 
-function passThroughGlb(bytes) {
+function passThroughGlb(bytes, glbAssetMetadata = null) {
   const inspection = inspectGaussianSplatGlb(bytes);
   if (!inspection.hasGaussianSplatting) {
     throw new UnsupportedSplatInputError(
@@ -347,8 +354,10 @@ function passThroughGlb(bytes) {
 
   const primitive = inspection.primitives[0];
   const shDegree = countShDegree(primitive?.attributes || {});
+  const glb = glbAssetMetadata ? applyGlbAssetMetadata(bytes, glbAssetMetadata) : bytes;
+  if (glb !== bytes) assertUsableKhrGlb(glb);
   return {
-    glb: bytes,
+    glb,
     splatCount: 0,
     shDegree,
     sourceShDegree: shDegree,

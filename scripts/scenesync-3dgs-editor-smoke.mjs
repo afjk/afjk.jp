@@ -204,7 +204,18 @@ try {
           title: 'SceneSync Ring',
           author: 'SceneSync fixture',
           downloadable: true,
-          license: { code: 'CC0-1.0', label: 'CC0 1.0' },
+          license: {
+            code: 'CC0-1.0',
+            label: 'CC0 1.0',
+            url: 'https://creativecommons.org/publicdomain/zero/1.0/',
+          },
+          attribution: {
+            status: 'complete',
+            text: '"SceneSync Ring" by SceneSync fixture\nSource: https://superspl.at/scene/scenesync-ring\nLicensed under CC0 1.0',
+            sourceUrl: superSplatSceneUrl,
+            creators: [{ name: 'SceneSync fixture', url: null }],
+            publisher: { name: 'SceneSync fixture', url: null },
+          },
           asset: { format: 'sog', url: superSplatAssetUrl, revision: 'v1' },
         }),
       });
@@ -341,6 +352,10 @@ try {
     'SuperSplat URL did not use the Gaussian conversion path');
   assert(typeof superSplatImported.metadata?.gaussianSplatSource?.license?.code === 'string',
     'SuperSplat attribution metadata was not retained');
+  assert(typeof superSplatImported.metadata?.gaussianSplatSource?.license?.url === 'string',
+    'SuperSplat license URL was not retained');
+  assert(superSplatImported.metadata?.gaussianSplatSource?.attribution?.status === 'complete',
+    'SuperSplat structured attribution was not retained');
   const superSplatSnapshot = await page.evaluate((objectId) => (
     globalThis.__sceneSyncDebug.objects.get(objectId)
   ), superSplatImported.objectId);
@@ -352,6 +367,73 @@ try {
   }
   assert(JSON.stringify(superSplatSnapshot.position) === JSON.stringify([2, 0, 0]),
     'SuperSplat URL ignored its requested placement');
+  const embeddedSuperSplatAsset = await page.evaluate(async ({ assetId, timeoutMs }) => {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('scene-sync-assets');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const record = await new Promise((resolve, reject) => {
+        const request = db.transaction(['assets'], 'readonly').objectStore('assets').get(assetId);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+      });
+      db.close();
+      if (record?.blob) {
+        const bytes = new Uint8Array(await record.blob.arrayBuffer());
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        if (view.getUint32(0, true) !== 0x46546c67 || view.getUint32(16, true) !== 0x4e4f534a) {
+          return null;
+        }
+        const jsonLength = view.getUint32(12, true);
+        const jsonText = new TextDecoder()
+          .decode(bytes.subarray(20, 20 + jsonLength))
+          .replace(/[\u0000\u0020]+$/u, '');
+        const gltfAsset = JSON.parse(jsonText).asset || null;
+        const [{ GLBFileLoader }, { scene }] = await Promise.all([
+          import('/assets/js/scenesync/loaders/glb-file-loader.js'),
+          import('/assets/js/scenesync/scene.js'),
+        ]);
+        const loader = new GLBFileLoader();
+        let reimportedSource = null;
+        let model = null;
+        try {
+          const file = new File([record.blob], 'embedded-supersplat.glb', {
+            type: 'model/gltf-binary',
+          });
+          model = await loader.loadFromFile(file, null, scene);
+          reimportedSource = structuredClone(
+            model.userData?.metadata?.gaussianSplatSource || null,
+          );
+        } finally {
+          if (model) scene.remove(model);
+          loader.dispose();
+        }
+        return { gltfAsset, reimportedSource };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return null;
+  }, {
+    assetId: superSplatSnapshot.asset.assetId,
+    timeoutMs: gaussianLoadTimeoutMs,
+  });
+  assert(typeof embeddedSuperSplatAsset?.gltfAsset?.copyright === 'string',
+    'Generated SuperSplat GLB did not contain asset.copyright');
+  const embeddedSuperSplatSource = embeddedSuperSplatAsset?.gltfAsset?.extras
+    ?.scenesync?.gaussianSplatSource;
+  assert(embeddedSuperSplatSource?.pageUrl === superSplatSceneUrl,
+    'Generated SuperSplat GLB did not contain namespaced source metadata');
+  assert(typeof embeddedSuperSplatSource?.license?.url === 'string',
+    'Generated SuperSplat GLB did not contain the license URL');
+  assert(embeddedSuperSplatSource?.attribution?.status === 'complete',
+    'Generated SuperSplat GLB did not contain structured attribution');
+  assert(embeddedSuperSplatAsset?.reimportedSource?.pageUrl === superSplatSceneUrl,
+    'A standalone SuperSplat GLB did not restore its source metadata when re-imported');
+  assert(embeddedSuperSplatAsset?.reimportedSource?.attribution?.status === 'complete',
+    'A standalone SuperSplat GLB did not restore its attribution when re-imported');
   await targetPage.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
   ), superSplatImported.objectId, { timeout: gaussianLoadTimeoutMs });
@@ -361,6 +443,8 @@ try {
   }, superSplatImported.objectId);
   assert(targetSuperSplatMetadata?.gaussianSplatSource?.pageUrl === superSplatSceneUrl,
     'A second player did not receive SuperSplat source metadata');
+  assert(targetSuperSplatMetadata?.gaussianSplatSource?.attribution?.status === 'complete',
+    'A second player did not receive SuperSplat attribution metadata');
 
   const targetCachedBytes = await targetPage.evaluate(async ({ assetId, timeoutMs }) => {
     const deadline = performance.now() + timeoutMs;
@@ -464,6 +548,8 @@ try {
   }, superSplatImported.objectId);
   assert(reloadedSuperSplatMetadata?.gaussianSplatSource?.pageUrl === superSplatSceneUrl,
     'Reloaded SuperSplat object lost its source and license metadata');
+  assert(reloadedSuperSplatMetadata?.gaussianSplatSource?.attribution?.status === 'complete',
+    'Reloaded SuperSplat object lost its attribution metadata');
 
   if (transportOnly) {
     assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('\n')}`);
@@ -488,6 +574,8 @@ try {
       superSplatUrlImported: true,
       superSplatUrlSynchronized: true,
       superSplatUrlRestored: true,
+      superSplatGlbAttributionEmbedded: true,
+      superSplatGlbAttributionReimported: true,
     }, null, 2));
     break e2eFlow;
   }
@@ -654,6 +742,8 @@ try {
     superSplatUrlImported: true,
     superSplatUrlSynchronized: true,
     superSplatUrlRestored: true,
+    superSplatGlbAttributionEmbedded: true,
+    superSplatGlbAttributionReimported: true,
   }, null, 2));
   }
 } finally {

@@ -4,6 +4,10 @@ import {
   isAllowedSuperSplatAssetUrl,
   parseSuperSplatSceneUrl,
 } from './supersplat-share.js';
+import {
+  normalizeSuperSplatAttribution,
+  normalizeSuperSplatLicense,
+} from './supersplat-metadata.js';
 
 export const SUPERSPLAT_RESOLVER_ENDPOINT =
   'https://insta360-sog-resolver.afjk01.workers.dev/api/supersplat';
@@ -55,11 +59,18 @@ function validateResolution(payload, share) {
       'SUPERSPLAT_NOT_DOWNLOADABLE',
     );
   }
-  if (!payload.license || !safeText(payload.license.code, 64) || !safeText(payload.license.label, 80)) {
+  const license = normalizeSuperSplatLicense(payload.license);
+  if (!license) {
     throw new SuperSplatImportError(
       SUPERSPLAT_ERROR_MESSAGES.SUPERSPLAT_LICENSE_NOT_FOUND,
       'SUPERSPLAT_LICENSE_NOT_FOUND',
     );
+  }
+  const attribution = payload.attribution == null
+    ? null
+    : normalizeSuperSplatAttribution(payload.attribution, share.sceneUrl);
+  if (payload.attribution != null && !attribution) {
+    throw new SuperSplatImportError('SuperSplat resolverの帰属情報が不正です。');
   }
   if (!payload.asset || !SUPERSPLAT_ASSET_FORMATS.has(payload.asset.format)) {
     throw new SuperSplatImportError(
@@ -78,10 +89,8 @@ function validateResolution(payload, share) {
     title: safeText(payload.title),
     author: safeText(payload.author),
     downloadable: true,
-    license: {
-      code: safeText(payload.license.code, 64),
-      label: safeText(payload.license.label, 80),
-    },
+    license,
+    attribution,
     asset: {
       format: payload.asset.format,
       url: new URL(payload.asset.url).href,
