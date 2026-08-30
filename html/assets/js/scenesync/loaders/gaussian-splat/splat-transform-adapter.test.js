@@ -322,6 +322,32 @@ test('the default is no correction at all', async () => {
   }
 });
 
+test('conversion embeds attribution in the glTF asset metadata', async () => {
+  const attribution = '"Lion" by Renaud\nLicensed under CC BY 4.0';
+  const { glb } = await convertGaussianSplatToGlb(plyBytes(), {
+    fileName: 'a.ply',
+    glbAssetMetadata: {
+      copyright: attribution,
+      extras: {
+        scenesync: {
+          gaussianSplatSource: {
+            provider: 'supersplat',
+            sceneId: '56155c3f',
+          },
+        },
+      },
+    },
+  });
+  const json = parseGlbJson(glb);
+
+  assert.equal(json.asset.copyright, attribution);
+  assert.equal(
+    json.asset.extras.scenesync.gaussianSplatSource.sceneId,
+    '56155c3f',
+  );
+  assert.equal(inspectGaussianSplatGlb(glb).valid, true);
+});
+
 test('a KHR GLB is validated and passed through untouched', async () => {
   const { glb } = await convertGaussianSplatToGlb(plyBytes(), { fileName: 'a.ply' });
   const result = await convertGaussianSplatToGlb(glb, { fileName: 'a.glb' });

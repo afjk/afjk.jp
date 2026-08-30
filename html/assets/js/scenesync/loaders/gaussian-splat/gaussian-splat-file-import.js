@@ -68,6 +68,7 @@ export function describeGaussianSplatImportError(error) {
  * @param {Object} [options]
  * @param {'none'|'flip-x-180'|'flip-z-180'} [options.upAxisCorrection]
  * @param {0|1|2|3} [options.maxShDegree]
+ * @param {{ copyright?: string|null, extras?: Object }} [options.glbAssetMetadata]
  * @param {(status: { phase: string, file: File, bytes: number }) => void} [options.onProgress]
  * @param {Function} [options.importer] injection point for tests
  * @param {AbortSignal} [options.signal]
@@ -80,6 +81,7 @@ export async function convertGaussianSplatFileToGlb(file, options = {}) {
     importer = importGaussianSplatAssetPreferringWorker,
     signal = null,
     maxShDegree,
+    glbAssetMetadata = null,
   } = options;
 
   if (!isGaussianSplatFile(file)) {
@@ -101,6 +103,7 @@ export async function convertGaussianSplatFileToGlb(file, options = {}) {
     fileName: file.name,
     upAxisCorrection,
     maxShDegree,
+    glbAssetMetadata,
     signal,
     // Only read again if the Worker path fails; the common case never pays for
     // this, and the buffer above has been transferred away by then.

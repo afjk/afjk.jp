@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   UP_AXIS_ROTATIONS,
+  applyGlbAssetMetadata,
   packGlb,
   splitGlb,
   wrapGlbSceneInRotationNode,
@@ -42,6 +43,44 @@ test('a GLB with no BIN chunk stays that way', () => {
   const { bin } = splitGlb(glb);
   assert.equal(bin, null);
   assert.equal(new DataView(glb.buffer).getUint32(8, true), glb.byteLength);
+});
+
+test('asset metadata is added without changing the binary payload', () => {
+  const bin = new Uint8Array([1, 2, 3, 4, 5, 6, 7]);
+  const updated = applyGlbAssetMetadata(sampleGlb({
+    asset: { version: '2.0', extras: { existing: true } },
+  }, bin), {
+    copyright: '"Lion" by Renaud\nLicensed under CC BY 4.0',
+    extras: {
+      scenesync: {
+        gaussianSplatSource: { provider: 'supersplat', sceneId: '56155c3f' },
+      },
+    },
+  });
+  const { json, bin: updatedBin } = splitGlb(updated);
+
+  assert.match(json.asset.copyright, /Renaud/);
+  assert.equal(json.asset.extras.existing, true);
+  assert.equal(json.asset.extras.scenesync.gaussianSplatSource.sceneId, '56155c3f');
+  assert.deepEqual(Array.from(updatedBin.subarray(0, bin.length)), Array.from(bin));
+});
+
+test('asset metadata preserves existing copyright and Scene Sync extras', () => {
+  const updated = applyGlbAssetMetadata(sampleGlb({
+    asset: {
+      version: '2.0',
+      copyright: 'Original notice',
+      extras: { scenesync: { existing: true } },
+    },
+  }), {
+    copyright: 'Attribution notice',
+    extras: { scenesync: { gaussianSplatSource: { provider: 'supersplat' } } },
+  });
+  const { json } = splitGlb(updated);
+
+  assert.equal(json.asset.copyright, 'Original notice\nAttribution notice');
+  assert.equal(json.asset.extras.scenesync.existing, true);
+  assert.equal(json.asset.extras.scenesync.gaussianSplatSource.provider, 'supersplat');
 });
 
 test('wrapping parents the scene roots under one rotated node', () => {

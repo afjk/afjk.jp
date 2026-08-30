@@ -18,7 +18,18 @@ function resolution(overrides = {}) {
     title: 'Lion',
     author: 'Example Artist',
     downloadable: true,
-    license: { code: 'CC-BY-4.0', label: 'CC BY 4.0' },
+    license: {
+      code: 'CC-BY-4.0',
+      label: 'CC BY 4.0',
+      url: 'https://creativecommons.org/licenses/by/4.0/',
+    },
+    attribution: {
+      status: 'complete',
+      text: '"Lion" by Example Artist\nSource: https://superspl.at/scene/56155c3f\nLicensed under CC BY 4.0',
+      sourceUrl: SCENE_URL,
+      creators: [{ name: 'Example Artist', url: 'https://superspl.at/user/example' }],
+      publisher: { name: 'example', url: 'https://superspl.at/user/example' },
+    },
     asset: { format: 'sog-meta', url: META_URL, revision: 'v1' },
     ...overrides,
   };
@@ -40,7 +51,46 @@ test('resolver receives the canonical URL and validates the Downloadable respons
   assert.equal(requestedUrl.searchParams.get('url'), SCENE_URL);
   assert.equal(resolved.pageUrl, SCENE_URL);
   assert.equal(resolved.asset.format, 'sog-meta');
-  assert.deepEqual(resolved.license, { code: 'CC-BY-4.0', label: 'CC BY 4.0' });
+  assert.deepEqual(resolved.license, {
+    code: 'CC-BY-4.0',
+    label: 'CC BY 4.0',
+    url: 'https://creativecommons.org/licenses/by/4.0/',
+  });
+  assert.equal(resolved.attribution.status, 'complete');
+  assert.equal(resolved.attribution.sourceUrl, SCENE_URL);
+  assert.deepEqual(resolved.attribution.creators, [
+    { name: 'Example Artist', url: 'https://superspl.at/user/example' },
+  ]);
+});
+
+test('resolver rejects attribution for a different SuperSplat scene', async () => {
+  await assert.rejects(
+    () => resolveSuperSplatScene(SCENE_URL, {
+      resolverEndpoint: 'https://resolver.example/api/supersplat',
+      fetchImpl: async () => new Response(JSON.stringify(resolution({
+        attribution: {
+          ...resolution().attribution,
+          sourceUrl: 'https://superspl.at/scene/someone-else',
+        },
+      })), { status: 200 }),
+    }),
+    /帰属情報が不正/,
+  );
+});
+
+test('resolver rejects unsafe URLs in attribution parties', async () => {
+  await assert.rejects(
+    () => resolveSuperSplatScene(SCENE_URL, {
+      resolverEndpoint: 'https://resolver.example/api/supersplat',
+      fetchImpl: async () => new Response(JSON.stringify(resolution({
+        attribution: {
+          ...resolution().attribution,
+          creators: [{ name: 'Example Artist', url: 'javascript:alert(1)' }],
+        },
+      })), { status: 200 }),
+    }),
+    /帰属情報が不正/,
+  );
 });
 
 test('resolver reports the provider refusal instead of guessing an asset URL', async () => {

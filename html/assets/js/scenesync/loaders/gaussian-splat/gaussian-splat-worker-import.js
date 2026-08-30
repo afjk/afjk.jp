@@ -103,10 +103,16 @@ export async function importGaussianSplatAssetInline(arrayBuffer, options = {}) 
  * intermediate buffers are released rather than lingering in a pooled worker.
  *
  * @param {ArrayBuffer} arrayBuffer
- * @param {{ fileName?: string, upAxisCorrection?: string, maxShDegree?: number, signal?: AbortSignal }} [options]
+ * @param {{ fileName?: string, upAxisCorrection?: string, maxShDegree?: number, glbAssetMetadata?: Object, signal?: AbortSignal }} [options]
  */
 export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
-  const { fileName = '', upAxisCorrection = 'none', maxShDegree, signal = null } = options;
+  const {
+    fileName = '',
+    upAxisCorrection = 'none',
+    maxShDegree,
+    glbAssetMetadata = null,
+    signal = null,
+  } = options;
 
   return new Promise((resolve, reject) => {
     let worker;
@@ -162,7 +168,14 @@ export function importGaussianSplatAssetInWorker(arrayBuffer, options = {}) {
 
     signal?.addEventListener('abort', onAbort);
 
-    worker.postMessage({ id, arrayBuffer, fileName, upAxisCorrection, maxShDegree }, [arrayBuffer]);
+    worker.postMessage({
+      id,
+      arrayBuffer,
+      fileName,
+      upAxisCorrection,
+      maxShDegree,
+      glbAssetMetadata,
+    }, [arrayBuffer]);
   });
 }
 

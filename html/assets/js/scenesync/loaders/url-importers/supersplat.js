@@ -8,24 +8,16 @@ import {
   downloadSuperSplatSource,
   resolveSuperSplatScene,
 } from '../supersplat-url.js';
+import {
+  createSuperSplatGlbAssetMetadata,
+  createSuperSplatSourceMetadata,
+} from '../supersplat-metadata.js';
 
 const SUPERSPLAT_UP_AXIS_CORRECTION = 'flip-z-180';
 
 function sourceMetadata(resolution, conversion) {
   return {
-    gaussianSplatSource: {
-      provider: 'supersplat',
-      sceneId: resolution.sceneId,
-      pageUrl: resolution.pageUrl,
-      title: resolution.title,
-      author: resolution.author,
-      license: { ...resolution.license },
-      sourceFormat: conversion.sourceFormat,
-      sourceAssetFormat: resolution.asset.format,
-      revision: resolution.asset.revision,
-      splatCount: conversion.splatCount,
-      shDegree: conversion.shDegree,
-    },
+    gaussianSplatSource: createSuperSplatSourceMetadata(resolution, conversion),
   };
 }
 
@@ -67,10 +59,12 @@ export async function importSuperSplatUrl(url, ctx) {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const converter = ctx.convertGaussianSplatFileToGlb || convertGaussianSplatFileToGlb;
+    const glbAssetMetadata = createSuperSplatGlbAssetMetadata(resolution);
     const conversion = await converter(sourceFile, {
       // SuperSplat's own viewer applies the same 180° Z rotation to every
       // published scene. Preserve that authored orientation in the GLB.
       upAxisCorrection: SUPERSPLAT_UP_AXIS_CORRECTION,
+      glbAssetMetadata,
       signal: ctx.signal,
     });
 

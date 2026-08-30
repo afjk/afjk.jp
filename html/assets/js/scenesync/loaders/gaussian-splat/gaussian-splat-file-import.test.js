@@ -112,6 +112,26 @@ test('convertGaussianSplatFileToGlb can preserve SuperSplat orientation', async 
   assert.deepEqual(root.rotation, [0, 0, 1, 0]);
 });
 
+test('convertGaussianSplatFileToGlb passes GLB asset metadata through', async () => {
+  const result = await convert(plyFile(), {
+    glbAssetMetadata: {
+      copyright: '"Lion" by Renaud',
+      extras: {
+        scenesync: {
+          gaussianSplatSource: { provider: 'supersplat', sceneId: '56155c3f' },
+        },
+      },
+    },
+  });
+
+  const json = parseGlbJson(new Uint8Array(await result.file.arrayBuffer()));
+  assert.equal(json.asset.copyright, '"Lion" by Renaud');
+  assert.equal(
+    json.asset.extras.scenesync.gaussianSplatSource.sceneId,
+    '56155c3f',
+  );
+});
+
 test('convertGaussianSplatFileToGlb passes maxShDegree through', async () => {
   const shRest = Array.from({ length: 45 }, (_, i) => i / 100);
   const file = new File([buildGaussianSplatPly([{ ...SAMPLE[0], shRest }], { shDegree: 3 })], 'a.ply');

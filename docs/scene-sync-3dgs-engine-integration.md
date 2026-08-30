@@ -21,6 +21,35 @@ PLY / SPZ / SOG / LCC2 / LCC / SPLAT / KSPLAT
          Editor/Runtime   Editor/Runtime
 ```
 
+### SuperSplatの権利メタデータ
+
+SuperSplat共有URLから生成したGLBは、表示用の帰属表記をglTF標準の
+`asset.copyright`へ、機械可読な取得元・ライセンス・作者情報を
+`asset.extras.scenesync.gaussianSplatSource`へ保存する。resolverが返した値は
+Scene Sync側でもURL、長さ、scene IDの一致を検証してから格納する。
+
+```json
+{
+  "asset": {
+    "copyright": "\"Lion\" by Renaud (...)\nSource: ...\nLicensed under CC BY 4.0 (...)",
+    "extras": {
+      "scenesync": {
+        "gaussianSplatSource": {
+          "provider": "supersplat",
+          "sceneId": "56155c3f",
+          "pageUrl": "https://superspl.at/scene/56155c3f",
+          "license": { "code": "CC-BY-4.0", "label": "CC BY 4.0", "url": "..." },
+          "attribution": { "status": "complete", "text": "...", "creators": [] }
+        }
+      }
+    }
+  }
+}
+```
+
+このGLBを単体で再読み込みした場合も、検証済みの
+`gaussianSplatSource`をScene Syncオブジェクトのmetadataへ復元する。
+
 ## 3層構成
 
 Unity / Godot とも同じ3層で組んである。エンジン差はいちばん下だけ。

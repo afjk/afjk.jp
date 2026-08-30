@@ -12,7 +12,18 @@ test('SuperSplat URL import becomes a normal managed GLB with source metadata', 
     title: 'Lion',
     author: 'Example Artist',
     downloadable: true,
-    license: { code: 'CC-BY-4.0', label: 'CC BY 4.0' },
+    license: {
+      code: 'CC-BY-4.0',
+      label: 'CC BY 4.0',
+      url: 'https://creativecommons.org/licenses/by/4.0/',
+    },
+    attribution: {
+      status: 'complete',
+      text: '"Lion" by Example Artist\nSource: https://superspl.at/scene/56155c3f\nLicensed under CC BY 4.0',
+      sourceUrl: 'https://superspl.at/scene/56155c3f',
+      creators: [{ name: 'Example Artist', url: 'https://superspl.at/user/example' }],
+      publisher: { name: 'example', url: 'https://superspl.at/user/example' },
+    },
     asset: { format: 'sog-meta', url: 'https://d1.cloudfront.net/v1/meta.json', revision: 'v1' },
   };
   const model = { userData: {} };
@@ -44,11 +55,25 @@ test('SuperSplat URL import becomes a normal managed GLB with source metadata', 
 
   assert.equal(result.objectId, 'glb-supersplat');
   assert.equal(calls.conversionOptions.upAxisCorrection, 'flip-z-180');
+  assert.match(calls.conversionOptions.glbAssetMetadata.copyright, /Example Artist/);
+  assert.equal(
+    calls.conversionOptions.glbAssetMetadata.extras.scenesync
+      .gaussianSplatSource.attribution.status,
+    'complete',
+  );
   assert.equal(calls.file.name, 'Lion.supersplat.glb');
   assert.equal(calls.importOptions.name, 'Lion');
   assert.deepEqual(calls.importOptions.position, [1, 2, 3]);
   assert.equal(calls.importOptions.metadata.gaussianSplatSource.provider, 'supersplat');
   assert.equal(calls.importOptions.metadata.gaussianSplatSource.license.code, 'CC-BY-4.0');
+  assert.equal(
+    calls.importOptions.metadata.gaussianSplatSource.license.url,
+    'https://creativecommons.org/licenses/by/4.0/',
+  );
+  assert.equal(
+    calls.importOptions.metadata.gaussianSplatSource.attribution.creators[0].name,
+    'Example Artist',
+  );
   assert.equal(calls.importOptions.metadata.gaussianSplatSource.splatCount, 195099);
   assert.equal(model.userData.importedFrom.provider, 'supersplat');
 });
