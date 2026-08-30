@@ -6,6 +6,7 @@ import {
   createSuperSplatSourceMetadata,
   normalizeSuperSplatAttribution,
   readEmbeddedSuperSplatSourceMetadata,
+  repairLegacySuperSplatOrientation,
 } from './supersplat-metadata.js';
 
 const SCENE_URL = 'https://superspl.at/scene/56155c3f';
@@ -89,4 +90,29 @@ test('attribution normalization rejects unsafe creator URLs', () => {
     ...resolution().attribution,
     creators: [{ name: 'Renaud', url: 'javascript:alert(1)' }],
   }, SCENE_URL), null);
+});
+
+test('repairs only the legacy SuperSplat 180 degree Z wrapper', () => {
+  let quaternion = [0, 0, 1, 0];
+  const correction = {
+    name: 'UpAxisCorrection',
+    quaternion: {
+      x: 0,
+      y: 0,
+      z: 1,
+      w: 0,
+      set: (...values) => { quaternion = values; },
+    },
+  };
+  const root = { children: [correction], userData: {} };
+  const source = createSuperSplatSourceMetadata(resolution());
+
+  assert.equal(repairLegacySuperSplatOrientation(root, source), true);
+  assert.deepEqual(quaternion, [0, 0, 0, 1]);
+  assert.equal(root.userData.scenesync.legacySuperSplatOrientationRepaired, true);
+
+  correction.quaternion.z = 0;
+  correction.quaternion.w = 1;
+  assert.equal(repairLegacySuperSplatOrientation(root, source), false);
+  assert.equal(repairLegacySuperSplatOrientation(root, null), false);
 });

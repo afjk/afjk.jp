@@ -104,14 +104,6 @@ test('convertGaussianSplatFileToGlb passes upAxisCorrection through', async () =
   assert.deepEqual(root.rotation, [1, 0, 0, 0]);
 });
 
-test('convertGaussianSplatFileToGlb can preserve SuperSplat orientation', async () => {
-  const result = await convert(plyFile(), { upAxisCorrection: 'flip-z-180' });
-
-  const json = parseGlbJson(new Uint8Array(await result.file.arrayBuffer()));
-  const root = json.nodes[json.scenes[json.scene ?? 0].nodes[0]];
-  assert.deepEqual(root.rotation, [0, 0, 1, 0]);
-});
-
 test('convertGaussianSplatFileToGlb passes GLB asset metadata through', async () => {
   const result = await convert(plyFile(), {
     glbAssetMetadata: {

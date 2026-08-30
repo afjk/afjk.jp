@@ -1,4 +1,8 @@
 import { normalizeGlbForSceneSync } from '../glb-normalizer.js';
+import {
+  readEmbeddedSuperSplatSourceMetadata,
+  repairLegacySuperSplatOrientation,
+} from '../supersplat-metadata.js';
 
 /**
  * GLB (binary glTF) をフェッチして GLTFLoader で読み込む。
@@ -100,6 +104,14 @@ export async function loadGlbFromUrl(url, {
     animations,
     animationState,
   };
+  const embeddedSuperSplatSource = readEmbeddedSuperSplatSourceMetadata(gltf?.parser?.json);
+  if (embeddedSuperSplatSource) {
+    gltf.scene.userData.metadata = {
+      ...gltf.scene.userData?.metadata,
+      gaussianSplatSource: embeddedSuperSplatSource,
+    };
+    repairLegacySuperSplatOrientation(gltf.scene, embeddedSuperSplatSource);
+  }
   prepareRoot?.(gltf.scene, THREE);
 
   // 変換後の ArrayBuffer を保持（upload/broadcast 用）
@@ -206,6 +218,10 @@ export async function importGlbUrl(url, ctx) {
       scale: spawnTransform.scale,
       asset,
     };
+
+    if (model.userData?.metadata) {
+      payload.metadata = structuredClone(model.userData.metadata);
+    }
 
     if (asset.meshPath) {
       payload.meshPath = asset.meshPath;

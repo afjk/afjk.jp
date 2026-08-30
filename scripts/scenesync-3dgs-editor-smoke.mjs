@@ -391,13 +391,18 @@ try {
         const jsonText = new TextDecoder()
           .decode(bytes.subarray(20, 20 + jsonLength))
           .replace(/[\u0000\u0020]+$/u, '');
-        const gltfAsset = JSON.parse(jsonText).asset || null;
-        const [{ GLBFileLoader }, { scene }] = await Promise.all([
+        const gltf = JSON.parse(jsonText);
+        const gltfAsset = gltf.asset || null;
+        const hasBakedUpAxisCorrection = Array.isArray(gltf.nodes)
+          && gltf.nodes.some((node) => node?.name === 'UpAxisCorrection');
+        const [{ GLBFileLoader }, { scene }, { wrapGlbSceneInRotationNode }] = await Promise.all([
           import('/assets/js/scenesync/loaders/glb-file-loader.js'),
           import('/assets/js/scenesync/scene.js'),
+          import('/assets/js/scenesync/loaders/gaussian-splat/glb-root-transform.js'),
         ]);
         const loader = new GLBFileLoader();
         let reimportedSource = null;
+        let repairedLegacyOrientation = false;
         let model = null;
         try {
           const file = new File([record.blob], 'embedded-supersplat.glb', {
@@ -407,11 +412,26 @@ try {
           reimportedSource = structuredClone(
             model.userData?.metadata?.gaussianSplatSource || null,
           );
+          scene.remove(model);
+          model = null;
+
+          const legacyBytes = wrapGlbSceneInRotationNode(bytes, [0, 0, 1, 0]);
+          const legacyFile = new File([legacyBytes], 'legacy-supersplat.glb', {
+            type: 'model/gltf-binary',
+          });
+          model = await loader.loadFromFile(legacyFile, null, scene);
+          repairedLegacyOrientation = model.userData?.scenesync
+            ?.legacySuperSplatOrientationRepaired === true;
         } finally {
           if (model) scene.remove(model);
           loader.dispose();
         }
-        return { gltfAsset, reimportedSource };
+        return {
+          gltfAsset,
+          hasBakedUpAxisCorrection,
+          reimportedSource,
+          repairedLegacyOrientation,
+        };
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -434,6 +454,10 @@ try {
     'A standalone SuperSplat GLB did not restore its source metadata when re-imported');
   assert(embeddedSuperSplatAsset?.reimportedSource?.attribution?.status === 'complete',
     'A standalone SuperSplat GLB did not restore its attribution when re-imported');
+  assert(embeddedSuperSplatAsset?.hasBakedUpAxisCorrection === false,
+    'Generated SuperSplat GLB baked a viewer-only rotation and will appear upside down');
+  assert(embeddedSuperSplatAsset?.repairedLegacyOrientation === true,
+    'A legacy upside-down SuperSplat GLB was not repaired when re-imported');
   await targetPage.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
   ), superSplatImported.objectId, { timeout: gaussianLoadTimeoutMs });
@@ -576,6 +600,8 @@ try {
       superSplatUrlRestored: true,
       superSplatGlbAttributionEmbedded: true,
       superSplatGlbAttributionReimported: true,
+      superSplatOrientationPreserved: true,
+      legacySuperSplatOrientationRepaired: true,
     }, null, 2));
     break e2eFlow;
   }
@@ -744,6 +770,8 @@ try {
     superSplatUrlRestored: true,
     superSplatGlbAttributionEmbedded: true,
     superSplatGlbAttributionReimported: true,
+    superSplatOrientationPreserved: true,
+    legacySuperSplatOrientationRepaired: true,
   }, null, 2));
   }
 } finally {

@@ -34,6 +34,7 @@ import {
   disposeObject3DResources,
   prepareGaussianSplatRoot,
 } from './loaders/gaussian-splat-runtime.js';
+import { repairLegacySuperSplatOrientation } from './loaders/supersplat-metadata.js';
 import { buildPlaneGlbFromImage, planeSizeFromImage } from './loaders/image-to-plane.js';
 import { createImageCanvasForScene } from './loaders/image-optimizer.js';
 import { generateTemporaryImageObjectId } from './loaders/image-preview.js';
@@ -10507,6 +10508,10 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
   return promise.then(({ model }) => {
     if (options.signal?.aborted || removedObjectIds.has(objectId)) return;
     removeLoadingOverlay(objectId);
+    repairLegacySuperSplatOrientation(
+      model,
+      info?.metadata?.gaussianSplatSource,
+    );
     model.userData.objectId = objectId;
     model.userData.name = info.name;
     model.userData.assetType = 'mesh';

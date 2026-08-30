@@ -176,3 +176,35 @@ export function readEmbeddedSuperSplatSourceMetadata(gltfJson) {
     gltfJson?.asset?.extras?.scenesync?.gaussianSplatSource,
   );
 }
+
+/**
+ * Neutralize GLBs produced during the short-lived double-rotation regression.
+ * The affected files are uniquely identified by validated embedded SuperSplat
+ * metadata plus the exact root node/quaternion Scene Sync used to add.
+ */
+export function repairLegacySuperSplatOrientation(root, sourceMetadata) {
+  if (!root || !normalizeSuperSplatSourceMetadata(sourceMetadata)) return false;
+  const correction = Array.isArray(root.children)
+    ? root.children.find((child) => child?.name === 'UpAxisCorrection')
+    : null;
+  const quaternion = correction?.quaternion;
+  const epsilon = 1e-6;
+  const isLegacyRotation = quaternion
+    && Math.abs(quaternion.x) < epsilon
+    && Math.abs(quaternion.y) < epsilon
+    && Math.abs(Math.abs(quaternion.z) - 1) < epsilon
+    && Math.abs(quaternion.w) < epsilon;
+  if (!isLegacyRotation || typeof quaternion.set !== 'function') return false;
+
+  quaternion.set(0, 0, 0, 1);
+  correction.updateMatrix?.();
+  root.updateMatrixWorld?.(true);
+  root.userData = {
+    ...root.userData,
+    scenesync: {
+      ...root.userData?.scenesync,
+      legacySuperSplatOrientationRepaired: true,
+    },
+  };
+  return true;
+}
