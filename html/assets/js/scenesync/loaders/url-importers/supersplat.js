@@ -13,7 +13,10 @@ import {
   createSuperSplatSourceMetadata,
 } from '../supersplat-metadata.js';
 
-const SUPERSPLAT_UP_AXIS_CORRECTION = 'flip-z-180';
+// splat-transform's SOG reader already produces the orientation Scene Sync
+// displayed before the Worker bundle was refreshed. Baking SuperSplat's own
+// presentation rotation here applies it twice and turns the GLB upside down.
+const SUPERSPLAT_UP_AXIS_CORRECTION = 'none';
 
 function sourceMetadata(resolution, conversion) {
   return {
@@ -61,8 +64,8 @@ export async function importSuperSplatUrl(url, ctx) {
     const converter = ctx.convertGaussianSplatFileToGlb || convertGaussianSplatFileToGlb;
     const glbAssetMetadata = createSuperSplatGlbAssetMetadata(resolution);
     const conversion = await converter(sourceFile, {
-      // SuperSplat's own viewer applies the same 180° Z rotation to every
-      // published scene. Preserve that authored orientation in the GLB.
+      // Keep the decoded SOG basis. A viewer-only 180° Z correction must not
+      // be baked into the portable GLB.
       upAxisCorrection: SUPERSPLAT_UP_AXIS_CORRECTION,
       glbAssetMetadata,
       signal: ctx.signal,

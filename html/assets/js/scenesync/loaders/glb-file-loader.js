@@ -8,7 +8,10 @@ import {
   shouldAutoScaleSceneSyncGlb,
   shouldGroundSceneSyncGlb,
 } from './gaussian-splat-runtime.js';
-import { readEmbeddedSuperSplatSourceMetadata } from './supersplat-metadata.js';
+import {
+  readEmbeddedSuperSplatSourceMetadata,
+  repairLegacySuperSplatOrientation,
+} from './supersplat-metadata.js';
 import { SCENE_SYNC_DRACO_DECODER_PATH } from '../../scenesync-export/viewer/three-runtime.js';
 
 function toVector3(position) {
@@ -52,6 +55,10 @@ export class GLBFileLoader {
   _buildModel(gltf, position, asset) {
     const wrapper = new THREE.Group();
     const embeddedSuperSplatSource = readEmbeddedSuperSplatSourceMetadata(gltf?.parser?.json);
+    const repairedLegacySuperSplatOrientation = repairLegacySuperSplatOrientation(
+      gltf?.scene,
+      embeddedSuperSplatSource,
+    );
     // Scene Sync treats meshPath GLBs as authored assets.
     // Do not add client-specific yaw fixes here; object rotation comes from wire transforms.
 
@@ -145,6 +152,7 @@ export class GLBFileLoader {
         gaussianSplatCount: gaussianDiagnostics.splatCount,
         gaussianSplatObjects: gaussianDiagnostics.gaussianObjects,
         gaussianSplatNaturalScale: gaussianDiagnostics.hasGaussianSplat,
+        legacySuperSplatOrientationRepaired: repairedLegacySuperSplatOrientation,
       },
     };
 

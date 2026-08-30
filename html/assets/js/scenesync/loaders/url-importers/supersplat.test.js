@@ -54,7 +54,7 @@ test('SuperSplat URL import becomes a normal managed GLB with source metadata', 
   });
 
   assert.equal(result.objectId, 'glb-supersplat');
-  assert.equal(calls.conversionOptions.upAxisCorrection, 'flip-z-180');
+  assert.equal(calls.conversionOptions.upAxisCorrection, 'none');
   assert.match(calls.conversionOptions.glbAssetMetadata.copyright, /Example Artist/);
   assert.equal(
     calls.conversionOptions.glbAssetMetadata.extras.scenesync

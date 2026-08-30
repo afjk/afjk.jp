@@ -201,7 +201,7 @@ function lodOptionsFor(inputFormat) {
  * @param {Object} [options]
  * @param {string} [options.fileName] used for format sniffing and error text
  * @param {0|1|2|3} [options.maxShDegree] drop SH bands above this degree
- * @param {'none'|'flip-x-180'|'flip-z-180'} [options.upAxisCorrection]
+ * @param {'none'|'flip-x-180'} [options.upAxisCorrection]
  * @param {{ copyright?: string|null, extras?: Object }} [options.glbAssetMetadata]
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<{ glb: Uint8Array, splatCount: number, shDegree: number, sourceShDegree: number, sourceFormat: string }>}
