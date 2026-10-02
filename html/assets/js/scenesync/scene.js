@@ -93,6 +93,8 @@ import { createRoomSnapshotCache } from './assets/scene-snapshot-cache.js';
 import { reportPreviousCrashProbe, markCrashProbe, clearCrashProbe } from './utils/crash-probe-helper.js';
 import { isSnapshotRestoreDisabled, isGlbLoadDisabled, logDiagnosticFlags } from './utils/diagnostic-flags.js';
 import { shouldFreezeObjectForEditorRuntime } from './runtime/editing-state.js';
+import { createScaleDragGuard } from './runtime/scale-drag-guard.js';
+import { canSelectCompletedLocalAdd } from './runtime/local-add-selection.js';
 import { createSceneEventTimeline, sceneEventToRuntimeEvent } from './runtime/event-timeline.js';
 import {
   createPlayerInteractionPointerPayload,
@@ -1033,8 +1035,10 @@ let multiMoveBroadcastIntervalId = null;
 let multiMovePendingOps = [];
 const multiTransformLockedObjectIds = new Set();
 const MULTI_MOVE_SYNC_INTERVAL_MS = 50;
+const scaleDragGuard = createScaleDragGuard();
 
 transformCtrl.addEventListener('objectChange', () => {
+  scaleDragGuard.update(transformCtrl.object);
   if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
     updateMultiTransformFromPivot();
   }
@@ -1043,6 +1047,14 @@ transformCtrl.addEventListener('objectChange', () => {
 transformCtrl.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
   isDragging = e.value;
+  if (isDragging) {
+    scaleDragGuard.begin(transformCtrl.object, {
+      enabled: document.body.classList.contains('scene-sync-shell-studio'),
+      mode: transformCtrl.mode,
+    });
+  } else {
+    scaleDragGuard.end();
+  }
 
   if (multiTransformActive && transformCtrl.object === multiTransformPivot) {
     if (isDragging) {
@@ -1464,6 +1476,7 @@ function createSampleCube() {
 // objectId → THREE.Object3D
 const managedObjects = new Map();
 const selectedObjectIds = new Set();
+let selectionIntentVersion = 0;
 const selectionHelpers = new Map();
 let scenePhysicsState = normalizeScenePhysics();
 let lastScenePhysicsHashBroadcastTick = null;
@@ -3583,6 +3596,7 @@ function updateSelectionState(options = {}) {
 }
 
 function setSingleSelection(objectId, options = {}) {
+  selectionIntentVersion += 1;
   selectedObjectIds.clear();
   if (objectId) selectedObjectIds.add(objectId);
   updateSelectionState(options);
@@ -3590,6 +3604,7 @@ function setSingleSelection(objectId, options = {}) {
 
 function toggleObjectSelection(objectId, options = {}) {
   if (!objectId) return;
+  selectionIntentVersion += 1;
   if (selectedObjectIds.has(objectId)) {
     selectedObjectIds.delete(objectId);
   } else {
@@ -3599,6 +3614,7 @@ function toggleObjectSelection(objectId, options = {}) {
 }
 
 function clearSelection(options = {}) {
+  selectionIntentVersion += 1;
   selectedObjectIds.clear();
   updateSelectionState(options);
 }
@@ -11735,6 +11751,7 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
 }
 
 async function imageImporterCallback(file, position, context = {}) {
+  const selectionAtStart = getLocalAddSelectionState();
   if (file.size > ABSOLUTE_IMAGE_FILE_LIMIT_BYTES) {
     throw new Error('この画像は非常に大きいため処理できません');
   }
@@ -11771,7 +11788,7 @@ async function imageImporterCallback(file, position, context = {}) {
 
     // Determine replacement target early
     const effectiveReplaceTargetId = replaceTargetObjectId || null;
-    const effectiveReplaceTarget = effectiveReplaceTargetId
+    const effectiveReplaceTarget = context.importIntent === 'add' ? null : effectiveReplaceTargetId
       ? managedObjects.get(effectiveReplaceTargetId)
       : getReplaceTarget('image', context.hitObjectId || null);
 
@@ -11897,11 +11914,19 @@ async function imageImporterCallback(file, position, context = {}) {
     };
 
     broadcast(payload);
-    addOrUpdateObject(objectId, payload, { previewObjectId: tempObjectId });
+    const loaded = addOrUpdateObject(objectId, payload, { previewObjectId: tempObjectId });
     presenceState.historyManager?.push(
       HistoryManager.createSceneAddEntry(payload)
     );
     temporaryPreviewHandedOffToFinalLoader = true;
+    const object = await loaded;
+    if (canSelectCompletedLocalAdd(selectionAtStart, {
+      ...getLocalAddSelectionState(),
+      loaded: !!object && isSelectableObject(object),
+      locked: isLockedByOthers(objectId),
+    })) {
+      selectManagedObject(object, { reason: 'local-image-added' });
+    }
     console.debug('[image-import] final object added', {
       ...logContext,
       objectId,
@@ -12488,6 +12513,14 @@ const clipboardImportManager = new ClipboardImportManager({
 
 // ── クリップボード貼り付けUI のイベントバインディング ─────────────────
 
+function getLocalAddSelectionState() {
+  return {
+    enabled: document.body.classList.contains('scene-sync-shell-studio')
+      && inputRoutingMode === 'edit' && !pastePreviewMode,
+    selectionVersion: selectionIntentVersion,
+  };
+}
+
 const pasteBtn = document.getElementById('paste-btn');
 const pasteSheet = document.getElementById('paste-sheet');
 const clipboardPasteTarget = document.getElementById('clipboard-paste-target');
@@ -12594,7 +12627,13 @@ dom.mobileImageInput?.addEventListener('change', (event) => {
   const file = input?.files?.[0];
 
   if (file) {
-    dragDropManager.handleFile(file, getCenterRayPlacementContext()).catch((error) => {
+    const placement = getCenterRayPlacementContext();
+    // Studio's + means add another image even while the last addition is selected.
+    // Explicit drop/paste replacements continue to use the existing target rules.
+    if (document.body.classList.contains('scene-sync-shell-studio')) {
+      placement.importIntent = 'add';
+    }
+    dragDropManager.handleFile(file, placement).catch((error) => {
       console.warn('[mobile-image-input] failed to add image:', error);
       showToast(error?.message || '画像の追加に失敗しました');
     });

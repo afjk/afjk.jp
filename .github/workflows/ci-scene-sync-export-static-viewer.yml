@@ -61,6 +61,9 @@ jobs:
       - name: Run export, import, and handoff unit suite
         run: npm run test:scene-sync-export-import
 
+      - name: Run Studio editing regressions
+        run: npm run test:studio-editing
+
       - name: Run Gaussian import and mesh upload unit suite
         run: npm run test:3dgs-import && npm run test:mesh-upload
 

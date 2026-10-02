@@ -323,6 +323,14 @@ Icons are inline line SVGs defined in an `ICON` map in `studio-shell.js`. State 
 
 > Status: experimental design prototype. Visual direction and labels may change based on feedback.
 
+### Local editing safeguards
+
+- Studio scale-gizmo drags keep each axis's starting sign and stop at 1% of its starting magnitude. Existing mirrors, explicit numeric scale edits, other shells, remote updates, and history replay keep their existing behavior.
+- Newly imported local images are selected after loading in Studio Edit mode. An intervening selection action, active stamp mode, failed load, or another user's lock prevents automatic selection. Remote additions, replacements, and repeated stamp placement do not trigger it. GLB file additions retain their existing selection behavior.
+- Studio's mobile **+ → image** action explicitly adds another image, including when the previous image is selected. Drop/paste replacement targeting remains available.
+- On narrow screens the mode pill and selection card sit below the connection row. The card stays within the viewport.
+- Regression checks: `npm run test:studio-editing`; `npm run test:e2e:studio` checks mobile touch editing and two independent browser clients against running local Scene Sync and Presence endpoints. Set `AFJK_WEB_ORIGIN` / `AFJK_PRESENCE_URL` when they differ from `http://127.0.0.1:8888` / `ws://127.0.0.1:8787`. The test uses Playwright's installed Chromium, or `AFJK_CHROMIUM_PATH` for a system Chromium. Chromium sandbox and TLS verification remain enabled.
+
 ## Core API contract (v1)
 
 Scene Sync Core (`scene.js`) exposes a stable surface to shells via `mountSceneSyncShellFromDom({...})`. Shells must use only this surface and must not touch scene internals.
