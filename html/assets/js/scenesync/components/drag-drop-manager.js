@@ -43,6 +43,7 @@ function normalizePositionContext(input, fallbackPosition) {
   if (input?.position) {
     return {
       position: input.position,
+      importIntent: input.importIntent === 'add' ? 'add' : null,
       targetKind: input.targetKind ?? 'scene',
       clientX: input.clientX,
       clientY: input.clientY,
@@ -579,7 +580,7 @@ export class DragDropManager {
 
       // Determine replacement target BEFORE calling onLoadStart
       let replaceTargetObjectId = null;
-      if (effectiveTargetKind !== 'sky') {
+      if (effectiveTargetKind !== 'sky' && normalized.importIntent !== 'add') {
         replaceTargetObjectId = this.getReplaceTargetForContent?.('image', {
           hitObjectId: normalized.hitObjectId,
           targetKind: effectiveTargetKind,
@@ -632,6 +633,7 @@ export class DragDropManager {
 
       try {
         await this.imageImporter(file, normalized.position, {
+          importIntent: normalized.importIntent,
           targetKind: effectiveTargetKind,
           clientX: normalized.clientX,
           clientY: normalized.clientY,
