@@ -38,6 +38,7 @@ export function createSceneSyncShell({ id = 'player', requestedId = 'player', av
       document.body.dataset.sceneSyncShell = 'player';
       document.body.classList.add(BODY_CLASS);
       document.body.classList.remove('scene-sync-shell-editor', 'scene-sync-shell-minimal');
+      core?.commands?.setInputRoutingMode?.('interact');
 
       transport = createPlayerTransportPanel({
         title: 'SCENE SYNC · PLAYER',

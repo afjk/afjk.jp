@@ -155,6 +155,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
       document.body.dataset.sceneSyncShell = 'studio';
       document.body.classList.add(BODY_CLASS);
       document.body.classList.remove('scene-sync-shell-editor', 'scene-sync-shell-minimal', 'scene-sync-shell-player');
+      core?.commands?.setInputRoutingMode?.('edit');
 
       actions = createStudioActions(core);
 
