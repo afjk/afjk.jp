@@ -3277,6 +3277,7 @@ const tmpViewerForward = new THREE.Vector3();
 
 // Input routing mode (local-only host UI state)
 let inputRoutingMode = 'edit';
+let selectionBeforeInteract = [];
 const INPUT_ROUTING_MODES = new Set(['edit', 'interact']);
 
 // Gaze tracking state (local-only, not broadcast)
@@ -3309,9 +3310,27 @@ function setInputRoutingMode(mode) {
   if (!INPUT_ROUTING_MODES.has(mode)) return;
   if (inputRoutingMode === mode) return;
   inputRoutingMode = mode;
-  // Clear interaction state when switching to Edit mode
-  if (mode === 'edit') {
+  if (mode === 'interact') {
+    // Keep only a local restoration hint. Play must not retain an editing
+    // selection (which also freezes runtime transforms) or its peer lock.
+    selectionBeforeInteract = Array.from(selectedObjectIds);
+    // Finish an in-progress drag while its object is still attached, so its
+    // history, final delta and multi-selection locks use the normal cleanup.
+    transformCtrl.dragging = false;
+    transformCtrl.axis = null;
+    clearSelection({ reason: 'selection-suspended-for-play' });
+    transformCtrl.enabled = false;
+    transformCtrl.getHelper().visible = false;
+  } else {
+    transformCtrl.enabled = true;
     clearInteractionRoutingState();
+    for (const objectId of selectionBeforeInteract) {
+      if (isSelectableObject(managedObjects.get(objectId)) && !isLockedByOthers(objectId)) {
+        selectedObjectIds.add(objectId);
+      }
+    }
+    selectionBeforeInteract = [];
+    updateSelectionState({ reason: 'selection-restored-after-play' });
   }
   updateInputRoutingModeUI();
   notifySceneSyncShellStateChanged('input-routing-mode-changed');
@@ -3538,6 +3557,10 @@ function updateSelectionState(options = {}) {
     broadcastUnlock = true,
     broadcastLock = true,
   } = options;
+
+  // Async imports, replacements and external selection commands must not
+  // reattach editing controls or acquire selection locks during Play.
+  if (inputRoutingMode !== 'edit') selectedObjectIds.clear();
 
   for (const objectId of Array.from(selectedObjectIds)) {
     if (!managedObjects.has(objectId)) {
@@ -6955,6 +6978,7 @@ function resetSceneState() {
   cleanupPastePreview();
   clearSelectionHelpers();
   selectedObjectIds.clear();
+  selectionBeforeInteract = [];
   for (const tempObjectId of [...temporaryImagePreviews.keys()]) {
     removeTemporaryImagePreview(tempObjectId);
     removeLoadingOverlay(tempObjectId);

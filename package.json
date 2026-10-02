@@ -46,7 +46,8 @@
     "verify:3dgs-threejs": "node scripts/verify-against-threejs-gaussian-splat.mjs",
     "bench:3dgs-import": "node --expose-gc scripts/benchmark-gaussian-splat-import.mjs",
     "test:studio-editing": "node --test html/assets/js/scenesync/runtime/scale-drag-guard.test.js html/assets/js/scenesync/runtime/local-add-selection.test.js html/assets/js/scenesync/components/drag-drop-image-intent.test.js",
-    "test:e2e:studio": "node scripts/scenesync-studio-browser-smoke.mjs"
+    "test:e2e:studio": "node scripts/scenesync-studio-browser-smoke.mjs",
+    "test:e2e:play-gizmo": "node scripts/scenesync-play-gizmo-browser-smoke.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.3.0",

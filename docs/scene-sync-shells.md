@@ -261,6 +261,10 @@ These join the existing commands (`openAddMenu`, `undo`, `redo`, `deleteSelected
 
 Input routing remains a core capability for shell-specific controls: `setInputRoutingMode(mode)` is still exposed by core for Viewer / Studio / future shells that intentionally switch between `'edit'` and `'interact'`. It is not wrapped as a standard Editor action, and the standard Editor does not expose an input-routing mode switch.
 
+Entering `interact` suspends the local edit selection, detaches and disables the transform gizmo, hides selection helpers and releases editing locks. Returning to `edit` restores the remembered selection only for objects that still exist and are not locked by another client. This applies to Studio's Edit/Play pill and Editor/Player shell switching; mounting Player sets `interact`, while Editor and Studio set `edit`. Play never retains a peer editing lock merely to remember the selection.
+
+`npm run test:e2e:play-gizmo` verifies both switches at a mobile 390×844 viewport with real Chromium and two local browser clients: move/rotate/scale, selection restoration, touch behavior, peer locks, deletion and repeated unselected switching. It uses the same endpoint and Chromium environment variables as `test:e2e:studio`; sandbox and TLS verification stay enabled.
+
 ### Edit state snapshot (`core.getEditorState()`)
 
 Any shell can read a unified edit-state snapshot and re-render on `core.onStateChange`:
