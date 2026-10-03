@@ -270,6 +270,9 @@ try {
     globalThis.__sceneSyncDebug?.presence?.().connected
       && globalThis.__sceneSyncDebug.presence().peers.length === 1
   ), null, { timeout: 30000 });
+  await Promise.all([page, targetPage].map(client => client.waitForFunction(() => (
+    globalThis.__sceneSyncDebug?.getRoomLifecycle?.().ready === true
+  ), null, { timeout: 30000 })));
   phase = 'sog-import';
   const importStartedAt = Date.now();
   const imported = await page.evaluate(async ({ fileName, dropPosition }) => {
@@ -553,6 +556,10 @@ try {
 
   phase = 'snapshot-reload';
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('[data-scene-action="restore-yes"]').waitFor({ timeout: 30000 });
+  assert(await page.evaluate(() => globalThis.__sceneSyncDebug.objects.list().length === 0),
+    'Reload restored objects before the user confirmed');
+  await page.locator('[data-scene-action="restore-yes"]').click();
   await page.waitForFunction((objectId) => (
     globalThis.__sceneSyncDebug?.objects?.get(objectId)?.gaussian?.hasGaussianSplat === true
   ), imported.objectId, { timeout: gaussianLoadTimeoutMs });
