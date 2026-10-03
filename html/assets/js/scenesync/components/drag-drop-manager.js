@@ -136,6 +136,8 @@ export class DragDropManager {
     }
 
     this.container = container;
+    this.captureWork = options.captureWork || (() => null);
+    this.assertWork = options.assertWork || (() => {});
     this.camera = camera;
     this.renderer = renderer;
     this.scene = scene;
@@ -453,6 +455,7 @@ export class DragDropManager {
   }
 
   async _loadFile(file, position, options = {}) {
+    const work = this.captureWork?.();
     const { originalFile = null, sourceFormat = null } = options;
     const objectId = `web-${Math.random().toString(36).slice(2, 10)}`;
     // The overlay and the object label show the file the user actually dropped,
@@ -463,9 +466,11 @@ export class DragDropManager {
     if (this.onLoadStart) {
       await this.onLoadStart(loadInfo);
     }
+    this.assertWork?.(work);
 
     try {
       const model = await this.glbLoader.loadFromFile(file, position, this.scene);
+      this.assertWork?.(work);
       model.userData.objectId = objectId;
       model.userData.name = displayFile.name;
 
@@ -535,8 +540,10 @@ export class DragDropManager {
   }
 
   async handleFile(file, positionContext) {
+    const work = this.captureWork?.();
     if (this.sceneSyncExportImporter && (isZipFile(file) || isSingleHtmlFile(file))) {
       const result = await this.sceneSyncExportImporter(file, positionContext);
+      this.assertWork?.(work);
       if (result?.handled) return null;
     }
 
@@ -557,6 +564,7 @@ export class DragDropManager {
     // need no special case.
     if (isGaussianSplatFile(file)) {
       const converted = await this._convertGaussianSplatFile(file);
+      this.assertWork?.(work);
       if (!converted) return null;
       return this._loadFile(converted.file, normalized.position, {
         originalFile: file,
@@ -662,6 +670,7 @@ export class DragDropManager {
     if (this.textImporter && isSupportedTextFile(file)) {
       try {
         const text = await file.text();
+        this.assertWork?.(work);
         await this.textImporter(text, normalized.position, file.name, {
           targetKind: normalized.targetKind,
           clientX: normalized.clientX,

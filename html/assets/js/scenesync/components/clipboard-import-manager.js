@@ -38,6 +38,8 @@ export class ClipboardImportManager {
     } = options || {};
 
     this.container = container;
+    this.captureWork = options?.captureWork || (() => null);
+    this.assertWork = options?.assertWork || (() => {});
     this.getDefaultPosition = getDefaultPosition || (() => null);
     this.getPastePosition = getPastePosition || (() => null);
     this.handleFile = handleFile || (() => Promise.resolve(null));
@@ -134,12 +136,16 @@ export class ClipboardImportManager {
   // silent=true の場合、read/readText が両方失敗しても強いエラー toast を出さない。
   // （通常の paste event 側で既に処理できているケースで誤った失敗表示を避けるため）
   async pasteFromNavigatorClipboard(position, { silent = false } = {}) {
+    const work = this.captureWork();
     if (navigator.clipboard?.read) {
       try {
         const items = await navigator.clipboard.read();
+        this.assertWork(work);
         const payload = await parseNavigatorClipboardItems(items);
+        this.assertWork(work);
         return await this.importPayload(payload, position || this._resolvePosition());
       } catch (err) {
+        if (err?.name === 'AbortError') return null;
         console.warn('[clipboard] navigator.clipboard.read failed:', err);
       }
     }
@@ -147,12 +153,14 @@ export class ClipboardImportManager {
     if (navigator.clipboard?.readText) {
       try {
         const text = await navigator.clipboard.readText();
+        this.assertWork(work);
         const isUrl = text.trim().startsWith('http://') || text.trim().startsWith('https://');
         const payload = isUrl
           ? { kind: 'url', url: text.trim() }
           : createPlainTextClipboardPayload(text);
         return await this.importPayload(payload, position || this._resolvePosition());
       } catch (err) {
+        if (err?.name === 'AbortError') return null;
         console.warn('[clipboard] navigator.clipboard.readText failed:', err);
       }
     }

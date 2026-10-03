@@ -35,7 +35,7 @@ export function createRoomSnapshotCache(options = {}) {
     });
   }
 
-  async function saveSnapshot(roomId, snapshot) {
+  async function saveSnapshot(roomId, snapshot, { isCurrent = () => true } = {}) {
     if (!roomId || !snapshot) return;
 
     const roomKey = createRoomKey(roomId);
@@ -49,13 +49,15 @@ export function createRoomSnapshotCache(options = {}) {
     };
 
     const nextDb = await initDb();
+    if (!isCurrent()) return;
 
     return new Promise((resolve, reject) => {
       const tx = nextDb.transaction([STORE_NAME], 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       const req = store.put(record);
 
-      req.onsuccess = () => resolve();
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error || new Error('Snapshot write aborted'));
       req.onerror = () => reject(req.error);
       tx.onerror = () => reject(tx.error);
     });

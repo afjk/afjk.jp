@@ -30,6 +30,8 @@ export function createExpiredGlbRecovery({
   presenceState,
   sendHandoff,
   loadGlbBlobForObject,
+  captureWork = () => null,
+  isWorkCurrent = () => true,
 }) {
   const pendingRecoveries = new Map();
   const responderCooldowns = new Map();
@@ -49,12 +51,13 @@ export function createExpiredGlbRecovery({
     });
 
     const recovery = {
+      work: captureWork(),
       requestId,
       objectId,
       assetId: assetId || null,
       meshPath: meshPath || null,
       expectedSize: expectedSize || null,
-      info: info ? cloneJsonSafe(info) : null,
+      info: info ? { ...cloneJsonSafe(info), ...(info._sceneWork ? { _sceneWork: info._sceneWork } : {}) } : null,
       requestedAt: Date.now(),
       requestedPeerIds: new Set(),
     };
@@ -99,6 +102,7 @@ export function createExpiredGlbRecovery({
       peerIndex++;
 
       const recovery = pendingRecoveries.get(requestId);
+      if (recovery && !isWorkCurrent(recovery.work)) { pendingRecoveries.delete(requestId); return; }
       if (recovery) {
         recovery.requestedPeerIds.add(peer.id);
       }
@@ -301,7 +305,7 @@ export function createExpiredGlbRecovery({
       recovery ||= fallback;
     }
 
-    if (!recovery) {
+    if (!recovery || !isWorkCurrent(recovery.work)) {
       console.log('[ExpiredGlbRecovery] No matching pending recovery for this file');
       return;
     }
@@ -334,6 +338,7 @@ export function createExpiredGlbRecovery({
         source: 'recovered',
       });
 
+      if (!isWorkCurrent(recovery.work)) return;
       console.log('[ExpiredGlbRecovery] Loading recovered GLB into object');
       await loadGlbBlobForObject(recovery.objectId, file, {
         info: recovery.info,
