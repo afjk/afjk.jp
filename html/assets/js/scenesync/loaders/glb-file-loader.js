@@ -25,6 +25,8 @@ function toVector3(position) {
 
 export class GLBFileLoader {
   constructor(options = {}) {
+    this.captureWork = options.captureWork || (() => null);
+    this.assertWork = options.assertWork || (() => {});
     this.maxDimension = options.maxDimension ?? 10;
     this.dracoPath = options.dracoPath ?? SCENE_SYNC_DRACO_DECODER_PATH;
     const dracoLoader = new DRACOLoader();
@@ -160,12 +162,23 @@ export class GLBFileLoader {
   }
 
   async loadFromUrl(url, position, scene, onLoaded, asset) {
+    const work = this.captureWork();
     if (!url || !scene) {
       throw new Error('必要なパラメータが不足しています');
     }
 
     const gltf = await this._load(url);
     const { wrapper, metadata } = this._buildModel(gltf, position, asset);
+    try { this.assertWork(work); } catch (error) {
+      wrapper.traverse(child => {
+        child.geometry?.dispose();
+        for (const material of [child.material].flat().filter(Boolean)) {
+          for (const value of Object.values(material)) if (value?.isTexture) value.dispose();
+          material.dispose();
+        }
+      });
+      throw error;
+    }
     scene.add(wrapper);
 
     if (onLoaded) {
@@ -176,6 +189,7 @@ export class GLBFileLoader {
   }
 
   async loadFromFile(file, position, scene, onLoaded, asset) {
+    const work = this.captureWork();
     if (!file || !scene) {
       throw new Error('必要なパラメータが不足しています');
     }
@@ -201,6 +215,7 @@ export class GLBFileLoader {
       normalized = { changed: false, skipped: true, skipReason: 'unexpectedError', warnings: [error.message], error };
     }
 
+    this.assertWork(work);
     const objectURL = URL.createObjectURL(normalizedFile);
 
     try {

@@ -4,6 +4,7 @@ import { URL, pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream, createWriteStream, renameSync, readdirSync, statfsSync } from 'node:fs';
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 import { encodeSession, decodeSession } from './gpt-session.mjs';
+import { createRoomLifecycle } from './scenesync/room-lifecycle.mjs';
 import { createSceneSyncConfig } from './scenesync/config.mjs';
 import { getActorIdFromRequest } from './scenesync/actor-id.mjs';
 import { createPerActorRateLimiter } from './scenesync/rate-limit.mjs';
@@ -41,6 +42,20 @@ const rooms = new Map(); // roomId -> Map<clientId, Client>
 const roomObjectIds = new Map(); // roomId -> Set<objectId>
 const roomPhysicsTimelines = new Map(); // roomId -> Map<timelineId, PhysicsTimeline>
 const roomSceneClocks = new Map(); // roomId -> latest canonical scene-clock payload
+const roomLifecycle = createRoomLifecycle({
+  emit(roomId, message) { rooms.get(roomId)?.forEach(client => safeSend(client.conn, message)); },
+  onClear(roomId) {
+    roomObjectIds.set(roomId, new Set());
+    roomPhysicsTimelines.delete(roomId);
+    rooms.get(roomId)?.forEach(client => { client.sceneReadyEpoch = null; });
+  },
+});
+function acceptRoomPayload(client, payload) {
+  if (roomLifecycle.accepts(client.roomId, payload, client)) return true;
+  safeSend(client.conn, { type: 'error', error: 'scene_epoch_mismatch',
+    message: 'シーンが更新されました。再接続またはクライアントの更新が必要です。' });
+  return false;
+}
 const pendingSceneRequests = new Map(); // apiRequestId -> { resolve, timer }
 const pendingAiCommandResults = new Map(); // apiRequestId -> { resolve, timer }
 const clientsByIpHash = new Map(); // ipHash -> Set<clientId>
@@ -454,6 +469,7 @@ function acceptWebSocket(req, socket) {
 }
 
 function makeClient(conn, roomId, ipHash) {
+  roomLifecycle.ensure(roomId);
   const client = {
     id: randomUUID(),
     conn,
@@ -485,6 +501,7 @@ function removeClient(client) {
   room.delete(client.id);
   if (!room.size) {
     rooms.delete(client.roomId);
+    roomLifecycle.remove(client.roomId);
     roomObjectIds.delete(client.roomId);
     roomPhysicsTimelines.delete(client.roomId);
     roomSceneClocks.delete(client.roomId);
@@ -512,7 +529,10 @@ function listPeers(roomId, excludeId) {
         nickname: p.nickname,
         device: p.device,
         streaming: p.streaming,
-        lastSeen: p.lastSeen
+        lastSeen: p.lastSeen,
+        connectedAt: p.connectedAt,
+        sceneProtocol: p.sceneProtocol || 0,
+        sceneReady: p.sceneProtocol === 1 ? p.sceneReadyEpoch === roomLifecycle.snapshot(roomId).epoch : !roomLifecycle.snapshot(roomId).cleared
       };
       if (p.userId) {
         peerInfo.userId = p.userId;
@@ -917,6 +937,7 @@ function createHandoffMessage(sender, payload) {
       nickname: sender.nickname,
       device: sender.device
     },
+    sceneEpoch: sender.roomId ? roomLifecycle.snapshot(sender.roomId).epoch : payload?.sceneEpoch,
     payload: payload || {}
   };
 }
@@ -927,6 +948,7 @@ function deliverHandoff(sender, msg) {
   const target = room.get(msg.targetId);
   if (!target) return;
   let payload = msg.payload;
+  if (!acceptRoomPayload(sender, payload)) return;
   // scene-physics-input is broadcast-shaped state: even when it arrives as a
   // targeted handoff it must pass through the room physics timeline so it gets a
   // canonical eventRevision (and clears are recorded), matching the broadcast path.
@@ -1191,7 +1213,8 @@ function waitForAiCommandResult(requestId, timeoutMs = 10000) {
 }
 
 function findLatestUserPeer(roomId, userId) {
-  const peers = getRoomClients(roomId).filter(client => client.userId === userId);
+  // Stable sort ties must prefer the newer connection (hellos can share a millisecond).
+  const peers = getRoomClients(roomId).filter(client => client.userId === userId).reverse();
   if (!peers.length) return null;
   peers.sort((a, b) => b.lastSeen - a.lastSeen);
   return peers[0];
@@ -1267,6 +1290,7 @@ function createBroadcastResponse(roomId, peers, userPresent) {
 }
 
 async function runAiCommand({ roomId, onBehalfOfUserId, payload, sender = createApiSender('AI') }) {
+  if (!roomLifecycle.accepts(roomId, payload)) return { status: 409, body: { error: 'scene_epoch_mismatch' } };
   const peers = getRoomClients(roomId);
   const userPresent = Boolean(onBehalfOfUserId) && peers.some(client => client.userId === onBehalfOfUserId);
   const targetClient = payload.targetPeerId
@@ -1307,6 +1331,9 @@ async function runAiCommand({ roomId, onBehalfOfUserId, payload, sender = create
 
 async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, sender = createApiSender('AI'), actorId = '' }) {
   const peers = getRoomClients(roomId);
+  if (!roomLifecycle.accepts(roomId, payload)) return {
+    status: 409, body: { error: 'scene_epoch_mismatch', message: 'クリア後のシーン世代を指定してください。' },
+  };
   let nextPayload = payload;
   if (onBehalfOfUserId) {
     nextPayload = { ...payload, onBehalfOf: onBehalfOfUserId };
@@ -1352,6 +1379,7 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
 
     const message = {
       type: 'handoff',
+      sceneEpoch: rooms.has(roomId) ? roomLifecycle.snapshot(roomId).epoch : undefined,
       from: sender,
       payload: nextPayload
     };
@@ -1421,6 +1449,7 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
 
   const message = {
     type: 'handoff',
+    sceneEpoch: rooms.has(roomId) ? roomLifecycle.snapshot(roomId).epoch : undefined,
     from: sender,
     payload: nextPayload
   };
@@ -2379,6 +2408,7 @@ function createPresenceServer({
         onBehalfOfUserId: session.payload.userId,
         payload: {
           kind: 'ai-command',
+          sceneEpoch: body.sceneEpoch,
           requestId: body.requestId || `req-${Date.now()}`,
           action: body.action,
           params: body.params && typeof body.params === 'object' ? body.params : {},
@@ -2514,7 +2544,7 @@ function createPresenceServer({
       roomOverride: Boolean(roomOverride)
     });
 
-    conn.send({ type: 'welcome', id: client.id, room: roomId, serverTime: Date.now() });
+    conn.send({ type: 'welcome', id: client.id, room: roomId, serverTime: Date.now(), connectedAt: client.connectedAt, sceneRoom: roomLifecycle.snapshot(roomId) });
     sendRoomSceneClock(client);
     broadcastPeers(roomId);
 
@@ -2533,6 +2563,8 @@ function createPresenceServer({
         return;
       }
 
+      if (data.payload && !acceptRoomPayload(client, data.payload)) return;
+
       if (handlePendingSceneState(data)) {
         return;
       }
@@ -2542,7 +2574,22 @@ function createPresenceServer({
       }
 
       switch (data.type) {
+        case 'scene-ready':
+          if (client.sceneProtocol === 1 && data.epoch === roomLifecycle.snapshot(roomId).epoch) {
+            client.sceneReadyEpoch = data.epoch;
+            broadcastPeers(roomId);
+          }
+          break;
+        case 'scene-clear-request':
+          if (client.sceneProtocol === 1 && client.sceneReadyEpoch === data.epoch) {
+            roomLifecycle.request(roomId, client, data.requestId, data.epoch);
+          }
+          break;
+        case 'scene-clear-cancel':
+          roomLifecycle.cancel(roomId, data.requestId);
+          break;
         case 'hello':
+          client.sceneProtocol = data.sceneProtocol === 1 ? 1 : 0;
           client.nickname = sanitizeName(data.nickname);
           client.device = sanitizeDevice(data.device);
           client.streaming = Boolean(data.streaming);
@@ -2751,6 +2798,7 @@ function createPresenceServer({
     clearInterval(handoffTokenCleanupInterval);
     clearInterval(heartbeatInterval);
     if (connectionSummaryInterval) clearInterval(connectionSummaryInterval);
+    roomLifecycle.clear();
     rooms.clear();
     roomObjectIds.clear();
     roomPhysicsTimelines.clear();

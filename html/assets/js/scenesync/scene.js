@@ -2,6 +2,8 @@
 // Three.js ビューア + presence-server 接続
 // ─────────────────────────────────────────────────────────
 import * as THREE from 'three';
+import { createSceneLifetime } from './runtime/scene-lifetime.js';
+import { createSceneClearUi } from './ui/scene-clear-ui.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
@@ -137,6 +139,154 @@ import { validateExportThumbnailFile } from '../scenesync-export/export/build-ex
 import { buildAutoExport } from '../scenesync-export/export/build-auto-export.js';
 import { formatEstimatedBytes, mergeMissingAssetWarning } from '../scenesync-export/export/auto-export-format.js';
 
+const sceneLifetime = createSceneLifetime();
+let sceneRoomEpoch = null;
+let sceneRoomCleared = false;
+let sceneSyncReady = false;
+let sceneRoomUi = null;
+let roomRecoveryRunning = false;
+let sceneRequestId = null;
+let sceneRequestPeerId = null;
+let selfConnectedAt = 0;
+let pendingSceneHandoffs = [];
+let suppressEmptySample = false;
+const objectWork = new Map();
+function beginLocalSceneTask() {
+  if (!sceneSyncReady) throw new Error('シーンの同期が完了するまでお待ちください');
+  return sceneLifetime.capture();
+}
+function guardSceneCallback(fn, token = sceneLifetime.capture()) {
+  return (...args) => { sceneLifetime.assert(token); return fn(...args); };
+}
+async function sceneAwait(promise, token) {
+  const value = await promise;
+  if (!sceneLifetime.current(token)) {
+    const model = value?.isObject3D ? value : (value?.model || value?.scene);
+    if (value?.isTexture) value.dispose();
+    value?.texture?.dispose?.();
+    if (model) { model.removeFromParent(); disposeObject3DResources(model); }
+    sceneLifetime.assert(token);
+  }
+  return value;
+}
+function sceneObjectWorkCurrent(info) {
+  return !info?._sceneWork || sceneLifetime.current(info._sceneWork);
+}
+function markSceneNotReady() {
+  sceneSyncReady = false;
+  sceneRoomUi?.setReady(false);
+  sceneRoomUi?.cancelRestore();
+  sceneLifetime.invalidate();
+  clearTimeout(saveRoomSnapshotTimer);
+  clearTimeout(restoreSnapshotTimer);
+  clearTimeout(sceneRequestTimer);
+  clearTimeout(aiTransformTweenSnapshotTimer);
+  roomRecoveryRunning = false;
+  sceneRequestId = null;
+  sceneRequestPeerId = null;
+  pendingSceneHandoffs = [];
+}
+function finishSceneRecovery() {
+  if (!presenceState.ws || presenceState.ws.readyState !== WebSocket.OPEN) return;
+  sceneReceived = true;
+  roomRecoveryRunning = false;
+  sceneSyncReady = true;
+  presenceState.ws.send(JSON.stringify({ type: 'scene-ready', epoch: sceneRoomEpoch }));
+  sceneRoomUi?.setReady(true);
+  clearTimeout(sceneRequestTimer);
+  sceneRequestId = null;
+  sceneRequestPeerId = null;
+  const queued = pendingSceneHandoffs; pendingSceneHandoffs = [];
+  for (const message of queued) handleHandoff(message);
+  prepareHandoffSceneReady();
+  ensureSampleCubeForEmptyRoom('room-recovered');
+  notifySceneStateChanged('room-recovered');
+}
+
+// Clear content only. Keep room, camera, XR, environment, scene BGM and settings.
+function clearSceneObjects(reason = 'scene-cleared') {
+  sceneSyncReady = false;
+  sceneRoomUi?.setReady(false);
+  sceneLifetime.invalidate();
+  sceneRoomUi?.cancelRestore();
+  clearTimeout(saveRoomSnapshotTimer);
+  clearTimeout(restoreSnapshotTimer);
+  clearTimeout(aiTransformTweenSnapshotTimer);
+  activeTransformTweens.clear();
+  cleanupMultiTransformPivot();
+  cleanupPastePreview();
+  sceneObjectClipboard = null;
+  clearSelection({ reason, broadcastUnlock: false, broadcastLock: false });
+  selectionBeforeInteract = [];
+  transformCtrl.detach();
+  for (const grabber of xrState.grabbers) { grabber.active = false; grabber.object = null; }
+  xrState.twoHand.active = false; xrState.twoHand.object = null; xrState.lockOwnedByMe.clear();
+  clearPlayerPhysicsDragState();
+  for (const id of [...objectWork.keys(), ...managedObjects.keys(), ...loadingOverlays.keys()]) removedObjectIds.add(id);
+  for (const [id, object] of [...managedObjects]) {
+    disposeObjectGlbAnimation(id);
+    audioSourceController.disposeObject(id);
+    loomIntegration.clearObjectGraph(id);
+    object.removeFromParent();
+    if (object.userData?.disposable) object.userData.disposable();
+    else disposeObject3DResources(object);
+  }
+  for (const id of Object.keys(loomIntegration.exportState().objects || {})) loomIntegration.clearObjectGraph(id);
+  managedObjects.clear(); objectWork.clear();
+  for (const id of [...temporaryImagePreviews.keys()]) removeTemporaryImagePreview(id);
+  for (const id of [...pendingMediaReplacementPreviews.keys()]) clearLocalImageReplacementPreview(id);
+  for (const id of [...loadingOverlays.keys()]) removeLoadingOverlay(id);
+  for (const id of [...recoveryOverlays.keys()]) removeRecoveringOverlay(id);
+  for (const id of [...failedOverlays.keys()]) removeFailedOverlay(id);
+  for (const id of [...lockOverlays.keys()]) removeLockOverlay(id);
+  locks.clear();
+  presenceState.historyManager.clear();
+  resetPlayerInteractionEventTimeline(reason);
+  scenePhysicsRuntime.dispose();
+  markScenePhysicsRuntimeDirty();
+  updateEnvironmentMenuSkyboxControls();
+  notifySceneSyncShellStateChanged(reason);
+}
+function receiveSceneRoom(state, event = 'welcome') {
+  const changed = sceneRoomEpoch !== state.epoch;
+  const hadEpoch = sceneRoomEpoch !== null;
+  sceneRoomEpoch = state.epoch;
+  sceneRoomCleared = state.cleared;
+  if (changed && hadEpoch) clearSceneObjects('room-generation-changed');
+  suppressEmptySample = state.cleared === true;
+  sceneRoomUi?.setPending(state.pending, state.serverTime);
+  if (event === 'cleared') {
+    if (!changed) return;
+    if (!hadEpoch) clearSceneObjects();
+    pendingSceneHandoffs = [];
+    roomRecoveryRunning = false;
+    finishSceneRecovery();
+    void saveCurrentRoomSnapshot('scene-cleared');
+    showToast(`${state.actorName || '参加者'} がシーンをクリアしました`);
+  } else if (event === 'cancelled') showToast('クリアをキャンセルしました');
+  sceneRoomUi?.setReady(sceneSyncReady);
+}
+async function recoverSceneRoom() {
+  if (sceneSyncReady || roomRecoveryRunning || !sceneRoomEpoch) return;
+  const readyPeers = presenceState.peers.filter(p => p.id !== presenceState.id && p.sceneReady !== false);
+  if (readyPeers.length) { requestSceneFromPeer(); return; }
+  const candidates = [{ id: presenceState.id, connectedAt: selfConnectedAt }, ...presenceState.peers.filter(p => p.sceneProtocol === 1)]
+    .sort((a, b) => a.connectedAt - b.connectedAt || a.id.localeCompare(b.id));
+  if (candidates[0]?.id !== presenceState.id) return;
+  roomRecoveryRunning = true;
+  const token = sceneLifetime.capture();
+  try {
+    // A live scene from this exact generation can continue when its peers left.
+    if (!hasSnapshotRestorableObjects()) {
+      sceneReceived = true;
+      if (!hasOtherParticipants()) await maybeRestoreRoomSnapshot('room-recovery');
+    }
+    if (!sceneLifetime.current(token)) return;
+    if (presenceState.peers.some(p => p.sceneReady !== false)) { requestSceneFromPeer(); return; }
+    finishSceneRecovery();
+  } finally { if (sceneLifetime.current(token)) roomRecoveryRunning = false; }
+}
+
 const ABSOLUTE_IMAGE_FILE_LIMIT_BYTES = 80 * 1024 * 1024;
 
 // ── Three.js 基本セットアップ ────────────────────────────
@@ -155,6 +305,8 @@ const dom = getSceneSyncDom();
 applySceneSyncDeviceMode(document.body);
 const glbLoader = new GLBFileLoader({
   maxDimension: 10,
+  captureWork: () => sceneLifetime.capture(),
+  assertWork: token => sceneLifetime.assert(token),
 });
 const configureEditorGLTFLoader = async (loader) => {
   loader.setDRACOLoader(glbLoader.dracoLoader);
@@ -497,6 +649,8 @@ const xrTmpMatrix = new THREE.Matrix4();
 const xrRaycaster = new THREE.Raycaster();
 
 function onXrSelectStart(ctrl) {
+  if (sceneRoomUi?.consumeXrSelect()) return;
+  if (!sceneSyncReady) return;
   // 床合わせモード中ならトリガーで床確定
   if (xrState.floor.calibrating) {
     xrFloor.confirmFloorCalibration();
@@ -1549,6 +1703,7 @@ function removeSampleCube(reason = 'unknown') {
 }
 
 function ensureSampleCubeForEmptyRoom(reason = 'unknown') {
+  if (suppressEmptySample || !sceneSyncReady) return false;
   if (!getCurrentRoomId()) return false;
   if (!sceneReceived) return false;
 
@@ -4651,6 +4806,7 @@ function updatePastePreviewFromPointer(event = null) {
 }
 
 async function startPastePreviewMode() {
+  const _sceneTask = beginLocalSceneTask();
   if (!sceneObjectClipboard) {
     showToast?.('ペーストするオブジェクトがありません');
     return false;
@@ -4658,7 +4814,7 @@ async function startPastePreviewMode() {
 
   cleanupPastePreview();
 
-  pastePreviewObject = await createPastePreviewObject(sceneObjectClipboard);
+  pastePreviewObject = await sceneAwait(createPastePreviewObject(sceneObjectClipboard), _sceneTask);
   if (!pastePreviewObject) {
     showToast?.('プレビューを作成できませんでした');
     return false;
@@ -5210,6 +5366,7 @@ function updateXrHitTest(frame) {
 // ── レンダリングループ ────────────────────────────────────
 
 renderer.setAnimationLoop((time, frame) => {
+  sceneRoomUi?.updateXr(xrState.active ? renderer.xr.getCamera() : camera, xrState.active);
   if (!xrState.active) {
     orbit.update();
   }
@@ -6942,6 +7099,7 @@ function sendHelloIfConnected() {
       nickname: presenceState.nickname,
       device: navigator.userAgent.slice(0, 60),
       userId: presenceState.userId,
+      sceneProtocol: 1,
     }));
   }
 }
@@ -7011,6 +7169,10 @@ function resetSceneState() {
 }
 
 function reconnectPresence() {
+  markSceneNotReady();
+  clearSceneObjects('room-switch');
+  sceneRoomEpoch = null;
+  sceneRoomUi?.setPending(null);
   clearTimeout(reconnectTimer);
   clearTimeout(saveRoomSnapshotTimer);
   clearTimeout(restoreSnapshotTimer);
@@ -7234,6 +7396,10 @@ function renderRoomSection() {
 }
 
 function connectPresence() {
+  markSceneNotReady();
+  presenceState.peers = [];
+  sceneReceived = false;
+  sceneRequestAttempt = 0;
   const base = resolvePresenceUrl();
   const url = buildPresenceRoomUrl(base, activeRoomCode);
 
@@ -7246,6 +7412,7 @@ function connectPresence() {
       nickname: presenceState.nickname,
       device: navigator.userAgent.slice(0, 60),
       userId: presenceState.userId,
+      sceneProtocol: 1,
     }));
   };
 
@@ -7258,18 +7425,28 @@ function connectPresence() {
       case 'welcome':
         presenceState.id = data.id;
         presenceState.room = data.room;
+        selfConnectedAt = data.connectedAt || data.serverTime;
+        if (data.sceneRoom) receiveSceneRoom(data.sceneRoom);
         setRoomTimeOffsetFromServer(data.serverTime);
         updateStatus(true);
         updatePeersList();
         notifyConnectionStateChanged('presence-welcome');
-        scheduleMaybeRestoreRoomSnapshot('presence-welcome');
+        // Recovery starts after this connection's first peers snapshot.
         break;
 
+      case 'scene-room':
+        receiveSceneRoom(data, data.event);
+        break;
       case 'peers': {
         const isFirstPeers = presenceState.peers.length === 0
           && (data.peers || []).length > 0;
         presenceState.peers = data.peers || [];
         if (hasOtherParticipants()) {
+          sceneRoomUi?.cancelRestore();
+          if (isRestoringRoomSnapshot && !sceneSyncReady) {
+            clearSceneObjects('restore-interrupted-by-peer');
+            roomRecoveryRunning = false;
+          }
           removeSampleCube('peers-present');
         }
         updateStatus(true);
@@ -7287,18 +7464,8 @@ function connectPresence() {
           if (!peerIds.has(peerId)) remoteAvatarManager.disposeRemoteAvatar(peerId);
         }
         updatePeersList();
-        // 初回 peers 受信時にシーンリクエスト
-        if (isFirstPeers && !sceneReceived) {
-          requestSceneFromPeer();
-        }
         notifyConnectionStateChanged('peers-updated');
-        if (!hasOtherParticipants()) {
-          if (!sceneReceived) sceneReceived = true;
-          scheduleMaybeRestoreRoomSnapshot('peers-updated');
-          prepareHandoffSceneReady({ restoreSnapshot: true });
-        } else {
-          removeSampleCube('peers-updated');
-        }
+        if (!sceneSyncReady) void recoverSceneRoom().catch(error => console.warn('[scene-recovery]', error));
         break;
       }
 
@@ -7319,6 +7486,7 @@ function connectPresence() {
     // 意図的な切断（ルーム切替）では presenceState.ws が先に null になる
     if (presenceState.ws !== ws) return;
     presenceState.ws = null;
+    markSceneNotReady();
     updateStatus(false);
     remoteAvatarManager.disposeAllRemoteAvatars();
     updatePeersList();
@@ -7363,39 +7531,18 @@ function updateStatus(connected, customMessage) {
 // ── シーンリクエスト（後から参加したクライアント用） ───────
 
 function requestSceneFromPeer() {
-  const peers = presenceState.peers.filter(p => p.id !== presenceState.id);
-  if (peers.length === 0) {
-    sceneReceived = true;
-    scheduleMaybeRestoreRoomSnapshot('scene-request-no-peers');
-    prepareHandoffSceneReady({ restoreSnapshot: true });
-    return;
-  }
-
-  if (sceneRequestAttempt >= peers.length) {
-    console.warn('[SceneSync] All peers failed to respond');
-    sceneReceived = true;
-    prepareHandoffSceneReady({ restoreSnapshot: true });
-    return;
-  }
-
-  const target = peers[sceneRequestAttempt];
-  console.log('[SceneSync] Requesting scene from:', target.nickname || target.id);
-
-  const ws = presenceState.ws;
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'handoff',
-      targetId: target.id,
-      payload: { kind: 'scene-request' },
-    }));
-  }
-
+  if (sceneSyncReady || sceneRequestPeerId) return;
+  const peers = presenceState.peers.filter(p => p.id !== presenceState.id && p.sceneReady !== false);
+  if (!peers.length) { void recoverSceneRoom(); return; }
+  const target = peers[sceneRequestAttempt % peers.length];
+  sceneRequestPeerId = target.id;
+  sceneRequestId = crypto.randomUUID();
+  sendHandoff({ targetId: target.id, payload: { kind: 'scene-request', requestId: sceneRequestId } });
   clearTimeout(sceneRequestTimer);
   sceneRequestTimer = setTimeout(() => {
-    if (!sceneReceived) {
-      sceneRequestAttempt++;
-      requestSceneFromPeer();
-    }
+    if (sceneSyncReady) return;
+    sceneRequestPeerId = null; sceneRequestAttempt++;
+    requestSceneFromPeer();
   }, 5000);
 }
 
@@ -7428,7 +7575,8 @@ function exportObjectAsGlb(obj) {
   });
 }
 
-async function respondToSceneRequest(from) {
+async function respondToSceneRequest(from, requestId) {
+  if (!sceneSyncReady) return;
   console.log('[SceneSync] Responding to scene-request from:',
     from?.nickname || from?.id);
 
@@ -7494,7 +7642,7 @@ async function respondToSceneRequest(from) {
 
   const ws = presenceState.ws;
   if (ws && ws.readyState === WebSocket.OPEN) {
-    const payload = { kind: 'scene-state', envId: environmentManager.getCurrentEnvId(), objects };
+    const payload = { kind: 'scene-state', requestId, envId: environmentManager.getCurrentEnvId(), objects };
 
     // BGM state を含める
     const bgmState = serializeSceneBgm();
@@ -7513,11 +7661,7 @@ async function respondToSceneRequest(from) {
       payload.physics = physicsState;
     }
 
-    ws.send(JSON.stringify({
-      type: 'handoff',
-      targetId: from.id,
-      payload,
-    }));
+    sendHandoff({ targetId: from.id, payload });
   }
 }
 
@@ -7559,6 +7703,11 @@ function collectSceneBatchOperations(payload) {
 function handleHandoff(data) {
   const payload = data.payload;
   if (!payload) return;
+  if (data.sceneEpoch && data.sceneEpoch !== sceneRoomEpoch) return;
+  if (!sceneSyncReady && !['scene-state', 'scene-request', 'scene-avatar'].includes(payload.kind)) {
+    if (pendingSceneHandoffs.length < 512) pendingSceneHandoffs.push(data);
+    return;
+  }
 
   // Handle scene-graph-* protocol messages (Loom graph protocol)
   const sceneGraphTypes = new Set(['scene-graph-set', 'scene-graph-clear', 'scene-graph-patch', 'scene-graph-input']);
@@ -7633,6 +7782,12 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-state': {
+      if (sceneSyncReady || data.from?.id !== sceneRequestPeerId) break;
+      if (payload.requestId && payload.requestId !== sceneRequestId) break;
+      clearSceneObjects('authoritative-scene-state');
+      roomRecoveryRunning = true;
+      sceneRequestId = null;
+      sceneRequestPeerId = null;
       sceneReceived = true;
       clearTimeout(sceneRequestTimer);
       if (payload.envId) {
@@ -7648,9 +7803,11 @@ function handleHandoff(data) {
         });
       }
       const objects = payload.objects || {};
+      const restoreWork = sceneLifetime.capture();
+      const restoring = [];
       removeSampleCube('scene-state-received');
       for (const [objectId, info] of Object.entries(objects)) {
-        addOrUpdateObject(objectId, info, { resetPhysicsMotion: true });
+        restoring.push(addOrUpdateObject(objectId, info, { resetPhysicsMotion: true }));
       }
       ensureSampleCubeForEmptyRoom('scene-state-applied');
 
@@ -7682,11 +7839,11 @@ function handleHandoff(data) {
       } else {
         broadcast(inputLogRequest);
       }
-      prepareHandoffSceneReady();
+      Promise.allSettled(restoring).then(() => { if (sceneLifetime.current(restoreWork)) finishSceneRecovery(); });
       break;
     }
     case 'scene-request': {
-      respondToSceneRequest(data.from);
+      respondToSceneRequest(data.from, payload.requestId);
       break;
     }
     case 'scene-delta': {
@@ -8028,6 +8185,7 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-mesh': {
+      const meshWork = sceneLifetime.capture();
       const obj = managedObjects.get(payload.objectId);
       const loadingName = obj?.userData?.name || payload.meshPath;
       const loadingInfo = obj ? {
@@ -8064,6 +8222,7 @@ function handleHandoff(data) {
         notifySceneStateChanged('scene-mesh-loaded');
       }, payload.asset).catch((err) => {
         removeLoadingOverlay(payload.objectId);
+        if (!sceneLifetime.current(meshWork)) return;
         // glB ロード失敗時のフォールバック
         console.warn('Failed to load mesh:', err);
         // 既存オブジェクトがあれば使用し続ける、なければ Box を生成
@@ -8479,12 +8638,13 @@ async function captureScreenshotForAi(options = {}) {
 }
 
 async function uploadGlbFromUrl(url, params = {}) {
-  const response = await fetch(url);
+  const _sceneTask = beginLocalSceneTask();
+  const response = await sceneAwait(fetch(url), _sceneTask);
   if (!response.ok) {
     throw new Error(`failed to fetch glb: ${response.status}`);
   }
 
-  const blob = await response.blob();
+  const blob = await sceneAwait(response.blob(), _sceneTask);
   const fileName = params.name || url.split('/').pop() || 'remote.glb';
   const file = new File([blob], fileName, { type: blob.type || 'model/gltf-binary' });
   const objectId = params.objectId || `web-${Math.random().toString(36).slice(2, 10)}`;
@@ -8492,7 +8652,7 @@ async function uploadGlbFromUrl(url, params = {}) {
     ? new THREE.Vector3().fromArray(params.position)
     : new THREE.Vector3(0, 0, 0);
 
-  const model = await glbLoader.loadFromFile(file, position, scene);
+  const model = await sceneAwait(glbLoader.loadFromFile(file, position, scene), _sceneTask);
 
   if (Array.isArray(params.rotation) && params.rotation.length === 4) {
     model.quaternion.fromArray(params.rotation);
@@ -8513,7 +8673,7 @@ async function uploadGlbFromUrl(url, params = {}) {
   // 変換後 ArrayBuffer を優先（upload / broadcast / cache すべてに変換後を使う）
   const arrayBuffer = model.userData.normalizedGlbArrayBuffer
     ? model.userData.normalizedGlbArrayBuffer
-    : await blob.arrayBuffer();
+    : await sceneAwait(blob.arrayBuffer(), _sceneTask);
 
   // 正規化の結果をトーストで通知
   const metadata = model.userData?.scenesync?.glbMetadata;
@@ -8523,7 +8683,7 @@ async function uploadGlbFromUrl(url, params = {}) {
     showToast('このモデルはScene Syncで正しく表示できない可能性があるマテリアルを使用しています');
   }
 
-  await uploadAndBroadcast(
+  await sceneAwait(uploadAndBroadcast(
     model.userData.objectId,
     file.name,
     model,
@@ -8531,7 +8691,7 @@ async function uploadGlbFromUrl(url, params = {}) {
     model.userData?.metadata
       ? { metadata: cloneJsonSafe(model.userData.metadata) }
       : {},
-  );
+  ), _sceneTask);
 
   return {
     ok: true,
@@ -8564,11 +8724,12 @@ async function importGlbFileAsSceneObject(file, {
   strictUpload = false,
   signal,
 } = {}) {
+  const _sceneTask = sceneLifetime.capture();
   const loadPosition = Array.isArray(position)
     ? new THREE.Vector3().fromArray(position)
     : new THREE.Vector3();
 
-  const model = await glbLoader.loadFromFile(file, loadPosition, scene);
+  const model = await sceneAwait(glbLoader.loadFromFile(file, loadPosition, scene), _sceneTask);
   model.userData.objectId = objectId;
   model.userData.name = name || file.name;
   const embeddedMetadata = cloneJsonSafe(model.userData?.metadata || null);
@@ -8628,9 +8789,9 @@ async function importGlbFileAsSceneObject(file, {
   // 変換後 ArrayBuffer を優先（upload / broadcast / cache すべてに変換後を使う）
   const arrayBuffer = model.userData.normalizedGlbArrayBuffer
     ? model.userData.normalizedGlbArrayBuffer
-    : await file.arrayBuffer();
+    : await sceneAwait(file.arrayBuffer(), _sceneTask);
 
-  await uploadAndBroadcast(objectId, name || file.name, model, arrayBuffer, {
+  await sceneAwait(uploadAndBroadcast(objectId, name || file.name, model, arrayBuffer, {
     visible,
     ...(effectiveMetadata ? { metadata: effectiveMetadata } : {}),
     ...(animation ? { animation } : {}),
@@ -8640,7 +8801,7 @@ async function importGlbFileAsSceneObject(file, {
     throwOnUploadFailure: strictUpload,
     suppressHistory: strictUpload,
     signal,
-  });
+  }), _sceneTask);
 
   return model;
 }
@@ -8654,6 +8815,7 @@ function readQuaternionArray(value, fallback) {
 }
 
 function createSceneUrlImportContext(options = {}) {
+  const work = sceneLifetime.capture();
   const {
     positionArray = [0, 1, 0],
     placementRotation = null,
@@ -8680,11 +8842,11 @@ function createSceneUrlImportContext(options = {}) {
   return {
     // 立体視 / VR180 の明示指定（{ projection, stereoLayout }）。null なら自動判定に任せる。
     mediaFormat: mediaFormat || sourceContext?.mediaFormat || null,
-    addOrUpdateObject,
-    broadcastSceneAdd: broadcast,
-    applySceneBgm,
-    broadcastSceneBgm: broadcast,
-    addOrUpdateAudioSource,
+    addOrUpdateObject: guardSceneCallback(addOrUpdateObject, work),
+    broadcastSceneAdd: guardSceneCallback(broadcast, work),
+    applySceneBgm: guardSceneCallback(applySceneBgm, work),
+    broadcastSceneBgm: guardSceneCallback(broadcast, work),
+    addOrUpdateAudioSource: guardSceneCallback(addOrUpdateAudioSource, work),
     resolveObjectAudioTarget: () => {
       const explicitObjectId = extraImporterContext?.objectId;
       if (explicitObjectId && managedObjects.has(explicitObjectId)) return explicitObjectId;
@@ -8713,7 +8875,7 @@ function createSceneUrlImportContext(options = {}) {
     wallSurfaceOffset,
     placementPosition,
     textImporter: (text, filename, importerContext = {}) =>
-      textImporterCallback(text, { toArray: () => position }, filename, {
+      guardSceneCallback(textImporterCallback, work)(text, { toArray: () => position }, filename, {
         ...sourceContext,
         ...extraImporterContext,
         ...importerContext,
@@ -8722,9 +8884,9 @@ function createSceneUrlImportContext(options = {}) {
     GLTFLoader,
     configureGLTFLoader: configureEditorGLTFLoader,
     prepareGlTFRoot: prepareGaussianSplatRoot,
-    importGlbFileAsSceneObject,
+    importGlbFileAsSceneObject: guardSceneCallback(importGlbFileAsSceneObject, work),
     targetKind,
-    replaceSkyboxSphereFromBlob,
+    replaceSkyboxSphereFromBlob: guardSceneCallback(replaceSkyboxSphereFromBlob, work),
     /**
      * Spec/Gloss変換後GLBをpresence blobへアップロードしてasset cacheへも記録する。
      * URL import時に normalization.changed === true の場合に使う。
@@ -8766,6 +8928,7 @@ function createSceneUrlImportContext(options = {}) {
       return { meshPath, assetId, size: arrayBuffer.byteLength };
     },
     commitSceneAdd: (payload, options = {}) => {
+      sceneLifetime.assert(work);
       broadcast(payload);
       addOrUpdateObject(payload.objectId, payload, options);
 
@@ -8826,13 +8989,14 @@ function assertAiUrlKind(url, allowedKinds, action) {
 }
 
 async function runAiUrlImport(action, params = {}, context = {}) {
+  const _sceneTask = sceneLifetime.capture();
   if (typeof params?.url !== 'string' || !params.url.trim()) {
     throw new Error(`${action} requires params.url`);
   }
 
   const normalizedUrl = assertAiUrlKind(params.url, context.allowedKinds || [], action);
   const importerContext = createAiUrlImportContext(params, context);
-  const imported = await dispatchUrlImport(normalizedUrl, importerContext);
+  const imported = await sceneAwait(dispatchUrlImport(normalizedUrl, importerContext), _sceneTask);
 
   return {
     ok: true,
@@ -9105,6 +9269,7 @@ function resolveReplaceTargetObjectId({ objectId, inputKind }) {
 }
 
 async function handleAiCommand(from, payload) {
+  const _sceneTask = sceneLifetime.capture();
   const requestId = payload.requestId || `req-${Date.now()}`;
 
   try {
@@ -9164,37 +9329,37 @@ async function handleAiCommand(from, payload) {
         const params = payload.params || {};
         const mode = params.mode === 'image' ? 'image' : 'url';
 
-        result = await captureScreenshotForAi({
+        result = await sceneAwait(captureScreenshotForAi({
           mode,
           maxWidth: Number.isFinite(params.maxWidth) ? params.maxWidth : 768,
           quality: Number.isFinite(params.quality) ? params.quality : (mode === 'image' ? 0.7 : 0.92),
-        });
+        }), _sceneTask);
 
         break;
       }
       case 'uploadGlbFromUrl':
-        result = await uploadGlbFromUrl(payload.params?.url, payload.params || {});
+        result = await sceneAwait(uploadGlbFromUrl(payload.params?.url, payload.params || {}), _sceneTask);
         break;
       case 'addImageFromUrl':
-        result = await runAiUrlImport(payload.action, payload.params, {
+        result = await sceneAwait(runAiUrlImport(payload.action, payload.params, {
           allowedKinds: [URL_KIND.IMAGE],
-        });
+        }), _sceneTask);
         break;
       case 'addVideoFromUrl':
-        result = await runAiUrlImport(payload.action, payload.params, {
+        result = await sceneAwait(runAiUrlImport(payload.action, payload.params, {
           allowedKinds: [URL_KIND.VIDEO, URL_KIND.VIDEO_HLS],
-        });
+        }), _sceneTask);
         break;
       case 'addTextFromUrl':
-        result = await runAiUrlImport(payload.action, payload.params, {
+        result = await sceneAwait(runAiUrlImport(payload.action, payload.params, {
           allowedKinds: [URL_KIND.TEXT],
-        });
+        }), _sceneTask);
         break;
       case 'setSkyboxFromImageUrl':
-        result = await runAiUrlImport(payload.action, payload.params, {
+        result = await sceneAwait(runAiUrlImport(payload.action, payload.params, {
           allowedKinds: [URL_KIND.IMAGE],
           targetKind: 'sky',
-        });
+        }), _sceneTask);
         break;
       case 'getSelection':
         result = {
@@ -9221,14 +9386,14 @@ async function handleAiCommand(from, payload) {
 
         try {
           const targetObjectId = resolveReplaceTargetObjectId({ objectId: params.objectId, inputKind: mediaType });
-          await replaceObjectContent(targetObjectId, {
+          await sceneAwait(replaceObjectContent(targetObjectId, {
             kind: mediaType,
             source: 'url',
             url,
             name,
             ...(params.projection ? { projection: params.projection } : {}),
             ...(params.stereoLayout ? { stereoLayout: params.stereoLayout } : {}),
-          });
+          }), _sceneTask);
 
           const targetObj = managedObjects.get(targetObjectId);
           result = {
@@ -9255,7 +9420,7 @@ async function handleAiCommand(from, payload) {
 
         try {
           const targetObjectId = resolveReplaceTargetObjectId({ objectId, inputKind: 'text' });
-          await replaceObjectContent(targetObjectId, {
+          await sceneAwait(replaceObjectContent(targetObjectId, {
             kind: 'text',
             source: 'inline',
             text: String(text),
@@ -9267,7 +9432,7 @@ async function handleAiCommand(from, payload) {
             backgroundColor: params.backgroundColor,
             align: params.align,
             name: params.name,
-          });
+          }), _sceneTask);
 
           const targetObj = managedObjects.get(targetObjectId);
           const asset = targetObj?.userData?.asset || {};
@@ -9341,6 +9506,10 @@ function cleanupPreviewForLoadedObject(options = {}) {
 }
 
 function addOrUpdateObject(objectId, info, options = {}) {
+  if (!sceneObjectWorkCurrent(info)) return;
+  const work = info?._sceneWork || sceneLifetime.capture();
+  objectWork.set(objectId, work);
+  info = { ...info, _sceneWork: work };
   removedObjectIds.delete(objectId);
   info = {
     ...(info || {}),
@@ -9452,6 +9621,7 @@ async function recoverUnavailableMeshBlob({
     reason,
   });
 
+  if (!sceneObjectWorkCurrent(info)) return true;
   addRecoveringOverlay(objectId, info);
   const recoveryResult = await expiredGlbRecovery.handleMissingGlb(
     objectId,
@@ -9589,7 +9759,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
         });
         if (!recoveryHandled) {
           removeFailedOverlay(objectId);
-          if (removedObjectIds.has(objectId)) {
+          if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
             cleanupPreviewForLoadedObject(options);
             return;
           }
@@ -9656,7 +9826,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             };
           }
 
-          if (removedObjectIds.has(objectId) || options.signal?.aborted) {
+          if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId)) || options.signal?.aborted) {
             scene.remove(model);
             model.traverse?.((child) => {
               child.geometry?.dispose?.();
@@ -9690,7 +9860,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
             scene.remove(existing);
           }
 
-          if (removedObjectIds.has(objectId)) {
+          if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
             scene.remove(model);
             cleanupPreviewForLoadedObject(options);
             return;
@@ -9743,7 +9913,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
       }, info.asset).catch((err) => {
         removeLoadingOverlay(objectId);
         console.warn('Failed to load mesh for', objectId, ':', err);
-        if (removedObjectIds.has(objectId)) {
+        if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
           cleanupPreviewForLoadedObject(options);
           loadCompleted = true;
           URL.revokeObjectURL(objectUrl);
@@ -9762,7 +9932,7 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
     } catch (err) {
       removeLoadingOverlay(objectId);
       console.warn('Failed to fetch mesh for', objectId, ':', err);
-      if (removedObjectIds.has(objectId)) {
+      if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
         cleanupPreviewForLoadedObject(options);
         return;
       }
@@ -9847,7 +10017,7 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
 
     // The handoff loader may have awaited media while a peer created this ID.
     // Check before touching the existing object, then commit synchronously.
-    if (removedObjectIds.has(objectId)) {
+    if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
       group.userData?.disposable?.();
       cleanupPreviewForLoadedObject(options);
       const error = new Error('Video object load was cancelled');
@@ -9877,7 +10047,7 @@ function loadVideoObject(objectId, info, videoUrl, existing, prebuilt = null, op
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load video for', objectId, ':', err);
-    if (removedObjectIds.has(objectId)) {
+    if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
       cleanupPreviewForLoadedObject(options);
       strictLoadFailure(options, err);
       return null;
@@ -9953,7 +10123,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
     group.userData.assetType = 'image';
     if (info.asset) group.userData.asset = structuredClone(info.asset);
 
-    if (removedObjectIds.has(objectId)) {
+    if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
       group.userData?.disposable?.();
       cleanupPreviewForLoadedObject(options);
       const error = new Error('Image object load was cancelled');
@@ -9983,7 +10153,7 @@ function loadImageObject(objectId, info, imageUrl, existing, prebuilt = null, op
   }).catch((err) => {
     removeLoadingOverlay(objectId);
     console.warn('Failed to load image for', objectId, ':', err);
-    if (removedObjectIds.has(objectId)) {
+    if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
       cleanupPreviewForLoadedObject(options);
       strictLoadFailure(options, err);
       return null;
@@ -10167,7 +10337,7 @@ function loadTextObject(objectId, info, asset, existing, options = {}) {
       material.dispose();
     };
 
-    if (removedObjectIds.has(objectId)) {
+    if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
       group.userData?.disposable?.();
       const error = new Error('Text object load was cancelled');
       error.code = 'handoff-object-load-cancelled';
@@ -10192,7 +10362,7 @@ function loadTextObject(objectId, info, asset, existing, options = {}) {
     return group;
   }).catch((err) => {
     console.warn('Failed to load text object for', objectId, ':', err);
-    if (removedObjectIds.has(objectId)) {
+    if ((!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) {
       strictLoadFailure(options, err);
       return null;
     }
@@ -10260,6 +10430,7 @@ function findPrimaryMediaMesh(root) {
 }
 
 async function showLocalImageReplacementPreview(objectId, file) {
+  const _sceneTask = sceneLifetime.capture();
   const target = managedObjects.get(objectId);
   if (!target) return null;
 
@@ -10276,9 +10447,9 @@ async function showLocalImageReplacementPreview(objectId, file) {
 
   let texture;
   try {
-    texture = await new Promise((resolve, reject) => {
+    texture = await sceneAwait(new Promise((resolve, reject) => {
       new THREE.TextureLoader().load(objectUrl, resolve, undefined, reject);
-    });
+    }), _sceneTask);
   } catch (error) {
     console.warn('[image-import] failed to load replacement preview texture:', error);
     URL.revokeObjectURL(objectUrl);
@@ -10363,6 +10534,7 @@ function createContentReplaceSnapshot(obj, fallbackObjectId = null) {
 }
 
 async function replaceObjectContent(objectId, input, options = {}) {
+  const _sceneTask = sceneLifetime.capture();
   const existing = managedObjects.get(objectId);
   if (!existing) return;
 
@@ -10546,7 +10718,7 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
       })();
 
   return promise.then(({ model }) => {
-    if (options.signal?.aborted || removedObjectIds.has(objectId)) return;
+    if (options.signal?.aborted || (!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId))) return;
     removeLoadingOverlay(objectId);
     repairLegacySuperSplatOrientation(
       model,
@@ -10590,6 +10762,9 @@ function loadMeshObjectFromUrl(objectId, info, glbUrl, existing, prebuilt = null
 }
 
 function replaceManagedObject(objectId, nextObject, info) {
+  if (!sceneObjectWorkCurrent(info)) {
+    nextObject.removeFromParent(); disposeObject3DResources(nextObject); return;
+  }
   const current = managedObjects.get(objectId);
   if (current) {
     if (transformCtrl.object === current) transformCtrl.detach();
@@ -10940,6 +11115,7 @@ function updateBgmControls() {
 // ── Undo/Redo 処理 ──────────────────────────────────────
 
 function performUndo() {
+  if (!sceneSyncReady) return;
   const historyManager = presenceState.historyManager;
   if (!historyManager.canUndo()) return;
 
@@ -10951,6 +11127,7 @@ function performUndo() {
 }
 
 function performRedo() {
+  if (!sceneSyncReady) return;
   const historyManager = presenceState.historyManager;
   if (!historyManager.canRedo()) return;
 
@@ -11130,6 +11307,8 @@ function attachSharedClockToSceneMutationPayload(payload, now = performance.now(
 }
 
 function broadcast(payload) {
+  if (!sceneSyncReady) return;
+  payload = { ...payload, sceneEpoch: sceneRoomEpoch };
   const ws = presenceState.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({
@@ -11141,7 +11320,7 @@ function broadcast(payload) {
 function sendHandoff({ targetId, payload }) {
   const ws = presenceState.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: 'handoff', targetId, payload }));
+  ws.send(JSON.stringify({ type: 'handoff', targetId, payload: { ...payload, sceneEpoch: sceneRoomEpoch } }));
 }
 
 // ── Asset modules initialization ────────────────────────
@@ -11160,8 +11339,10 @@ function getObjectById(objectId) {
 }
 
 async function loadGlbBlobForObject(objectId, blob, options = {}) {
+  const _sceneTask = sceneLifetime.capture();
   const obj = managedObjects.get(objectId);
   const info = options.info || null;
+  if (!sceneObjectWorkCurrent(info)) return;
   const preservedAudioSources = Object.prototype.hasOwnProperty.call(info || {}, 'audioSources')
     ? info.audioSources
     : obj?.userData?.audioSources;
@@ -11197,8 +11378,8 @@ async function loadGlbBlobForObject(objectId, blob, options = {}) {
       source: 'cache',
     });
 
-    const configuredLoader = await configureEditorGLTFLoader(new GLTFLoader());
-    const gltf = await configuredLoader.loadAsync(url);
+    const configuredLoader = await sceneAwait(configureEditorGLTFLoader(new GLTFLoader()), _sceneTask);
+    const gltf = await sceneAwait(configuredLoader.loadAsync(url), _sceneTask);
     markCrashProbe('glb-load-success', {
       objectId,
       meshPath: options.meshPath,
@@ -11324,6 +11505,8 @@ const expiredGlbRecovery = createExpiredGlbRecovery({
   presenceState,
   sendHandoff,
   loadGlbBlobForObject,
+  captureWork: () => sceneLifetime.capture(),
+  isWorkCurrent: token => sceneLifetime.current(token),
 });
 
 fileTransferAdapter.onFileReceived((event) => {
@@ -11337,6 +11520,7 @@ expiredGlbRecovery.onRecoverySuccess(({ objectId, requestId }) => {
 });
 
 expiredGlbRecovery.onRecoveryFailed(({ objectId, requestId, reason, info }) => {
+  if (!sceneObjectWorkCurrent(info) || removedObjectIds.has(objectId)) return;
   console.log('[SceneSync] Recovery failed:', { objectId, requestId, reason });
   removeRecoveringOverlay(objectId);
   addFailedOverlay(objectId, info);
@@ -11351,6 +11535,7 @@ function generateRandomPath() {
 }
 
 async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraFields = {}, options = {}) {
+  const _sceneTask = sceneLifetime.capture();
   const hasGaussianSplat = model.userData?.scenesync?.hasGaussianSplat === true;
   const useCompressedCarrier = hasGaussianSplat
     && arrayBuffer.byteLength >= DEFAULT_GAUSSIAN_CARRIER_COMPRESSION_MIN_BYTES
@@ -11367,7 +11552,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
   try {
     let uploaded;
     try {
-      uploaded = await uploadLocalMeshAsset({
+      uploaded = await sceneAwait(uploadLocalMeshAsset({
         arrayBuffer,
         name,
         meshPath,
@@ -11406,7 +11591,7 @@ async function uploadAndBroadcast(objectId, name, model, arrayBuffer, extraField
             showToast(`Gaussian Splatを同期中… (${detail})`);
           }
         },
-      });
+      }), _sceneTask);
     } catch (err) {
       console.warn('POST failed:', err);
       showToast('GLB アップロード失敗: ' + err.message);
@@ -11518,6 +11703,7 @@ function applySceneActionLocally(action, options = {}) {
 }
 
 async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', context = {}) {
+  const _sceneTask = sceneLifetime.capture();
   const safeName = sourceName || 'skybox';
   let optimizationInfo = null;
   const existingMetadata = (context.metadata && typeof context.metadata === 'object')
@@ -11533,7 +11719,7 @@ async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', co
   const buildStart = performance.now();
   console.debug('[image-import] build glb start', logContext);
 
-  const result = await buildImageSkySphereGlb(blob, {
+  const result = await sceneAwait(buildImageSkySphereGlb(blob, {
     THREE,
     GLTFExporter,
     radius: 50,
@@ -11543,7 +11729,7 @@ async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', co
     onOptimized: (info) => {
       optimizationInfo = info;
     },
-  });
+  }), _sceneTask);
   console.debug('[image-import] build glb complete', {
     ...logContext,
     ms: Math.round(performance.now() - buildStart),
@@ -11560,7 +11746,7 @@ async function createSkyboxSpherePayloadFromBlob(blob, sourceName = 'skybox', co
 
   const uploadStart = performance.now();
   console.debug('[image-import] upload start', logContext);
-  const meshPath = await uploadCarrierGlb(result.arrayBuffer);
+  const meshPath = await sceneAwait(uploadCarrierGlb(result.arrayBuffer), _sceneTask);
   console.debug('[image-import] upload complete', {
     ...logContext,
     ms: Math.round(performance.now() - uploadStart),
@@ -11628,8 +11814,9 @@ function createReplaceSkyboxBatchEntry(oldSkyboxPayloads, newSkyboxPayload) {
 }
 
 async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context = {}) {
+  const _sceneTask = sceneLifetime.capture();
   const oldSkyboxPayloads = getSkySpherePayloads();
-  const newSkyboxPayload = await createSkyboxSpherePayloadFromBlob(blob, sourceName, context);
+  const newSkyboxPayload = await sceneAwait(createSkyboxSpherePayloadFromBlob(blob, sourceName, context), _sceneTask);
 
   const batchEntry = createReplaceSkyboxBatchEntry(
     oldSkyboxPayloads,
@@ -11714,23 +11901,24 @@ function canvasToBlob(canvas, mime, quality) {
 }
 
 async function replaceImageFileOptimistically(objectId, file, context = {}) {
-  const preview = await showLocalImageReplacementPreview(objectId, file);
+  const _sceneTask = sceneLifetime.capture();
+  const preview = await sceneAwait(showLocalImageReplacementPreview(objectId, file), _sceneTask);
 
   try {
     // Optimize and upload
-    const optimized = await createImageCanvasForScene(file, {
+    const optimized = await sceneAwait(createImageCanvasForScene(file, {
       maxPixel: 2048,
       label: file.name,
-    });
+    }), _sceneTask);
 
     const outputFormat = getOptimizedImageOutputFormat(file);
-    const imageBlob = await canvasToBlob(
+    const imageBlob = await sceneAwait(canvasToBlob(
       optimized.canvas,
       outputFormat.mime,
       outputFormat.quality,
-    );
+    ), _sceneTask);
 
-    const uploadedUrl = await uploadBlobToStore(imageBlob, outputFormat.mime, outputFormat.extension);
+    const uploadedUrl = await sceneAwait(uploadBlobToStore(imageBlob, outputFormat.mime, outputFormat.extension), _sceneTask);
 
     // Check if this preview is still current
     if (preview && !isCurrentLocalImageReplacementPreview(objectId, preview.token)) {
@@ -11738,7 +11926,7 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
       return { objectId, stale: true };
     }
 
-    await replaceObjectContent(
+    await sceneAwait(replaceObjectContent(
       objectId,
       {
         kind: 'image',
@@ -11755,7 +11943,7 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
             localReplacementPreviewToken: preview.token,
           }
         : {}
-    );
+    ), _sceneTask);
 
     return {
       objectId,
@@ -11775,6 +11963,7 @@ async function replaceImageFileOptimistically(objectId, file, context = {}) {
 }
 
 async function imageImporterCallback(file, position, context = {}) {
+  const _sceneTask = beginLocalSceneTask();
   const selectionAtStart = getLocalAddSelectionState();
   if (file.size > ABSOLUTE_IMAGE_FILE_LIMIT_BYTES) {
     throw new Error('この画像は非常に大きいため処理できません');
@@ -11799,9 +11988,9 @@ async function imageImporterCallback(file, position, context = {}) {
 
   try {
     if (isSkyTarget) {
-      const result = await replaceSkyboxSphereFromBlob(file, file.name || 'skybox', {
+      const result = await sceneAwait(replaceSkyboxSphereFromBlob(file, file.name || 'skybox', {
         ...logContext,
-      });
+      }), _sceneTask);
       temporaryPreviewHandedOffToFinalLoader = true;
       console.debug('[image-import] final object added', {
         ...logContext,
@@ -11835,7 +12024,7 @@ async function imageImporterCallback(file, position, context = {}) {
         targetId,
       });
       try {
-        const result = await replaceImageFileOptimistically(targetId, file, context);
+        const result = await sceneAwait(replaceImageFileOptimistically(targetId, file, context), _sceneTask);
         // Do NOT set temporaryPreviewHandedOffToFinalLoader = true here.
         // Replacement uses localReplacementPreview, not the new-addition temporary preview.
         console.debug('[image-import] optimistic replacement complete', {
@@ -11857,7 +12046,7 @@ async function imageImporterCallback(file, position, context = {}) {
     // Optimize image and upload as raw blob (not GLB) - for new additions
     const optimizeStart = performance.now();
     console.debug('[image-import] optimize start', logContext);
-    const optimized = await createImageCanvasForScene(file, { maxPixel: 2048, label: file.name });
+    const optimized = await sceneAwait(createImageCanvasForScene(file, { maxPixel: 2048, label: file.name }), _sceneTask);
     console.debug('[image-import] optimize complete', {
       ...logContext,
       ms: Math.round(performance.now() - optimizeStart),
@@ -11869,17 +12058,17 @@ async function imageImporterCallback(file, position, context = {}) {
     });
 
     const outputFormat = getOptimizedImageOutputFormat(file);
-    const imageBlob = await canvasToBlob(
+    const imageBlob = await sceneAwait(canvasToBlob(
       optimized.canvas,
       outputFormat.mime,
       outputFormat.quality,
-    );
+    ), _sceneTask);
 
     // TODO: presence blobs have a server-side TTL; long-lived rooms may see broken image URLs.
     // Future: cache the blob in IndexedDB and re-upload on session reconnect if the URL 404s.
     const uploadStart = performance.now();
     console.debug('[image-import] upload start', logContext);
-    const uploaded = await uploadBlobToStore(imageBlob, outputFormat.mime, outputFormat.extension);
+    const uploaded = await sceneAwait(uploadBlobToStore(imageBlob, outputFormat.mime, outputFormat.extension), _sceneTask);
     console.debug('[image-import] upload complete', {
       ...logContext,
       ms: Math.round(performance.now() - uploadStart),
@@ -11943,7 +12132,7 @@ async function imageImporterCallback(file, position, context = {}) {
       HistoryManager.createSceneAddEntry(payload)
     );
     temporaryPreviewHandedOffToFinalLoader = true;
-    const object = await loaded;
+    const object = await sceneAwait(loaded, _sceneTask);
     if (canSelectCompletedLocalAdd(selectionAtStart, {
       ...getLocalAddSelectionState(),
       loaded: !!object && isSelectableObject(object),
@@ -11976,6 +12165,7 @@ async function imageImporterCallback(file, position, context = {}) {
 }
 
 async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
+  const _sceneTask = beginLocalSceneTask();
   // 通常ペースト導線の特殊ケース: 貼り付け内容が Loomlet graph なら
   // text panel 化せず、選択中オブジェクトへ attach / clear する。
   // 独自 toast を出すため、呼び出し側の汎用 toast は抑止する。
@@ -12022,12 +12212,12 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
   const replaceTarget = getReplaceTarget('text', context.hitObjectId);
   if (replaceTarget) {
     const targetId = replaceTarget.userData.objectId;
-    await replaceObjectContent(targetId, {
+    await sceneAwait(replaceObjectContent(targetId, {
       kind: 'text',
       source: 'inline',
       text,
       format: newAsset.format,
-    });
+    }), _sceneTask);
     return { objectId: targetId };
   }
 
@@ -12073,6 +12263,7 @@ function generateObjectId(prefix) {
 }
 
 async function urlImporterCallback(url, position, context = {}) {
+  const _sceneTask = beginLocalSceneTask();
   const resolved = resolveDroppedUrl(url);
 
   for (const note of resolved.notes || []) {
@@ -12093,23 +12284,7 @@ async function urlImporterCallback(url, position, context = {}) {
   const urlKind = classified.kind;
 
   if (urlKind === URL_KIND.WEBPAGE) {
-    const sceneSyncExportResult = await tryOpenSceneSyncExportUrl(normalizedUrl, {
-      managedObjects,
-      addOrUpdateObject,
-      broadcast,
-      showToast,
-      environmentManager,
-      importGlbFileAsSceneObject,
-      uploadBlobToStore,
-      applySceneBgm,
-      applyScenePhysics,
-      applySceneBehaviors: (behaviors, options = {}) => applySceneDocumentBehaviors(behaviors, {
-        managedObjects,
-        applySceneGraphOperation,
-        broadcast,
-        source: options.source || 'scene-sync-export-import',
-      }),
-    });
+    const sceneSyncExportResult = await sceneAwait(tryOpenSceneSyncExportUrl(normalizedUrl, createSceneSyncExportImportContext()), _sceneTask);
     if (sceneSyncExportResult?.handled) return;
   }
 
@@ -12130,7 +12305,7 @@ async function urlImporterCallback(url, position, context = {}) {
     if (inputKind) {
       const replaceTarget = getReplaceTarget(inputKind, context.hitObjectId);
       if (replaceTarget) {
-        await replaceObjectContent(replaceTarget.userData.objectId, {
+        await sceneAwait(replaceObjectContent(replaceTarget.userData.objectId, {
           kind: inputKind,
           source: 'url',
           url: normalizedUrl,
@@ -12144,7 +12319,7 @@ async function urlImporterCallback(url, position, context = {}) {
           ...(inputKind === 'text' && /\.(md|markdown)(?:$|[?#])/i.test(normalizedUrl)
             ? { format: 'markdown' }
             : {}),
-        });
+        }), _sceneTask);
         return;
       }
     }
@@ -12168,10 +12343,12 @@ async function urlImporterCallback(url, position, context = {}) {
     sourceContext: context,
   });
 
-  await dispatchUrlImport(normalizedUrl, ctx);
+  await sceneAwait(dispatchUrlImport(normalizedUrl, ctx), _sceneTask);
 }
 
 const dragDropManager = new DragDropManager({
+  captureWork: beginLocalSceneTask,
+  assertWork: token => sceneLifetime.assert(token),
   container: document,
   camera,
   renderer,
@@ -12210,23 +12387,7 @@ const dragDropManager = new DragDropManager({
     const target = getReplaceTarget(inputKind, context.hitObjectId || null);
     return target?.userData?.objectId || null;
   },
-  sceneSyncExportImporter: (file) => tryOpenSceneSyncExportFile(file, {
-    managedObjects,
-    addOrUpdateObject,
-    broadcast,
-    showToast,
-    environmentManager,
-    importGlbFileAsSceneObject,
-    uploadBlobToStore,
-    applySceneBgm,
-    applyScenePhysics,
-    applySceneBehaviors: (behaviors, options = {}) => applySceneDocumentBehaviors(behaviors, {
-      managedObjects,
-      applySceneGraphOperation,
-      broadcast,
-      source: options.source || 'scene-sync-export-import',
-    }),
-  }),
+  sceneSyncExportImporter: file => tryOpenSceneSyncExportFile(file, createSceneSyncExportImportContext()),
   onLoadStart: async ({
     objectId,
     file,
@@ -12261,6 +12422,7 @@ const dragDropManager = new DragDropManager({
     // and must happen only after the final GLB object has been displayed.
   },
   onLoaded: async (model, file) => {
+    const _sceneTask = sceneLifetime.capture();
     managedObjects.set(model.userData.objectId, model);
     setupObjectGlbAnimation(model.userData.objectId, model);
     rebaseObjectClock(model, { reason: 'drag-drop-loaded' });
@@ -12278,16 +12440,16 @@ const dragDropManager = new DragDropManager({
     // 変換後 ArrayBuffer を優先（upload / broadcast / cache すべてに変換後を使う）
     const arrayBuffer = model.userData.normalizedGlbArrayBuffer
       ? model.userData.normalizedGlbArrayBuffer
-      : await file.arrayBuffer();
+      : await sceneAwait(file.arrayBuffer(), _sceneTask);
     const embeddedObjectMetadata = cloneJsonSafe(model.userData?.metadata || null);
 
-    await uploadAndBroadcast(
+    await sceneAwait(uploadAndBroadcast(
       model.userData.objectId,
       file.name,
       model,
       arrayBuffer,
       embeddedObjectMetadata ? { metadata: embeddedObjectMetadata } : {},
-    );
+    ), _sceneTask);
   },
   imageImporter: imageImporterCallback,
   textImporter: textImporterCallback,
@@ -12297,6 +12459,7 @@ const dragDropManager = new DragDropManager({
 const sceneSyncDebugApi = {
   ...(window.__sceneSyncDebug || {}),
   dragDropManager,
+  getRoomLifecycle: () => ({ epoch: sceneRoomEpoch, ready: sceneSyncReady, cleared: sceneRoomCleared }),
   getSelection: getCurrentSelectionPayload,
   getActiveTransformTweenCount: () => activeTransformTweens.size,
   audioSource: audioSourceHostApi,
@@ -12365,11 +12528,13 @@ if (isDevUiEnabled()) {
   }
 
   Object.assign(sceneSyncDebugApi, {
+    sceneClear: { switchRoom: applyRoomCode },
     presence: () => ({
       connected: presenceState.ws?.readyState === WebSocket.OPEN,
       readyState: presenceState.ws?.readyState ?? WebSocket.CLOSED,
       id: presenceState.id,
       userId: presenceState.userId,
+      sceneProtocol: 1,
       room: presenceState.room,
       peers: presenceState.peers.map(peer => ({
         id: peer.id,
@@ -12517,6 +12682,8 @@ function getClipboardPlacementContext() {
 }
 
 const clipboardImportManager = new ClipboardImportManager({
+  captureWork: () => sceneLifetime.capture(),
+  assertWork: token => sceneLifetime.assert(token),
   container: document,
   getDefaultPosition: getClipboardPlacementContext,
   showToast,
@@ -12602,14 +12769,15 @@ function openPasteSheet() {
 }
 
 async function pasteFromClipboardAtDefaultPosition() {
+  const _sceneTask = beginLocalSceneTask();
   showToast('クリップボードを読み込みます…');
   // silent: true — read/readText が失敗しても manager 側で強い error toast を出さない。
   // 成功時は importPayload が { ok: true } を返すので、それを成否判定に使う。
-  const result = await clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext(), { silent: true })
+  const result = await sceneAwait(clipboardImportManager.pasteFromNavigatorClipboard(getClipboardPlacementContext(), { silent: true })
     .catch((error) => {
       console.warn('[clipboard] navigator clipboard paste failed:', error);
       return null;
-    });
+    }), _sceneTask);
 
   if (result?.ok) {
     return result;
@@ -14979,6 +15147,7 @@ function buildSceneInspectorSnapshot() {
       connected: presenceState.ws?.readyState === WebSocket.OPEN,
       peerId: presenceState.id,
       userId: presenceState.userId,
+      sceneProtocol: 1,
       sceneReceived,
     },
     environment: {
@@ -15105,6 +15274,8 @@ function createCurrentSceneSnapshot() {
 
   const snapshot = {
     schemaVersion: 1,
+    sceneEpoch: sceneRoomEpoch,
+    cleared: suppressEmptySample,
     savedAt: Date.now(),
     envId: environmentManager.getCurrentEnvId?.() || dom.envSelect?.value || null,
     objects,
@@ -15128,6 +15299,7 @@ function getCurrentRoomId() {
 }
 
 function scheduleSaveRoomSnapshot(reason = 'unknown') {
+  if (!sceneSyncReady) return;
   const roomId = getCurrentRoomId();
   if (!roomId) return;
 
@@ -15149,11 +15321,13 @@ function scheduleSaveRoomSnapshot(reason = 'unknown') {
 }
 
 async function saveCurrentRoomSnapshot(reason = 'unknown', explicitRoomId = null) {
+  if (!sceneSyncReady) return;
+  const work = sceneLifetime.capture();
   const roomId = explicitRoomId || getCurrentRoomId();
   if (!roomId) return;
 
   const snapshot = createCurrentSceneSnapshot();
-  await roomSnapshotCache.saveSnapshot(roomId, snapshot);
+  await roomSnapshotCache.saveSnapshot(roomId, snapshot, { isCurrent: () => sceneLifetime.current(work) && sceneSyncReady });
 
   console.debug('[scene-snapshot] saved', {
     roomId,
@@ -15178,6 +15352,8 @@ function scheduleMaybeRestoreRoomSnapshot(reason = 'unknown') {
 }
 
 async function maybeRestoreRoomSnapshot(reason = 'unknown') {
+  if (sceneSyncReady) return;
+  const work = sceneLifetime.capture();
   const roomId = getCurrentRoomId();
   if (!roomId) return;
 
@@ -15215,15 +15391,21 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
   }
 
   const record = await roomSnapshotCache.getSnapshot(roomId);
+  if (!sceneLifetime.current(work) || hasOtherParticipants()) return;
   const snapshot = record?.snapshot;
+  if (sceneRoomCleared && snapshot?.sceneEpoch !== sceneRoomEpoch) return;
   const snapshotObjectCount = Array.isArray(snapshot?.objects) ? snapshot.objects.length : 0;
   const hasLoomGraphs = hasRestorableSnapshotLoomGraphs(snapshot);
   if (snapshotObjectCount === 0 && !hasLoomGraphs) {
+    if (snapshot?.cleared) suppressEmptySample = true;
     console.debug('[scene-snapshot] no snapshot to restore', { roomId, reason });
     ensureSampleCubeForEmptyRoom('snapshot-empty');
     return;
   }
 
+  const accepted = await sceneRoomUi.askRestore();
+  if (!sceneLifetime.current(work) || getCurrentRoomId() !== roomId || hasOtherParticipants()) return;
+  if (!accepted) { suppressEmptySample = true; return; }
   console.info('[scene-snapshot] restoring local snapshot', {
     roomId,
     objectCount: snapshotObjectCount,
@@ -15239,6 +15421,7 @@ async function maybeRestoreRoomSnapshot(reason = 'unknown') {
 }
 
 async function applyRoomSnapshot(snapshot, options = {}) {
+  const _sceneTask = sceneLifetime.capture();
   let restored = 0;
   let failed = 0;
   let restoredLoomGraphs = false;
@@ -15246,6 +15429,23 @@ async function applyRoomSnapshot(snapshot, options = {}) {
   isRestoringRoomSnapshot = true;
 
   try {
+    for (const entry of snapshot.objects || []) {
+      sceneLifetime.assert(_sceneTask);
+      try {
+        await sceneAwait(restoreSnapshotObject(entry, options), _sceneTask);
+        restored++;
+      } catch (err) {
+        if (!sceneLifetime.current(_sceneTask)) throw err;
+        failed++;
+        console.warn('[scene-snapshot] object restore failed', {
+          objectId: entry?.objectId,
+          name: entry?.name,
+          err,
+        });
+      }
+    }
+
+    sceneLifetime.assert(_sceneTask);
     if (snapshot.envId) {
       if (dom.envSelect) dom.envSelect.value = snapshot.envId;
       if (mobileEnvSelect) mobileEnvSelect.value = snapshot.envId;
@@ -15260,20 +15460,6 @@ async function applyRoomSnapshot(snapshot, options = {}) {
         notify: false,
         reason: 'snapshot-physics-restore',
       });
-    }
-
-    for (const entry of snapshot.objects || []) {
-      try {
-        restoreSnapshotObject(entry, options);
-        restored++;
-      } catch (err) {
-        failed++;
-        console.warn('[scene-snapshot] object restore failed', {
-          objectId: entry?.objectId,
-          name: entry?.name,
-          err,
-        });
-      }
     }
 
     if (hasRestorableSnapshotLoomGraphs(snapshot)) {
@@ -15351,7 +15537,7 @@ function restoreSnapshotObject(entry, options = {}) {
     payload.physics = safeCloneJson(entry.physics);
   }
 
-  addOrUpdateObject(objectId, payload, {
+  return addOrUpdateObject(objectId, payload, {
     skipFallbackOnFailure: true,
     suppressSnapshotSaveOnFailure: true,
     resetPhysicsMotion: true,
@@ -15856,22 +16042,24 @@ function openHelpDialog() {
 }
 
 function createSceneSyncExportImportContext() {
+  const work = beginLocalSceneTask();
   return {
+    signal: work.signal,
     managedObjects,
-    addOrUpdateObject,
-    broadcast,
+    addOrUpdateObject: guardSceneCallback(addOrUpdateObject, work),
+    broadcast: guardSceneCallback(broadcast, work),
     showToast,
-    environmentManager,
-    importGlbFileAsSceneObject,
-    uploadBlobToStore,
-    applySceneBgm,
-    applyScenePhysics,
-    applySceneBehaviors: (behaviors, options = {}) => applySceneDocumentBehaviors(behaviors, {
+    environmentManager: { loadEnvironment: guardSceneCallback((...args) => environmentManager.loadEnvironment(...args), work) },
+    importGlbFileAsSceneObject: guardSceneCallback(importGlbFileAsSceneObject, work),
+    uploadBlobToStore: guardSceneCallback(uploadBlobToStore, work),
+    applySceneBgm: guardSceneCallback(applySceneBgm, work),
+    applyScenePhysics: guardSceneCallback(applyScenePhysics, work),
+    applySceneBehaviors: (behaviors, options = {}) => { sceneLifetime.assert(work); return applySceneDocumentBehaviors(behaviors, {
       managedObjects,
       applySceneGraphOperation,
-      broadcast,
+      broadcast: guardSceneCallback(broadcast, work),
       source: options.source || 'scene-sync-export-import',
-    }),
+    }); },
     rollbackImportedObject: (objectId, expectedObject) => {
       if (managedObjects.get(objectId) !== expectedObject) return false;
       return deleteObjectById(objectId, {
@@ -15954,6 +16142,13 @@ document.addEventListener('keydown', (event) => {
 
 // ── 起動 ─────────────────────────────────────────────────
 
+sceneRoomUi = createSceneClearUi({ THREE, scene,
+  request() {
+    if (!sceneSyncReady) return;
+    presenceState.ws?.send(JSON.stringify({ type: 'scene-clear-request', epoch: sceneRoomEpoch, requestId: crypto.randomUUID() }));
+  },
+  cancel(requestId) { presenceState.ws?.send(JSON.stringify({ type: 'scene-clear-cancel', requestId })); },
+});
 reportPreviousCrashProbe();
 logDiagnosticFlags();
 

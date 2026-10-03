@@ -95,6 +95,9 @@ Single HTML / 外部ページからの `Open in Scene Sync` 連携仕様は
 
 詳細な技術仕様は [`docs/scene-sync-spec.md`](docs/scene-sync-spec.md) を参照。
 
+Webのルーム全体クリア、再接続時の世代照合、端末内保存の復元確認は
+[`docs/scene-sync-clear.md`](docs/scene-sync-clear.md) を参照。
+
 AI 連携ドキュメント:
 
 - GPTs 用 OpenAPI: [`docs/scene-sync-gpt-openapi.yaml`](docs/scene-sync-gpt-openapi.yaml)
@@ -182,6 +185,20 @@ git config core.hooksPath .githooks
 ---
 
 ## ローカル開発
+
+Web + Presence のみをloopbackで動かす場合:
+
+```bash
+npm ci
+npm ci --prefix apps/presence-server
+npm run dev:web
+```
+
+表示されたScene Sync URLを開く。`html/` の編集はブラウザ再読み込みで反映される。
+既定はWebポート8888、Presenceポート8787。`WEB_PORT` / `PRESENCE_PORT` で変更できる。
+`.env` は読み込まず、データは `logs/web-dev/` に保存する。停止はCtrl+C。
+クリア機能の検証は `npm run test:scene-clear` と、起動中のサーバーに対する
+`npm run test:e2e:scene-clear` を使用する。
 
 ### 起動
 
