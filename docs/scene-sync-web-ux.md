@@ -40,6 +40,9 @@ Scene Sync Web は、軽量な共有 3D editor / DevTool として扱う。
 - desktop: settings panel の 🎬 `メディアURL` chip から開く。
 - mobile: 追加シートの `メディアURLを追加（VR180 / 3D）` から開く。
 - 入力: URL、表示形式 select（自動判定 / 2D / 3D SBS / 3D TB / VR180 系）。
+- mobile の URL / 表示形式欄は 16px 以上にし、Safari の小さい入力文字に対する focus zoom を避ける。viewport の zoom 制限は追加しない。
+- mobile のダイアログは画面高に収まり、短い画面では内部をスクロールして操作できる。
+- `npm run test:e2e:url-input` はローカル開発サーバーで Editor / Studio の文字サイズ、入力、閉じる操作、画面内の配置を確認する。Chromium の縮小 viewport は iOS のソフトウェアキーボードや Safari の focus zoom 自体を再現しないため、それらは実機確認が必要。
 - 「自動判定」選択中は、URL のファイル名から推定した形式をダイアログ内にライブ表示する。
 - 明示指定は自動判定より優先。明示的な 2D 指定は自動判定を抑止する。
 - URL drop / clipboard 経由の追加でも同じ自動判定が走り、判定時は toast で形式を通知する。
