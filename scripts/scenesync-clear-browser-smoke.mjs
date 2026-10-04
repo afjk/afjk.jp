@@ -38,8 +38,12 @@ async function add(page, roomName, id, asset={type:'primitive',shape:'box',color
   const response=await fetch(presence.replace('ws:','http:')+`/api/room/${roomName}/broadcast`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'scene-add',sceneEpoch:epoch,objectId:id,name:id,asset,position:[0,1,0],rotation:[0,0,0,1],scale:[1,1,1]})});
   assert.equal(response.status,200);
 }
+async function requestClear(page) {
+  await page.locator('[data-studio-menu-btn]').click();
+  await page.locator('[data-studio-menu] [data-scene-clear]').click();
+}
 async function clear(page) {
-  const before=await epochOf(page);await page.locator('#scene-clear-button').click();
+  const before=await epochOf(page);await requestClear(page);
   await page.waitForFunction(before=>window.__sceneSyncDebug.getRoomLifecycle().epoch!==before,before,{timeout:15000});
   await ready(page);
 }
@@ -52,7 +56,7 @@ try {
   result.security.status=sandbox;result.security.browser=browser.version();await check.close();
   const a=await open('スマートフォン');const b=await open('HMDビューア');
   await add(a.page,room,'clear-box');await count(a.page,1);await count(b.page,1);pass('two clients ready and synchronized');
-  await a.page.locator('#scene-clear-button').click();await b.page.locator('[data-scene-action="cancel-clear"]').waitFor();
+  await requestClear(a.page);await b.page.locator('[data-scene-action="cancel-clear"]').waitFor();
   await a.page.screenshot({path:`${out}/clear-countdown-mobile.png`});
   const pending=a.frames.findLast(m=>m.type==='scene-room'&&m.pending)?.pending;
   assert.ok(pending);
@@ -104,7 +108,7 @@ try {
   assert.ok(cancelledGlb.error);await count(a.page,0);await count(b.page,0);
   pass('local GLB decoded before clear is disposed instead of attaching or broadcasting afterward');
   // Exercise the real XR notice mesh and the same select event used by XR controllers.
-  const xr=await open('XR入力確認');await a.page.locator('#scene-clear-button').click();await xr.page.locator('[data-scene-action="cancel-clear"]').waitFor();
+  const xr=await open('XR入力確認');await requestClear(a.page);await xr.page.locator('[data-scene-action="cancel-clear"]').waitFor();
   await xr.page.evaluate(async()=>{
     const {scene,camera,renderer}=await import('/assets/js/scenesync/scene.js');
     renderer.setAnimationLoop(null);

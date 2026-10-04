@@ -34,6 +34,9 @@ export function createStudioActions(core) {
     exportScene() {
       core?.commands?.exportScene?.();
     },
+    clearScene() {
+      core?.commands?.requestSceneClear?.();
+    },
     openHelp() {
       core?.commands?.openHelp?.();
     },

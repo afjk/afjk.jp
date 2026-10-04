@@ -21,6 +21,9 @@ export function createEditorChrome(core) {
     btnDelete: document.getElementById('btn-delete'),
     btnUndo: document.getElementById('btn-undo'),
     btnRedo: document.getElementById('btn-redo'),
+    sceneMenu: document.getElementById('editor-scene-menu'),
+    exportScene: document.getElementById('export-btn'),
+    clearScene: document.getElementById('editor-scene-clear'),
   };
 
   const disposers = [];
@@ -51,18 +54,40 @@ export function createEditorChrome(core) {
     // undo / redo
     if (els.btnUndo) els.btnUndo.disabled = !s.canUndo;
     if (els.btnRedo) els.btnRedo.disabled = !s.canRedo;
+    if (els.clearScene) els.clearScene.disabled = !s.canClearScene;
   }
+
+  function closeSceneMenu() { if (els.sceneMenu) els.sceneMenu.open = false; }
 
   return {
     mount() {
       disposers.push(
         addListener(els.btnUndo, 'click', () => core?.commands?.undo?.()),
-        addListener(els.btnRedo, 'click', () => core?.commands?.redo?.())
+        addListener(els.btnRedo, 'click', () => core?.commands?.redo?.()),
+        addListener(els.exportScene, 'click', () => {
+          closeSceneMenu();
+          core?.commands?.exportScene?.();
+        }),
+        addListener(els.clearScene, 'click', () => {
+          closeSceneMenu();
+          core?.commands?.requestSceneClear?.();
+        }),
+        addListener(document, 'pointerdown', event => {
+          if (!els.sceneMenu?.contains(event.target)) closeSceneMenu();
+        }, true),
+        addListener(document, 'keydown', event => {
+          if (event.key === 'Escape' && els.sceneMenu?.open) {
+            closeSceneMenu();
+            els.sceneMenu.querySelector('summary')?.focus();
+          }
+        })
       );
       removeStateListener = core?.onStateChange?.(render) || null;
       render();
     },
     unmount() {
+      closeSceneMenu();
+      if (els.clearScene) els.clearScene.disabled = true;
       removeStateListener?.();
       removeStateListener = null;
       for (const dispose of disposers.splice(0)) dispose();

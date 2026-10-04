@@ -279,7 +279,7 @@ async function run() {
     });
 
     await page.goto(result.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForSelector('#export-btn', { state: 'visible', timeout: 60000 });
+    await page.waitForSelector('#editor-scene-menu summary', { state: 'visible', timeout: 60000 });
     await page.waitForFunction(() => window.__sceneSyncDebug?.dragDropManager, null, { timeout: 60000 });
     await page.waitForFunction(
       () => document.querySelector('canvas') && document.querySelector('canvas').width > 0,
@@ -290,6 +290,7 @@ async function run() {
     // Product-default Auto should choose a portable Single HTML for a small,
     // fully embeddable scene before this test seeds its ZIP-import fixture.
     const autoDownloadPromise = page.waitForEvent('download', { timeout: 120000 });
+    await page.locator('#editor-scene-menu summary').click();
     await page.locator('#export-btn').click();
     await page.locator('#export-dialog:not([hidden])').waitFor({ state: 'visible' });
     assert(await page.locator('#export-format-input').inputValue() === 'auto', 'Auto must be the default export format');
@@ -570,6 +571,7 @@ async function run() {
     result.assertions.push(`seeded:${seeded.objectIds.length}`);
 
     const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
+    await page.locator('#editor-scene-menu summary').click();
     await page.locator('#export-btn').click();
     await page.locator('#export-dialog:not([hidden])').waitFor({ state: 'visible' });
     // This regression test inspects a Static ZIP. Auto is the product default,

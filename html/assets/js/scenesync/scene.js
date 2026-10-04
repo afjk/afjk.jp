@@ -9127,6 +9127,7 @@ function getEditorState() {
     toolbarVisible: editorToolbarVisible,
     canUndo: presenceState.historyManager?.canUndo?.() === true,
     canRedo: presenceState.historyManager?.canRedo?.() === true,
+    canClearScene: sceneRoomUi?.canRequest() === true,
   };
 }
 
@@ -16143,6 +16144,7 @@ document.addEventListener('keydown', (event) => {
 // ── 起動 ─────────────────────────────────────────────────
 
 sceneRoomUi = createSceneClearUi({ THREE, scene,
+  onAvailabilityChange: () => notifySceneSyncShellStateChanged('scene-clear-availability'),
   request() {
     if (!sceneSyncReady) return;
     presenceState.ws?.send(JSON.stringify({ type: 'scene-clear-request', epoch: sceneRoomEpoch, requestId: crypto.randomUUID() }));
@@ -16165,6 +16167,7 @@ mountSceneSyncShellFromDom({
     deleteSelected: deleteSelectedObjects,
     focusSelected: focusCameraOnSelection,
     exportScene: triggerExport,
+    requestSceneClear: () => sceneRoomUi?.requestClear(),
     openHelp: openHelpDialog,
     startAiLink: () => {
       if (presenceState.linkManager.isLinked()) {

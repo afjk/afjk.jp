@@ -20,14 +20,12 @@ export function createDesktopEditorLayout() {
       chrome = createEditorChrome(core);
       chrome.mount();
 
-      const exportBtn = document.getElementById('export-btn');
       const helpBtn = document.getElementById('help-btn');
       const linkBtn = document.getElementById('link-btn');
       const sceneInspectorToggleBtn = document.getElementById('scene-inspector-toggle');
       const sceneInspectorCloseBtn = document.getElementById('scene-inspector-close');
 
       disposers.push(
-        addListener(exportBtn, 'click', () => actions?.exportScene?.()),
         addListener(helpBtn, 'click', () => actions?.openHelp?.()),
         addListener(linkBtn, 'click', () => actions?.startAiLink?.()),
         addListener(sceneInspectorToggleBtn, 'click', () => core?.commands?.toggleSceneInspector?.()),
