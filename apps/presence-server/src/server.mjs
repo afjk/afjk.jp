@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync, createReadStream, c
 import { verifyLinkToken, initiatePairingCode, redeemPairingCode, revokeLinkToken, getActiveLink } from './link-token.mjs';
 import { encodeSession, decodeSession } from './gpt-session.mjs';
 import { createRoomLifecycle } from './scenesync/room-lifecycle.mjs';
+import { createRoomSelectionLocks } from './scenesync/selection-locks.mjs';
 import { createSceneSyncConfig } from './scenesync/config.mjs';
 import { getActorIdFromRequest } from './scenesync/actor-id.mjs';
 import { createPerActorRateLimiter } from './scenesync/rate-limit.mjs';
@@ -42,11 +43,13 @@ const rooms = new Map(); // roomId -> Map<clientId, Client>
 const roomObjectIds = new Map(); // roomId -> Set<objectId>
 const roomPhysicsTimelines = new Map(); // roomId -> Map<timelineId, PhysicsTimeline>
 const roomSceneClocks = new Map(); // roomId -> latest canonical scene-clock payload
+const roomSelectionLocks = createRoomSelectionLocks({ maxEntries: sceneSyncConfig.maxObjectsPerRoom });
 const roomLifecycle = createRoomLifecycle({
   emit(roomId, message) { rooms.get(roomId)?.forEach(client => safeSend(client.conn, message)); },
   onClear(roomId) {
     roomObjectIds.set(roomId, new Set());
     roomPhysicsTimelines.delete(roomId);
+    roomSelectionLocks.clearRoom(roomId);
     rooms.get(roomId)?.forEach(client => { client.sceneReadyEpoch = null; });
   },
 });
@@ -499,12 +502,14 @@ function removeClient(client) {
   const room = rooms.get(client.roomId);
   if (!room) return;
   room.delete(client.id);
+  roomSelectionLocks.leave(client.roomId, client.id);
   if (!room.size) {
     rooms.delete(client.roomId);
     roomLifecycle.remove(client.roomId);
     roomObjectIds.delete(client.roomId);
     roomPhysicsTimelines.delete(client.roomId);
     roomSceneClocks.delete(client.roomId);
+    roomSelectionLocks.clearRoom(client.roomId);
   }
 
   if (client.ipHash) {
@@ -929,6 +934,14 @@ function sendRoomPhysicsTimeline(client, timelineId = null) {
   }
 }
 
+function withSelectionLocks(roomId, payload, senderId) {
+  const room = rooms.get(roomId);
+  roomSelectionLocks.observe(roomId, payload, room?.has(senderId) ? senderId : null);
+  if (payload?.kind !== 'scene-state') return payload;
+  // Replace client-supplied/saved hints with the live room's current owners.
+  return { ...payload, selectionLocks: roomSelectionLocks.snapshot(roomId, payload.objects, id => room?.has(id)) };
+}
+
 function createHandoffMessage(sender, payload) {
   return {
     type: 'handoff',
@@ -938,7 +951,7 @@ function createHandoffMessage(sender, payload) {
       device: sender.device
     },
     sceneEpoch: sender.roomId ? roomLifecycle.snapshot(sender.roomId).epoch : payload?.sceneEpoch,
-    payload: payload || {}
+    payload: withSelectionLocks(sender.roomId, payload || {}, sender.id)
   };
 }
 
@@ -1451,7 +1464,7 @@ async function runRoomBroadcast({ roomId, payload, onBehalfOfUserId = null, send
     type: 'handoff',
     sceneEpoch: rooms.has(roomId) ? roomLifecycle.snapshot(roomId).epoch : undefined,
     from: sender,
-    payload: nextPayload
+    payload: withSelectionLocks(roomId, nextPayload, sender.id)
   };
   peers.forEach(client => safeSend(client.conn, message));
 
@@ -2801,6 +2814,7 @@ function createPresenceServer({
     roomLifecycle.clear();
     rooms.clear();
     roomObjectIds.clear();
+    roomSelectionLocks.clear();
     roomPhysicsTimelines.clear();
     clientsByIpHash.clear();
     importJobs.clear();
