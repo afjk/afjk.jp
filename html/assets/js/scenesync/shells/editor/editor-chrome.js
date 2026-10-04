@@ -89,6 +89,7 @@ export function createEditorChrome(core) {
         addListener(els.clearScene, 'click', menuAction('requestSceneClear')),
         addListener(els.sceneMenu, 'toggle', fitSceneMenu),
         addListener(window, 'resize', fitSceneMenu),
+        addListener(document, 'scene-sync-notice-layout', fitSceneMenu),
         addListener(document, 'pointerdown', event => {
           if (!els.sceneMenu?.contains(event.target)) closeSceneMenu();
         }, true),

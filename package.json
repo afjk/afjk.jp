@@ -48,6 +48,7 @@
     "test:studio-editing": "node --test html/assets/js/scenesync/runtime/scale-drag-guard.test.js html/assets/js/scenesync/runtime/local-add-selection.test.js html/assets/js/scenesync/components/drag-drop-image-intent.test.js",
     "test:e2e:studio": "node scripts/scenesync-studio-browser-smoke.mjs",
     "test:e2e:scene-menus": "node scripts/scenesync-menu-browser-smoke.mjs",
+    "test:e2e:notifications": "node scripts/scenesync-notification-browser-smoke.mjs",
     "test:e2e:play-gizmo": "node scripts/scenesync-play-gizmo-browser-smoke.mjs",
     "dev:web": "node scripts/dev-web.mjs",
     "test:scene-clear": "node --test apps/presence-server/tests/room-lifecycle.test.mjs apps/presence-server/tests/scene-clear-api.test.mjs html/assets/js/scenesync/runtime/scene-lifetime.test.js html/assets/js/scenesync/components/clipboard-import-manager.test.js",

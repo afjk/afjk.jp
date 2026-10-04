@@ -329,6 +329,10 @@ Icons are inline line SVGs defined in an `ICON` map in `studio-shell.js`. State 
 
 `npm run test:e2e:scene-menus` checks both shells on desktop/mobile against local `AFJK_WEB_ORIGIN` and `AFJK_PRESENCE_URL`, saving screenshots and `results.json` to `AFJK_MENU_OUTPUT`. It exercises room sharing, Export/help/privacy destinations, add routes, Player, and repeated shell switching; AI pairing is replaced by a local call counter. Import semantics and clear countdowns remain covered by the Studio and scene-clear browser suites.
 
+Notifications share a region below the visible top controls in Studio, Editor and Player. Clear/restore actions and informational text remain visible together; notices are not deferred while a menu or dialog is open. Menus, selection cards and playback panels use the remaining height and scroll when necessary. Notification text does not intercept pointer input; clear/restore buttons do.
+
+`npm run test:e2e:notifications` uses the same local server variables and writes screenshots plus `results.json` to `AFJK_NOTIFICATION_OUTPUT`. It checks 390×844, 844×390, 320×568 and 568×320 in mobile Chromium: short/multiline messages, the reconnect-required message, open menus, selected Studio objects, Player transport, and real clear cancellation. Rectangles detect text/control overlap even when pointer events pass through. Open menus may intentionally cover background controls; that is recorded separately from notification interception. This is mobile emulation, not a guarantee for every browser, device, text length or accessibility setting.
+
 > Status: experimental design prototype. Visual direction and labels may change based on feedback.
 
 ### Local editing safeguards

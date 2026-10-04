@@ -1,8 +1,15 @@
+import { getNotificationRegion } from './notification-layout.js';
+
 let toastTimer = null;
 
 export function showToast(input, duration = 2500) {
   const el = document.getElementById('toast');
   if (!el) return;
+  const region = getNotificationRegion();
+  if (el.parentElement !== region) region.append(el);
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
+  el.setAttribute('aria-atomic', 'true');
 
   const message = typeof input === 'string'
     ? input

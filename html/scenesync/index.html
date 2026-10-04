@@ -124,6 +124,9 @@
       justify-content: flex-start; font: 14px/1.4 system-ui;
     }
     .editor-scene-menu-panel .chip:hover { background: #ffffff12; }
+    body.scene-sync-notice-active .editor-scene-menu-panel {
+      top: calc(100% + 8px + var(--scene-notice-menu-offset, 0px));
+    }
     .editor-scene-menu-panel hr { border: 0; border-top: 1px solid #57617a; margin: 5px 4px; }
     #editor-scene-clear { color: #f4a3a3; }
     #editor-scene-clear:disabled { opacity: .45; cursor: default; }
@@ -247,23 +250,44 @@
     #drop-overlay.active {
       display: flex;
     }
-    #toast {
+    #scene-notifications {
       position: fixed;
-      bottom: 24px;
+      top: calc(110px + var(--mobile-safe-top));
       left: 50%;
       transform: translateX(-50%);
+      width: min(560px, calc(100vw - 24px));
+      display: grid;
+      gap: 8px;
+      z-index: 12000;
+      pointer-events: none;
+    }
+    #scene-notifications[hidden] { display: none; }
+    #toast {
+      display: none;
       background: rgba(0, 0, 0, 0.8);
       color: #fff;
       padding: 8px 20px;
       border-radius: 8px;
       font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
       pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.3s;
-      z-index: 100;
     }
     #toast.show {
-      opacity: 1;
+      display: block;
+    }
+    body.scene-sync-notice-active .mobile-sheet-panel,
+    body.scene-sync-notice-active .pairing-content,
+    body.scene-sync-notice-active .welcome-content,
+    body.scene-sync-notice-active .export-content {
+      max-height: max(60px, calc(100dvh - var(--scene-notice-bottom) - 24px));
+      overflow-y: auto;
+    }
+    body.scene-sync-notice-active .pairing-dialog,
+    body.scene-sync-notice-active .welcome-dialog,
+    body.scene-sync-notice-active #export-dialog {
+      padding-top: calc(var(--scene-notice-bottom) + 8px);
     }
     #mobile-toolbar {
       position: fixed;
