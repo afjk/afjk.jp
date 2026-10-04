@@ -138,6 +138,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     on('[data-studio-frame]', () => actions.focusSelected());
     on('[data-studio-details]', () => { actions.openInspector(); setMenuOpen(false); });
     on('[data-studio-menu-btn]', () => setMenuOpen(!menuOpen));
+    on('[data-studio-room]', () => { actions.openRoomSettings(); setMenuOpen(false); });
     on('[data-studio-export]', () => { actions.exportScene(); setMenuOpen(false); });
     on('[data-scene-clear]', () => { actions.clearScene(); setMenuOpen(false); });
     on('[data-studio-help]', () => { actions.openHelp(); setMenuOpen(false); });
@@ -209,10 +210,11 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
           <div class="studio-menu-wrap">
             <button class="studio-icon-btn studio-dock-btn" data-studio-menu-btn type="button" title="Menu" aria-label="Menu">${icon('more', 20)}</button>
             <div class="studio-menu" data-studio-menu data-open="false" role="menu">
+              <button class="studio-menu-item" data-studio-room type="button">${icon('link', 18)}<span>ルーム設定</span></button>
+              <button class="studio-menu-item" data-studio-export type="button">${icon('download', 18)}<span>Export（書き出し）</span></button>
+              <button class="studio-menu-item" data-studio-ai type="button">${icon('link', 18)}<span>AIにリンク</span></button>
               <button class="studio-menu-item" data-studio-details type="button">${icon('sliders', 18)}<span>Properties</span></button>
-              <button class="studio-menu-item" data-studio-export type="button">${icon('download', 18)}<span>Export</span></button>
-              <button class="studio-menu-item" data-studio-ai type="button">${icon('link', 18)}<span>AI Link</span></button>
-              <button class="studio-menu-item" data-studio-help type="button">${icon('help', 18)}<span>Help</span></button>
+              <button class="studio-menu-item" data-studio-help type="button">${icon('help', 18)}<span>ヘルプ</span></button>
               <hr class="studio-menu-separator">
               <button class="studio-menu-item studio-menu-danger" data-scene-clear type="button" disabled>${icon('trash', 18)}<span>シーンをクリア</span></button>
             </div>
@@ -232,6 +234,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
 
     unmount() {
       setMenuOpen(false); // document リスナを確実に解除
+      actions?.closeMenuSheets();
       removeStateListener?.();
       removeStateListener = null;
       root?.remove();

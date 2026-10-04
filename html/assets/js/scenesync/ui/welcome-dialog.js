@@ -59,6 +59,7 @@ export class WelcomeDialog {
         </div>
 
         <button id="welcome-close" class="welcome-close-btn" style="display: none;">閉じる</button>
+        <p class="welcome-note"><a class="meta-link" href="/scenesync/privacy/" target="_blank" rel="noopener noreferrer">プライバシーポリシー</a></p>
       </div>
     `;
     return dialog;

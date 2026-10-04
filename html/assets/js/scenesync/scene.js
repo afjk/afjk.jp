@@ -12641,6 +12641,11 @@ function closeMobileRoomSheet() {
   closeSheet('mobile-room-sheet');
 }
 
+function closeMenuSheets() {
+  for (const id of ['mobile-action-sheet', 'mobile-room-sheet', 'mobile-env-sheet']) closeSheet(id);
+  closePasteSheet();
+}
+
 function openAddMenu() {
   if (isMobileUi()) {
     openMobileActionSheet();
@@ -12721,15 +12726,12 @@ const mobileActionSheetCloseBtn = document.getElementById('mobile-action-sheet-c
 const mobileAddImageBtn = document.getElementById('mobile-add-image-btn');
 const mobileAddGlbBtn = document.getElementById('mobile-add-glb-btn');
 const mobilePasteBtn = document.getElementById('mobile-paste-btn');
-const mobileRoomOpenBtn = document.getElementById('mobile-room-open-btn');
 const mobileRoomSheetCloseBtn = document.getElementById('mobile-room-sheet-close');
 const mobileEnvOpenBtn = document.getElementById('mobile-env-open-btn');
 const mobileEnvSheetCloseBtn = document.getElementById('mobile-env-sheet-close');
 const mobileEnvSelect = document.getElementById('mobile-env-select');
 const mobileSetSkyboxBtn = document.getElementById('mobile-set-skybox-btn');
 const mobileDeleteSkyboxBtn = document.getElementById('mobile-delete-skybox-btn');
-const mobileLinkOpenBtn = document.getElementById('mobile-link-open-btn');
-const mobileHelpBtn = document.getElementById('mobile-help-btn');
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 const mediaUrlBtn = document.getElementById('media-url-btn');
 const mobileAddMediaUrlBtn = document.getElementById('mobile-add-media-url-btn');
@@ -12897,10 +12899,6 @@ mobileSkyboxImageInput?.addEventListener('change', async (event) => {
     }
   }
 });
-mobileRoomOpenBtn?.addEventListener('click', () => {
-  closeMobileActionSheet();
-  openMobileRoomSheet();
-});
 mobileRoomSheetCloseBtn?.addEventListener('click', closeMobileRoomSheet);
 mobileEnvOpenBtn?.addEventListener('click', () => {
   if (mobileEnvSelect && dom.envSelect) {
@@ -12929,6 +12927,10 @@ document.querySelectorAll('[data-mobile-sheet-close]').forEach((el) => {
     if (target === 'room') closeMobileRoomSheet();
     if (target === 'env') closeSheet('mobile-env-sheet');
   });
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.querySelector('.mobile-sheet:not([hidden])')) closeMenuSheets();
 });
 
 mobileEnvSelect?.addEventListener('change', () => {
@@ -15771,7 +15773,7 @@ function updateLinkButtonState() {
 
 function updateMobileDevVisibility() {
   if (!mobileDevOpenBtn) return;
-  mobileDevOpenBtn.hidden = !isDevUiEnabled();
+  mobileDevOpenBtn.hidden = !isMobileUi() || !isDevUiEnabled();
 }
 
 btnCancelPairing?.addEventListener('click', cancelPairing);
@@ -16158,6 +16160,8 @@ nicknameChip?.addEventListener('click', editNickname);
 mountSceneSyncShellFromDom({
   commands: {
     openAddMenu,
+    openRoomSettings: openMobileRoomSheet,
+    closeMenuSheets,
     undo: () => {
       if (presenceState.historyManager.canUndo()) performUndo();
     },

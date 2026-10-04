@@ -31,6 +31,12 @@ export function createStudioActions(core) {
     openInspector() {
       core?.commands?.openSceneInspector?.();
     },
+    openRoomSettings() {
+      core?.commands?.openRoomSettings?.();
+    },
+    closeMenuSheets() {
+      core?.commands?.closeMenuSheets?.();
+    },
     exportScene() {
       core?.commands?.exportScene?.();
     },
