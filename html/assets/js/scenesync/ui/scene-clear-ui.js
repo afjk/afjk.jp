@@ -1,21 +1,16 @@
-export function createSceneClearUi({ THREE, scene, request, cancel, now = Date.now }) {
+export function createSceneClearUi({ THREE, scene, request, cancel, onAvailabilityChange = () => {}, now = Date.now }) {
   const style = document.createElement('style');
   style.textContent = `
-    #scene-clear-button{position:fixed;right:12px;bottom:calc(80px + env(safe-area-inset-bottom));z-index:85;border:1px solid #57617a;border-radius:12px;background:#172033ed;color:#fff;padding:10px 14px;font:13px system-ui;min-height:44px}
     #scene-clear-notice{position:fixed;left:50%;top:calc(70px + env(safe-area-inset-top));transform:translateX(-50%);z-index:12000;width:min(360px,calc(100vw - 24px));box-sizing:border-box;background:#172033;color:#fff;border:1px solid #8e9bb5;border-radius:16px;padding:18px;box-shadow:0 8px 36px #0008;font:15px/1.6 system-ui}
     #scene-clear-notice[hidden]{display:none}#scene-clear-notice p{margin:0 0 12px;overflow-wrap:anywhere}#scene-clear-notice button{min-height:44px;padding:9px 18px;border:0;border-radius:10px;font:inherit;margin-right:8px;background:#e8edf8;color:#172033}
-    body.scenesync-xr #scene-clear-button{display:none}
   `;
   document.head.append(style);
-  const button = document.createElement('button');
-  button.id = 'scene-clear-button'; button.textContent = 'シーンをクリア';
-  button.disabled = true; button.addEventListener('click', () => request());
   const notice = document.createElement('section');
   notice.id = 'scene-clear-notice'; notice.hidden = true; notice.setAttribute('role', 'status');
   const text = document.createElement('p');
   const actions = document.createElement('div');
-  notice.append(text, actions); document.body.append(button, notice);
-  let pending = null, restore = null, offset = 0, lastLabel = '';
+  notice.append(text, actions); document.body.append(notice);
+  let ready = false, pending = null, restore = null, offset = 0, lastLabel = '';
   const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 384;
   const texture = new THREE.CanvasTexture(canvas);
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.3, .49), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
@@ -53,10 +48,13 @@ export function createSceneClearUi({ THREE, scene, request, cancel, now = Date.n
     else if (restore) finishRestore(false);
   }, true);
   return {
-    setReady(ready) { button.disabled = !ready || !!pending; },
+    canRequest: () => ready && !pending,
+    requestClear() { if (ready && !pending) request(); },
+    setReady(next) { ready = next; onAvailabilityChange(); },
     setPending(next, serverTime) {
       if (restore && next) finishRestore(false);
       pending = next; lastLabel = ''; offset = Number.isFinite(serverTime) ? serverTime - now() : offset;
+      onAvailabilityChange();
       if (!restore) { notice.hidden = !next; actions.replaceChildren(); }
       if (next) { action('キャンセル', cancelPending, 'cancel-clear'); render(); }
     },

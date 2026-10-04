@@ -329,6 +329,10 @@
 }
 .studio-menu-item .studio-ic { color: var(--s-muted); }
 .studio-menu-item:hover { background: var(--s-raised-hover); }
+.studio-menu-separator { border: 0; border-top: 1px solid var(--s-border); margin: 5px 4px; }
+.studio-menu-danger, .studio-menu-danger .studio-ic { color: #f4a3a3; }
+.studio-menu-item[data-scene-clear] { min-height: 44px; white-space: nowrap; }
+.studio-menu-item:disabled { opacity: .45; cursor: default; }
 
 /* ── Mobile 調整 ─────────────────────────────────────── */
 @media (max-width: 560px) {

@@ -66,6 +66,8 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     const redoBtn = root.querySelector('[data-studio-redo]');
     if (undoBtn) undoBtn.disabled = !s.canUndo;
     if (redoBtn) redoBtn.disabled = !s.canRedo;
+    const clearBtn = root.querySelector('[data-scene-clear]');
+    if (clearBtn) clearBtn.disabled = !s.canClearScene;
 
     const hint = root.querySelector('[data-studio-hint]');
     if (hint) hint.dataset.show = String((s.objectCount || 0) === 0);
@@ -137,6 +139,7 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
     on('[data-studio-details]', () => { actions.openInspector(); setMenuOpen(false); });
     on('[data-studio-menu-btn]', () => setMenuOpen(!menuOpen));
     on('[data-studio-export]', () => { actions.exportScene(); setMenuOpen(false); });
+    on('[data-scene-clear]', () => { actions.clearScene(); setMenuOpen(false); });
     on('[data-studio-help]', () => { actions.openHelp(); setMenuOpen(false); });
     on('[data-studio-ai]', () => { actions.startAiLink(); setMenuOpen(false); });
   }
@@ -210,6 +213,8 @@ export function createSceneSyncShell({ id = 'studio', requestedId = 'studio', av
               <button class="studio-menu-item" data-studio-export type="button">${icon('download', 18)}<span>Export</span></button>
               <button class="studio-menu-item" data-studio-ai type="button">${icon('link', 18)}<span>AI Link</span></button>
               <button class="studio-menu-item" data-studio-help type="button">${icon('help', 18)}<span>Help</span></button>
+              <hr class="studio-menu-separator">
+              <button class="studio-menu-item studio-menu-danger" data-scene-clear type="button" disabled>${icon('trash', 18)}<span>シーンをクリア</span></button>
             </div>
           </div>
         </div>

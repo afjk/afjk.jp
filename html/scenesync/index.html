@@ -107,6 +107,27 @@
     .chip.primary:hover { background: rgba(68,136,255,0.8); }
     .chip.active { background: rgba(68,136,255,0.7); }
     .chip.active:hover { background: rgba(68,136,255,0.9); }
+    #editor-scene-menu { position: relative; }
+    #editor-scene-menu summary { list-style: none; min-height: 36px; }
+    #editor-scene-menu summary::-webkit-details-marker { display: none; }
+    .editor-scene-menu-mobile-label { display: none; }
+    .editor-scene-menu-panel {
+      position: absolute; top: calc(100% + 8px); left: 0; z-index: 90;
+      width: min(220px, calc(100vw - 24px)); padding: 6px;
+      border: 1px solid #57617a; border-radius: 12px;
+      background: #172033; box-shadow: 0 8px 28px #0006;
+    }
+    .editor-scene-menu-panel .chip {
+      width: 100%; min-height: 44px; background: transparent;
+      justify-content: flex-start; font: 14px/1.4 system-ui;
+    }
+    .editor-scene-menu-panel .chip:hover { background: #ffffff12; }
+    .editor-scene-menu-panel hr { border: 0; border-top: 1px solid #57617a; margin: 5px 4px; }
+    #editor-scene-clear { color: #f4a3a3; }
+    #editor-scene-clear:disabled { opacity: .45; cursor: default; }
+    body.scene-sync-device-mobile #editor-scene-menu summary { min-width: 44px; min-height: 44px; justify-content: center; }
+    body.scene-sync-device-mobile .editor-scene-menu-label { display: none; }
+    body.scene-sync-device-mobile .editor-scene-menu-mobile-label { display: inline; font-size: 22px; }
     select.chip {
       appearance: auto;
       cursor: pointer;
@@ -1486,11 +1507,20 @@
         <span id="link-label">AIにリンク</span>
       </button>
     </div>
-    <div class="row mobile-collapsible-row">
-      <button id="export-btn" class="chip" type="button" title="Export scene as ZIP">
-        <span>⬇</span>
-        <span>Export</span>
-      </button>
+    <div class="row">
+      <details id="editor-scene-menu">
+        <summary class="chip" aria-label="シーンメニュー">
+          <span class="editor-scene-menu-label">シーン ▾</span>
+          <span class="editor-scene-menu-mobile-label" aria-hidden="true">…</span>
+        </summary>
+        <div class="editor-scene-menu-panel">
+          <button id="export-btn" class="chip" type="button" title="Export scene as ZIP">
+            <span>⬇</span><span>Export</span>
+          </button>
+          <hr>
+          <button id="editor-scene-clear" class="chip" data-scene-clear type="button" disabled>シーンをクリア</button>
+        </div>
+      </details>
     </div>
     <div class="row mobile-collapsible-row">
       <button id="scene-inspector-toggle" class="chip" type="button" title="Scene Inspector を開く">
