@@ -139,6 +139,9 @@ OpenAPI 定義:
 ```
 
 `scene-state` は、単なる transform だけでなく、復元に必要な asset metadata も保持する。
+Presence は WebSocket へ `scene-state` を中継するときに、現在の接続の選択ロックを optional な `selectionLocks` map（`objectId: ownerConnectionId`）として付与する。クライアントが送った同フィールドは採用しない。HTTP scene API の応答形式は変更しない。シーンファイルへの永続化対象ではなく、解除・退出・削除・シーンクリアで破棄する。
+Web は復元が完了した object と現在の peer に限って適用し、復元中に届いた live lock / unlock を後から反映する。古い scene 世代の応答や読み込み完了は復元しない。
+追加フィールドを送らない Unity / Godot / Unreal の応答も Presence が補完する。既存のそれらの受信実装は追加フィールドを無視するため、シーン受信形式は互換だが、非Web側自身の後参加ロック復元はこのWeb修正の対象外。旧Presenceとの接続は従来動作のままで、復元改善には新Presenceと新Webの両方が必要。
 特に Unity 由来 GLB では `asset.visualBasis` を落としてはいけない。詳細は [座標系と visualBasis](./scene-sync-coordinate-system.md) を参照。
 
 Unity が publish した `origin: "unity"` object は Unity Hierarchy 上の既存 `GameObject` が実体を管理する。Unity client は受信時に `objectId`、`unityHierarchyPath`、最後に一意な `name` の順で既存 object を解決し、見つかった場合は新規 object を生成せずその object に transform / metadata を反映する。
@@ -209,6 +212,8 @@ Unity Editor 由来 object の削除挙動は Web と異なる。Unity Editor �
   "objectId": "obj-001"
 }
 ```
+
+選択ロックは既存の共同編集用ヒントであり、同時取得のサーバー調停やアクセス権限を追加するものではない。`npm run test:selection-locks` とローカルサーバー向け `npm run test:e2e:selection-locks` で復元と寿命を確認できる。
 
 ### `scene-request`
 
