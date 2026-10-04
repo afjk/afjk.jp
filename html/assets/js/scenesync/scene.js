@@ -140,6 +140,9 @@ import { buildAutoExport } from '../scenesync-export/export/build-auto-export.js
 import { formatEstimatedBytes, mergeMissingAssetWarning } from '../scenesync-export/export/auto-export-format.js';
 import { restoreSelectionLocks } from './runtime/selection-locks.js';
 
+import { createSkyboxSwapController, skyboxReplacementInBatch } from './runtime/skybox-swap.js';
+
+const skyboxSwap = createSkyboxSwapController();
 const sceneLifetime = createSceneLifetime();
 let sceneRoomEpoch = null;
 let sceneRoomCleared = false;
@@ -174,6 +177,7 @@ function sceneObjectWorkCurrent(info) {
   return !info?._sceneWork || sceneLifetime.current(info._sceneWork);
 }
 function markSceneNotReady() {
+  skyboxSwap.cancel();
   sceneSyncReady = false;
   sceneRoomUi?.setReady(false);
   sceneRoomUi?.cancelRestore();
@@ -206,6 +210,7 @@ function finishSceneRecovery() {
 
 // Clear content only. Keep room, camera, XR, environment, scene BGM and settings.
 function clearSceneObjects(reason = 'scene-cleared') {
+  skyboxSwap.cancel();
   sceneSyncReady = false;
   sceneRoomUi?.setReady(false);
   sceneLifetime.invalidate();
@@ -412,6 +417,7 @@ function updateEnvironmentMenuSkyboxControls() {
 }
 
 function removeSkyboxSpheres() {
+  skyboxSwap.cancel();
   const skyObjects = getSkySphereObjects();
 
   if (skyObjects.length === 0) {
@@ -3203,6 +3209,8 @@ function showTemporaryImagePreview(objectId, file, position, options = {}) {
   if (!objectId || !file) return;
 
   removeTemporaryImagePreview(objectId);
+  // Keep the displayed panorama throughout the next image's build/upload/load.
+  if (options.targetKind === 'sky' && getSkySphereObjects().length > 0) return;
 
   const entry = {
     object: null,
@@ -5112,6 +5120,9 @@ function deleteObjectById(objectId, options = {}) {
     ignoreLock = false,
   } = options;
   const attached = managedObjects.get(objectId);
+  if (!options.preserveSkyboxSwap && (objectId?.startsWith('sky-') || isSkySphereThreeObject(attached))) {
+    skyboxSwap.cancel();
+  }
   if (!attached) {
     selectedObjectIds.delete(objectId);
     removeSelectionHelper(objectId);
@@ -8297,6 +8308,18 @@ function handleHandoff(data) {
     }
     case 'scene-batch': {
       const batchOps = collectSceneBatchOperations(payload);
+      const skybox = skyboxReplacementInBatch(batchOps);
+      if (skybox) {
+        if (!isOwn) {
+          void applySkyboxReplacement(skybox).then(oldPayloads => {
+            if (shouldTrackHistory && isOnBehalfOf) {
+              presenceState.historyManager.push(createReplaceSkyboxBatchEntry(oldPayloads, skybox));
+            }
+            publishSharedObjectClockBaselines('skybox-replaced');
+          }).catch(reportSkyboxSwapFailure);
+        }
+        break;
+      }
       if (!Array.isArray(batchOps)) {
         console.warn('[scene-batch] invalid ops', payload);
         notifySceneStateChanged('scene-batch-handoff');
@@ -9933,7 +9956,11 @@ function loadMeshObject(objectId, info, meshPath, existing, options = {}) {
           URL.revokeObjectURL(objectUrl);
           return;
         }
-        if (options.strictLoad) throw err;
+        if (options.strictLoad) {
+          loadCompleted = true;
+          URL.revokeObjectURL(objectUrl);
+          throw err;
+        }
         if (!existing && !skipFallbackOnFailure) {
           replaceManagedObject(objectId, buildDefaultBoxObject(objectId, info, 0xff4444), info);
         } else if (!suppressSnapshotSaveOnFailure) {
@@ -11262,6 +11289,11 @@ function applyOperationToScene(operation) {
     }
     case 'scene-batch': {
       const batchOps = operation.ops ?? operation.actions;
+      const skybox = skyboxReplacementInBatch(batchOps);
+      if (skybox) {
+        void applySkyboxReplacement(skybox).catch(reportSkyboxSwapFailure);
+        break;
+      }
       if (!Array.isArray(batchOps)) break;
       for (const action of batchOps) {
         if (!action || action.kind === 'scene-batch') continue;
@@ -11678,41 +11710,72 @@ async function uploadCarrierGlb(arrayBuffer) {
 
 // Skybox管理のためのヘルパー関数
 
-function applySceneActionLocally(action, options = {}) {
-  if (!action) return;
+function reportSkyboxSwapFailure(error) {
+  if (error?.name === 'AbortError') return;
+  console.warn('[skybox-swap] failed; keeping previous background:', error);
+  showToast(getSkySphereObjects().length > 0
+    ? '背景画像を読み込めませんでした。前の背景を保持しています'
+    : '背景画像を読み込めませんでした');
+}
 
-  if (action.kind === 'scene-add') {
-    addOrUpdateObject(action.objectId, action, options);
-    return;
-  }
-
-  if (action.kind === 'scene-remove') {
-    deleteObjectById(action.objectId, {
-      broadcastDelete: false,
-      pushHistory: false,
-      notifyScene: false,
-    });
-    loomIntegration.clearObjectGraph(action.objectId);
-    updateEnvironmentMenuSkyboxControls();
-    notifySceneStateChanged('local-scene-remove');
-    return;
-  }
-
-  if (action.kind === 'scene-physics') {
-    applyScenePhysics(action.physics || { enabled: false }, {
-      notify: false,
-      reason: 'local-scene-physics',
-    });
-    notifySceneStateChanged('local-scene-physics');
-    return;
-  }
-
-  if (action.kind === 'scene-batch') {
-    for (const child of action.actions || []) {
-      const childOptions = child.kind === 'scene-add' ? options : {};
-      applySceneActionLocally(child, childOptions);
+async function applySkyboxReplacement(payload, { swapRequest = skyboxSwap.begin(), previewObjectId } = {}) {
+  const sceneToken = sceneLifetime.capture();
+  const assertCurrent = () => { skyboxSwap.assert(swapRequest); sceneLifetime.assert(sceneToken); };
+  const oldPayloads = getSkySpherePayloads();
+  const existing = managedObjects.get(payload.objectId);
+  let candidate = null;
+  const cleanupPreview = () => {
+    if (previewObjectId) {
+      removeTemporaryImagePreview(previewObjectId);
+      removeLoadingOverlay(previewObjectId);
     }
-    return;
+  };
+  swapRequest.signal.addEventListener('abort', cleanupPreview, { once: true });
+  try {
+    return await skyboxSwap.run(swapRequest, async signal => {
+      assertCurrent();
+      // Undo can target the still-visible background while a replacement loads.
+      if (existing?.visible && existing.userData?.asset?.meshPath === payload.asset?.meshPath) {
+        return existing;
+      }
+      await addOrUpdateObject(payload.objectId, { ...payload, visible: false }, {
+        strictLoad: true,
+        signal,
+        previewObjectId,
+        beforeCommit: (_id, model) => { assertCurrent(); candidate = model; },
+      });
+      assertCurrent();
+      if (!candidate || managedObjects.get(payload.objectId) !== candidate) {
+        throw new Error('Skybox load did not produce a renderable object');
+      }
+      return candidate;
+    }, loaded => {
+      assertCurrent();
+      // No await between revealing the ready texture and disposing the old sky.
+      applyObjectVisibility(loaded, payload.visible ?? true);
+      for (const old of getSkySphereObjects()) {
+        if (old.objectId === payload.objectId) continue;
+        deleteObjectById(old.objectId, {
+          broadcastDelete: false, pushHistory: false, notifyScene: false,
+          ignoreLock: true, preserveSkyboxSwap: true,
+        });
+        loomIntegration.clearObjectGraph(old.objectId);
+      }
+      updateEnvironmentMenuSkyboxControls();
+      notifySceneStateChanged('skybox-replaced');
+      return oldPayloads;
+    }, () => {
+      // Never discard a newer request's model (or the old, still-visible sky).
+      if (candidate && candidate !== existing && managedObjects.get(payload.objectId) === candidate) {
+        deleteObjectById(payload.objectId, {
+          broadcastDelete: false, pushHistory: false, notifyScene: false,
+          ignoreLock: true, preserveSkyboxSwap: true,
+        });
+      }
+    });
+  } finally {
+    swapRequest.signal.removeEventListener('abort', cleanupPreview);
+    cleanupPreview();
   }
 }
 
@@ -11828,37 +11891,34 @@ function createReplaceSkyboxBatchEntry(oldSkyboxPayloads, newSkyboxPayload) {
 }
 
 async function replaceSkyboxSphereFromBlob(blob, sourceName = 'skybox', context = {}) {
-  const _sceneTask = sceneLifetime.capture();
-  const oldSkyboxPayloads = getSkySpherePayloads();
-  const newSkyboxPayload = await sceneAwait(createSkyboxSpherePayloadFromBlob(blob, sourceName, context), _sceneTask);
-
-  const batchEntry = createReplaceSkyboxBatchEntry(
-    oldSkyboxPayloads,
-    newSkyboxPayload
-  );
-
-  // ローカルに適用
-  applySceneActionLocally(batchEntry.forward, { previewObjectId: context.tempObjectId });
-
-  // リモートに同期
-  broadcast(batchEntry.forward);
-
-  // Undoに登録
-  presenceState.historyManager.push(batchEntry);
-
-  updateEnvironmentMenuSkyboxControls();
-  notifySceneStateChanged('skybox-replaced');
-
-  showToast(
-    oldSkyboxPayloads.length > 0
-      ? 'Skyboxを置き換えました'
-      : 'Skyboxを追加しました'
-  );
-
-  return {
-    objectId: newSkyboxPayload.objectId,
-    payload: newSkyboxPayload,
+  // Capture intent before building/uploading: completion order is not intent order.
+  const swapRequest = skyboxSwap.begin();
+  const sceneToken = sceneLifetime.capture();
+  const cleanupPreview = () => {
+    if (context.tempObjectId) {
+      removeTemporaryImagePreview(context.tempObjectId);
+      removeLoadingOverlay(context.tempObjectId);
+    }
   };
+  swapRequest.signal.addEventListener('abort', cleanupPreview, { once: true });
+  try {
+    const payload = await sceneAwait(createSkyboxSpherePayloadFromBlob(blob, sourceName, context), sceneToken);
+    skyboxSwap.assert(swapRequest);
+    const oldPayloads = await applySkyboxReplacement(payload, { swapRequest, previewObjectId: context.tempObjectId });
+    skyboxSwap.assert(swapRequest);
+    sceneLifetime.assert(sceneToken);
+    const batchEntry = createReplaceSkyboxBatchEntry(oldPayloads, payload);
+    broadcast(batchEntry.forward);
+    presenceState.historyManager.push(batchEntry);
+    showToast(oldPayloads.length > 0 ? 'Skyboxを置き換えました' : 'Skyboxを追加しました');
+    return { objectId: payload.objectId, payload };
+  } catch (error) {
+    if (swapRequest.signal.aborted) skyboxSwap.assert(swapRequest);
+    throw error;
+  } finally {
+    swapRequest.signal.removeEventListener('abort', cleanupPreview);
+    cleanupPreview();
+  }
 }
 
 function getOptimizedImageOutputFormat(file) {
@@ -12902,8 +12962,8 @@ mobileSkyboxImageInput?.addEventListener('change', async (event) => {
       closeSheet('mobile-env-sheet');
     }
   } catch (error) {
-    console.warn('[mobile-skybox-input] failed to set skybox:', error);
-    showToast(error?.message || '背景画像の設定に失敗しました');
+    if (error?.name === 'AbortError') return;
+    reportSkyboxSwapFailure(error);
     if (tempObjectId) {
       removeTemporaryImagePreview(tempObjectId);
       removeLoadingOverlay(tempObjectId);
