@@ -54,7 +54,9 @@
     "test:e2e:play-gizmo": "node scripts/scenesync-play-gizmo-browser-smoke.mjs",
     "dev:web": "node scripts/dev-web.mjs",
     "test:scene-clear": "node --test apps/presence-server/tests/room-lifecycle.test.mjs apps/presence-server/tests/scene-clear-api.test.mjs html/assets/js/scenesync/runtime/scene-lifetime.test.js html/assets/js/scenesync/components/clipboard-import-manager.test.js",
-    "test:e2e:scene-clear": "node scripts/scenesync-clear-browser-smoke.mjs"
+    "test:e2e:scene-clear": "node scripts/scenesync-clear-browser-smoke.mjs",
+    "test:skybox-swap": "node --test html/assets/js/scenesync/runtime/skybox-swap.test.js",
+    "test:e2e:skybox-swap": "node scripts/scenesync-skybox-swap-browser-smoke.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.3.0",
