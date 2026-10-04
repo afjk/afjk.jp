@@ -314,16 +314,20 @@ html/assets/js/scenesync/shells/studio/
 
 ### Design direction
 
-Soft-modern (Apple/Notion-like): dark neutral glass surfaces, a single calm-blue accent, thin line (SVG) icons, restrained motion, single-layer shadows. English labels (kept short) — chosen over hiragana to avoid a childish tone.
+Soft-modern (Apple/Notion-like): dark neutral glass surfaces, a single calm-blue accent, thin line (SVG) icons, restrained motion, single-layer shadows. Editing tools keep short English labels. Shared room/help/AI menu labels follow the existing Japanese dialogs in both Editor and Studio; established names such as Export, Properties, and Player remain recognizable.
 
 ### UI
 
 - **Mode pill (top center)**: `✎ Edit | ▷ Play` — always shows the current Edit/Interact mode (`setInputRoutingMode`). Active segment uses a soft accent fill + thin border (not a solid block).
 - **Selection card (appears when something is selected)**: object name, a 3-way tool toggle `Move / Rotate / Scale` with line icons (highlights `transformMode`), `Duplicate` (single-selection only), `Delete` (soft red), `✕` deselect, and `Details ›` → Scene Inspector.
-- **Bottom dock (always visible)**: rounded-square `undo / redo` (disabled per `canUndo/canRedo`), a central calm-blue circular `+` (Add, primary CTA), and a `⋯` menu popover (Properties / Export / AI Link / Help).
+- **Bottom dock (always visible)**: rounded-square `undo / redo` (disabled per `canUndo/canRedo`), a central calm-blue circular `+` (Add, primary CTA), and a `⋯` menu popover (ルーム設定 / Export（書き出し） / AIにリンク / Properties / ヘルプ / シーンをクリア). Room settings puts the share URL within one more tap. Properties continues to open the advanced Scene Inspector.
+- **Mobile + sheet (shared with Editor)**: image, file, URL, clipboard, and background only. Desktop + retains its direct file picker. Export/AI/help use the shell menu rather than duplicate mobile handlers. Privacy is reachable from Help, including Studio. Editor keeps Player (mobile menu / desktop settings) and Dev (mobile menu with `dev=1` / desktop settings).
+- Menus close on outside taps or Escape. Shared add/room/background/paste sheets close when leaving a shell, and menus scroll within the viewport on short screens.
 - **Empty-state hint**: when `objectCount === 0`, a subtle neutral chip above the `+` ("Tap + to add") fades in to invite the first action (no bounce/pulse).
 
 Icons are inline line SVGs defined in an `ICON` map in `studio-shell.js`. State is read via `core.getEditorState()` and the panel re-renders on `core.onStateChange`. All actions go through `core.commands` (no direct scene mutation).
+
+`npm run test:e2e:scene-menus` checks both shells on desktop/mobile against local `AFJK_WEB_ORIGIN` and `AFJK_PRESENCE_URL`, saving screenshots and `results.json` to `AFJK_MENU_OUTPUT`. It exercises room sharing, Export/help/privacy destinations, add routes, Player, and repeated shell switching; AI pairing is replaced by a local call counter. Import semantics and clear countdowns remain covered by the Studio and scene-clear browser suites.
 
 > Status: experimental design prototype. Visual direction and labels may change based on feedback.
 

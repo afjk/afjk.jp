@@ -22,7 +22,11 @@ export function createEditorChrome(core) {
     btnUndo: document.getElementById('btn-undo'),
     btnRedo: document.getElementById('btn-redo'),
     sceneMenu: document.getElementById('editor-scene-menu'),
+    roomSettings: document.getElementById('editor-room-open-btn'),
     exportScene: document.getElementById('export-btn'),
+    aiLink: document.getElementById('link-btn'),
+    help: document.getElementById('help-btn'),
+    mobileDev: document.getElementById('mobile-dev-open-btn'),
     clearScene: document.getElementById('editor-scene-clear'),
   };
 
@@ -59,19 +63,32 @@ export function createEditorChrome(core) {
 
   function closeSceneMenu() { if (els.sceneMenu) els.sceneMenu.open = false; }
 
+  function fitSceneMenu() {
+    if (!els.sceneMenu?.open) return;
+    const panel = els.sceneMenu.querySelector('.editor-scene-menu-panel');
+    if (panel) panel.style.maxHeight = `${Math.max(80, window.innerHeight - panel.getBoundingClientRect().top - 12)}px`;
+  }
+
+  function menuAction(command) {
+    return () => {
+      closeSceneMenu();
+      core?.commands?.[command]?.();
+    };
+  }
+
   return {
     mount() {
       disposers.push(
         addListener(els.btnUndo, 'click', () => core?.commands?.undo?.()),
         addListener(els.btnRedo, 'click', () => core?.commands?.redo?.()),
-        addListener(els.exportScene, 'click', () => {
-          closeSceneMenu();
-          core?.commands?.exportScene?.();
-        }),
-        addListener(els.clearScene, 'click', () => {
-          closeSceneMenu();
-          core?.commands?.requestSceneClear?.();
-        }),
+        addListener(els.roomSettings, 'click', menuAction('openRoomSettings')),
+        addListener(els.exportScene, 'click', menuAction('exportScene')),
+        addListener(els.aiLink, 'click', menuAction('startAiLink')),
+        addListener(els.help, 'click', menuAction('openHelp')),
+        addListener(els.mobileDev, 'click', menuAction('toggleSceneInspector')),
+        addListener(els.clearScene, 'click', menuAction('requestSceneClear')),
+        addListener(els.sceneMenu, 'toggle', fitSceneMenu),
+        addListener(window, 'resize', fitSceneMenu),
         addListener(document, 'pointerdown', event => {
           if (!els.sceneMenu?.contains(event.target)) closeSceneMenu();
         }, true),
@@ -87,6 +104,7 @@ export function createEditorChrome(core) {
     },
     unmount() {
       closeSceneMenu();
+      core?.commands?.closeMenuSheets?.();
       if (els.clearScene) els.clearScene.disabled = true;
       removeStateListener?.();
       removeStateListener = null;

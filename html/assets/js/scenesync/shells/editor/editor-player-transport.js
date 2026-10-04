@@ -42,10 +42,11 @@ function insertDesktopToggle(button) {
 }
 
 function insertMobileToggle(button) {
-  const actions = document.querySelector('#mobile-action-sheet .mobile-sheet-actions');
+  const actions = document.querySelector('#editor-scene-menu .editor-scene-menu-panel');
   if (!actions) return null;
 
-  const before = document.getElementById('mobile-export-btn');
+  button.hidden = !document.body.classList.contains('scene-sync-device-mobile');
+  const before = document.getElementById('help-btn');
   if (before?.parentElement === actions) {
     actions.insertBefore(button, before);
   } else {
@@ -112,7 +113,8 @@ export function createEditorPlayerTransport() {
       disposers.push(
         addListener(desktopButton, 'click', () => toggle(core)),
         addListener(mobileButton, 'click', () => {
-          core?.commands?.closeMobileActionSheet?.();
+          const sceneMenu = document.getElementById('editor-scene-menu');
+          if (sceneMenu) sceneMenu.open = false;
           toggle(core);
         }),
         addListener(document, 'keydown', (event) => {

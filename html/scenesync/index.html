@@ -108,6 +108,7 @@
     .chip.active { background: rgba(68,136,255,0.7); }
     .chip.active:hover { background: rgba(68,136,255,0.9); }
     #editor-scene-menu { position: relative; }
+    #settings-panel:has(#editor-scene-menu[open]) { z-index: 90; }
     #editor-scene-menu summary { list-style: none; min-height: 36px; }
     #editor-scene-menu summary::-webkit-details-marker { display: none; }
     .editor-scene-menu-mobile-label { display: none; }
@@ -116,6 +117,7 @@
       width: min(220px, calc(100vw - 24px)); padding: 6px;
       border: 1px solid #57617a; border-radius: 12px;
       background: #172033; box-shadow: 0 8px 28px #0006;
+      max-height: calc(100dvh - 160px); overflow-y: auto;
     }
     .editor-scene-menu-panel .chip {
       width: 100%; min-height: 44px; background: transparent;
@@ -907,6 +909,13 @@
       color: #fff;
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
+      max-height: calc(100dvh - 24px);
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    body.scene-sync-device-desktop .mobile-sheet-panel {
+      max-width: 480px;
+      margin-inline: auto;
     }
     .mobile-sheet-handle {
       width: 44px;
@@ -1501,12 +1510,6 @@
         <span>メディアURL</span>
       </button>
     </div>
-    <div class="row mobile-collapsible-row">
-      <button id="link-btn" class="chip" type="button" title="AI とリンク">
-        <span id="link-icon">🔗</span>
-        <span id="link-label">AIにリンク</span>
-      </button>
-    </div>
     <div class="row">
       <details id="editor-scene-menu">
         <summary class="chip" aria-label="シーンメニュー">
@@ -1514,9 +1517,15 @@
           <span class="editor-scene-menu-mobile-label" aria-hidden="true">…</span>
         </summary>
         <div class="editor-scene-menu-panel">
+          <button id="editor-room-open-btn" class="chip" type="button">ルーム設定</button>
           <button id="export-btn" class="chip" type="button" title="Export scene as ZIP">
-            <span>⬇</span><span>Export</span>
+            <span>⬇</span><span>Export（書き出し）</span>
           </button>
+          <button id="link-btn" class="chip" type="button" title="AI とリンク">
+            <span id="link-icon">🔗</span><span id="link-label">AIにリンク</span>
+          </button>
+          <button id="help-btn" class="chip" type="button" title="ヘルプを表示">ヘルプ</button>
+          <button id="mobile-dev-open-btn" class="chip" type="button" hidden>Dev</button>
           <hr>
           <button id="editor-scene-clear" class="chip" data-scene-clear type="button" disabled>シーンをクリア</button>
         </div>
@@ -1527,15 +1536,8 @@
         <span>🛠</span>
         <span>Dev</span>
       </button>
-      <button id="help-btn" class="chip" type="button" title="ヘルプを表示">
-        <span>?</span>
-        <span>ヘルプ</span>
-      </button>
     </div>
     <div class="row mobile-collapsible-row" id="room-section"></div>
-    <div class="row meta-link-row mobile-collapsible-row">
-      <a class="meta-link" href="/scenesync/privacy/">プライバシーポリシー</a>
-    </div>
   </div>
 
   <!-- グローバルモーダル: #settings-panel を隠す shell でも表示できるよう外出し -->
@@ -1925,13 +1927,7 @@
         <button id="mobile-add-glb-btn" class="chip" type="button">ファイルを追加</button>
         <button id="mobile-add-media-url-btn" class="chip" type="button">URLを追加（メディア / SuperSplat）</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
-        <button id="mobile-room-open-btn" class="chip" type="button">ルーム設定</button>
         <button id="mobile-env-open-btn" class="chip" type="button">背景</button>
-        <button id="mobile-export-btn" class="chip" type="button">Export</button>
-        <button id="mobile-link-open-btn" class="chip" type="button">AIにリンク</button>
-        <button id="mobile-help-btn" class="chip" type="button">ヘルプ</button>
-        <button id="mobile-dev-open-btn" class="chip" type="button" hidden>Dev</button>
-        <a class="chip" href="/scenesync/privacy/">プライバシーポリシー</a>
       </div>
     </div>
   </div>
@@ -1940,7 +1936,7 @@
     <div class="mobile-sheet-panel">
       <div class="mobile-sheet-handle"></div>
       <div class="mobile-sheet-header">
-        <h2>ルーム</h2>
+        <h2>ルーム設定</h2>
         <button id="mobile-room-sheet-close" class="chip" type="button">閉じる</button>
       </div>
       <div id="mobile-room-actions" class="mobile-sheet-actions"></div>
