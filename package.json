@@ -51,6 +51,8 @@
     "test:e2e:scene-menus": "node scripts/scenesync-menu-browser-smoke.mjs",
     "test:e2e:notifications": "node scripts/scenesync-notification-browser-smoke.mjs",
     "test:e2e:url-input": "node scripts/scenesync-url-input-browser-smoke.mjs",
+    "test:selection-locks": "node --test apps/presence-server/tests/selection-locks.test.mjs html/assets/js/scenesync/runtime/selection-locks.test.js",
+    "test:e2e:selection-locks": "node scripts/scenesync-selection-locks-browser-smoke.mjs",
     "test:e2e:play-gizmo": "node scripts/scenesync-play-gizmo-browser-smoke.mjs",
     "dev:web": "node scripts/dev-web.mjs",
     "test:scene-clear": "node --test apps/presence-server/tests/room-lifecycle.test.mjs apps/presence-server/tests/scene-clear-api.test.mjs html/assets/js/scenesync/runtime/scene-lifetime.test.js html/assets/js/scenesync/components/clipboard-import-manager.test.js",

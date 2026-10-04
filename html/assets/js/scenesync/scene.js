@@ -138,6 +138,7 @@ import {
 import { validateExportThumbnailFile } from '../scenesync-export/export/build-export-package.js';
 import { buildAutoExport } from '../scenesync-export/export/build-auto-export.js';
 import { formatEstimatedBytes, mergeMissingAssetWarning } from '../scenesync-export/export/auto-export-format.js';
+import { restoreSelectionLocks } from './runtime/selection-locks.js';
 
 import { createSkyboxSwapController, skyboxReplacementInBatch } from './runtime/skybox-swap.js';
 
@@ -7850,7 +7851,16 @@ function handleHandoff(data) {
       } else {
         broadcast(inputLogRequest);
       }
-      Promise.allSettled(restoring).then(() => { if (sceneLifetime.current(restoreWork)) finishSceneRecovery(); });
+      Promise.allSettled(restoring).then(() => {
+        if (!sceneLifetime.current(restoreWork)) return;
+        for (const [objectId, owner] of restoreSelectionLocks(payload.selectionLocks, managedObjects.keys(), presenceState.peers)) {
+          locks.set(objectId, owner);
+          addLockOverlay(objectId, owner);
+        }
+        updatePeersList();
+        // Live lock/unlock messages queued during recovery take precedence.
+        finishSceneRecovery();
+      });
       break;
     }
     case 'scene-request': {
@@ -8252,6 +8262,8 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-lock': {
+      // A queued packet from a departed connection must not restore its lock.
+      if (data.from?.id !== presenceState.id && !presenceState.peers.some(peer => peer.id === data.from?.id)) break;
       locks.set(payload.objectId, data.from);
       addLockOverlay(payload.objectId, data.from);
       updatePeersList();
@@ -8259,6 +8271,7 @@ function handleHandoff(data) {
       break;
     }
     case 'scene-unlock': {
+      if (locks.get(payload.objectId)?.id !== data.from?.id) break;
       locks.delete(payload.objectId);
       removeLockOverlay(payload.objectId);
       updatePeersList();
