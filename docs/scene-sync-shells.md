@@ -333,6 +333,8 @@ Notifications share a region below the visible top controls in Studio, Editor an
 
 `npm run test:e2e:notifications` uses the same local server variables and writes screenshots plus `results.json` to `AFJK_NOTIFICATION_OUTPUT`. It checks 390×844, 844×390, 320×568 and 568×320 in mobile Chromium: short/multiline messages, the reconnect-required message, open menus, selected Studio objects, Player transport, and real clear cancellation. Rectangles detect text/control overlap even when pointer events pass through. Open menus may intentionally cover background controls; that is recorded separately from notification interception. This is mobile emulation, not a guarantee for every browser, device, text length or accessibility setting.
 
+The geometry audit discovers visible text, controls (including ARIA buttons), painted panels and floating UI across the DOM, independently of the placement code's header groups. It does not discard an element because another layer covers it. It also checks header surfaces against one another. The server epoch-error path, expanded participant panel, and selected Editor toolbar are exercised; `AFJK_NOTIFICATION_NAME` can set a short name such as `さ` for screenshot review. A stale pre-region toast response is offered at its unversioned URL. The HTML import map pins the three notification modules to the matching layout revision, so that response must not load. Bump these three URLs together when changing this layout contract; unrelated modules and media retain their cache policy.
+
 > Status: experimental design prototype. Visual direction and labels may change based on feedback.
 
 ### Local editing safeguards
