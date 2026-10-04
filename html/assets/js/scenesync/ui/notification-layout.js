@@ -1,6 +1,6 @@
 // One shared notification area below the shell's top controls. Both informational
 // messages and actionable notices remain visible; no queue or priority guessing.
-const TOP_CONTROLS = '#status, #nickname-chip, #editor-scene-menu summary, .studio-mode-pill, #scene-sync-shell-mode-switcher, #xr-toggle-btn, #xr-calibrate-btn';
+const HEADER_SURFACES = '#settings-panel, #peers-panel, #status, .studio-mode-pill, #scene-sync-shell-mode-switcher, #xr-toggle-btn, #xr-calibrate-btn';
 let region = null;
 
 export function getNotificationRegion() {
@@ -28,10 +28,13 @@ export function getNotificationRegion() {
       if (changed) document.dispatchEvent(new Event('scene-sync-notice-layout'));
       return;
     }
-    const controls = [...document.querySelectorAll(TOP_CONTROLS)].filter(el => el.getClientRects().length
+    // Reserve the whole rendered header, including non-button status/peer text
+    // and desktop settings rows. Observe hidden panels too so opening one fits.
+    const surfaces = [...document.querySelectorAll(HEADER_SURFACES)];
+    for (const el of observed) if (!surfaces.includes(el)) { resize.unobserve(el); observed.delete(el); }
+    for (const el of surfaces) if (!observed.has(el)) { resize.observe(el); observed.add(el); }
+    const controls = surfaces.filter(el => el.getClientRects().length
       && getComputedStyle(el).visibility !== 'hidden' && !el.closest('[hidden]'));
-    for (const el of observed) if (!controls.includes(el)) { resize.unobserve(el); observed.delete(el); }
-    for (const el of controls) if (!observed.has(el)) { resize.observe(el); observed.add(el); }
     const viewport = window.visualViewport;
     const safeTop = parseFloat(getComputedStyle(document.body).getPropertyValue('--mobile-safe-top')) || 0;
     const top = Math.max((viewport?.offsetTop || 0) + 4 + safeTop, ...controls.map(el => el.getBoundingClientRect().bottom)) + 8;
