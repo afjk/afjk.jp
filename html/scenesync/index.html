@@ -880,6 +880,10 @@
       width: min(92vw, 360px);
       max-width: none;
     }
+    .scene-sync-device-mobile .media-url-content {
+      max-height: calc(100dvh - 32px);
+      overflow-y: auto;
+    }
     .media-url-input {
       display: block;
       width: 100%;
@@ -1343,6 +1347,8 @@
     }
 
     body.scene-sync-device-mobile .room-input,
+    body.scene-sync-device-mobile .media-url-input,
+    body.scene-sync-device-mobile #media-url-format,
     body.scene-sync-device-mobile .form-input,
     body.scene-sync-device-mobile .export-textarea,
     body.scene-sync-device-mobile .scene-inspector-editor,
