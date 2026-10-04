@@ -313,6 +313,14 @@
   visibility: hidden;
 }
 .studio-menu[data-open="true"] { opacity: 1; visibility: visible; }
+body.scene-sync-notice-active .studio-card {
+  top: calc(var(--scene-notice-bottom) + 8px);
+  max-height: max(44px, calc(100dvh - var(--scene-notice-bottom) - 104px - var(--mobile-safe-bottom, 0px)));
+  overflow-y: auto;
+}
+body.scene-sync-notice-active .studio-menu {
+  max-height: max(44px, calc(100dvh - var(--scene-notice-bottom) - 112px - var(--mobile-safe-bottom, 0px)));
+}
 .studio-menu-item {
   display: flex;
   flex-shrink: 0;

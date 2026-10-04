@@ -14,7 +14,8 @@
 /* ── Player panel ──────────────────────────────────── */
 .scene-sync-player-shell {
   position: fixed;
-  bottom: 28px;
+  --player-panel-bottom: 28px;
+  bottom: var(--player-panel-bottom);
   left: 50%;
   transform: translateX(-50%);
   z-index: 220;
@@ -41,9 +42,18 @@
 }
 
 .scene-sync-editor-player-panel {
-  bottom: 72px;
+  --player-panel-bottom: 72px;
   width: clamp(320px, 54vw, 560px);
 }
+
+body.scene-sync-notice-active .scene-sync-player-shell {
+  /* Keep a reachable scroll area even above Editor's taller bottom toolbar. */
+  --player-notice-bottom: min(var(--player-panel-bottom), max(calc(18px + var(--mobile-safe-bottom, 0px)), calc(100dvh - var(--scene-notice-bottom) - 64px)));
+  bottom: var(--player-notice-bottom);
+  max-height: max(44px, calc(100dvh - var(--scene-notice-bottom) - var(--player-notice-bottom) - 8px));
+  overflow-y: auto;
+}
+body.scene-sync-notice-active .scene-sync-player-shell > * { flex-shrink: 0; }
 
 /* ── Header ─────────────────────────────────────────── */
 .player-header {
@@ -443,14 +453,14 @@
 
 @media (max-width: 720px) {
   .scene-sync-player-shell {
-    bottom: calc(18px + var(--mobile-safe-bottom, 0px));
+    --player-panel-bottom: calc(18px + var(--mobile-safe-bottom, 0px));
     width: min(560px, calc(100vw - 24px));
     padding: 6px 8px;
     border-radius: 14px;
   }
 
   .scene-sync-editor-player-panel {
-    bottom: calc(96px + var(--mobile-safe-bottom, 0px));
+    --player-panel-bottom: calc(96px + var(--mobile-safe-bottom, 0px));
   }
 
   .player-current-time {

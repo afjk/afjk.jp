@@ -1,15 +1,18 @@
+import { getNotificationRegion } from './notification-layout.js';
+
 export function createSceneClearUi({ THREE, scene, request, cancel, onAvailabilityChange = () => {}, now = Date.now }) {
   const style = document.createElement('style');
   style.textContent = `
-    #scene-clear-notice{position:fixed;left:50%;top:calc(70px + env(safe-area-inset-top));transform:translateX(-50%);z-index:12000;width:min(360px,calc(100vw - 24px));box-sizing:border-box;background:#172033;color:#fff;border:1px solid #8e9bb5;border-radius:16px;padding:18px;box-shadow:0 8px 36px #0008;font:15px/1.6 system-ui}
-    #scene-clear-notice[hidden]{display:none}#scene-clear-notice p{margin:0 0 12px;overflow-wrap:anywhere}#scene-clear-notice button{min-height:44px;padding:9px 18px;border:0;border-radius:10px;font:inherit;margin-right:8px;background:#e8edf8;color:#172033}
+    #scene-clear-notice{width:100%;box-sizing:border-box;background:#172033;color:#fff;border:1px solid #8e9bb5;border-radius:12px;padding:8px;box-shadow:0 8px 36px #0008;font:14px/1.4 system-ui;pointer-events:none;display:flex;align-items:center;gap:12px}
+    #scene-clear-notice[hidden]{display:none}#scene-clear-notice p{margin:0;overflow-wrap:anywhere;flex:1;min-width:0}#scene-clear-notice button{min-height:44px;padding:8px 12px;border:0;border-radius:10px;font:inherit;background:#e8edf8;color:#172033;pointer-events:auto;white-space:nowrap}
+    #scene-clear-notice>div{display:flex;flex-direction:column;gap:8px}
   `;
   document.head.append(style);
   const notice = document.createElement('section');
   notice.id = 'scene-clear-notice'; notice.hidden = true; notice.setAttribute('role', 'status');
   const text = document.createElement('p');
   const actions = document.createElement('div');
-  notice.append(text, actions); document.body.append(notice);
+  notice.append(text, actions); getNotificationRegion().prepend(notice);
   let ready = false, pending = null, restore = null, offset = 0, lastLabel = '';
   const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 384;
   const texture = new THREE.CanvasTexture(canvas);
