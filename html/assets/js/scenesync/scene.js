@@ -12711,9 +12711,11 @@ const clipboardImportManager = new ClipboardImportManager({
 // ── クリップボード貼り付けUI のイベントバインディング ─────────────────
 
 function getLocalAddSelectionState() {
+  const shell = ['editor', 'studio'].find(id =>
+    document.body.classList.contains(`scene-sync-shell-${id}`));
   return {
-    enabled: document.body.classList.contains('scene-sync-shell-studio')
-      && inputRoutingMode === 'edit' && !pastePreviewMode,
+    shell,
+    enabled: !!shell && inputRoutingMode === 'edit' && !pastePreviewMode,
     selectionVersion: selectionIntentVersion,
   };
 }
