@@ -26,7 +26,8 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 const pass = label => { report.checks.push(label); console.log('PASS', label); };
 async function noOverflow(page, label) {
-  const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
+  const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth }));
+  dimensions.width = page.viewportSize().width;
   assert.ok(dimensions.scroll <= dimensions.width, `${label}: horizontal overflow ${JSON.stringify(dimensions)}`);
 }
 try {
@@ -54,13 +55,13 @@ try {
     assert.equal(await page.locator('html').getAttribute('lang'), 'en');
     for (const lang of ['ja', 'en']) {
       await page.locator(`#btn-${lang}`).click();
-      await page.locator('#works').scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${out}/${width}-${lang}-works.png` });
+      await page.locator('#works').evaluate(el => el.scrollIntoView({ block: 'start', behavior: 'instant' }));
+      await page.screenshot({ animations: 'disabled', path: `${out}/${width}-${lang}-works.png` });
       await page.locator('#posts').scrollIntoViewIfNeeded();
       await page.locator('.posts-more a').waitFor({ state: 'visible' });
       assert.equal(await page.locator('.posts-more a').getAttribute('href'), 'https://x.com/afjk01');
-      await page.screenshot({ path: `${out}/${width}-${lang}-posts-blocked.png` });
-      await page.screenshot({ path: `${out}/${width}-${lang}-full.png`, fullPage: true });
+      await page.screenshot({ animations: 'disabled', path: `${out}/${width}-${lang}-posts-blocked.png` });
+      await page.screenshot({ animations: 'disabled', path: `${out}/${width}-${lang}-full.png`, fullPage: true });
     }
     assert.deepEqual(errors, []);
     pass(`${width}px: 17 cards, repeated language toggles, persisted language, no horizontal overflow, real blocked-widget fallback`);
@@ -82,7 +83,7 @@ try {
   report.liveX.frames = live.frames().map(frame => frame.url().split('?')[0]);
   assert.equal(await live.locator('.posts-more a').getAttribute('href'), 'https://x.com/afjk01');
   await noOverflow(live, 'live X desktop');
-  await live.screenshot({ path: `${out}/live-x-desktop.png` });
+  await live.screenshot({ animations: 'disabled', path: `${out}/live-x-desktop.png` });
   await liveContext.close();
   console.log('LIVE X', report.liveX.status);
 } catch (error) {

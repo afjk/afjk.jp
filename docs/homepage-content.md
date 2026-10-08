@@ -90,3 +90,10 @@ Before publication, visually check the page at mobile and desktop widths in
 both languages and with the X widget blocked. Verify that the timeline renders
 when X permits it, that scrolling is usable, and that the fallback remains
 visible. Verify demo availability separately from repository-link validity.
+
+Automated browser evidence is available from the `CI - Homepage` workflow's
+`homepage-browser-evidence` artifact. It uses the runner's official Chrome with
+sandbox and TLS verification enabled, covers 1280px / 390px / 320px viewports,
+repeated language toggles, persistence, card counts, and blocked-widget fallback.
+A separate live-X observation records whether a timeline actually appears; an
+unavailable feed is reported explicitly and is not presented as a rendering pass.
