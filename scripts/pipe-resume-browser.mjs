@@ -41,7 +41,7 @@ const server=createServer(async(req,res)=>{
       assert.ok(data.includes(relay)&&data.includes(ice));
       data=data.replace(relay,"const PIPE = location.origin + '/relay';").replace(ice,'return Promise.resolve([]);');
       // Test-only observations; protocol and UI handlers are unchanged.
-      data+=`\nwindow.__pipeTest={getFiles:()=>selFiles};window.__received=[];
+      data+=`\nwindow.__pipeTest={getFiles:()=>selFiles,getSession:()=>_activeSendSession};window.__received=[];
         const originalDownload=triggerDownload;
         triggerDownload=(blob,name)=>{window.__received.push({blob,name});originalDownload(blob,name);};
         window.__completedAt=null;const originalEnd=_sendEnd;
@@ -104,9 +104,11 @@ async function verify(pair,payloads){
     const ack=window.__wire.find(e=>e.direction==='in'&&e.frame?.t==='recv-ack');
     const frames=window.__wire.filter(e=>e.direction==='out');
     return{totalMs:window.__completedAt-window.__start,postHandshakeMs:window.__completedAt-meta.at,
+      completedAt:window.__completedAt,peerAcks:window.__pipeTest.getSession()?.peerAcks,
       ackBeforeCompletion:!!ack&&ack.at<=window.__completedAt,
       fileWaitMs:frames.flatMap((e,i)=>e.frame?.t==='meta'?[frames[i+1].at-e.at]:[]),wire:window.__wire};
   });
+  if(!timing.ackBeforeCompletion)console.log("ACK_DIAGNOSTIC",JSON.stringify(timing));
   assert.equal(timing.ackBeforeCompletion,true);
   return timing;
 }
@@ -161,7 +163,7 @@ try{
     return[version,{totalMedianMs:median(rows.map(r=>r.totalMs)),postHandshakeMedianMs:median(rows.map(r=>r.postHandshakeMs))}];
   }))}));
   console.log(JSON.stringify(report.summary,null,2));
-}catch(error){report.ok=false;report.failure=error.stack;process.exitCode=1;console.error(error);
+}catch(error){report.ok=false;report.failure=error.stack;process.exitCode=1;console.error(error);console.log("BROWSER_REPORT",JSON.stringify(report));
   for(const [i,context]of openContexts.entries())for(const[j,p]of context.pages().entries())await p.screenshot({path:path.join(output,`failure-${i}-${j}.png`),fullPage:true}).catch(()=>{});
 }finally{
   await writeFile(path.join(output,'results.json'),JSON.stringify(report,null,2));
