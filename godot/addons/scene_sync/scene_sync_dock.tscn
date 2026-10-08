@@ -69,7 +69,70 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 
+[node name="PublishHeader" type="Label" parent="."]
+layout_mode = 2
+text = "Publish"
+
+[node name="TargetRootRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="TargetRootLabel" type="Label" parent="TargetRootRow"]
+layout_mode = 2
+text = "Target Root"
+
+[node name="TargetRootValue" type="Label" parent="TargetRootRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 2
+text = "No sync root selected"
+
+[node name="PublishRulesLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 2
+text = "Click Create SceneSyncRoot, place 3D objects under it, then click Publish Children."
+
+[node name="ManagedObjectsHeader" type="Label" parent="."]
+layout_mode = 2
+text = "Managed Objects"
+
+[node name="ManagedObjectsContainer" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="CreateRootButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Create SceneSyncRoot"
+
+[node name="UseSelectedRootButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Use Selected As Root"
+
+[node name="PublishSelectedButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Publish Selected"
+
+[node name="PublishChildrenButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Publish Children"
+
 [node name="SyncMeshesButton" type="Button" parent="."]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Sync Meshes"
+text = "Republish Meshes"
+
+[node name="PublishHelpLabel" type="Label" parent="."]
+layout_mode = 2
+autowrap_mode = 2
+text = "Publish Selected publishes one direct child of Target Root. Publish Children publishes all direct children with meshes."
+
+[node name="PublishStatusLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 2
+text = "No publish action yet."
