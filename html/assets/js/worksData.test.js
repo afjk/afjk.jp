@@ -86,30 +86,35 @@ test('new focus areas remain visible in both language modes', () => {
   }
 });
 
-test('posts use one official profile timeline instead of fixed post IDs', () => {
+test('selected posts use the four original URLs without invented excerpts or timeline claims', () => {
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const posts = html.match(/<section id="posts">([\s\S]*?)<\/section>/)?.[1];
   assert.ok(posts);
-  assert.equal((posts.match(/class="twitter-timeline"/g) || []).length, 1);
-  assert.match(posts, /href="https:\/\/twitter.com\/afjk01"/);
-  assert.doesNotMatch(posts, /twitter-tweet|\/status\/\d+/);
+  assert.match(posts, /ピックアップ/);
+  assert.match(posts, /Selected posts/);
+  assert.doesNotMatch(posts, /twitter-timeline|最近のポスト|Recent Posts/);
+  const quotes = [...posts.matchAll(/<blockquote([^>]*)>([\s\S]*?)<\/blockquote>/g)];
+  assert.equal(quotes.length, 4);
+  const ids = ['1992045374941610023', '2025139388393685498', '1984967767293067764', '1973603383127974370'];
+  quotes.forEach(([_, attributes, content], i) => {
+    assert.match(attributes, /class="twitter-tweet"/);
+    assert.match(attributes, /data-dnt="true"/);
+    assert.ok(content.includes(`https://x.com/afjk01/status/${ids[i]}`));
+    assert.doesNotMatch(content, /<p|<time/);
+    assert.ok(posts.includes(`class="selected-post-link ext-link" href="https://x.com/afjk01/status/${ids[i]}"`));
+  });
   assert.equal((html.match(/src="https:\/\/platform.twitter.com\/widgets.js"/g) || []).length, 1);
-  assert.match(posts, /data-dnt="true"/);
 });
 
-test('timeline has a bounded responsive container and an independent bilingual fallback', () => {
+test('selected posts stay responsive and keep independent bilingual fallback links', () => {
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../css/main.css', import.meta.url), 'utf8');
-  const container = css.match(/\.posts-timeline \{([^}]+)\}/)?.[1];
-  assert.match(container, /width: 100%/);
-  assert.match(container, /max-width: 700px/);
-  assert.match(container, /max-height: 640px/);
-  assert.match(container, /overflow: auto/);
-  assert.match(html, /data-height="640"/);
+  assert.ok(css.includes('minmax(min(300px, 100%), 1fr)'));
+  assert.ok(css.includes('.selected-post { min-width: 0; }'));
   const fallback = html.match(/<div class="posts-more">([\s\S]*?)<\/div>/)?.[1];
   assert.match(fallback, /href="https:\/\/x.com\/afjk01"/);
   assert.match(fallback, /data-ja/);
   assert.match(fallback, /data-en/);
-  assert.match(html, /更新のタイミングは X 側の仕様/);
-  assert.match(html, /update timing depend on X/);
+  assert.match(html, /自動更新ではありません/);
+  assert.match(html, /not automatically updated/);
 });

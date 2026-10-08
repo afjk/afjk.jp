@@ -52,23 +52,30 @@ README blobs, not repository commits.
 Scene Sync and Pipe descriptions also use this repository's [README](../README.md)
 at base commit `96ff46795f2e396bd51d8f20e80a93d079d560d4`.
 
-## X timeline
+## Selected X posts
 
-Posts uses X's official profile timeline for `@afjk01` rather than four fixed
-status IDs. The existing `platform.twitter.com/widgets.js` script is loaded once.
-No paid API, account credentials, cookie-based scraper, new service, or polling
-backend is introduced. The embed retains `data-dnt="true"`.
+The Posts section is labeled **ピックアップ / Selected posts**. It contains the
+four individual post URLs previously selected for the homepage, rather than a
+profile timeline or a promise of automatically refreshed recent posts:
 
-The container is full-width up to 700px and bounded to 640px high. The profile
-link below it is independent of the widget and stays available if JavaScript,
-tracking protection, or X availability prevents the embed from loading. Both
-languages explain that content availability and update timing depend on X;
-this is not a guarantee of immediate or chronological updates.
+- https://x.com/afjk01/status/1992045374941610023
+- https://x.com/afjk01/status/2025139388393685498
+- https://x.com/afjk01/status/1984967767293067764
+- https://x.com/afjk01/status/1973603383127974370
 
-Official guidance: [How to embed a timeline](https://help.x.com/en/using-x/embed-x-feed).
-It supports public profile timelines and notes that embedded timelines are
-subject to X's Developer Agreement and Policy. The site already used X widgets;
-this change does not create an account or accept an explicit new agreement.
+The profile timeline showed an empty state both on the homepage and in X's
+own embed preview. Individual post embeds were observable in the same browser.
+The selected-post approach keeps the existing official `widgets.js` and
+`data-dnt="true"`; it adds no paid API, credentials, scraper, or background job.
+
+Fallback markup deliberately contains only neutral numbered links, not manually
+reconstructed post excerpts or guessed publication dates. X supplies actual post
+contents when the widgets load. Each card also has an independent bilingual
+permalink outside the replaceable blockquote, plus the section's profile link.
+Those links remain usable when X or browser privacy settings block an embed.
+
+The collection is manually curated and says so in both languages. The grid can
+shrink below 300px, preserving the homepage's 320px viewport support.
 
 ## Verification
 
@@ -81,19 +88,18 @@ git diff --check
 ```
 
 The tests cover bilingual data, unique identifiers, link shapes and local
-routes, repeated rendering in both languages, required caveats, removal of fixed
-post IDs, single widget loading, responsive container rules, and the independent
-fallback link. They do not verify live X rendering or pixel layout. This static
+routes, repeated rendering in both languages, required caveats, the four selected
+post IDs, single widget loading, responsive grid rules, and independent
+per-post and profile fallback links. These unit tests do not verify live X rendering or pixel layout. This static
 homepage does not have a build step.
 
 Before publication, visually check the page at mobile and desktop widths in
-both languages and with the X widget blocked. Verify that the timeline renders
-when X permits it, that scrolling is usable, and that the fallback remains
-visible. Verify demo availability separately from repository-link validity.
+both languages and with the X widget blocked. Verify that individual posts render
+when X permits it and that each fallback remains visible. Verify demo availability separately from repository-link validity.
 
 Automated browser evidence is available from the `CI - Homepage` workflow's
 `homepage-browser-evidence` artifact. It uses the runner's official Chrome with
 sandbox and TLS verification enabled, covers 1280px / 390px / 320px viewports,
 repeated language toggles, persistence, card counts, and blocked-widget fallback.
-A separate live-X observation records whether a timeline actually appears; an
-unavailable feed is reported explicitly and is not presented as a rendering pass.
+Separate live-X observations at all three widths record how many individual
+post frames appear; missing embeds are reported rather than treated as passes.

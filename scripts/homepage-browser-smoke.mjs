@@ -9,7 +9,7 @@ import { WORKS } from '../html/assets/js/worksData.js';
 const root = fileURLToPath(new URL('../html/', import.meta.url));
 const out = path.resolve('logs/homepage-browser');
 await mkdir(out, { recursive: true });
-const report = { checks: [], security: { chromiumSandbox: true, ignoreHTTPSErrors: false }, liveX: { status: 'not checked' } };
+const report = { checks: [], security: { chromiumSandbox: true, ignoreHTTPSErrors: false }, liveX: { observations: [] } };
 const server = createServer(async (req, res) => {
   try {
     let pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -57,7 +57,11 @@ try {
       await page.locator(`#btn-${lang}`).click();
       await page.locator('#works').evaluate(el => el.scrollIntoView({ block: 'start', behavior: 'instant' }));
       await page.screenshot({ animations: 'disabled', path: `${out}/${width}-${lang}-works.png` });
-      await page.locator('#posts').scrollIntoViewIfNeeded();
+      await page.locator('#posts').evaluate(el => el.scrollIntoView({ block: 'start', behavior: 'instant' }));
+      assert.equal(await page.locator('.selected-post').count(), 4);
+      assert.equal(await page.locator('.selected-post-link').count(), 4);
+      assert.equal(await page.locator('#posts h2').innerText(), lang === 'ja' ? 'ピックアップ' : 'Selected posts');
+      for (const link of await page.locator('.selected-post-link').all()) assert.ok(await link.isVisible());
       await page.locator('.posts-more a').waitFor({ state: 'visible' });
       assert.equal(await page.locator('.posts-more a').getAttribute('href'), 'https://x.com/afjk01');
       await page.screenshot({ animations: 'disabled', path: `${out}/${width}-${lang}-posts-blocked.png` });
@@ -67,25 +71,44 @@ try {
     pass(`${width}px: 17 cards, repeated language toggles, persisted language, no horizontal overflow, real blocked-widget fallback`);
     await context.close();
   }
-  const liveContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, ignoreHTTPSErrors: false });
-  // Do not touch the production stats service; only the existing X embed is observed.
-  await liveContext.route('https://afjk.jp/presence/stats', route => route.abort());
-  const live = await liveContext.newPage();
-  const failedRequests = [];
-  live.on('requestfailed', r => { if (/twitter|x\.com/.test(r.url())) failedRequests.push({ url: r.url().split('?')[0], error: r.failure()?.errorText }); });
-  await live.goto(origin, { waitUntil: 'domcontentloaded' });
-  await live.locator('#posts').scrollIntoViewIfNeeded();
-  try {
-    await live.locator('.posts-timeline iframe').waitFor({ state: 'visible', timeout: 20000 });
-    report.liveX.status = 'iframe visible; post contents require visual review';
-  } catch { report.liveX.status = 'timeline iframe did not become visible within 20 seconds; profile fallback remains available'; }
-  report.liveX.failedRequests = failedRequests;
-  report.liveX.frames = live.frames().map(frame => frame.url().split('?')[0]);
-  assert.equal(await live.locator('.posts-more a').getAttribute('href'), 'https://x.com/afjk01');
-  await noOverflow(live, 'live X desktop');
-  await live.screenshot({ animations: 'disabled', path: `${out}/live-x-desktop.png` });
-  await liveContext.close();
-  console.log('LIVE X', report.liveX.status);
+  for (const width of [1280, 390, 320]) {
+    const liveContext = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600, ignoreHTTPSErrors: false });
+    // Only observe public post widgets; never send test traffic to production stats.
+    await liveContext.route('https://afjk.jp/presence/stats', route => route.abort());
+    const live = await liveContext.newPage();
+    const observation = { width, status: 'not checked', failedRequests: [] };
+    live.on('requestfailed', r => { if (/twitter|x\.com/.test(r.url())) observation.failedRequests.push({ url: r.url().split('?')[0], error: r.failure()?.errorText }); });
+    await live.goto(origin, { waitUntil: 'domcontentloaded' });
+    await live.locator('#posts').evaluate(el => el.scrollIntoView({ block: 'start', behavior: 'instant' }));
+    try {
+      await live.waitForFunction(() => [...document.querySelectorAll('.selected-post iframe')].filter(frame => frame.getBoundingClientRect().height > 100).length === 4, null, { timeout: 20000 });
+      observation.status = 'four post iframes visible; screenshots recorded for content review';
+    } catch { observation.status = 'not all four post iframes became visible within 20 seconds; individual fallback links remain available'; }
+    observation.visibleEmbeds = await live.locator('.selected-post iframe').evaluateAll(frames => frames.filter(frame => frame.getBoundingClientRect().height > 100).length);
+    observation.posts = [];
+    for (let index = 0; index < 4; index++) {
+      const card = live.locator('.selected-post').nth(index);
+      await card.scrollIntoViewIfNeeded();
+      const handle = await card.locator('iframe').elementHandle();
+      const frame = handle ? await handle.contentFrame() : null;
+      let contentReady = false;
+      if (frame) {
+        try {
+          await frame.waitForFunction(() => document.body.innerText.includes('afjk'), null, { timeout: 15000 });
+          contentReady = true;
+        } catch { /* Record unavailable external content without inventing a pass. */ }
+      }
+      observation.posts.push({ number: index + 1, contentReady });
+      await card.screenshot({ animations: 'disabled', path: `${out}/live-x-${width}-post-${index + 1}.png` });
+    }
+    assert.equal(await live.locator('.selected-post-link').count(), 4);
+    for (const link of await live.locator('.selected-post-link').all()) assert.ok(await link.isVisible());
+    await noOverflow(live, `live X ${width}px`);
+    await live.locator('#posts').screenshot({ animations: 'disabled', path: `${out}/live-x-${width}.png` });
+    report.liveX.observations.push(observation);
+    await liveContext.close();
+    console.log('LIVE X', width, observation.status);
+  }
 } catch (error) {
   report.error = error.stack;
   throw error;
