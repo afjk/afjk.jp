@@ -17,11 +17,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout with baseline history
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      # Public, credential-free fetch avoids checkout's submodule-auth cleanup:
+      # this repository contains unrelated worktree gitlinks without .gitmodules.
+      - name: Checkout exact PR head with baseline history
+        env:
+          PIPE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          [[ "$PIPE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init
+          git remote add origin https://github.com/afjk/afjk.jp.git
+          git fetch --no-tags origin "$PIPE_HEAD_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$PIPE_HEAD_SHA"
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
