@@ -500,16 +500,24 @@
     }
 
     /* ── Posts ────────────────────────────────────── */
-    .posts-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 16px;
-      margin-bottom: 28px;
-      align-items: start;
+    .posts-timeline {
+      width: 100%;
+      max-width: 700px;
+      max-height: 640px;
+      overflow: auto;
+      margin: 0 auto 20px;
     }
 
-    .posts-grid .twitter-tweet {
-      margin: 0 !important;
+    .posts-timeline iframe {
+      max-width: 100% !important;
+    }
+
+    .posts-note {
+      max-width: 700px;
+      margin: 0 auto 20px;
+      color: var(--text2);
+      font-size: 0.8rem;
+      line-height: 1.6;
     }
 
     .posts-more {

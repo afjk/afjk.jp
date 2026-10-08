@@ -1,0 +1,40 @@
+name: CI - Homepage
+
+on:
+  pull_request:
+    paths:
+      - 'html/index.html'
+      - 'html/assets/css/main.css'
+      - 'html/assets/js/worksData.js'
+      - 'html/assets/js/worksData.test.js'
+      - 'html/assets/js/worksSection.js'
+      - '.github/workflows/ci-homepage.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'html/index.html'
+      - 'html/assets/css/main.css'
+      - 'html/assets/js/worksData.js'
+      - 'html/assets/js/worksData.test.js'
+      - 'html/assets/js/worksSection.js'
+      - '.github/workflows/ci-homepage.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Homepage content and embed checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: |
+          node --check html/assets/js/worksData.js
+          node --check html/assets/js/worksSection.js
+      - name: Test bilingual cards and timeline fallback
+        run: node --test html/assets/js/worksData.test.js
