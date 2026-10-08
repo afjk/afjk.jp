@@ -46,6 +46,10 @@ The CI artifacts contain raw measurements, sandbox evidence, desktop screenshots
 
 The read-only CI workflow runs syntax checks, protocol tests and browser verification on affected pull requests and main pushes. It uses a credential-free fetch of a validated exact commit SHA from the fixed public repository URL, retains baseline history, and performs no deployment. This avoids checkout-action authentication cleanup failing on unrelated malformed worktree gitlinks already in the repository.
 
+## Additional Reset regression fixed during browser QA
+
+The real cancel/reset/retry flow exposed an existing `ReferenceError`: `resetSend()` called `hideMagnetInfo()` but the helper was private to `swarm.js`. A separate minimal commit exports that existing helper and imports it into `app.js`; there is no new dependency or circular import. The real-browser regression checks that Reset clears the file queue and magnet UI, then successfully transfers another file without page errors.
+
 ## Existing follow-up issues isolated by browser QA
 
 - The sender can miss the initial receiver-capabilities frame: the baseline receiver was observed with sender `peerAcks === false`, byte-correct receipt and a receiver ACK arriving a few milliseconds after sender completion. The harness therefore observes receipt independently rather than treating the sender status as confirmation. Reproduce with repeated fresh baseline one-file UI transfers and inspect the captured capability/ACK frames. The production ACK logic is intentionally unchanged by this focused fix.

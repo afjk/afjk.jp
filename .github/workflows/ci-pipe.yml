@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'html/assets/js/pipe/app.js'
+      - 'html/assets/js/pipe/swarm.js'
       - 'scripts/pipe-resume-latency.test.mjs'
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
@@ -12,6 +13,7 @@ on:
     branches: [main]
     paths:
       - 'html/assets/js/pipe/app.js'
+      - 'html/assets/js/pipe/swarm.js'
       - 'scripts/pipe-resume-latency.test.mjs'
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
@@ -45,6 +47,7 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check html/assets/js/pipe/app.js
+          node --check html/assets/js/pipe/swarm.js
           node --check scripts/pipe-resume-latency.test.mjs
           node --check scripts/pipe-resume-browser.mjs
       - name: Test protocol and synthetic latency

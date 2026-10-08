@@ -162,7 +162,11 @@ try{
   await shots(pair,'cancel');report.checks.push('UI sender cancellation stops an unfinished legacy multi-file queue');
   await pair.receiver.reload();await pair.receiver.waitForFunction(()=>window.__pipeTest);
   await pair.receiver.locator('[data-tab="receive"]').click();
+  // Regression: Reset must call the exported swarm UI helper without ReferenceError.
+  await pair.sender.evaluate(()=>document.getElementById('magnet-info').classList.add('visible'));
   await pair.sender.locator('#reset-send-btn').click();
+  assert.equal(await pair.sender.locator('#magnet-info').evaluate(el=>el.classList.contains('visible')),false);
+  assert.equal(await pair.sender.evaluate(()=>window.__pipeTest.getFiles().length),0);
   await pair.sender.evaluate(()=>{window.__wire=[];window.__completedAt=null;});
   await start(pair,payloadsFor([4096]));await verify(pair,payloadsFor([4096]));
   report.checks.push('fresh transfer succeeds after sender cancel/reset and receiver reload');await shots(pair,'repeat-after-cancel');

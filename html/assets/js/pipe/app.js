@@ -10,6 +10,7 @@ import {
   stopSeeding,
   unregisterAllLocalSeeders,
   handleSwarmHandoff,
+  hideMagnetInfo,
 } from './swarm.js';
 import {
   initStreamModule,
