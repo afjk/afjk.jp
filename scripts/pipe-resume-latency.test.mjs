@@ -85,8 +85,12 @@ async function transfer(senderCode, receiverCode, sizes, options = {}) {
   return { totalMs: completeAt - started, fileWaitMs: waits, bytes: sizes.reduce((a,b) => a+b,0), sender, receiver };
 }
 
-test('production sender and final ACK logic remain unchanged', () => {
-  for (const name of ['trySendWebRTCFiles', 'waitForAck', 'sendDoneFrame']) {
+test('transport core and final ACK remain unchanged apart from a file-start observer', () => {
+  const sender = definition(source, 'trySendWebRTCFiles')
+    .replace(', onFileStart)', ')')
+    .replace("      if (typeof onFileStart === 'function') onFileStart(i, resumeOffset, total);\n\n", '');
+  assert.equal(sender, definition(baseline, 'trySendWebRTCFiles'));
+  for (const name of ['waitForAck', 'sendDoneFrame']) {
     assert.equal(definition(source, name), definition(baseline, name));
   }
 });
@@ -102,6 +106,13 @@ for (const [name, senderCode, receiverCode] of [
     }
   });
 }
+test('file-start observers reset meters with actual resumed offsets, including empty files', async () => {
+  const {sender,receiver}=pair();const sendStarts=[],recvStarts=[];
+  const recv=receiver.context.tryRecvWebRTC('synthetic',()=>{},()=>{},()=>{},(...args)=>recvStarts.push(args));
+  const send=sender.context.trySendWebRTCFiles([0,1024].map((size,i)=>({file:new File([new Uint8Array(size)],`file-${i}`),path:'synthetic'})),()=>{},()=>{},()=>{},()=>{},(...args)=>sendStarts.push(args));
+  assert.deepEqual(await Promise.all([send,recv]),[true,true]);
+  assert.deepEqual(sendStarts,[[0,0,0],[1,0,1024]]);assert.deepEqual(recvStarts,sendStarts);
+});
 test('completion timing includes delayed final ACK', async () => {
   const r = await transfer(source, source, [4096, 4096], { ackDelay: 40 });
   const last = r.sender.dc.frames.findLast(f => f.data.t === 'all-done');
@@ -111,14 +122,15 @@ test('completion timing includes delayed final ACK', async () => {
 test('receiver preserves matching partial bytes and resets different files', async () => {
   for (const same of [true, false]) {
     const {sender, receiver} = pair();
-    const received = [];
-    const recv = receiver.context.tryRecvWebRTC('synthetic', () => {}, (_m,b) => received.push(b), () => {});
+    const received = [], starts = [];
+    const recv = receiver.context.tryRecvWebRTC('synthetic', () => {}, (_m,b) => received.push(b), () => {}, (_i,offset) => starts.push(offset));
     await sleep(0);
     const meta = {t:'meta', name:'partial.bin', index:0, count:2, size:4, resumable:true};
     sender.dc.send(JSON.stringify(meta)); sender.dc.send(new Uint8Array([1,2]).buffer);
     sender.dc.send(JSON.stringify({...meta, name: same ? meta.name : 'different.bin'}));
     await sleep(10);
     assert.deepEqual(receiver.dc.frames.filter(f => f.data.t === 'resume').map(f => f.data.offset), [0, same ? 2 : 0]);
+    assert.deepEqual(starts,[0,same ? 2 : 0]);
     sender.dc.send(new Uint8Array([3,4]).buffer);
     sender.dc.send(JSON.stringify({t:'done'})); sender.dc.send(JSON.stringify({t:'all-done'}));
     assert.equal(await recv, true);

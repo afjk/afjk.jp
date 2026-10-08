@@ -1008,3 +1008,9 @@
       min-width: 4em;
       text-align: center;
     }
+
+/* Live payload rate: wraps naturally at mobile widths without per-chunk layout. */
+.transfer-speed { margin-top: 10px; font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; }
+.transfer-speed[hidden] { display: none; }
+.speed-value { color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.speed-hint { display: block; font-size: 0.7rem; color: var(--muted); }

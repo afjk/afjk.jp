@@ -17,13 +17,22 @@ const repetitions=Number(process.env.PIPE_BROWSER_SAMPLES||5);
 assert.ok(Number.isInteger(repetitions)&&repetitions>=1&&repetitions<=10);
 const report={baselineRef,security:{chromiumSandbox:true,ignoreHTTPSErrors:false,hostIceOnly:true},
   conditions:'Two pages in one browser context; actual app UI and RTCDataChannel; loopback HTTP signaling; prewarming enabled; timing from actual Send click through the later of sender completion and observed receiver ACK; QR CDN stubbed; no production traffic',
-  browser:null,results:[],checks:[],errors:[],blockedExternal:[]};
-const slots=new Map();
+  browser:null,results:[],checks:[],speedCases:[],errors:[],blockedExternal:[]};
+const slots=new Map(),httpUploads=new Map();
 const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,'http://localhost');
     if(url.pathname.startsWith('/relay/')) {
-      assert.match(url.pathname,/\.__(offer|answer)$/); // No HTTP file fallback can masquerade as P2P success.
+      if(url.pathname==='/relay/http-rate-download.__offer'){res.writeHead(503).end();return;}
+      if(url.pathname==='/relay/http-rate-download'){
+        res.setHeader('content-type','application/octet-stream');
+        res.setHeader('content-disposition','attachment; filename="synthetic-http.bin"');res.end(Buffer.alloc(4096));return;
+      }
+      if(!/\.__(offer|answer)$/.test(url.pathname)){
+        assert.equal(req.method,'POST');const parts=[];for await(const p of req)parts.push(p);
+        httpUploads.set(url.pathname,Buffer.concat(parts));res.end('ok');return;
+      } // P2P verification below still requires actual RTC frames and final ACKs.
+
       const key=url.pathname, slot=slots.get(key)||{};slots.set(key,slot);
       if(req.method==='POST'){const parts=[];for await(const p of req)parts.push(p);slot.body=Buffer.concat(parts);slot.post=res;}
       else slot.get=res;
@@ -50,12 +59,12 @@ const server=createServer(async(req,res)=>{
     if(relative==='/pipe/index.html')data=data.toString().replace(/<script src="https:\/\/cdnjs[^>]*><\/script>/g,'');
     const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.json':'application/json'};
     res.setHeader('content-type',mime[path.extname(file)]||'application/octet-stream');res.end(data);
-  }catch(e){res.writeHead(404).end();}
+  }catch(e){if(!res.destroyed&&!res.writableEnded)res.writeHead(404).end();}
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
 let browser;const openContexts=[];
-async function openPair(senderVersion,receiverVersion,{mobile=false}={}) {
+async function openPair(senderVersion,receiverVersion,{mobile=false,slowReadMs=0,language='en'}={}) {
   const context=await browser.newContext({acceptDownloads:true,ignoreHTTPSErrors:false,
     viewport:mobile?{width:390,height:844}:{width:1100,height:900},isMobile:mobile,hasTouch:mobile});
   openContexts.push(context);
@@ -64,7 +73,15 @@ async function openPair(senderVersion,receiverVersion,{mobile=false}={}) {
     report.blockedExternal.push(route.request().url());return route.abort();
   });
   await context.routeWebSocket('**/*',ws=>ws.close());
-  await context.addInitScript(()=>{
+  await context.addInitScript(({slowReadMs,language})=>{
+    localStorage.setItem('lang',language);
+    if(slowReadMs){
+      // Synthetic producer pacing makes live UI sampling observable; transport stays real.
+      const slice=File.prototype.slice;
+      File.prototype.slice=function(...args){const blob=slice.apply(this,args),read=blob.arrayBuffer.bind(blob);
+        blob.arrayBuffer=async()=>{await new Promise(r=>setTimeout(r,slowReadMs));return read();};return blob;};
+    }
+
     window.QRCode=class{clear(){}}; // CDN QR rendering is deliberately offline.
     window.__wire=[];window.__start=null;
     document.addEventListener('click',e=>{if(e.target.closest('#send-btn'))window.__start=performance.now();},true);
@@ -76,7 +93,7 @@ async function openPair(senderVersion,receiverVersion,{mobile=false}={}) {
       if(!observed.has(this)){observed.add(this);this.addEventListener('message',e=>observe('in',e.data));}
       observe('out',data);return original.call(this,data);
     };
-  });
+  },{slowReadMs,language});
   const sender=await context.newPage(),receiver=await context.newPage();
   for(const p of [sender,receiver])p.on('pageerror',e=>report.errors.push(e.message));
   await sender.goto(origin+'/?version='+senderVersion);await receiver.goto(origin+'/?version='+receiverVersion);
@@ -114,6 +131,9 @@ async function verify(pair,payloads){
       fileWaitMs:frames.flatMap((e,i)=>e.frame?.t==='meta'?[frames[i+1].at-e.at]:[]),wire:window.__wire};
   });
   assert.ok(timing.totalMs>=timing.receiverAckMs);
+  for(const [page,id]of [[pair.sender,'send-speed'],[pair.receiver,'recv-speed']]){
+    if(await page.locator('#'+id).isVisible())assert.doesNotMatch(await page.locator('#'+id).innerText(),/NaN|Infinity/);
+  }
   console.log("TRANSFER",JSON.stringify({files:payloads.length,totalMs:timing.totalMs,peerAcks:timing.peerAcks,ackBeforeCompletion:timing.ackBeforeCompletion}));
   return timing;
 }
@@ -149,6 +169,48 @@ try{
     await shots(pair,`compat-${senderVersion}-${receiverVersion}-${sizes.join('-')}-${mobile}`);
     await pair.context.close();
   }
+  // New live-speed UI: paced synthetic file reads, real RTC transfer, both directions.
+  for(const mobile of [false,true]){
+    const pair=await openPair('patched','patched',{mobile,slowReadMs:80,language:mobile?'ja':'en'});
+    const payloads=payloadsFor([8*1024*1024]);
+    for(const [page,id]of [[pair.sender,'send-speed'],[pair.receiver,'recv-speed']])await page.evaluate(id=>{
+      window.__speedWrites=0;new MutationObserver(()=>window.__speedWrites++).observe(document.querySelector('#'+id+' .speed-value'),{childList:true});
+    },id);
+    await start(pair,payloads);
+    for(const [page,id]of [[pair.sender,'send-speed'],[pair.receiver,'recv-speed']])await page.waitForFunction(id=>{
+      const el=document.getElementById(id);return !el.hidden&&/^[1-9][0-9.]* [KMG]?B\/s$/.test(el.querySelector('.speed-value').textContent)&&!el.querySelector('.speed-label').textContent.includes('Average')&&!el.querySelector('.speed-label').textContent.includes('平均');
+    },id);
+    const values={mobile,sender:await pair.sender.locator('#send-speed').innerText(),receiver:await pair.receiver.locator('#recv-speed').innerText()};
+    assert.match(values.sender,/queued|キュー投入/);assert.match(values.receiver,/Receive speed|受信速度/);
+    await Promise.all([pair.sender.screenshot({path:path.join(output,`live-speed-${mobile}-sender.png`),fullPage:true}),pair.receiver.screenshot({path:path.join(output,`live-speed-${mobile}-receiver.png`),fullPage:true})]);
+    const timing=await verify(pair,payloads);
+    for(const p of [pair.sender,pair.receiver]){
+      assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      assert.ok(await p.evaluate(()=>window.__speedWrites)<=Math.ceil(timing.totalMs/250)+8);
+    }
+    report.speedCases.push({...values,byteEquality:true,totalMs:timing.totalMs});await pair.context.close();
+  }
+  // Actual XHR upload-to-relay progress, throttled only in this test browser.
+  {
+    const pair=await openPair('patched','patched');
+    await pair.context.route('**/relay/**.__answer',route=>route.fulfill({status:503,body:'test P2P unavailable'}));
+    const cdp=await pair.context.newCDPSession(pair.sender);await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:10*1024*1024,uploadThroughput:1024*1024});
+    const payloads=payloadsFor([4*1024*1024]);await pair.sender.locator('#file-input').setInputFiles(payloads);
+    const transferPath=await pair.sender.evaluate(()=>window.__pipeTest.getFiles()[0].path);
+    await pair.sender.locator('#send-btn').click();
+    await pair.sender.waitForFunction(()=>/^[1-9][0-9.]* [KMG]?B\/s$/.test(document.querySelector('#send-speed .speed-value').textContent));
+    assert.match(await pair.sender.locator('#send-speed').innerText(),/to relay/);
+    await pair.sender.screenshot({path:path.join(output,'live-speed-http-upload.png'),fullPage:true});
+    await pair.sender.waitForFunction(()=>document.querySelector('#send-status').classList.contains('ok'),undefined,{timeout:20000});
+    assert.deepEqual(httpUploads.get('/relay/'+transferPath),payloads[0].buffer);
+    report.checks.push('HTTP upload shows observed upload-to-relay rate and exact bytes');
+    await pair.receiver.locator('#recv-path').fill('http-rate-download');await pair.receiver.locator('#recv-btn').click();
+    await pair.receiver.waitForFunction(()=>document.querySelector('#recv-speed .speed-hint').textContent.includes('browser-managed'));
+    assert.equal(await pair.receiver.locator('#recv-speed .speed-value').innerText(),'—');
+    await pair.receiver.screenshot({path:path.join(output,'speed-unavailable-http-download.png'),fullPage:true});
+    report.checks.push('browser-managed HTTP receive explicitly reports rate unavailable');await pair.context.close();
+  }
   const pair=await openPair('patched','baseline');
   // A long legacy queue keeps the Cancel control available to real UI automation.
   // Do not rely on winning a sub-500 ms actionability window for a single file.
@@ -157,6 +219,7 @@ try{
   await pair.sender.locator('#cancel-send-btn').click();
   await pair.sender.waitForTimeout(650);
   assert.match(await pair.sender.locator('#send-status').innerText(),/キャンセル|cancel/i);
+  assert.equal(await pair.sender.locator('#send-speed').isVisible(),false);
   assert.ok(await pair.receiver.evaluate(()=>window.__received.length)<20);
   assert.equal(await pair.sender.evaluate(()=>window.__wire.some(e=>e.direction==='out'&&e.frame?.t==='all-done')),false);
   await shots(pair,'cancel');report.checks.push('UI sender cancellation stops an unfinished legacy multi-file queue');
@@ -167,6 +230,7 @@ try{
   await pair.sender.locator('#reset-send-btn').click();
   assert.equal(await pair.sender.locator('#magnet-info').evaluate(el=>el.classList.contains('visible')),false);
   assert.equal(await pair.sender.evaluate(()=>window.__pipeTest.getFiles().length),0);
+  assert.equal(await pair.sender.locator('#send-speed').isVisible(),false);
   await pair.sender.evaluate(()=>{window.__wire=[];window.__completedAt=null;});
   await start(pair,payloadsFor([4096]));await verify(pair,payloadsFor([4096]));
   report.checks.push('fresh transfer succeeds after sender cancel/reset and receiver reload');await shots(pair,'repeat-after-cancel');

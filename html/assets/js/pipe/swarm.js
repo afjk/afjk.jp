@@ -19,8 +19,10 @@ let getSelFiles = () => [];
 let getCurrentSwarmMagnet = () => null;
 let setCurrentSwarmMagnet = () => {};
 let getCurrentLang = () => 'en';
+let clearTransferSpeed = () => {};
 
 export function initSwarmModule(ctx) {
+  clearTransferSpeed = ctx.clearTransferSpeed || (() => {});
   presenceState = ctx.presenceState;
   swarmState = ctx.swarmState;
   localSeedInfoHashes = ctx.localSeedInfoHashes;
@@ -790,6 +792,7 @@ function updateMagnetStats(torrent) {
 }
 
 async function seedFilesAsTorrent() {
+  clearTransferSpeed('send');
   const selFiles = getSelFiles();
   if (!selFiles.length) { setStatus('send-status', t('selectFileFirst'), 'err'); return; }
   const btn = document.getElementById('torrent-btn');
@@ -867,6 +870,7 @@ function stopSeeding() {
 }
 
 async function receiveTorrent(magnetURI, sender, senderId = null, opts = {}) {
+  clearTransferSpeed('receive');
   logSwarm('receiveTorrent start', { magnetURI, sender });
   switchTab('receive');
   setRecvSender('recv-from', sender);

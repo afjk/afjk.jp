@@ -3,8 +3,9 @@ name: CI - Pipe Resume Protocol
 on:
   pull_request:
     paths:
-      - 'html/assets/js/pipe/app.js'
-      - 'html/assets/js/pipe/swarm.js'
+      - 'html/assets/js/pipe/**'
+      - 'html/assets/css/pipe.css'
+      - 'html/pipe/index.html'
       - 'scripts/pipe-resume-latency.test.mjs'
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
@@ -12,8 +13,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'html/assets/js/pipe/app.js'
-      - 'html/assets/js/pipe/swarm.js'
+      - 'html/assets/js/pipe/**'
+      - 'html/assets/css/pipe.css'
+      - 'html/pipe/index.html'
       - 'scripts/pipe-resume-latency.test.mjs'
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
@@ -48,8 +50,11 @@ jobs:
         run: |
           node --check html/assets/js/pipe/app.js
           node --check html/assets/js/pipe/swarm.js
+          node --check html/assets/js/pipe/transfer-speed.js
           node --check scripts/pipe-resume-latency.test.mjs
           node --check scripts/pipe-resume-browser.mjs
+      - name: Test live speed and upload lifecycle
+        run: node --test html/assets/js/pipe/transfer-speed.test.js
       - name: Test protocol and synthetic latency
         run: node --test scripts/pipe-resume-latency.test.mjs
       - name: Install isolated browser test dependency
