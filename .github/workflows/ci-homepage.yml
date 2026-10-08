@@ -52,7 +52,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: Verify official Chrome and install browser dependencies
+        run: |
+          google-chrome --version
+          npx playwright install-deps chromium
       - run: node scripts/homepage-browser-smoke.mjs
       - name: Save screenshots and verification report
         if: always()

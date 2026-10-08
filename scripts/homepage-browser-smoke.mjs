@@ -30,7 +30,7 @@ async function noOverflow(page, label) {
   assert.ok(dimensions.scroll <= dimensions.width, `${label}: horizontal overflow ${JSON.stringify(dimensions)}`);
 }
 try {
-  browser = await chromium.launch({ headless: true, chromiumSandbox: true });
+  browser = await chromium.launch({ channel: 'chrome', headless: true, chromiumSandbox: true, ignoreDefaultArgs: ['--enable-unsafe-swiftshader'] });
   const security = await browser.newPage();
   await security.goto('chrome://sandbox');
   report.security.status = await security.locator('body').innerText();
