@@ -1,0 +1,67 @@
+name: CI - Homepage
+
+on:
+  pull_request:
+    paths:
+      - 'html/index.html'
+      - 'html/assets/css/main.css'
+      - 'html/assets/js/worksData.js'
+      - 'html/assets/js/worksData.test.js'
+      - 'html/assets/js/worksSection.js'
+      - '.github/workflows/ci-homepage.yml'
+      - 'scripts/homepage-browser-smoke.mjs'
+  push:
+    branches: [main]
+    paths:
+      - 'html/index.html'
+      - 'html/assets/css/main.css'
+      - 'html/assets/js/worksData.js'
+      - 'html/assets/js/worksData.test.js'
+      - 'html/assets/js/worksSection.js'
+      - '.github/workflows/ci-homepage.yml'
+      - 'scripts/homepage-browser-smoke.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Homepage content and embed checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: |
+          node --check html/assets/js/worksData.js
+          node --check html/assets/js/worksSection.js
+      - name: Test bilingual cards and timeline fallback
+        run: node --test html/assets/js/worksData.test.js
+
+  browser:
+    name: Homepage desktop and mobile browser checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify official Chrome and install browser dependencies
+        run: |
+          google-chrome --version
+          npx playwright install-deps chromium
+      - run: node scripts/homepage-browser-smoke.mjs
+      - name: Save screenshots and verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homepage-browser-evidence
+          path: logs/homepage-browser/
+          if-no-files-found: error
+          retention-days: 7
