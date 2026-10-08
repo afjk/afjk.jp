@@ -1203,4 +1203,5 @@ export {
   startFallbackDownload,
   unregisterAllLocalSeeders,
   handleSwarmHandoff,
+  hideMagnetInfo,
 };
