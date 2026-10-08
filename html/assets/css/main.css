@@ -501,17 +501,30 @@
     }
 
     /* ── Posts ────────────────────────────────────── */
-    .posts-timeline {
-      width: 100%;
-      max-width: 700px;
-      max-height: 640px;
-      overflow: auto;
-      margin: 0 auto 20px;
+    .posts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+      gap: 24px;
+      margin-bottom: 24px;
+      align-items: start;
     }
 
-    .posts-timeline iframe {
+    .selected-post { min-width: 0; }
+
+    .selected-post .twitter-tweet {
+      margin: 0 0 12px !important;
+      width: 100% !important;
       max-width: 100% !important;
     }
+
+    .selected-post blockquote {
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .selected-post iframe { max-width: 100% !important; }
 
     .posts-note {
       max-width: 700px;
