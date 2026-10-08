@@ -99,7 +99,9 @@ async function verify(pair,payloads){
   const received=await pair.receiver.evaluate(async()=>Promise.all(window.__received.map(async({blob,name})=>({name,bytes:Array.from(new Uint8Array(await blob.arrayBuffer()))}))));
   assert.equal(received.length,payloads.length);
   received.forEach((r,i)=>{assert.equal(r.name,payloads[i].name);assert.deepEqual(Buffer.from(r.bytes),payloads[i].buffer);});
-  await pair.sender.waitForFunction(()=>window.__wire.some(e=>e.direction==='in'&&e.frame?.t==='recv-ack'),undefined,{timeout:3000});
+  // Single-file receiver ACKs both done and all-done; multi-file ACKs all-done only.
+  // Each case uses its own channel, so waiting for this count includes the final ACK.
+  await pair.sender.waitForFunction(count=>window.__wire.filter(e=>e.direction==='in'&&e.frame?.t==='recv-ack').length===count,payloads.length===1?2:1,{timeout:3000});
   const timing=await pair.sender.evaluate(()=>{
     const meta=window.__wire.find(e=>e.direction==='out'&&e.frame?.t==='meta');
     const ack=window.__wire.findLast(e=>e.direction==='in'&&e.frame?.t==='recv-ack');
@@ -116,6 +118,7 @@ async function verify(pair,payloads){
   return timing;
 }
 async function shots(pair,tag){
+  await pair.sender.waitForTimeout(400); // Let the existing progress-bar transition settle.
   await pair.sender.screenshot({path:path.join(output,tag+'-sender.png'),fullPage:true});
   await pair.receiver.screenshot({path:path.join(output,tag+'-receiver.png'),fullPage:true});
 }

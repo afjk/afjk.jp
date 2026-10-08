@@ -23,18 +23,30 @@ A five-sample benchmark alternates baseline and patched receivers using 4 KiB sy
 
 These are simulated-transport protocol measurements. They show removal of the intentional per-file wait; they are **not** real-browser, LAN, WAN, throughput, or user-perceived end-to-end measurements. Session creation, signaling and rendering are not modeled. Set `PIPE_BENCH_OUTPUT` to save raw samples as JSON. All 10 tests passed locally; syntax checks and `git diff --check` also passed. The full repository test suite was not run.
 
-## Browser verification still required
+## Real-browser verification
 
-The local Chromium launch was blocked by the host's process-singleton `socket()` restriction (`Operation not permitted`), including after execution escalation. Browser sandbox and TLS checks were not disabled. Actual browser transfers, screenshots and visual review have therefore **not** been completed.
-
-A syntax-checked, runtime-unverified companion harness is provided:
+The dot workspace cannot launch Chromium because of a host process-singleton socket restriction. Browser verification therefore runs in GitHub's Ubuntu runner using its official Google Chrome installation and Playwright 1.60.0. The harness checks `chrome://sandbox` for an adequately sandboxed browser; namespaces and Seccomp-BPF are enabled, and TLS validation is unchanged.
 
 ```sh
-CHROMIUM_PATH=/usr/bin/chromium PIPE_BROWSER_OUTPUT=./pipe-browser-results node scripts/pipe-resume-browser.mjs
+CHROMIUM_PATH=/usr/bin/google-chrome PIPE_BROWSER_OUTPUT=./pipe-browser-results node scripts/pipe-resume-browser.mjs
 ```
 
-It requires the repository's Playwright dependency. `PIPE_PLAYWRIGHT_MODULE` can instead point to an installed Playwright module using a file URL. The harness serves local baseline/patched pages, uses loopback-only signaling and host-only ICE, blocks outside HTTP requests and WebSockets, and transfers synthetic files through actual UI controls. It checks bytes and records post-ACK completion, then captures screenshots for subsequent human inspection. Unrelated CDN QR rendering is stubbed in the harness only.
+The harness requires Playwright (`PIPE_PLAYWRIGHT_MODULE` may select its installed module by file URL). It serves the actual app pages, uses real Send/Receive controls and RTCDataChannels, loopback-only signaling and host-only ICE, blocks external HTTP/WebSocket requests, and never uses the production relay or telemetry. Unrelated CDN QR rendering is stubbed. Google Drive sign-in and nearby-device discovery are not exercised.
 
-The companion covers baseline/patched receivers with the patched sender, one file, five files and a zero-byte file. Cancellation, partial resume and all old/new combinations remain protocol-only coverage until real-browser validation is expanded and run. No production relay or production telemetry is used for these tests.
+Five alternating baseline/patched receiver samples with identical sender code, Chrome 154.0.8037.97 and 4 KiB files produced these observed medians:
 
-The `CI - Pipe Resume Protocol` pull-request workflow runs syntax checks and the protocol tests for affected Pipe source/test changes. It grants read-only repository permissions, uses a credential-free fetch of the validated exact PR head from the fixed public repository URL, fetches full baseline history and performs no deployment. This also avoids a checkout-action cleanup failure caused by unrelated malformed worktree gitlinks already in the repository. It does not run the browser harness.
+| Files | Baseline click-to-confirmation | Patched click-to-confirmation | Baseline after metadata | Patched after metadata |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 566 ms | 67 ms | 507 ms | 8.5 ms |
+| 5 | 2570 ms | 77 ms | 2512 ms | 19.1 ms |
+
+These are localhost UI/WebRTC latency measurements, **not** WAN throughput claims. Prewarming remains enabled. Confirmation is the later of sender completion and observed final receiver acknowledgement. The harness records per-file waits and validates each received file byte-for-byte. Each case has its own channel; for one file the receiver sends an ACK for `done` and another for `all-done`, while multi-file cases send the final ACK only. The harness waits for the corresponding ACK count before taking the final timestamp.
+
+The CI artifacts contain raw measurements, sandbox evidence, desktop screenshots and a 390 px mobile-emulated mixed-file case. Coverage includes single/multiple/empty files, baseline/modified sender-receiver combinations, cancellation of a long legacy-receiver queue, and a fresh transfer after sender cancel/reset and receiver reload. Real partial-buffer resume remains protocol-test coverage only. This is one-browser-engine, same-host validation; it does not replace physical mobile devices, Safari, cross-network NAT/TURN testing or large-file throughput benchmarks.
+
+The read-only CI workflow runs syntax checks, protocol tests and browser verification on affected pull requests and main pushes. It uses a credential-free fetch of a validated exact commit SHA from the fixed public repository URL, retains baseline history, and performs no deployment. This avoids checkout-action authentication cleanup failing on unrelated malformed worktree gitlinks already in the repository.
+
+## Existing follow-up issues isolated by browser QA
+
+- The sender can miss the initial receiver-capabilities frame: the baseline receiver was observed with sender `peerAcks === false`, byte-correct receipt and a receiver ACK arriving a few milliseconds after sender completion. The harness therefore observes receipt independently rather than treating the sender status as confirmation. Reproduce with repeated fresh baseline one-file UI transfers and inspect the captured capability/ACK frames. The production ACK logic is intentionally unchanged by this focused fix.
+- A zero-byte transfer succeeds and arrives byte-for-byte, but the sender's progress bar can remain at 0% beside its success message. This existing display quirk is not changed here.
