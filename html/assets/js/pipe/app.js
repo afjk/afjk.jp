@@ -1,3 +1,4 @@
+import { createSpeedReadout, formatTransferSpeed } from './transfer-speed.js';
 import {
   initSwarmModule,
   loadLocalSwarmCatalog,
@@ -345,6 +346,7 @@ function handleLanguageChange(lang) {
   }
   renderHistory();
   renderSwarmList();
+  speedReadouts.forEach(readout => readout.refresh());
 }
 
 languageManager.onChange(handleLanguageChange);
@@ -1124,6 +1126,7 @@ async function _sendFilesRawToPeer(fileEntries) {
 }
 
 async function sendFilesToAllPeers() {
+  sendSpeed.hide();
   const peers = Array.from(presenceState.peers.values());
   if (!peers.length) return;
   if (!selFiles.length) { setStatus('send-status', t('selectFileFirst'), 'err'); return; }
@@ -2154,6 +2157,7 @@ function renderFileList() {
 }
 
 function setFiles(files) {
+  sendSpeed.cancel();
   selFiles = files.map(f => ({ file: f, path: randPath() }));
   if (!selFiles.length) return;
 
@@ -2194,6 +2198,38 @@ function setFiles(files) {
   }
 }
 
+// Per-file payload rates; sent/queued and received values are intentionally distinct.
+function speedReadout(id) {
+  const el = document.getElementById(id);
+  return createSpeedReadout(state => {
+    if (!el) return; // Tolerate an older cached page during a static-asset rollout.
+    el.hidden = !state.visible;
+    if (!state.visible) return;
+    const ja = currentLang === 'ja';
+    const names = ja
+      ? { queued: '送信速度（キュー投入）', upload: '送信速度（中継へ）', receive: '受信速度', download: '受信速度', unmeasured: '受信速度' }
+      : { queued: 'Send speed (queued)', upload: 'Upload speed (to relay)', receive: 'Receive speed', download: 'Receive speed', unmeasured: 'Receive speed' };
+    const complete = state.phase === 'complete';
+    el.querySelector('.speed-label').textContent = `${complete ? (ja ? '平均 ' : 'Average ') : ''}${names[state.mode]}${ja ? '：' : ': '}`;
+    el.querySelector('.speed-value').textContent = formatTransferSpeed(state.rate);
+    let hint;
+    if (state.phase === 'unavailable') {
+      hint = state.mode === 'download'
+        ? (ja ? 'ブラウザ管理のダウンロードでは速度を取得できません' : 'Rate unavailable for browser-managed downloads')
+        : (ja ? 'この受信経路では進捗を取得できません' : 'Progress is unavailable on this receive path');
+    } else {
+      const scope = ja ? 'このファイル' : 'This file';
+      hint = scope + (ja ? ' · 1 MB/s = 1,000,000 バイト/秒' : ' · 1 MB/s = 1,000,000 bytes/s');
+      if (complete && state.rate === null) hint += ja ? ' · 短時間のため計測なし' : ' · Too brief to measure';
+      else if (!complete) hint += ja ? ' · 直近2秒' : ' · Last 2 seconds';
+      if (state.mode === 'queued') hint += ja ? ' · 相手への到着速度ではありません' : ' · Queueing rate, not peer delivery';
+    }
+    el.querySelector('.speed-hint').textContent = hint;
+  });
+}
+const sendSpeed = speedReadout('send-speed'), recvSpeed = speedReadout('recv-speed');
+const speedReadouts = [sendSpeed, recvSpeed];
+
 // ── Send ──────────────────────────────────────────────────────────────────────
 function _sendStart() {
   document.getElementById('send-btn').disabled      = true;
@@ -2207,6 +2243,7 @@ function _sendEnd() {
   _sendXHR = null; _sendPC = null;
 }
 function cancelSend() {
+  sendSpeed.cancel();
   _sendXHR?.abort();
   _sendXHR = null;
   disposeRtcSession(_activeSendSession, { force: true });
@@ -2219,12 +2256,15 @@ function cancelSend() {
 async function startSend() {
   if (!selFiles.length) return;
   _sendStart();
+  const speed = sendSpeed.begin('queued');
   document.getElementById('prog-wrap').style.display = 'block';
   setStatus('send-status', t('sendPreparing'), 'waiting');
 
   const ok = await trySendWebRTCFiles(selFiles,
     (fileIdx, loaded, total) => {
-      const p = Math.round(loaded / total * 100);
+      if (!speed.isCurrent()) return;
+      speed.update(loaded);
+      const p = total > 0 ? Math.round(loaded / total * 100) : 100;
       document.getElementById('prog-bar').style.width = p + '%';
       const prefix = selFiles.length > 1 ? t('fileProgress')(fileIdx + 1, selFiles.length) + ': ' : '';
       document.getElementById('prog-text').textContent = `${prefix}${p}%  (${fmt(loaded)} / ${fmt(total)})`;
@@ -2233,36 +2273,43 @@ async function startSend() {
       if (item && !item.classList.contains('done')) item.classList.add('sending');
     },
     fileIdx => {
+      if (!speed.isCurrent()) return;
+      speed.finish();
       const item = document.getElementById(`fli-${fileIdx}`);
       if (item) { item.classList.remove('sending'); item.classList.add('done'); }
       const st = document.getElementById(`fli-status-${fileIdx}`);
       if (st) st.textContent = '✓';
     },
     (totalSent, elapsed) => {
-      const speed = elapsed > 0 ? totalSent / elapsed : 0;
+      if (!speed.isCurrent()) return;
+      const averageSpeed = elapsed > 0 ? totalSent / elapsed : 0;
       const msg = selFiles.length > 1
         ? t('allDone')(selFiles.length)
-        : t('p2pSendDone')(fmt(totalSent), elapsed.toFixed(2), fmt(speed));
+        : t('p2pSendDone')(fmt(totalSent), elapsed.toFixed(2), fmt(averageSpeed));
       setStatus('send-status', msg, 'ok');
       _sendEnd();
     },
-    () => setStatus('send-status', t('sendReady'), 'waiting')
+    () => { if (speed.isCurrent()) setStatus('send-status', t('sendReady'), 'waiting'); },
+    (_fileIdx, offset) => speed.startFile(offset)
   );
 
+  if (!speed.isCurrent()) return;
   if (!ok) {
     if (!_sendPC && !_sendXHR && document.getElementById('cancel-send-btn').style.display === 'none') return; // cancelled
     const oversized = selFiles.find(({ file }) => file.size > PIPE_MAX_SIZE);
     if (oversized) {
+      speed.cancel();
       setStatus('send-status', t('pipeSizeLimit'), 'err');
       _sendEnd();
       return;
     }
     setStatus('send-status', t('waitingRcvr'), 'waiting');
+    const uploadSpeed = sendSpeed.begin('upload');
 
     let totalSent = 0;
     let anyError = false;
     for (let i = 0; i < selFiles.length; i++) {
-      if (anyError) break;
+      if (anyError || !uploadSpeed.isCurrent()) break;
       // Stop the queue if the user cancelled (cancelSend hides this button).
       if (document.getElementById('cancel-send-btn').style.display === 'none') return;
       const { file, path } = selFiles[i];
@@ -2271,7 +2318,8 @@ async function startSend() {
       if (item) item.classList.add('sending');
       if (st)   st.textContent = '…';
       try {
-        await sendHTTP(file, path, i, selFiles.length);
+        await sendHTTP(file, path, i, selFiles.length, uploadSpeed);
+        if (!uploadSpeed.isCurrent()) return;
         // sendHTTP resolves quietly on user-cancel (xhr abort); don't mark the
         // aborted file as sent.
         if (document.getElementById('cancel-send-btn').style.display === 'none') return;
@@ -2279,10 +2327,11 @@ async function startSend() {
         if (st)   st.textContent = '✓';
         totalSent += file.size;
       } catch {
+        uploadSpeed.cancel();
         anyError = true;
       }
     }
-    if (!anyError) {
+    if (!anyError && uploadSpeed.isCurrent()) {
       const msg = selFiles.length > 1
         ? t('allDone')(selFiles.length)
         : t('transferDone')(fmt(totalSent), '—', '—');
@@ -2296,7 +2345,8 @@ async function startSend() {
 // ReadableStream fetch body requires `duplex: 'half'` + HTTP/2 and throws on
 // Chromium otherwise — which silently broke every HTTP fallback. XHR streams the
 // File straight from disk (low memory, any size) and gives real upload progress.
-function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
+function sendHTTP(body, path, fileIdx = 0, totalFiles = 1, speed = null) {
+  speed?.startFile(0, 'upload');
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     _sendXHR = xhr;
@@ -2309,33 +2359,37 @@ function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
       `attachment; filename="${encodeURIComponent(body.name || 'file')}"`);
 
     xhr.upload.onprogress = e => {
+      if (speed?.isCurrent?.() === false) return;
+      speed?.update(e.loaded);
       if (!total || !e.lengthComputable) return;
       const p = Math.round(e.loaded / total * 100);
       document.getElementById('prog-bar').style.width = p + '%';
-      const elapsed = (performance.now() - t0) / 1000;
-      const speed   = elapsed > 0 ? e.loaded / elapsed : 0;
       const prefix  = totalFiles > 1 ? t('fileProgress')(fileIdx + 1, totalFiles) + ': ' : '';
       document.getElementById('prog-text').textContent =
-        `${prefix}${p}%  (${fmt(e.loaded)} / ${fmt(total)})  ${fmt(speed)}/s`;
+        `${prefix}${p}%  (${fmt(e.loaded)} / ${fmt(total)})`;
       if (p > 0 && p < 100) setStatus('send-status', t('transferring'));
     };
 
     xhr.onload = () => {
+      if (speed?.isCurrent?.() === false) { resolve(); return; }
       _sendXHR = null;
       if (xhr.status < 200 || xhr.status >= 300) {
+        speed?.cancel();
         setStatus('send-status', t('transferFail'), 'err');
         _sendEnd();
         reject(new Error('HTTP upload failed: ' + xhr.status));
         return;
       }
+      speed?.update(total);
+      speed?.finish();
       const elapsed = (performance.now() - t0) / 1000;
-      const speed   = elapsed > 0 ? total / elapsed : 0;
+      const averageSpeed = elapsed > 0 ? total / elapsed : 0;
       document.getElementById('prog-bar').style.width = '100%';
       document.getElementById('prog-text').textContent = totalFiles > 1
         ? t('fileProgress')(fileIdx + 1, totalFiles) + ': 100%'
         : '100%';
       if (totalFiles === 1) {
-        setStatus('send-status', t('transferDone')(fmt(total), elapsed.toFixed(2), fmt(speed)), 'ok');
+        setStatus('send-status', t('transferDone')(fmt(total), elapsed.toFixed(2), fmt(averageSpeed)), 'ok');
       }
       reportTransfer('pipe', total, {
         transport: 'http',
@@ -2346,8 +2400,13 @@ function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
     };
 
     // Abort is a user cancel — resolve quietly so the multi-file loop stops cleanly.
-    xhr.onabort = () => { _sendXHR = null; resolve(); };
+    xhr.onabort = () => {
+      if (speed?.isCurrent?.() !== false) { speed?.cancel(); _sendXHR = null; }
+      resolve();
+    };
     xhr.onerror = () => {
+      if (speed?.isCurrent?.() === false) { resolve(); return; }
+      speed?.cancel();
       _sendXHR = null;
       setStatus('send-status', t('transferFail'), 'err');
       _sendEnd();
@@ -2359,6 +2418,7 @@ function sendHTTP(body, path, fileIdx = 0, totalFiles = 1) {
 }
 
 function resetSend() {
+  sendSpeed.cancel();
   discardPrewarm();
   selFiles = []; fi.value = '';
   const fileList = document.getElementById('file-list');
@@ -2402,7 +2462,9 @@ function _recvEnd() {
   document.getElementById('cancel-recv-btn').style.display = 'none';
   _recvPC = null; _recvAC = null;
 }
-function _recvProgress(received, total) {
+function _recvProgress(received, total, speed = null) {
+  if (speed?.isCurrent?.() === false) return;
+  speed?.update(received);
   const wrap = document.getElementById('recv-prog-wrap');
   const bar  = document.getElementById('recv-prog-bar');
   const text = document.getElementById('recv-prog-text');
@@ -2414,6 +2476,7 @@ function _recvProgress(received, total) {
   }
 }
 function cancelRecv() {
+  recvSpeed.cancel();
   disposeRtcSession(_activeRecvSession, { force: true });
   setStatus('recv-status', t('cancelled'), 'err');
   _recvEnd();
@@ -2423,17 +2486,21 @@ async function startReceive(sender = null) {
   const path = parsePath(document.getElementById('recv-path').value);
   if (!path) return;
   _recvStart();
+  const speed = recvSpeed.begin('receive');
   setRecvSender('recv-from', sender);
   setStatus('recv-status', t('tryingP2P'), 'waiting');
 
   const ok = await tryRecvWebRTC(path,
-    msg => setStatus('recv-status', msg, 'waiting'),
-    (msg, blob, filename) => { triggerDownload(blob, filename); setStatus('recv-status', msg, 'ok'); _recvEnd(); },
-    (received, total) => _recvProgress(received, total)
+    msg => { if (speed.isCurrent()) setStatus('recv-status', msg, 'waiting'); },
+    (msg, blob, filename) => { triggerDownload(blob, filename); if (!speed.isCurrent()) return; speed.finish(); setStatus('recv-status', msg, 'ok'); _recvEnd(); },
+    (received, total) => _recvProgress(received, total, speed),
+    (_index, offset) => speed.startFile(offset)
   );
 
+  if (!speed.isCurrent()) return;
   if (!ok) {
     if (document.getElementById('cancel-recv-btn').style.display === 'none') return; // cancelled
+    speed.unavailable('download');
     setStatus('recv-status', t('startDL'), 'waiting');
     const a = Object.assign(document.createElement('a'), {
       href: `${PIPE}/${path}`, download: ''
@@ -2441,8 +2508,9 @@ async function startReceive(sender = null) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() =>
-      setStatus('recv-status', t('waitingXfer')), 1200);
+    setTimeout(() => {
+      if (speed.isCurrent()) setStatus('recv-status', t('waitingXfer'));
+    }, 1200);
     _recvEnd();
   }
 }
@@ -2450,6 +2518,7 @@ async function startReceive(sender = null) {
 // Receive multiple files arriving via a single P2P session (kind: 'files' handoff)
 async function startReceiveFiles(sigPath, fileInfos, sender) {
   _recvStart();
+  const speed = recvSpeed.begin('receive');
   setRecvSender('recv-from', sender);
   setStatus('recv-status', t('tryingP2P'), 'waiting');
 
@@ -2457,10 +2526,12 @@ async function startReceiveFiles(sigPath, fileInfos, sender) {
   let filesReceived = 0;
 
   const ok = await tryRecvWebRTC(sigPath,
-    msg => setStatus('recv-status', msg, 'waiting'),
+    msg => { if (speed.isCurrent()) setStatus('recv-status', msg, 'waiting'); },
     (msg, blob, filename) => {
       triggerDownload(blob, filename);
       filesReceived++;
+      if (!speed.isCurrent()) return;
+      speed.finish();
       if (filesReceived >= fileCount) {
         const finalMsg = fileCount > 1 ? t('allDone')(fileCount) : msg;
         setStatus('recv-status', finalMsg, 'ok');
@@ -2473,13 +2544,18 @@ async function startReceiveFiles(sigPath, fileInfos, sender) {
           'waiting');
       }
     },
-    (received, total) => _recvProgress(received, total)
+    (received, total) => _recvProgress(received, total, speed),
+    (_index, offset) => speed.startFile(offset)
   );
 
+  if (!speed.isCurrent()) return;
   if (!ok) {
+    if (document.getElementById('cancel-recv-btn').style.display === 'none') return; // cancelled
+    speed.unavailable('download');
     // HTTP fallback: trigger a download for each file path
     const infos = fileInfos || [{ path: sigPath, filename: '' }];
     for (const info of infos) {
+      if (!speed.isCurrent()) return;
       const a = Object.assign(document.createElement('a'), {
         href: `${PIPE}/${info.path}`, download: info.filename || ''
       });
@@ -2488,7 +2564,7 @@ async function startReceiveFiles(sigPath, fileInfos, sender) {
       document.body.removeChild(a);
       await new Promise(r => setTimeout(r, 600));
     }
-    setTimeout(() => setStatus('recv-status', t('waitingXfer')), 1200);
+    setTimeout(() => { if (speed.isCurrent()) setStatus('recv-status', t('waitingXfer')); }, 1200);
     _recvEnd();
   }
 }
@@ -3105,7 +3181,7 @@ async function trySendWebRTC(body, path, onProgress, onDone, onReady) {
 // ── WebRTC send (multi-file) ──────────────────────────────────────────────────
 // fileEntries: [{file, path}] — uses first path for signaling
 // onProgress(fileIdx, loaded, total), onFileDone(fileIdx), onAllDone(totalSent, elapsed)
-async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone, onReady) {
+async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone, onReady, onFileStart) {
   const sigPath = fileEntries[0].path;
   let session = null;
   let success = false;
@@ -3156,6 +3232,8 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
           dc.addEventListener('message', handler);
         });
       } catch { resumeOffset = 0; }
+
+      if (typeof onFileStart === 'function') onFileStart(i, resumeOffset, total);
 
       // Read the file in chunkSize-sized slices and send each as one DataChannel
       // message. Reading via Blob.slice (not Blob.stream) lets us emit full
@@ -3209,7 +3287,7 @@ async function trySendWebRTCFiles(fileEntries, onProgress, onFileDone, onAllDone
 // ── WebRTC receive ────────────────────────────────────────────────────────────
 // onStatus(message), onDone(message, blob, filename), onProgress(received, total)
 // Returns true if P2P succeeded
-async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
+async function tryRecvWebRTC(path, onStatus, onDone, onProgress, onFileStart) {
   let session = null;
   let success = false;
   try {
@@ -3271,8 +3349,9 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
             t0 = null;
             isMulti = (msg.count > 1);
             onStatus(t('p2pReceiving')(meta.name));
-            // Reset the bar to 0% for the new file (multi-file transfers).
-            if (onProgress) tick(() => onProgress(0, meta.size), true);
+            // Preserve resumed bytes in progress, but exclude them from the new rate.
+            if (typeof onFileStart === 'function') onFileStart(meta.index, recvd, meta.size);
+            if (onProgress) tick(() => onProgress(recvd, meta.size), true);
           } else if (msg.t === 'done') {
             if (!meta) { fail(new Error('done before meta')); return; }
             const elapsed = t0 ? (performance.now() - t0) / 1000 : 0;
@@ -3414,6 +3493,7 @@ function renderHistory() {
 
 // ── Lang init ─────────────────────────────────────────────────────────────────
 initSwarmModule({
+  clearTransferSpeed: direction => (direction === 'send' ? sendSpeed : recvSpeed).hide(),
   presenceState,
   swarmState,
   localSeedInfoHashes,

@@ -3,8 +3,9 @@ name: CI - Pipe Resume Protocol
 on:
   pull_request:
     paths:
-      - 'html/assets/js/pipe/app.js'
-      - 'html/assets/js/pipe/swarm.js'
+      - 'html/assets/js/pipe/**'
+      - 'html/assets/css/pipe.css'
+      - 'html/pipe/index.html'
       - 'scripts/pipe-resume-latency.test.mjs'
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
@@ -12,8 +13,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'html/assets/js/pipe/app.js'
-      - 'html/assets/js/pipe/swarm.js'
+      - 'html/assets/js/pipe/**'
+      - 'html/assets/css/pipe.css'
+      - 'html/pipe/index.html'
       - 'scripts/pipe-resume-latency.test.mjs'
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
@@ -48,12 +50,17 @@ jobs:
         run: |
           node --check html/assets/js/pipe/app.js
           node --check html/assets/js/pipe/swarm.js
+          node --check html/assets/js/pipe/transfer-speed.js
           node --check scripts/pipe-resume-latency.test.mjs
           node --check scripts/pipe-resume-browser.mjs
+      - name: Test live speed and upload lifecycle
+        run: node --test html/assets/js/pipe/transfer-speed.test.js
       - name: Test protocol and synthetic latency
         run: node --test scripts/pipe-resume-latency.test.mjs
       - name: Install isolated browser test dependency
         run: npm install --prefix "$RUNNER_TEMP/pipe-browser-deps" --ignore-scripts --no-audit --no-fund playwright@1.60.0
+      - name: Install Japanese screenshot fonts
+        run: sudo apt-get update -qq && sudo apt-get install -y fonts-noto-cjk
       - name: Run isolated sandboxed Chrome UI transfers
         env:
           PIPE_BROWSER_OUTPUT: pipe-browser-results

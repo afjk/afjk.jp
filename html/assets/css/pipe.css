@@ -638,8 +638,10 @@
     /* ── Receive tab ── */
     .field-label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing:.06em; margin-bottom: 8px; }
     .input-row { display: flex; gap: 8px; }
+    .input-row .btn { flex-shrink: 0; white-space: nowrap; padding-inline: 14px; }
     .path-input {
       flex: 1;
+      min-width: 0;
       background: var(--surface);
       border: 1px solid var(--border2);
       border-radius: 8px;
@@ -1008,3 +1010,9 @@
       min-width: 4em;
       text-align: center;
     }
+
+/* Live payload rate: wraps naturally at mobile widths without per-chunk layout. */
+.transfer-speed { margin-top: 10px; font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; }
+.transfer-speed[hidden] { display: none; }
+.speed-value { color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.speed-hint { display: block; font-size: 0.7rem; color: var(--muted); }
