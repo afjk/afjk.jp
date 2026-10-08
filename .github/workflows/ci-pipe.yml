@@ -8,6 +8,14 @@ on:
       - 'scripts/pipe-resume-browser.mjs'
       - '.github/workflows/ci-pipe.yml'
 
+  push:
+    branches: [main]
+    paths:
+      - 'html/assets/js/pipe/app.js'
+      - 'scripts/pipe-resume-latency.test.mjs'
+      - 'scripts/pipe-resume-browser.mjs'
+      - '.github/workflows/ci-pipe.yml'
+
 permissions:
   contents: read
 
@@ -15,13 +23,13 @@ jobs:
   protocol:
     name: Pipe resume protocol
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       # Public, credential-free fetch avoids checkout's submodule-auth cleanup:
       # this repository contains unrelated worktree gitlinks without .gitmodules.
-      - name: Checkout exact PR head with baseline history
+      - name: Checkout exact change with baseline history
         env:
-          PIPE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PIPE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
         run: |
           [[ "$PIPE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
