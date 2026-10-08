@@ -41,3 +41,22 @@ jobs:
           node --check scripts/pipe-resume-browser.mjs
       - name: Test protocol and synthetic latency
         run: node --test scripts/pipe-resume-latency.test.mjs
+      - name: Install isolated browser test dependency
+        run: npm install --prefix "$RUNNER_TEMP/pipe-browser-deps" --ignore-scripts --no-audit --no-fund playwright@1.60.0
+      - name: Run isolated sandboxed Chrome UI transfers
+        env:
+          PIPE_BROWSER_OUTPUT: pipe-browser-results
+          PIPE_BROWSER_SAMPLES: 5
+        run: |
+          export CHROMIUM_PATH="$(command -v google-chrome)"
+          export PIPE_PLAYWRIGHT_MODULE="file://$RUNNER_TEMP/pipe-browser-deps/node_modules/playwright/index.mjs"
+          "$CHROMIUM_PATH" --version
+          node scripts/pipe-resume-browser.mjs
+      - name: Upload browser screenshots and measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipe-browser-results
+          path: pipe-browser-results/
+          if-no-files-found: warn
+          retention-days: 14
