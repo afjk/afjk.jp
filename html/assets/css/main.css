@@ -526,6 +526,11 @@
 
     .selected-post iframe { max-width: 100% !important; }
 
+    @media (max-width: 600px) {
+      /* X post embeds need at least 250px; avoid double section/container padding. */
+      #posts .container { padding-inline: 0; }
+    }
+
     .posts-note {
       max-width: 700px;
       margin: 0 auto 20px;

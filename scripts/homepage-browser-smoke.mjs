@@ -85,6 +85,22 @@ try {
       observation.status = 'four post iframes visible; screenshots recorded for content review';
     } catch { observation.status = 'not all four post iframes became visible within 20 seconds; individual fallback links remain available'; }
     observation.visibleEmbeds = await live.locator('.selected-post iframe').evaluateAll(frames => frames.filter(frame => frame.getBoundingClientRect().height > 100).length);
+    observation.posts = [];
+    for (let index = 0; index < 4; index++) {
+      const card = live.locator('.selected-post').nth(index);
+      await card.scrollIntoViewIfNeeded();
+      const handle = await card.locator('iframe').elementHandle();
+      const frame = handle ? await handle.contentFrame() : null;
+      let contentReady = false;
+      if (frame) {
+        try {
+          await frame.waitForFunction(() => document.body.innerText.includes('afjk'), null, { timeout: 15000 });
+          contentReady = true;
+        } catch { /* Record unavailable external content without inventing a pass. */ }
+      }
+      observation.posts.push({ number: index + 1, contentReady });
+      await card.screenshot({ animations: 'disabled', path: `${out}/live-x-${width}-post-${index + 1}.png` });
+    }
     assert.equal(await live.locator('.selected-post-link').count(), 4);
     for (const link of await live.locator('.selected-post-link').all()) assert.ok(await link.isVisible());
     await noOverflow(live, `live X ${width}px`);
