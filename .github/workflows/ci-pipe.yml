@@ -1,0 +1,35 @@
+name: CI - Pipe Resume Protocol
+
+on:
+  pull_request:
+    paths:
+      - 'html/assets/js/pipe/app.js'
+      - 'scripts/pipe-resume-latency.test.mjs'
+      - 'scripts/pipe-resume-browser.mjs'
+      - '.github/workflows/ci-pipe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    name: Pipe resume protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout with baseline history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check JavaScript syntax
+        run: |
+          node --check html/assets/js/pipe/app.js
+          node --check scripts/pipe-resume-latency.test.mjs
+          node --check scripts/pipe-resume-browser.mjs
+      - name: Test protocol and synthetic latency
+        run: node --test scripts/pipe-resume-latency.test.mjs

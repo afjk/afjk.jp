@@ -3262,6 +3262,9 @@ async function tryRecvWebRTC(path, onStatus, onDone, onProgress) {
               dc.send(JSON.stringify({ t: 'resume', index: msg.index, offset: recvd }));
             } else {
               resetBuffers();
+              // Fresh files have nothing to resume. Reply explicitly so a
+              // resumable sender need not wait for its legacy-peer timeout.
+              if (msg.resumable) dc.send(JSON.stringify({ t: 'resume', index: msg.index, offset: 0 }));
             }
             meta = msg;
             t0 = null;
