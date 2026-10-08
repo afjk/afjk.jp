@@ -182,6 +182,9 @@ try{
     },id);
     const values={mobile,sender:await pair.sender.locator('#send-speed').innerText(),receiver:await pair.receiver.locator('#recv-speed').innerText()};
     assert.match(values.sender,/queued|キュー投入/);assert.match(values.receiver,/Receive speed|受信速度/);
+    if(mobile)for(const id of ['recv-btn','cancel-recv-btn']){
+      const box=await pair.receiver.locator('#'+id).boundingBox();assert.ok(box.height<70,'Receive controls must stay on one readable line');
+    }
     await Promise.all([pair.sender.screenshot({path:path.join(output,`live-speed-${mobile}-sender.png`),fullPage:true}),pair.receiver.screenshot({path:path.join(output,`live-speed-${mobile}-receiver.png`),fullPage:true})]);
     const timing=await verify(pair,payloads);
     for(const p of [pair.sender,pair.receiver]){
