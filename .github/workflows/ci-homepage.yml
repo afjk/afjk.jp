@@ -9,6 +9,7 @@ on:
       - 'html/assets/js/worksData.test.js'
       - 'html/assets/js/worksSection.js'
       - '.github/workflows/ci-homepage.yml'
+      - 'scripts/homepage-browser-smoke.mjs'
   push:
     branches: [main]
     paths:
@@ -18,6 +19,7 @@ on:
       - 'html/assets/js/worksData.test.js'
       - 'html/assets/js/worksSection.js'
       - '.github/workflows/ci-homepage.yml'
+      - 'scripts/homepage-browser-smoke.mjs'
 
 permissions:
   contents: read
@@ -38,3 +40,25 @@ jobs:
           node --check html/assets/js/worksSection.js
       - name: Test bilingual cards and timeline fallback
         run: node --test html/assets/js/worksData.test.js
+
+  browser:
+    name: Homepage desktop and mobile browser checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/homepage-browser-smoke.mjs
+      - name: Save screenshots and verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homepage-browser-evidence
+          path: logs/homepage-browser/
+          if-no-files-found: error
+          retention-days: 7
