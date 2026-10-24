@@ -58,6 +58,7 @@ import { getSceneSyncDom, mountSceneSyncShellFromDom } from './ui/dom.js';
 import { showToast } from './ui/toast.js';
 import { createWelcomeDialog } from './ui/welcome-dialog.js';
 import { initMediaUrlDialog } from './ui/media-url-dialog.js';
+import { initTextAddDialog } from './ui/text-add-dialog.js';
 import { focusTextInputIfSafe, blurActiveEditableElement } from './ui/input-focus-guard.js';
 import { applySceneSyncDeviceMode, isSceneSyncMobileDevice } from './ui/device-mode.js';
 import { normalizeDisplayName } from './utils/display-name.js';
@@ -12261,10 +12262,11 @@ async function imageImporterCallback(file, position, context = {}) {
 
 async function textImporterCallback(text, position, filename = 'text.md', context = {}) {
   const _sceneTask = beginLocalSceneTask();
+  const explicitAdd = context.importIntent === 'add';
   // 通常ペースト導線の特殊ケース: 貼り付け内容が Loomlet graph なら
   // text panel 化せず、選択中オブジェクトへ attach / clear する。
   // 独自 toast を出すため、呼び出し側の汎用 toast は抑止する。
-  if (tryHandleLoomletGraphPaste(text)) {
+  if (!explicitAdd && tryHandleLoomletGraphPaste(text)) {
     return { suppressToast: true };
   }
 
@@ -12304,7 +12306,7 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
   };
 
   // Check for replace target
-  const replaceTarget = getReplaceTarget('text', context.hitObjectId);
+  const replaceTarget = explicitAdd ? null : getReplaceTarget('text', context.hitObjectId);
   if (replaceTarget) {
     const targetId = replaceTarget.userData.objectId;
     await sceneAwait(replaceObjectContent(targetId, {
@@ -12342,8 +12344,11 @@ async function textImporterCallback(text, position, filename = 'text.md', contex
     },
   };
 
+  // The numeric-add dialog waits for local preparation before publishing. It
+  // cannot replace a selected object or turn literal text into a graph command.
+  if (explicitAdd) await sceneAwait(addOrUpdateObject(objectId, payload, { strictLoad: true }), _sceneTask);
   broadcast(payload);
-  addOrUpdateObject(objectId, payload);
+  if (!explicitAdd) addOrUpdateObject(objectId, payload);
   presenceState.historyManager?.push(
     HistoryManager.createSceneAddEntry(payload)
   );
@@ -12820,6 +12825,21 @@ function getLocalAddSelectionState() {
     selectionVersion: selectionIntentVersion,
   };
 }
+
+const canAddText = () => sceneSyncReady && getLocalAddSelectionState().enabled
+  && presenceState.ws?.readyState === WebSocket.OPEN;
+initTextAddDialog({
+  canAdd: canAddText,
+  onStateChange: onSceneSyncShellStateChange,
+  showToast,
+  onAdd: ({ text, position }) => {
+    if (!canAddText()) throw new Error('編集モードでシーンの同期が完了してから追加してください。');
+    return textImporterCallback(text, new THREE.Vector3().fromArray(position), 'text.txt', {
+      importIntent: 'add',
+      name: text.split('\n')[0].slice(0, 60),
+    });
+  },
+});
 
 const pasteBtn = document.getElementById('paste-btn');
 const pasteSheet = document.getElementById('paste-sheet');
