@@ -10,6 +10,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { createThreeApp } from './core/three-app.js';
+import { showRenderingUnavailableNotice } from './ui/rendering-unavailable.js';
 import { createEnvironmentManager } from './core/environment.js';
 import { DragDropManager, SKY_DROP_UPNESS_THRESHOLD } from './components/drag-drop-manager.js';
 import {
@@ -303,7 +304,13 @@ const {
   camera,
   renderer,
   pmremGenerator,
+  viewport,
 } = threeApp;
+if (!renderer) showRenderingUnavailableNotice();
+
+function requireRenderer() {
+  if (!renderer) throw new Error('3D描画を利用できません。シーンの同期・状態操作は継続できますが、画像取得・XR・画面上での配置は利用できません。');
+}
 const gaussianSplatSortScheduler = createGaussianSplatSortScheduler({
   isObjectInView: createGaussianSplatFrustumTest(THREE),
 });
@@ -477,7 +484,7 @@ function updateInputRoutingModeUI() {
   notifySceneSyncShellStateChanged('input-routing-mode-changed');
 }
 
-setupXrButtons({
+if (renderer) setupXrButtons({
   renderer,
   dom,
 });
@@ -559,7 +566,7 @@ function isLockedByOthers(objectId) {
 
 // ── XR モード切り替え（VR ⇄ MR） ─────────────────────────
 async function switchXrMode(targetMode) {
-  if (!('xr' in navigator)) return;
+  if (!renderer || !('xr' in navigator)) return;
 
   const supported = await navigator.xr.isSessionSupported(targetMode).catch(() => false);
   if (!supported) {
@@ -589,6 +596,7 @@ async function switchXrMode(targetMode) {
 }
 
 async function requestXrSession(mode) {
+  requireRenderer();
   const sessionInit = mode === 'immersive-ar'
     ? {
         requiredFeatures: ['hit-test'],
@@ -621,7 +629,7 @@ function handleXrRestartFailure(intendedMode, error) {
 
 const controllerModelFactory = new XRControllerModelFactory();
 
-for (let i = 0; i < 2; i++) {
+for (let i = 0; renderer && i < 2; i++) {
   const ctrl = renderer.xr.getController(i);
   ctrl.userData.xrIndex = i;
   ctrl.addEventListener('selectstart', () => onXrSelectStart(ctrl));
@@ -1052,7 +1060,7 @@ function updateTwoHandGrab() {
 // ── XR セッション開始/終了 ─────────────────────────────
 let xrSavedBackground = null;
 
-renderer.xr.addEventListener('sessionstart', async () => {
+renderer?.xr.addEventListener('sessionstart', async () => {
   document.body.classList.add('scene-sync-xr-session');
   xrState.active = true;
   const session = renderer.xr.getSession();
@@ -1109,7 +1117,7 @@ renderer.xr.addEventListener('sessionstart', async () => {
   console.debug('[XR] hand joint spheres ready');
 });
 
-renderer.xr.addEventListener('sessionend', () => {
+renderer?.xr.addEventListener('sessionend', () => {
   document.body.classList.remove('scene-sync-xr-session');
   // トグルボタンと床合わせボタンを隠す
   const xrToggleBtn = dom.xrToggleBtn;
@@ -1175,13 +1183,15 @@ renderer.xr.addEventListener('sessionend', () => {
 
 // ── コントロール ─────────────────────────────────────────
 
-const orbit = new OrbitControls(camera, renderer.domElement);
+const orbit = new OrbitControls(camera, viewport);
 orbit.enableDamping = true;
 orbit.dampingFactor = 0.1;
+orbit.enabled = !!renderer;
 
-const transformCtrl = new TransformControls(camera, renderer.domElement);
+const transformCtrl = new TransformControls(camera, viewport);
 // Three.js 0.170+ では getHelper() で Object3D を取得して scene に追加
 scene.add(transformCtrl.getHelper());
+transformCtrl.enabled = !!renderer;
 
 let isDragging = false;
 let dragIntervalId = null;
@@ -3829,6 +3839,7 @@ function selectManagedObject(obj, options = {}) {
 }
 
 function updateHoverStateFromPointer(clientX, clientY) {
+  if (!renderer) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
@@ -3868,6 +3879,7 @@ function updateHoverStateFromPointer(clientX, clientY) {
 }
 
 function selectObjectAt(clientX, clientY, event = null) {
+  if (!renderer) return false;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
@@ -4159,6 +4171,7 @@ function findManagedObjectRootFromHit(hitObject) {
 }
 
 function findPlayerPhysicsDragHit(clientX, clientY) {
+  if (!renderer) return null;
   const rect = renderer.domElement.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
 
@@ -4186,6 +4199,7 @@ function findPlayerPhysicsDragHit(clientX, clientY) {
 }
 
 function getPlayerPhysicsDragTarget(clientX, clientY, target = playerPhysicsDragTarget) {
+  if (!renderer) return null;
   if (!isPlayerPhysicsDragging()) return null;
   const rect = renderer.domElement.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
@@ -4422,6 +4436,7 @@ function inputCommitPasteClick() {
 
 // touch シングルタップ：空き領域なら選択解除（transform 中/選択中のみ）
 function inputHandleEmptyTapDeselect(clientX, clientY) {
+  if (!renderer) return;
   if (!(transformCtrl.object || selectedObjectIds.size > 0)) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -4473,7 +4488,7 @@ function inputHandleEscape() {
 }
 
 const sceneInputIntent = {
-  getCanvas: () => renderer.domElement,
+  getCanvas: () => renderer?.domElement || null,
   isDragging: () => isDragging || isPlayerPhysicsDragging(),
   isPasteMode: () => pastePreviewMode,
   selectAt: (clientX, clientY, event = null) => selectObjectAt(clientX, clientY, event),
@@ -4815,6 +4830,7 @@ function updatePastePreviewFromPointer(event = null) {
 }
 
 async function startPastePreviewMode() {
+  if (!renderer) { showRenderingUnavailableNotice(); return false; }
   const _sceneTask = beginLocalSceneTask();
   if (!sceneObjectClipboard) {
     showToast?.('ペーストするオブジェクトがありません');
@@ -5306,7 +5322,7 @@ function onResize() {
   if (xrState.active) return;
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer?.setSize(innerWidth, innerHeight);
 }
 
 window.addEventListener('resize', onResize);
@@ -5377,7 +5393,7 @@ function updateXrHitTest(frame) {
 
 // ── レンダリングループ ────────────────────────────────────
 
-renderer.setAnimationLoop((time, frame) => {
+threeApp.setAnimationLoop((time, frame) => {
   sceneRoomUi?.updateXr(xrState.active ? renderer.xr.getCamera() : camera, xrState.active);
   if (!xrState.active) {
     orbit.update();
@@ -5415,8 +5431,10 @@ renderer.setAnimationLoop((time, frame) => {
     updateSelectionHelpers();
   }
   updateObjectGlbAnimations(now, sceneClockStateForTick);
-  updateGazeStateFromCamera();
-  updateGazeDwellState(now);
+  if (renderer) {
+    updateGazeStateFromCamera();
+    updateGazeDwellState(now);
+  }
   const loomletClockStateForTick = {
     ...sceneClockStateForTick,
     ...(Number.isFinite(physicsTick?.tick) ? { tick: physicsTick.tick } : {}),
@@ -5441,15 +5459,17 @@ renderer.setAnimationLoop((time, frame) => {
   sendAvatarPose(time);
   remoteAvatarManager.updateRemoteAvatars(time);
 
-  gaussianSplatSortScheduler.update({
-    root: scene,
-    renderer,
-    camera,
-    now: time,
-    continuous: xrState.active || renderer.xr.isPresenting,
-  });
+  if (renderer) {
+    gaussianSplatSortScheduler.update({
+      root: scene,
+      renderer,
+      camera,
+      now: time,
+      continuous: xrState.active || renderer.xr.isPresenting,
+    });
 
-  renderer.render(scene, camera);
+    renderer.render(scene, camera);
+  }
 
   // Clear queued Loomlet host events at frame end
   loomletHostEvents.clear();
@@ -8462,7 +8482,7 @@ function focusCameraOnObject(objectId) {
 function focusCameraOnSelection() {
   // View framing is a local desktop/mobile editor action. Do not disturb the
   // XR camera pose, and never broadcast this camera-only operation.
-  if (renderer.xr.isPresenting || selectedObjectIds.size === 0) return false;
+  if (renderer?.xr.isPresenting || selectedObjectIds.size === 0) return false;
 
   const selectionBounds = new THREE.Box3();
   let objects = 0;
@@ -8543,9 +8563,9 @@ function captureScreenshotBlob(options = {}) {
     quality = 0.92,
   } = options;
   return new Promise((resolve, reject) => {
-    const canvas = renderer.domElement;
+    const canvas = renderer?.domElement;
     if (!canvas) {
-      reject(new Error('renderer canvas not available'));
+      reject(new Error('Screenshot unavailable: 3D rendering is unavailable; scene sync and state operations remain available.'));
       return;
     }
 
@@ -9153,6 +9173,7 @@ function getEditorState() {
   }
 
   return {
+    renderingAvailable: !!renderer,
     transformMode: transformCtrl?.mode || 'translate',
     inputRoutingMode,
     selectedCount: selectedIds.length,
@@ -12421,14 +12442,15 @@ async function urlImporterCallback(url, position, context = {}) {
 }
 
 const dragDropManager = new DragDropManager({
-  captureWork: beginLocalSceneTask,
+  captureWork: () => { requireRenderer(); return beginLocalSceneTask(); },
   assertWork: token => sceneLifetime.assert(token),
-  container: document,
+  container: renderer ? document : null,
   camera,
-  renderer,
+  // This manager uses only domElement for coordinates; GPU calls stay guarded.
+  renderer: renderer || { domElement: viewport },
   scene,
-  fileInput: dom.fileInput,
-  addBtn: dom.addBtn,
+  fileInput: renderer ? dom.fileInput : null,
+  addBtn: renderer ? dom.addBtn : null,
   dropOverlay: dom.dropOverlay,
   showToast,
   glbLoader,
@@ -12573,6 +12595,7 @@ if (isDevUiEnabled()) {
   }
 
   function getDebugObjectScreenPoint(objectId) {
+    if (!renderer) return null;
     const object = managedObjects.get(objectId);
     if (!object) return null;
     object.updateMatrixWorld?.(true);
@@ -12648,9 +12671,11 @@ if (isDevUiEnabled()) {
       screenPoint: getDebugObjectScreenPoint,
     },
     renderer: () => ({
-      renderer: renderer.isWebGPURenderer === true ? 'WebGPURenderer' : renderer.type,
-      backend: renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu',
-      xrEnabled: renderer.xr.enabled === true,
+      available: !!renderer,
+      error: threeApp.renderingError?.message || null,
+      renderer: renderer ? (renderer.isWebGPURenderer === true ? 'WebGPURenderer' : renderer.type) : null,
+      backend: renderer ? (renderer.backend?.isWebGLBackend === true ? 'webgl' : 'webgpu') : null,
+      xrEnabled: renderer?.xr.enabled === true,
       ...getSceneSyncGLTFLoaderExtensionDiagnostics(),
     }),
     selectAt: (clientX, clientY) => sceneInputIntent.selectAt(clientX, clientY),
@@ -12720,6 +12745,7 @@ function closeMenuSheets() {
 }
 
 function openAddMenu() {
+  if (!renderer) { showRenderingUnavailableNotice(); return; }
   if (isMobileUi()) {
     openMobileActionSheet();
     return;
@@ -12728,7 +12754,7 @@ function openAddMenu() {
 }
 
 dom.addBtn?.addEventListener('click', (event) => {
-  if (!isMobileUi()) return;
+  if (renderer && !isMobileUi()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   openAddMenu();
@@ -12737,6 +12763,7 @@ dom.addBtn?.addEventListener('click', (event) => {
 // ── クリップボード貼り付け ────────────────────────────────────────────
 
 function getDefaultImportPosition() {
+  requireRenderer();
   const rect = renderer.domElement.getBoundingClientRect();
   return dragDropManager.coordinateTransformer.screenToWorld(
     rect.left + rect.width / 2,
@@ -12746,6 +12773,7 @@ function getDefaultImportPosition() {
 }
 
 function getCenterRayPlacementContext() {
+  requireRenderer();
   const rect = renderer.domElement.getBoundingClientRect();
   const clientX = rect.left + rect.width / 2;
   const clientY = rect.top + rect.height / 2;
@@ -12763,7 +12791,7 @@ function getClipboardPlacementContext() {
 const clipboardImportManager = new ClipboardImportManager({
   captureWork: () => sceneLifetime.capture(),
   assertWork: token => sceneLifetime.assert(token),
-  container: document,
+  container: renderer ? document : null,
   getDefaultPosition: getClipboardPlacementContext,
   showToast,
   isEditingTarget: (target) => {
@@ -12814,12 +12842,14 @@ const mobileAddMediaUrlBtn = document.getElementById('mobile-add-media-url-btn')
 // ── メディアURL登録ダイアログ（VR180 / 3D 立体視対応） ────────────────
 const mediaUrlDialog = initMediaUrlDialog({
   showToast,
-  onSubmit: (url, mediaFormat) =>
-    urlImporterCallback(url, getDefaultImportPosition(), { mediaFormat })
+  onSubmit: async (url, mediaFormat) => {
+    if (!renderer) { showRenderingUnavailableNotice(); return; }
+    return urlImporterCallback(url, getDefaultImportPosition(), { mediaFormat })
       .catch((error) => {
         console.warn('[media-url-dialog] import failed:', error);
         showToast(error?.message || 'メディアURLの追加に失敗しました');
-      }),
+      });
+  },
 });
 
 mediaUrlBtn?.addEventListener('click', () => mediaUrlDialog.open());
@@ -12847,6 +12877,7 @@ function openPasteSheet() {
 }
 
 async function pasteFromClipboardAtDefaultPosition() {
+  if (!renderer) { showRenderingUnavailableNotice(); return null; }
   const _sceneTask = beginLocalSceneTask();
   showToast('クリップボードを読み込みます…');
   // silent: true — read/readText が失敗しても manager 側で強い error toast を出さない。
@@ -12896,6 +12927,7 @@ dom.mobileImageInput?.addEventListener('change', (event) => {
   const input = event.target;
   const file = input?.files?.[0];
 
+  if (!renderer) { input.value = ''; showRenderingUnavailableNotice(); return; }
   if (file) {
     const placement = getCenterRayPlacementContext();
     // Studio's + means add another image even while the last addition is selected.
@@ -12917,6 +12949,7 @@ dom.mobileGlbInput?.addEventListener('change', (event) => {
   const input = event.target;
   const file = input?.files?.[0];
 
+  if (!renderer) { input.value = ''; showRenderingUnavailableNotice(); return; }
   if (file) {
     dragDropManager.handleFile(file, getCenterRayPlacementContext()).catch((error) => {
       console.warn('[mobile-glb-input] failed to add GLB:', error);
@@ -13029,7 +13062,7 @@ if (pasteSheet) {
 }
 
 // #clipboard-paste-target に専用の paste handler
-if (clipboardPasteTarget) {
+if (renderer && clipboardPasteTarget) {
   clipboardPasteTarget.addEventListener('paste', async (event) => {
     const handled = await clipboardImportManager.handlePasteEvent(event, {
       force: true,

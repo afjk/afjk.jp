@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:rendering": "node --test html/assets/js/scenesync/core/three-app.test.js html/assets/js/scenesync-export/viewer/three-runtime.test.js",
+    "test:e2e:renderer-failure": "node scripts/scenesync-renderer-failure-browser-smoke.mjs",
     "test:audio-source-controller": "node --test html/assets/js/scenesync/audio/audio-source-controller.test.js",
     "test:editing-state": "node --test html/assets/js/scenesync/runtime/editing-state.test.js",
     "test:editor-input": "node --test html/assets/js/scenesync/shells/editor/inputs/editor-keyboard-adapter.test.js",

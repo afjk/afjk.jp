@@ -38,6 +38,8 @@ export function createEnvironmentManager(ctx) {
   }
 
   function loadEnvironmentAsset(envId) {
+    // Keep desired environment, broadcasts and history without GPU processing.
+    if (!pmremGenerator) return;
     const seq = ++loadSeq;
     const url = '/assets/hdri/' + envId + '.hdr';
 

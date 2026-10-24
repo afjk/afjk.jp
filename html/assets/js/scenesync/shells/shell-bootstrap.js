@@ -112,11 +112,11 @@ const INPUT_ADAPTER_FACTORIES = {
 
 function mountInputAdaptersForShell(shell, core) {
   const inputAdapters = [];
-  if (!core?.input?.getCanvas?.()) return inputAdapters;
 
   const shellInputs = Array.isArray(shell?.inputs) ? shell.inputs : [];
 
   for (const inputId of shellInputs) {
+    if (inputId !== 'keyboard' && !core?.input?.getCanvas?.()) continue;
     const factory = INPUT_ADAPTER_FACTORIES[inputId];
     if (!factory) {
       console.warn(`[SceneSyncShell] unknown input adapter: ${inputId}`);
