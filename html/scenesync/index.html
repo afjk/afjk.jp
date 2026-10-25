@@ -1612,9 +1612,10 @@
     </form>
   </dialog>
   <!-- グローバルモーダル: #settings-panel を隠す shell でも表示できるよう外出し -->
-  <div id="pairing-dialog" class="pairing-dialog" style="display:none;">
+  <div id="pairing-dialog" class="pairing-dialog" role="dialog" aria-modal="true" aria-labelledby="pairing-title" style="display:none;">
     <div class="pairing-content">
-      <h3>AI ペアリング</h3>
+      <h3 id="pairing-title">AI ペアリング</h3>
+      <p id="pairing-status" role="status" style="display:none;">リンクコードを取得しています…</p>
       <div id="pairing-step-code">
         <p>次のコードを AI に入力してください:</p>
         <button id="pairing-code" class="pairing-code" type="button" title="クリックしてコピー">------</button>
@@ -1633,8 +1634,9 @@
           このダイアログは自動で閉じます。
         </p>
       </div>
-      <div id="pairing-error" style="display:none;" class="pairing-error"></div>
+      <div id="pairing-error" role="alert" style="display:none;" class="pairing-error"></div>
       <div class="pairing-buttons">
+        <button id="btn-retry-pairing" class="chip" type="button" style="display:none;">再試行</button>
         <button id="btn-cancel-pairing" class="chip">キャンセル</button>
         <button id="btn-revoke-link" class="chip danger" style="display:none;">リンク解除</button>
       </div>

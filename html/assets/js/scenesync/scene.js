@@ -73,6 +73,8 @@ import { createRemoteAvatarManager } from './avatars/remote-avatars.js';
 import { createHistoryManager, HistoryManager } from './history/history-manager.js';
 import { createUserManager } from './user/user-manager.js';
 import { createLinkManager } from './link/link-manager.js';
+import { createPairingRequestController } from './link/pairing-request.js';
+import { resolveSceneSyncPresenceUrl, getSceneSyncApiBaseUrl } from './utils/presence-url.js';
 import { createSceneSyncLoomIntegration } from './loomlet-runtime-integration.js';
 import {
   normalizeAudioSource,
@@ -5111,6 +5113,7 @@ function commitPastePreviewPlacement({ selectPlaced = true } = {}) {
 }
 
 function shouldIgnoreSceneShortcut(event) {
+  if (document.getElementById('pairing-dialog')?.style.display === 'flex') return true;
   const target = event.target;
   if (!target) return false;
 
@@ -5552,12 +5555,7 @@ const sceneInspectorPhysicsVelocityYEl = document.getElementById('scene-inspecto
 const sceneInspectorPhysicsVelocityZEl = document.getElementById('scene-inspector-physics-velocity-z');
 
 function resolvePresenceUrl() {
-  const params = new URLSearchParams(location.search);
-  const override = params.get('presence');
-  if (override) return override;
-  const isLocal = location.hostname === 'localhost'
-                 || location.hostname === '127.0.0.1';
-  return isLocal ? 'ws://localhost:8787' : 'wss://afjk.jp/presence';
+  return resolveSceneSyncPresenceUrl(location.href);
 }
 
 function buildPresenceRoomUrl(base, roomCode) {
@@ -5640,15 +5638,7 @@ function updatePeersList() {
 const userManager = createUserManager();
 
 function getApiBaseUrl() {
-  const params = new URLSearchParams(location.search);
-  const presenceOverride = params.get('presence');
-  if (presenceOverride) {
-    const url = new URL(presenceOverride, window.location.origin);
-    return url.origin + url.pathname + '/api';
-  }
-  const isLocal = location.hostname === 'localhost'
-                 || location.hostname === '127.0.0.1';
-  return isLocal ? 'http://localhost:8787/api' : 'https://afjk.jp/presence/api';
+  return getSceneSyncApiBaseUrl(resolvePresenceUrl());
 }
 
 const linkManager = createLinkManager(getApiBaseUrl());
@@ -8395,7 +8385,6 @@ function handleHandoff(data) {
           roomId: payload.roomId || presenceState.room,
           expiresAt: payload.expiresAt
         });
-        showPairingDialogLinked(payload.expiresAt);
         showToast('AIリンクが確立しました');
       }
       break;
@@ -8403,6 +8392,7 @@ function handleHandoff(data) {
     case 'ai-link-revoked': {
       if (presenceState.linkManager.linkId === payload.linkId) {
         presenceState.linkManager.clearLocal();
+        pairingRequests.reset();
         updateLinkButtonState();
         showToast('AIリンクが解除されました');
       }
@@ -13112,7 +13102,9 @@ const pairingStepLinked = document.getElementById('pairing-step-linked');
 const pairingCode = document.getElementById('pairing-code');
 const pairingTimer = document.getElementById('pairing-timer');
 const pairingError = document.getElementById('pairing-error');
+const pairingStatus = document.getElementById('pairing-status');
 const btnCancelPairing = document.getElementById('btn-cancel-pairing');
+const btnRetryPairing = document.getElementById('btn-retry-pairing');
 const btnRevokeLink = document.getElementById('btn-revoke-link');
 const btnCopyPairingCode = document.getElementById('btn-copy-pairing-code');
 const sceneSyncOperatorLink = document.getElementById('scene-sync-operator-link');
@@ -13126,6 +13118,16 @@ const btnRoomFullNew = document.getElementById('btn-room-full-new');
 let pairingCountdown = null;
 let pairingExpireTime = null;
 let pairingAutoCloseTimer = null;
+
+const pairingRequests = createPairingRequestController({
+  getSession: () => presenceState.ws?.readyState === WebSocket.OPEN && presenceState.id
+    ? { roomId: presenceState.room, userId: presenceState.userId, peerId: presenceState.id }
+    : null,
+  request: ({ roomId, userId, peerId }) => presenceState.linkManager.initiatePairing(roomId, userId, peerId),
+  isLinked: () => presenceState.linkManager.isLinked(),
+  render: renderPairingRequestState,
+});
+onSceneSyncShellStateChange(() => pairingRequests.sessionChanged());
 
 function formatTime(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -13155,13 +13157,33 @@ function updatePairingTimer() {
   }
 }
 
-function showPairingDialogCode() {
+function renderPairingRequestState(state) {
+  clearPairingCountdown();
+  clearPairingAutoCloseTimer();
+  if (state.status === 'closed') {
+    pairingDialog.style.display = 'none';
+    return;
+  }
+  const wasOpen = pairingDialog.style.display === 'flex';
   btnCancelPairing.textContent = '閉じる';
   btnCancelPairing.style.display = 'inline-block';
   btnRevokeLink.style.display = 'none';
-  pairingStepCode.style.display = 'block';
+  btnRetryPairing.style.display = state.status === 'error' ? 'inline-block' : 'none';
+  pairingStatus.style.display = state.status === 'loading' ? 'block' : 'none';
+  pairingDialog.setAttribute('aria-busy', String(state.status === 'loading'));
+  pairingError.textContent = state.error || '';
+  pairingError.style.display = state.status === 'error' ? 'block' : 'none';
+  pairingStepCode.style.display = state.status === 'code' ? 'block' : 'none';
   pairingStepLinked.style.display = 'none';
+  pairingCode.textContent = state.code || '';
+  pairingCode.disabled = btnCopyPairingCode.disabled = state.status !== 'code';
   pairingDialog.style.display = 'flex';
+  if (!wasOpen) btnCancelPairing.focus();
+  if (state.status === 'code') {
+    pairingExpireTime = state.expiresAt;
+    pairingCountdown = setInterval(updatePairingTimer, 100);
+    updatePairingTimer();
+  }
 }
 
 function scheduleClosePairingDialogAfterLinked() {
@@ -13169,9 +13191,7 @@ function scheduleClosePairingDialogAfterLinked() {
 
   pairingAutoCloseTimer = window.setTimeout(() => {
     pairingAutoCloseTimer = null;
-    if (pairingDialog) {
-      pairingDialog.style.display = 'none';
-    }
+    cancelPairing();
   }, 2000);
 }
 
@@ -13201,6 +13221,7 @@ async function copyText(text, successMessage = 'コピーしました') {
 }
 
 function copyPairingCode() {
+  if (btnCopyPairingCode?.disabled) return false;
   return copyText(pairingCode?.textContent?.trim(), 'AIリンクコードをコピーしました');
 }
 
@@ -15828,6 +15849,12 @@ function setSceneInspectorOpen(nextOpen) {
 }
 
 function showPairingDialogLinked(expiresAtMs, { autoClose = false } = {}) {
+  pairingRequests.complete();
+  clearPairingCountdown();
+  clearPairingAutoCloseTimer();
+  pairingDialog.setAttribute('aria-busy', 'false');
+  pairingStatus.style.display = pairingError.style.display = btnRetryPairing.style.display = 'none';
+  pairingCode.disabled = btnCopyPairingCode.disabled = true;
   btnCancelPairing.textContent = '閉じる';
   btnCancelPairing.style.display = 'inline-block';
   btnRevokeLink.style.display = 'inline-block';
@@ -15847,39 +15874,12 @@ function showPairingDialogLinked(expiresAtMs, { autoClose = false } = {}) {
   }
 }
 
-async function startPairing() {
-  if (!presenceState.room) {
-    showToast('ルームに接続してからリンクしてください');
-    return;
-  }
-
-  try {
-    pairingError.style.display = 'none';
-    pairingError.textContent = '';
-
-    const result = await presenceState.linkManager.initiatePairing(
-      presenceState.room,
-      presenceState.userId,
-      presenceState.id
-    );
-
-    pairingCode.textContent = result.code;
-    pairingExpireTime = result.expiresAt;
-
-    if (pairingCountdown) clearInterval(pairingCountdown);
-    pairingCountdown = setInterval(updatePairingTimer, 100);
-    showPairingDialogCode();
-    updatePairingTimer();
-  } catch (err) {
-    pairingError.textContent = err.message;
-    pairingError.style.display = 'block';
-  }
+function startPairing() {
+  return pairingRequests.open();
 }
 
 function cancelPairing() {
-  clearPairingCountdown();
-  clearPairingAutoCloseTimer();
-  pairingDialog.style.display = 'none';
+  pairingRequests.close();
 }
 
 async function revokeLink() {
@@ -15913,6 +15913,7 @@ function updateMobileDevVisibility() {
 }
 
 btnCancelPairing?.addEventListener('click', cancelPairing);
+btnRetryPairing?.addEventListener('click', startPairing);
 btnRevokeLink?.addEventListener('click', revokeLink);
 btnCopyPairingCode?.addEventListener('click', copyPairingCode);
 pairingCode?.addEventListener('click', copyPairingCode);
@@ -16084,8 +16085,25 @@ pairingDialog?.addEventListener('click', (event) => {
     cancelPairing();
   }
 });
+pairingDialog?.addEventListener('keydown', (event) => {
+  event.stopPropagation();
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelPairing();
+  } else if (event.key === 'Tab') {
+    const controls = [...pairingDialog.querySelectorAll('button:not(:disabled), a[href]')]
+      .filter(control => control.getClientRects().length);
+    const current = controls.indexOf(document.activeElement);
+    if (current < 0 || (event.shiftKey ? current === 0 : current === controls.length - 1)) {
+      event.preventDefault();
+      (event.shiftKey ? controls.at(-1) : controls[0])?.focus();
+    }
+  }
+});
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && pairingDialog?.style.display === 'flex') {
+    event.preventDefault();
+    event.stopImmediatePropagation();
     cancelPairing();
     return;
   }
@@ -16106,12 +16124,13 @@ presenceState.linkManager.onStatusChange = () => {
   updateLinkButtonState();
 
   if (!presenceState.linkManager.isLinked()) {
-    clearPairingAutoCloseTimer();
+    pairingRequests.reset();
     return;
   }
 
   const dialogOpen = pairingDialog?.style.display === 'flex';
-  const wasWaitingForCode = pairingStepCode?.style.display !== 'none';
+  const wasWaitingForCode = pairingStepLinked?.style.display !== 'block';
+  pairingRequests.complete();
 
   if (dialogOpen && wasWaitingForCode) {
     showPairingDialogLinked(presenceState.linkManager.expiresAt, { autoClose: true });

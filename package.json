@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:ai-link": "node --test html/assets/js/scenesync/utils/presence-url.test.js html/assets/js/scenesync/link/pairing-request.test.js",
+    "test:e2e:ai-link": "node scripts/scenesync-ai-link-browser-smoke.mjs",
     "test:text-add": "node --test html/assets/js/scenesync/ui/text-add-dialog.test.js",
     "test:e2e:text-add": "node scripts/scenesync-text-add-browser-smoke.mjs",
     "test:rendering": "node --test html/assets/js/scenesync/core/three-app.test.js html/assets/js/scenesync-export/viewer/three-runtime.test.js",
