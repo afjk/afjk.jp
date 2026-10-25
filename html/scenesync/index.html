@@ -129,6 +129,25 @@
       top: calc(100% + 8px + var(--scene-notice-menu-offset, 0px));
     }
     .editor-scene-menu-panel hr { border: 0; border-top: 1px solid #57617a; margin: 5px 4px; }
+    #add-text-btn:disabled { opacity: .45; cursor: default; }
+    #text-add-dialog {
+      box-sizing: border-box; width: min(440px, calc(100vw - 24px));
+      max-height: calc(100dvh - 24px); overflow-y: auto;
+      margin: auto; padding: 20px; border: 1px solid #57617a; border-radius: 12px;
+      background: #172033; color: #fff; font: 15px/1.5 system-ui;
+    }
+    #text-add-dialog::backdrop { background: #0009; }
+    #text-add-dialog h2 { margin: 0 0 12px; font-size: 20px; }
+    #text-add-dialog textarea, #text-add-dialog input {
+      box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid #7887a3;
+      border-radius: 6px; background: #101827; color: #fff; font: inherit; font-size: 16px;
+    }
+    #text-add-dialog textarea { resize: vertical; min-height: 100px; }
+    #text-add-dialog fieldset { margin: 12px 0; padding: 8px; border: 1px solid #57617a; }
+    .text-add-coordinates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .text-add-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    #text-add-dialog button { min-height: 44px; font: inherit; }
+    #text-add-error { color: #ffc2c2; }
     #editor-scene-clear { color: #f4a3a3; }
     #editor-scene-clear:disabled { opacity: .45; cursor: default; }
     body.scene-sync-device-mobile #editor-scene-menu summary { min-width: 44px; min-height: 44px; justify-content: center; }
@@ -975,6 +994,7 @@
       min-height: 42px;
       font-size: 14px;
     }
+    .mobile-sheet-actions .chip:disabled { opacity: .45; cursor: default; }
     #paste-sheet {
       position: fixed;
       inset: 0;
@@ -1571,10 +1591,31 @@
     <div class="row mobile-collapsible-row" id="room-section"></div>
   </div>
 
+  <dialog id="text-add-dialog" aria-labelledby="text-add-title">
+    <form id="text-add-form">
+      <h2 id="text-add-title">テキストを追加</h2>
+      <label for="text-add-content">内容</label>
+      <textarea id="text-add-content" rows="4" maxlength="5000" required></textarea>
+      <fieldset>
+        <legend>位置（m）</legend>
+        <div class="text-add-coordinates">
+          <label>X<input id="text-add-x" type="number" step="any" value="0" required></label>
+          <label>Y<input id="text-add-y" type="number" step="any" value="1" required></label>
+          <label>Z<input id="text-add-z" type="number" step="any" value="0" required></label>
+        </div>
+      </fieldset>
+      <p id="text-add-error" role="alert" hidden></p>
+      <div class="text-add-actions">
+        <button id="text-add-cancel" class="chip" type="button">キャンセル</button>
+        <button id="text-add-submit" class="chip primary" type="submit">追加</button>
+      </div>
+    </form>
+  </dialog>
   <!-- グローバルモーダル: #settings-panel を隠す shell でも表示できるよう外出し -->
-  <div id="pairing-dialog" class="pairing-dialog" style="display:none;">
+  <div id="pairing-dialog" class="pairing-dialog" role="dialog" aria-modal="true" aria-labelledby="pairing-title" style="display:none;">
     <div class="pairing-content">
-      <h3>AI ペアリング</h3>
+      <h3 id="pairing-title">AI ペアリング</h3>
+      <p id="pairing-status" role="status" style="display:none;">リンクコードを取得しています…</p>
       <div id="pairing-step-code">
         <p>次のコードを AI に入力してください:</p>
         <button id="pairing-code" class="pairing-code" type="button" title="クリックしてコピー">------</button>
@@ -1593,8 +1634,9 @@
           このダイアログは自動で閉じます。
         </p>
       </div>
-      <div id="pairing-error" style="display:none;" class="pairing-error"></div>
+      <div id="pairing-error" role="alert" style="display:none;" class="pairing-error"></div>
       <div class="pairing-buttons">
+        <button id="btn-retry-pairing" class="chip" type="button" style="display:none;">再試行</button>
         <button id="btn-cancel-pairing" class="chip">キャンセル</button>
         <button id="btn-revoke-link" class="chip danger" style="display:none;">リンク解除</button>
       </div>
@@ -1917,7 +1959,7 @@
       </div>
     </div>
   </aside>
-  <button id="add-btn" title="GLB/画像を追加">＋</button>
+  <button id="add-btn" title="追加" aria-label="追加">＋</button>
   <input type="file" id="file-input" style="display:none">
   <input
     type="file"
@@ -1956,6 +1998,7 @@
       <div class="mobile-sheet-actions">
         <button id="mobile-add-image-btn" class="chip primary" type="button">画像を追加</button>
         <button id="mobile-add-glb-btn" class="chip" type="button">ファイルを追加</button>
+        <button id="add-text-btn" class="chip" type="button" disabled>テキストを追加…</button>
         <button id="mobile-add-media-url-btn" class="chip" type="button">URLを追加（メディア / SuperSplat）</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
         <button id="mobile-env-open-btn" class="chip" type="button">背景</button>
