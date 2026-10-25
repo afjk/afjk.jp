@@ -12750,16 +12750,11 @@ function closeMenuSheets() {
 }
 
 function openAddMenu() {
-  if (!renderer) { showRenderingUnavailableNotice(); return; }
-  if (isMobileUi()) {
-    openMobileActionSheet();
-    return;
-  }
-  dom.fileInput?.click();
+  document.getElementById('editor-scene-menu')?.removeAttribute('open');
+  openMobileActionSheet();
 }
 
 dom.addBtn?.addEventListener('click', (event) => {
-  if (renderer && !isMobileUi()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   openAddMenu();
@@ -12830,6 +12825,11 @@ const canAddText = () => sceneSyncReady && getLocalAddSelectionState().enabled
   && presenceState.ws?.readyState === WebSocket.OPEN;
 initTextAddDialog({
   canAdd: canAddText,
+  onOpen: closeMobileActionSheet,
+  onClose: () => {
+    const button = document.querySelector('[data-studio-add]') || dom.addBtn;
+    if (button?.getClientRects().length) button.focus();
+  },
   onStateChange: onSceneSyncShellStateChange,
   showToast,
   onAdd: ({ text, position }) => {
@@ -12858,6 +12858,14 @@ const mobileDeleteSkyboxBtn = document.getElementById('mobile-delete-skybox-btn'
 const mobileDevOpenBtn = document.getElementById('mobile-dev-open-btn');
 const mediaUrlBtn = document.getElementById('media-url-btn');
 const mobileAddMediaUrlBtn = document.getElementById('mobile-add-media-url-btn');
+
+if (!renderer) {
+  for (const button of [mobileAddImageBtn, mobileAddGlbBtn, mobileAddMediaUrlBtn, mobilePasteBtn]) {
+    if (!button) continue;
+    button.disabled = true;
+    button.title = '3D描画を利用できないため、この配置操作は利用できません';
+  }
+}
 
 // ── メディアURL登録ダイアログ（VR180 / 3D 立体視対応） ────────────────
 const mediaUrlDialog = initMediaUrlDialog({
@@ -12935,7 +12943,7 @@ mobileAddImageBtn?.addEventListener('click', () => {
 });
 mobileAddGlbBtn?.addEventListener('click', () => {
   closeMobileActionSheet();
-  dom.mobileGlbInput?.click();
+  (isMobileUi() ? dom.mobileGlbInput : dom.fileInput)?.click();
 });
 mobilePasteBtn?.addEventListener('click', () => {
   closeMobileActionSheet();

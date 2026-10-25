@@ -9,12 +9,12 @@ test('an older shell without the optional dialog can still initialize', () => {
 });
 
 function fixture(onAdd = async () => {}) {
-  const ids = ['text-add-dialog', 'text-add-form', 'text-add-content', 'text-add-x', 'text-add-y', 'text-add-z', 'editor-add-text', 'text-add-submit', 'text-add-cancel', 'text-add-error'];
+  const ids = ['text-add-dialog', 'text-add-form', 'text-add-content', 'text-add-x', 'text-add-y', 'text-add-z', 'add-text-btn', 'text-add-submit', 'text-add-cancel', 'text-add-error'];
   const elements = Object.fromEntries(ids.map(id => [id, Object.assign(new EventTarget(), { value: '', disabled: false, hidden: true })]));
   const dialog = elements['text-add-dialog'];
   dialog.open = false;
   dialog.showModal = () => { dialog.open = true; };
-  dialog.close = () => { dialog.open = false; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent(new Event('close')); };
   elements['text-add-content'].focus = () => {};
   elements['text-add-form'].reset = () => {
     elements['text-add-content'].value = '';
@@ -22,17 +22,19 @@ function fixture(onAdd = async () => {}) {
   };
   elements['text-add-form'].setAttribute = () => {};
   let allowed = true, refresh;
-  const additions = [], messages = [];
+  const additions = [], messages = [], transitions = [];
   initTextAddDialog({
     root: { getElementById: id => elements[id] },
     canAdd: () => allowed,
+    onOpen: () => transitions.push('open'),
+    onClose: () => transitions.push('close'),
     onAdd: async input => { additions.push(input); await onAdd(input); },
     showToast: message => messages.push(message),
     onStateChange: listener => { refresh = listener; },
   });
   return {
-    elements, dialog, additions, messages,
-    open() { elements['editor-add-text'].dispatchEvent(new Event('click')); },
+    elements, dialog, additions, messages, transitions,
+    open() { elements['add-text-btn'].dispatchEvent(new Event('click')); },
     text(value) { elements['text-add-content'].value = value; },
     submit() { elements['text-add-form'].dispatchEvent(new Event('submit', { cancelable: true })); },
     allow(value) { allowed = value; refresh(); },
@@ -85,4 +87,17 @@ test('failed preparation leaves the draft available for retry; cancel makes no a
   fail = false; f.submit(); await flush(); assert.equal(f.messages.length, 1);
   f.open(); f.text('cancelled'); f.elements['text-add-cancel'].dispatchEvent(new Event('click'));
   f.submit(); await flush(); assert.equal(f.additions.length, 2);
+});
+
+
+test('opening from the add menu closes it once and cancel restores its opener on every cycle', () => {
+  const f = fixture();
+  for (let i = 0; i < 3; i++) {
+    f.open(); f.text('discard draft');
+    f.elements['text-add-cancel'].dispatchEvent(new Event('click'));
+    assert.equal(f.dialog.open, false);
+  }
+  assert.deepEqual(f.transitions, ['open', 'close', 'open', 'close', 'open', 'close']);
+  assert.equal(f.additions.length, 0);
+  f.open(); assert.equal(f.elements['text-add-content'].value, '');
 });

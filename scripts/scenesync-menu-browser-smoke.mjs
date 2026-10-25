@@ -28,6 +28,7 @@ try {
       localStorage.setItem('sceneSync.displayName', 'Menu check');
     });
     page = await context.newPage();
+    page.setDefaultTimeout(20000);
     page.on('pageerror', error => result.errors.push(error.message));
     await page.goto(`${base}/scenesync/?shell=studio&room=mn-${mobile ? 'm' : 'd'}-${Date.now().toString(36)}&presence=${encodeURIComponent(presence)}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.sceneSyncShell?.current() === 'studio' && window.__sceneSyncDebug?.getRoomLifecycle().ready, null, { timeout: 60000 });
@@ -120,43 +121,38 @@ try {
       }
       check(`${surface}/${shell}: advanced controls preserved`);
 
-      if (mobile) {
+      await click(add);
+      assert.deepEqual(await page.locator('#mobile-action-sheet .mobile-sheet-actions button').allTextContents(), ['画像を追加', 'ファイルを追加', 'テキストを追加…', 'URLを追加（メディア / SuperSplat）', 'クリップボードから追加', '背景']);
+      await page.screenshot({ path: `${out}/${surface}-${shell}-plus.png` });
+      await click('#mobile-action-sheet-close');
+      for (const id of ['#mobile-add-image-btn', '#mobile-add-glb-btn']) {
         await click(add);
-        assert.deepEqual(await page.locator('#mobile-action-sheet .mobile-sheet-actions button').allTextContents(), ['画像を追加', 'ファイルを追加', 'URLを追加（メディア / SuperSplat）', 'クリップボードから追加', '背景']);
-        await page.screenshot({ path: `${out}/${surface}-${shell}-plus.png` });
-        await click('#mobile-action-sheet-close');
-        for (const id of ['#mobile-add-image-btn', '#mobile-add-glb-btn']) {
-          await click(add);
-          const chooserReady = page.waitForEvent('filechooser');
-          await click(id);
-          await (await chooserReady).setFiles([]);
-          assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
-        }
-        await click(add); await click('#mobile-add-media-url-btn');
-        await page.locator('#media-url-dialog').waitFor({ state: 'visible' });
-        await click('#media-url-cancel-btn');
-        // Supply local test text without reading the host clipboard.
-        const objectsBeforePaste = await page.evaluate(async () => (await import('/assets/js/scenesync/ui/dom.js')).getSceneSyncShellRuntime().core.getEditorState().objectCount);
-        await page.evaluate(() => {
-          Object.defineProperty(navigator.clipboard, 'read', { configurable: true, value: async () => [{ types: ['text/plain'], getType: async () => new Blob(['Menu clipboard test'], { type: 'text/plain' }) }] });
-        });
-        await click(add); await click('#mobile-paste-btn');
-        await page.waitForFunction(async before => (await import('/assets/js/scenesync/ui/dom.js')).getSceneSyncShellRuntime().core.getEditorState().objectCount > before, objectsBeforePaste, { timeout: 20000 });
-        assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
-        await click(add); await click('#mobile-env-open-btn');
-        await page.locator('#mobile-env-select').selectOption('outdoor_night');
-        assert.equal(await page.locator('#env-select').inputValue(), 'outdoor_night');
-        await page.locator('#mobile-env-select').selectOption('outdoor_day');
-        await click('#mobile-env-sheet-close');
-        await click(add);
-        await page.touchscreen.tap(20, 100);
-        assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
-        check(`${surface}/${shell}: five add actions, picker/URL/clipboard text import/background routes`);
-      } else {
         const chooserReady = page.waitForEvent('filechooser');
-        await click(add); await (await chooserReady).setFiles([]);
-        check(`${surface}/${shell}: desktop + file picker preserved`);
+        await click(id);
+        await (await chooserReady).setFiles([]);
+        assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
       }
+      await click(add); await click('#mobile-add-media-url-btn');
+      await page.locator('#media-url-dialog').waitFor({ state: 'visible' });
+      await click('#media-url-cancel-btn');
+      // Supply local test text without reading the host clipboard.
+      const objectsBeforePaste = await page.evaluate(async () => (await import('/assets/js/scenesync/ui/dom.js')).getSceneSyncShellRuntime().core.getEditorState().objectCount);
+      await page.evaluate(() => {
+        Object.defineProperty(navigator.clipboard, 'read', { configurable: true, value: async () => [{ types: ['text/plain'], getType: async () => new Blob(['Menu clipboard test'], { type: 'text/plain' }) }] });
+      });
+      await click(add); await click('#mobile-paste-btn');
+      await page.waitForFunction(async before => (await import('/assets/js/scenesync/ui/dom.js')).getSceneSyncShellRuntime().core.getEditorState().objectCount > before, objectsBeforePaste, { timeout: 20000 });
+      assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
+      await click(add); await click('#mobile-env-open-btn');
+      await page.locator('#mobile-env-select').selectOption('outdoor_night');
+      assert.equal(await page.locator('#env-select').inputValue(), 'outdoor_night');
+      await page.locator('#mobile-env-select').selectOption('outdoor_day');
+      await click('#mobile-env-sheet-close');
+      await click(add);
+      if (mobile) await page.touchscreen.tap(20, 100); else await page.mouse.click(20, 100);
+      assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
+      check(`${surface}/${shell}: six add actions, picker/URL/clipboard text import/background routes`);
+
       await click(toggle); await click(action('room'));
       await page.evaluate(() => window.sceneSyncShell.switchTo('player'));
       assert.equal(await page.locator('.mobile-sheet:visible').count(), 0);

@@ -47,12 +47,20 @@ async function open(name, fail = false, mobile = false) {
   assert.equal(await page.evaluate(() => window.__sceneSyncDebug.renderer().available), !fail);
   return { page, context, sent };
 }
-async function openDialog(page) {
-  const menu = page.locator('#editor-scene-menu');
-  if (!await menu.evaluate(el => el.open)) await menu.locator('summary').click();
-  await page.locator('#editor-add-text').click();
-  await page.locator('#text-add-dialog').waitFor({ state: 'visible' });
+async function openPlus(page) {
+  assert.equal(await page.locator('#editor-add-text').count(), 0);
+  assert.equal((await page.locator('#editor-scene-menu button').allTextContents()).some(text => text.includes('テキストを追加')), false);
+  await page.locator('#add-btn').click();
+  await page.locator('#mobile-action-sheet').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#text-add-dialog').isVisible(), false);
 }
+async function openDialog(page) {
+  await openPlus(page);
+  await page.locator('#add-text-btn').click();
+  await page.locator('#text-add-dialog').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#mobile-action-sheet').isVisible(), false);
+}
+
 async function fill(page, text, position) {
   await page.locator('#text-add-content').fill(text);
   for (const [index, axis] of ['x', 'y', 'z'].entries()) await page.locator(`#text-add-${axis}`).fill(String(position[index]));
@@ -76,6 +84,13 @@ try {
   result.security.status = await check.locator('body').innerText();
   assert.match(result.security.status, /You are adequately sandboxed/); await check.close();
   const a = await open('visual editor');
+  for (let i = 0; i < 3; i++) {
+    await openDialog(a.page);
+    await a.page.locator('#text-add-cancel').click();
+    assert.equal(await a.page.locator('#mobile-action-sheet').isVisible(), false);
+  }
+  assert.deepEqual(await ids(a.page), []);
+  pass('normal plus menu opens text dialog; repeated open/cancel does not open a file picker or create objects');
   const original = 'Existing user note';
   const existing = await add(a.page, original, [-1.8, 1, 0]);
   const point = await a.page.evaluate(id => window.__sceneSyncDebug.objects.screenPoint(id), existing);
@@ -85,6 +100,13 @@ try {
   const b = await open('state-only editor', true);
   await count(b.page, 1); await textEquals(b.page, existing, original);
   await wait(b.page, () => document.querySelectorAll('#peers-list .peer-editing').length > 0);
+  await openPlus(b.page);
+  for (const id of ['mobile-add-image-btn', 'mobile-add-glb-btn', 'mobile-add-media-url-btn', 'mobile-paste-btn']) {
+    assert.equal(await b.page.locator(`#${id}`).isDisabled(), true);
+  }
+  await b.page.screenshot({ path: `${out}/state-only-plus-menu.png` });
+  await b.page.locator('#mobile-action-sheet-close').click();
+  pass('state-only plus menu keeps text creation available while disabling rendering-dependent add actions');
   const reply = 'やあ、af！一緒に作ろう。';
   const position = [2.25, 1.25, -0.5];
   const replyId = await add(b.page, reply, position, true);
@@ -164,6 +186,13 @@ try {
   const c = await open('late mobile state-only peer', true, true);
   await count(c.page, 3); await textEquals(c.page, replyId, reply);
   assert.deepEqual((await object(c.page, replyId)).position, position);
+  await openPlus(c.page);
+  await c.page.screenshot({ path: `${out}/mobile-plus-menu.png` });
+  await c.page.locator('#mobile-action-sheet-close').click();
+  for (let i = 0; i < 3; i++) {
+    await openDialog(c.page); await c.page.locator('#text-add-cancel').click();
+    assert.equal(await c.page.locator('#mobile-action-sheet').isVisible(), false);
+  }
   await openDialog(c.page); await fill(c.page, reply, position);
   const bounds = await c.page.locator('#text-add-dialog').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 391 && bounds.y >= 0 && bounds.y + bounds.height <= 845);

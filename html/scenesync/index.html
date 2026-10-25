@@ -129,7 +129,7 @@
       top: calc(100% + 8px + var(--scene-notice-menu-offset, 0px));
     }
     .editor-scene-menu-panel hr { border: 0; border-top: 1px solid #57617a; margin: 5px 4px; }
-    #editor-add-text:disabled { opacity: .45; cursor: default; }
+    #add-text-btn:disabled { opacity: .45; cursor: default; }
     #text-add-dialog {
       box-sizing: border-box; width: min(440px, calc(100vw - 24px));
       max-height: calc(100dvh - 24px); overflow-y: auto;
@@ -994,6 +994,7 @@
       min-height: 42px;
       font-size: 14px;
     }
+    .mobile-sheet-actions .chip:disabled { opacity: .45; cursor: default; }
     #paste-sheet {
       position: fixed;
       inset: 0;
@@ -1567,7 +1568,6 @@
           <span class="editor-scene-menu-mobile-label" aria-hidden="true">…</span>
         </summary>
         <div class="editor-scene-menu-panel">
-          <button id="editor-add-text" class="chip" type="button" disabled>テキストを追加…</button>
           <button id="editor-room-open-btn" class="chip" type="button">ルーム設定</button>
           <button id="export-btn" class="chip" type="button" title="Export scene as ZIP">
             <span>⬇</span><span>Export（書き出し）</span>
@@ -1957,7 +1957,7 @@
       </div>
     </div>
   </aside>
-  <button id="add-btn" title="GLB/画像を追加">＋</button>
+  <button id="add-btn" title="追加" aria-label="追加">＋</button>
   <input type="file" id="file-input" style="display:none">
   <input
     type="file"
@@ -1996,6 +1996,7 @@
       <div class="mobile-sheet-actions">
         <button id="mobile-add-image-btn" class="chip primary" type="button">画像を追加</button>
         <button id="mobile-add-glb-btn" class="chip" type="button">ファイルを追加</button>
+        <button id="add-text-btn" class="chip" type="button" disabled>テキストを追加…</button>
         <button id="mobile-add-media-url-btn" class="chip" type="button">URLを追加（メディア / SuperSplat）</button>
         <button id="mobile-paste-btn" class="chip" type="button">クリップボードから追加</button>
         <button id="mobile-env-open-btn" class="chip" type="button">背景</button>

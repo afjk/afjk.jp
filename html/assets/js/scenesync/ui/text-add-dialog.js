@@ -9,12 +9,12 @@ export function readTextAddInput(text, coordinates) {
   return { text: value, position: coordinates.map(Number) };
 }
 
-export function initTextAddDialog({ canAdd, onAdd, showToast, onStateChange, root = document }) {
+export function initTextAddDialog({ canAdd, onAdd, showToast, onStateChange, onOpen, onClose, root = document }) {
   const dialog = root.getElementById('text-add-dialog');
   const form = root.getElementById('text-add-form');
   const text = root.getElementById('text-add-content');
   const coordinates = ['x', 'y', 'z'].map(axis => root.getElementById(`text-add-${axis}`));
-  const openButton = root.getElementById('editor-add-text');
+  const openButton = root.getElementById('add-text-btn');
   const addButton = root.getElementById('text-add-submit');
   const cancelButton = root.getElementById('text-add-cancel');
   const error = root.getElementById('text-add-error');
@@ -31,9 +31,11 @@ export function initTextAddDialog({ canAdd, onAdd, showToast, onStateChange, roo
     if (pending || !canAdd()) return;
     form.reset();
     error.hidden = true;
+    onOpen?.();
     dialog.showModal();
     text.focus();
   });
+  dialog.addEventListener('close', () => onClose?.());
   cancelButton.addEventListener('click', () => { if (!pending) dialog.close(); });
   // Buttons in the modal must not trigger the editor's Delete/Undo shortcuts.
   dialog.addEventListener('keydown', event => event.stopPropagation());
