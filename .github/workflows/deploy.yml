@@ -53,11 +53,22 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           timeout: 120s
           script: |
+            set -e
             cd ~/github/afjk.jp
             git fetch origin
+            git checkout -B main origin/main
             git reset --hard origin/main
             docker compose up -d --force-recreate www-service
             docker compose up -d --build presence-server
             docker compose up -d mediamtx
             docker compose up -d --force-recreate https-portal
             docker compose up -d --force-recreate verdaccio
+            sleep 3
+            if [ "$(docker inspect -f '{{.State.Running}}' https-portal 2>/dev/null)" != "true" ]; then
+              echo "::error::https-portal is not running; afjk.jp is offline"
+              docker ps -a --filter name=https-portal
+              docker ps --filter publish=80 --filter publish=443
+              ss -ltn '( sport = :80 or sport = :443 )' || true
+              docker logs --tail 50 https-portal || true
+              exit 1
+            fi

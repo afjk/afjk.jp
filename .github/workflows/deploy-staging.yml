@@ -29,6 +29,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           timeout: 120s
           script: |
+            set -e
             DEPLOY_BRANCH='${{ github.ref_name }}'
             cd ~/github/afjk.jp
             git fetch origin "+refs/heads/${DEPLOY_BRANCH}:refs/remotes/origin/${DEPLOY_BRANCH}"
@@ -36,5 +37,22 @@ jobs:
             git reset --hard "refs/remotes/origin/${DEPLOY_BRANCH}"
             docker compose up -d --build presence-server
             docker compose up -d mediamtx
-            docker compose up -d --force-recreate https-portal
             docker compose -p afjkjp-staging -f docker-compose.staging.yml up -d --force-recreate
+            # https-portal fronts production too. Reload nginx in place (which
+            # re-resolves the recreated www-service-staging upstream) instead of
+            # recreating the container: a recreate releases and rebinds 80/443,
+            # and a failed rebind takes every afjk.jp domain offline.
+            if [ "$(docker inspect -f '{{.State.Running}}' https-portal 2>/dev/null)" = "true" ]; then
+              docker exec https-portal nginx -s reload
+            else
+              docker compose up -d https-portal
+            fi
+            sleep 3
+            if [ "$(docker inspect -f '{{.State.Running}}' https-portal 2>/dev/null)" != "true" ]; then
+              echo "::error::https-portal is not running; afjk.jp is offline"
+              docker ps -a --filter name=https-portal
+              docker ps --filter publish=80 --filter publish=443
+              ss -ltn '( sport = :80 or sport = :443 )' || true
+              docker logs --tail 50 https-portal || true
+              exit 1
+            fi
