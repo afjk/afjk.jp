@@ -232,6 +232,36 @@ docker compose down
 
 ## 本番環境
 
+### 再起動後に公開サイトへ接続できない場合
+
+DNS が正常でも HTTP / HTTPS に接続できない場合は、公開入口の
+`https-portal` とポート競合を確認する。
+
+```bash
+docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker inspect https-portal --format '{{json .State}}'
+```
+
+`port is already allocated` が出ている場合は、80 / 443 番を占有している
+コンテナを確認する。Compose 定義から削除されたコンテナも、
+`restart: always` が残っているとホスト再起動時に自動起動する。
+
+2026-11-16 の障害では、旧 `websocket-server`（`jmalloc/echo-server`）が
+80 / 443 番を占有し、`https-portal` が起動できなくなった。
+旧サービスと確認できたコンテナは自動起動を無効にして停止し、
+既存のプロキシを起動する。以下はこの旧コンテナが存在する場合の復旧例。
+
+```bash
+docker update --restart=no websocket-server
+docker stop websocket-server
+docker start https-portal
+curl --fail --silent --show-error --output /dev/null https://afjk.jp/
+curl --fail --silent --show-error --output /dev/null https://staging.afjk.jp/
+```
+
+本番・staging のデプロイは SSH 内のエラーで即時停止し、最後に公開 URL の
+応答を確認する。公開 URL に接続できない場合もデプロイ失敗として扱う。
+
 ### 通常起動
 
 ```bash
