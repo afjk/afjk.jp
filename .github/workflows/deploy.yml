@@ -11,7 +11,8 @@ permissions:
 jobs:
   static-viewer-smoke:
     name: Static Viewer Smoke
-    runs-on: ubuntu-latest
+    # The locked Playwright version does not support Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
