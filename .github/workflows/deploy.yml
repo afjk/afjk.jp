@@ -11,7 +11,8 @@ permissions:
 jobs:
   static-viewer-smoke:
     name: Static Viewer Smoke
-    runs-on: ubuntu-latest
+    # The locked Playwright version does not support Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -53,6 +54,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           timeout: 120s
           script: |
+            set -eu
             cd ~/github/afjk.jp
             git fetch origin
             git reset --hard origin/main
@@ -61,3 +63,13 @@ jobs:
             docker compose up -d mediamtx
             docker compose up -d --force-recreate https-portal
             docker compose up -d --force-recreate verdaccio
+
+      - name: Verify public site
+        timeout-minutes: 5
+        run: |
+          for url in https://afjk.jp/ https://afjk.jp/presence/; do
+            curl --fail --silent --show-error \
+              --retry 6 --retry-delay 5 --retry-all-errors \
+              --connect-timeout 5 --max-time 10 \
+              --output /dev/null "$url"
+          done
