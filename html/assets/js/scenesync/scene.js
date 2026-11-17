@@ -7617,7 +7617,11 @@ async function respondToSceneRequest(from, requestId) {
       position: initialPose ? initialPose.position : obj.position.toArray(),
       rotation: initialPose ? initialPose.rotation : obj.quaternion.toArray(),
       scale: obj.scale.toArray(),
+      visible: obj.visible !== false,
     };
+    if (obj.userData.metadata) {
+      entry.metadata = structuredClone(obj.userData.metadata);
+    }
     const clock = serializeObjectClockForSceneSync(obj);
     if (clock) {
       entry.clock = clock;
